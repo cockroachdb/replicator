@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+cdc-sink
 
 # Test binary, built with `go test -c`
 *.test
