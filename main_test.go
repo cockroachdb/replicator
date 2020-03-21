@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,4 +68,26 @@ func TestDB(t *testing.T) {
 		t.Fatal(fmt.Sprintf("DB names do not match expected - %s, actual: %s", dbName, actualDBName))
 	}
 
+}
+
+func TestFeedImport(t *testing.T) {
+	_, _, dbClose := getDB(t)
+	defer dbClose()
+
+	server := httptest.NewServer(
+		http.HandlerFunc(handler),
+	)
+	defer server.Close()
+
+	fmt.Printf(server.URL)
+
+	client := server.Client()
+	content := strings.NewReader("my request")
+	resp, err := client.Post(server.URL, "text/html", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Got Response Code: %d", resp.StatusCode)
+	}
 }
