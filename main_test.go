@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -59,32 +58,63 @@ CREATE TABLE %s.%s (
 `
 
 type tableInfo struct {
+	db       *sql.DB
 	dbName   string
 	name     string
 	rowCount int
+}
+
+type jobInfo struct {
+	db *sql.DB
+	id int
+}
+
+func (ji *jobInfo) cancelJob(t *testing.T) {
+	if ji.id == 0 {
+		return
+	}
+	if _, err := ji.db.Exec(fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
+		t.Fatal(err)
+	}
+	ji.id = 0
 }
 
 func (ti tableInfo) getFullName() string {
 	return fmt.Sprintf("%s.%s", ti.dbName, ti.name)
 }
 
-func (ti *tableInfo) populateTable(t *testing.T, db *sql.DB, count int) {
+func (ti *tableInfo) populateTable(t *testing.T, count int) {
 	for i := 0; i < count; i++ {
-		_, err := db.Exec("INSERT INTO "+ti.getFullName()+" VALUES ($1,$1)", ti.rowCount+1)
-		if err != nil {
+		if _, err := ti.db.Exec("INSERT INTO "+ti.getFullName()+" VALUES ($1,$1)", ti.rowCount+1); err != nil {
 			t.Fatal(err)
 		}
 		ti.rowCount++
 	}
 }
 
-func (ti tableInfo) getTableCount(t *testing.T, db *sql.DB) int {
-	row := db.QueryRow("SELECT COUNT(*) FROM " + ti.getFullName())
+func (ti tableInfo) getTableCount(t *testing.T) int {
+	row := ti.db.QueryRow("SELECT COUNT(*) FROM " + ti.getFullName())
 	var count int
 	if err := row.Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	return count
+}
+
+func (ti tableInfo) createChangeFeed(t *testing.T, url string) jobInfo {
+	query := fmt.Sprintf("CREATE CHANGEFEED FOR TABLE %s INTO 'experimental-%s/test.sql'", ti.getFullName(), url)
+	t.Logf(query)
+	row := ti.db.QueryRow(
+		fmt.Sprintf("CREATE CHANGEFEED FOR TABLE %s INTO 'experimental-%s/test.sql'", ti.getFullName(), url),
+	)
+	var jobID int
+	if err := row.Scan(&jobID); err != nil {
+		t.Fatal(err)
+	}
+	return jobInfo{
+		db: ti.db,
+		id: jobID,
+	}
 }
 
 // This function creates a test table and returns its name.
@@ -121,6 +151,7 @@ outer:
 
 	t.Logf("Testing Table: %s.%s", dbName, tableName)
 	return tableInfo{
+		db:     db,
 		dbName: dbName,
 		name:   tableName,
 	}
@@ -145,8 +176,8 @@ func TestDB(t *testing.T) {
 
 	// Create a test table and insert some rows
 	table := createTestTable(t, db, dbName)
-	table.populateTable(t, db, 10)
-	if count := table.getTableCount(t, db); count != 10 {
+	table.populateTable(t, 10)
+	if count := table.getTableCount(t); count != 10 {
 		t.Fatalf("Expected Rows 10, actual %d", count)
 	}
 }
@@ -166,18 +197,22 @@ func TestFeedImport(t *testing.T) {
 
 	// Create the test table, give it a few rows.
 	table := createTestTable(t, db, dbName)
-	table.populateTable(t, db, 10)
-	if count := table.getTableCount(t, db); count != 10 {
+	table.populateTable(t, 10)
+	if count := table.getTableCount(t); count != 10 {
 		t.Fatalf("Expected Rows 10, actual %d", count)
 	}
 
-	client := server.Client()
-	content := strings.NewReader("my request")
-	resp, err := client.Post(server.URL, "text/html", content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("Got Response Code: %d", resp.StatusCode)
-	}
+	job := table.createChangeFeed(t, server.URL)
+	defer job.cancelJob(t)
+
+	/*client := server.Client()
+	  content := strings.NewReader("my request")
+	  resp, err := client.Post(server.URL, "text/html", content)
+	  if err != nil {
+	  	t.Fatal(err)
+	  }
+	  if resp.StatusCode != http.StatusOK {
+	  	t.Fatalf("Got Response Code: %d", resp.StatusCode)
+	  }*/
+
 }
