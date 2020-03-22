@@ -51,6 +51,81 @@ func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
 	return
 }
 
+const tableStyle1 = `
+CREATE TABLE %s.%s (
+	a INT PRIMARY KEY,
+	b INT
+)
+`
+
+type tableInfo struct {
+	dbName   string
+	name     string
+	rowCount int
+}
+
+func (ti tableInfo) getFullName() string {
+	return fmt.Sprintf("%s.%s", ti.dbName, ti.name)
+}
+
+func (ti *tableInfo) populateTable(t *testing.T, db *sql.DB, count int) {
+	for i := 0; i < count; i++ {
+		_, err := db.Exec("INSERT INTO "+ti.getFullName()+" VALUES ($1,$1)", ti.rowCount+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ti.rowCount++
+	}
+}
+
+func (ti tableInfo) getTableCount(t *testing.T, db *sql.DB) int {
+	row := db.QueryRow("SELECT COUNT(*) FROM " + ti.getFullName())
+	var count int
+	if err := row.Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// This function creates a test table and returns its name.
+func createTestTable(t *testing.T, db *sql.DB, dbName string) tableInfo {
+	var tableName string
+
+outer:
+	for {
+		// Create the testing database
+		tableNum := r.Intn(10000)
+		tableName = fmt.Sprintf("_test_table_%d", tableNum)
+
+		// Find the DB.
+		var actualTableName string
+		row := db.QueryRow(
+			fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
+			tableName,
+		)
+		err := row.Scan(&actualTableName)
+		switch err {
+		case sql.ErrNoRows:
+			break outer
+		case nil:
+			continue
+		default:
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := db.Exec(
+		fmt.Sprintf(tableStyle1, dbName, tableName)); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Testing Table: %s.%s", dbName, tableName)
+	return tableInfo{
+		dbName: dbName,
+		name:   tableName,
+	}
+}
+
 // TestDB is just a quick test to create and drop a database to ensure the
 // Cockroach Cluster is working correctly and we have the correct permissions.
 func TestDB(t *testing.T) {
@@ -68,18 +143,33 @@ func TestDB(t *testing.T) {
 		t.Fatal(fmt.Sprintf("DB names do not match expected - %s, actual: %s", dbName, actualDBName))
 	}
 
+	// Create a test table and insert some rows
+	table := createTestTable(t, db, dbName)
+	table.populateTable(t, db, 10)
+	if count := table.getTableCount(t, db); count != 10 {
+		t.Fatalf("Expected Rows 10, actual %d", count)
+	}
 }
 
 func TestFeedImport(t *testing.T) {
-	_, _, dbClose := getDB(t)
+
+	// Create the test db
+	db, dbName, dbClose := getDB(t)
 	defer dbClose()
 
+	// Create a test http server
 	server := httptest.NewServer(
 		http.HandlerFunc(handler),
 	)
 	defer server.Close()
+	t.Log(server.URL)
 
-	fmt.Printf(server.URL)
+	// Create the test table, give it a few rows.
+	table := createTestTable(t, db, dbName)
+	table.populateTable(t, db, 10)
+	if count := table.getTableCount(t, db); count != 10 {
+		t.Fatalf("Expected Rows 10, actual %d", count)
+	}
 
 	client := server.Client()
 	content := strings.NewReader("my request")
