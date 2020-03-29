@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,18 +102,23 @@ func (ti tableInfo) getTableCount(t *testing.T) int {
 	return count
 }
 
-func (ti tableInfo) createChangeFeed(t *testing.T, url string) jobInfo {
-	query := fmt.Sprintf("CREATE CHANGEFEED FOR TABLE %s INTO 'experimental-%s/test.sql'", ti.getFullName(), url)
+func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jobInfo {
+	query := "CREATE CHANGEFEED FOR TABLE "
+	for i := 0; i < len(tis); i++ {
+		if i != 0 {
+			query += fmt.Sprintf(", ")
+		}
+		query += fmt.Sprintf(tis[i].getFullName())
+	}
+	query += fmt.Sprintf(" INTO 'experimental-%s/test.sql' WITH updated,resolved", url)
 	t.Logf(query)
-	row := ti.db.QueryRow(
-		fmt.Sprintf("CREATE CHANGEFEED FOR TABLE %s INTO 'experimental-%s/test.sql'", ti.getFullName(), url),
-	)
+	row := db.QueryRow(query)
 	var jobID int
 	if err := row.Scan(&jobID); err != nil {
 		t.Fatal(err)
 	}
 	return jobInfo{
-		db: ti.db,
+		db: db,
 		id: jobID,
 	}
 }
@@ -202,17 +208,18 @@ func TestFeedImport(t *testing.T) {
 		t.Fatalf("Expected Rows 10, actual %d", count)
 	}
 
-	job := table.createChangeFeed(t, server.URL)
+	job := createChangeFeed(t, db, server.URL, table)
 	defer job.cancelJob(t)
 
-	/*client := server.Client()
-	  content := strings.NewReader("my request")
-	  resp, err := client.Post(server.URL, "text/html", content)
-	  if err != nil {
-	  	t.Fatal(err)
-	  }
-	  if resp.StatusCode != http.StatusOK {
-	  	t.Fatalf("Got Response Code: %d", resp.StatusCode)
-	  }*/
+	table.populateTable(t, 10)
 
+	client := server.Client()
+	content := strings.NewReader("my request")
+	resp, err := client.Post(server.URL, "text/html", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Got Response Code: %d", resp.StatusCode)
+	}
 }

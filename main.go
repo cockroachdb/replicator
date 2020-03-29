@@ -21,8 +21,9 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		panic(err)
 	}
-
 	fmt.Fprintf(w, "%s\n", body)
+	fmt.Printf("%s\n", r.Header)
+	fmt.Printf("%s\n", body)
 }
 
 func main() {
