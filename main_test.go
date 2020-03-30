@@ -65,21 +65,6 @@ type tableInfo struct {
 	rowCount int
 }
 
-type jobInfo struct {
-	db *sql.DB
-	id int
-}
-
-func (ji *jobInfo) cancelJob(t *testing.T) {
-	if ji.id == 0 {
-		return
-	}
-	if _, err := ji.db.Exec(fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
-		t.Fatal(err)
-	}
-	ji.id = 0
-}
-
 func (ti tableInfo) getFullName() string {
 	return fmt.Sprintf("%s.%s", ti.dbName, ti.name)
 }
@@ -100,6 +85,21 @@ func (ti tableInfo) getTableCount(t *testing.T) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+type jobInfo struct {
+	db *sql.DB
+	id int
+}
+
+func (ji *jobInfo) cancelJob(t *testing.T) {
+	if ji.id == 0 {
+		return
+	}
+	if _, err := ji.db.Exec(fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
+		t.Fatal(err)
+	}
+	ji.id = 0
 }
 
 func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jobInfo {
@@ -189,29 +189,44 @@ func TestDB(t *testing.T) {
 }
 
 func TestFeedImport(t *testing.T) {
-
 	// Create the test db
 	db, dbName, dbClose := getDB(t)
 	defer dbClose()
 
+	// Drop the previous _cdc_sink db
+	if err := dropSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new _cdc_sink db
+	if err := createSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the table to import from
+	tableFrom := createTestTable(t, db, dbName)
+
+	// Create the table to receive into
+	tableTo := createTestTable(t, db, dbName)
+
+	// Give the from table a few rows
+	tableFrom.populateTable(t, 10)
+	if count := tableFrom.getTableCount(t); count != 10 {
+		t.Fatalf("Expected Rows 10, actual %d", count)
+	}
+
 	// Create a test http server
+	handler := createHandler(db, tableTo.dbName, tableTo.name)
 	server := httptest.NewServer(
 		http.HandlerFunc(handler),
 	)
 	defer server.Close()
 	t.Log(server.URL)
 
-	// Create the test table, give it a few rows.
-	table := createTestTable(t, db, dbName)
-	table.populateTable(t, 10)
-	if count := table.getTableCount(t); count != 10 {
-		t.Fatalf("Expected Rows 10, actual %d", count)
-	}
-
-	job := createChangeFeed(t, db, server.URL, table)
+	job := createChangeFeed(t, db, server.URL, tableFrom)
 	defer job.cancelJob(t)
 
-	table.populateTable(t, 10)
+	tableFrom.populateTable(t, 10)
 
 	client := server.Client()
 	content := strings.NewReader("my request")
