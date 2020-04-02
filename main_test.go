@@ -194,12 +194,12 @@ func TestFeedImport(t *testing.T) {
 	defer dbClose()
 
 	// Drop the previous _cdc_sink db
-	if err := dropSinkDB(db); err != nil {
+	if err := DropSinkDB(db); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create a new _cdc_sink db
-	if err := createSinkDB(db); err != nil {
+	if err := CreateSinkDB(db); err != nil {
 		t.Fatal(err)
 	}
 
@@ -215,8 +215,14 @@ func TestFeedImport(t *testing.T) {
 		t.Fatalf("Expected Rows 10, actual %d", count)
 	}
 
+	// Create the sinks and sink
+	sinks := CreateSinks()
+	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+		t.Fatal(err)
+	}
+
 	// Create a test http server
-	handler := createHandler(db, tableTo.dbName, tableTo.name)
+	handler := createHandler(db, sinks)
 	server := httptest.NewServer(
 		http.HandlerFunc(handler),
 	)
