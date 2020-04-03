@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"log"
+	"net/http"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -41,4 +46,33 @@ func CreateSink(
 	}
 
 	return sink, nil
+}
+
+// Line is used to parse a json line in the request body.
+//{"after": {"a": 1, "b": 1}, "key": [1], "updated": "1585949214695218000.0000000000"}
+type Line struct {
+	After     map[string]interface{} `json:"after"`
+	Key       []interface{}          `json:"key"`
+	Updated   string                 `json:"updated"`
+	timestamp time.Time
+	logical   int
+}
+
+// HandleRequest is a handler used for this specific sink.
+func (s *Sink) HandleRequest(w http.ResponseWriter, r *http.Request) {
+	scanner := bufio.NewScanner(r.Body)
+	defer r.Body.Close()
+	for scanner.Scan() {
+		var line Line
+		json.Unmarshal(scanner.Bytes(), &line)
+		//log.Printf("body: %s\n", scanner.Text())
+		log.Printf("line: %+v\n", line)
+		var err error
+		line.timestamp, line.logical, err = parseSplitTimestamp(line.Updated)
+		if err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}
 }
