@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -64,21 +65,6 @@ type tableInfo struct {
 	rowCount int
 }
 
-type jobInfo struct {
-	db *sql.DB
-	id int
-}
-
-func (ji *jobInfo) cancelJob(t *testing.T) {
-	if ji.id == 0 {
-		return
-	}
-	if _, err := ji.db.Exec(fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
-		t.Fatal(err)
-	}
-	ji.id = 0
-}
-
 func (ti tableInfo) getFullName() string {
 	return fmt.Sprintf("%s.%s", ti.dbName, ti.name)
 }
@@ -101,18 +87,38 @@ func (ti tableInfo) getTableCount(t *testing.T) int {
 	return count
 }
 
-func (ti tableInfo) createChangeFeed(t *testing.T, url string) jobInfo {
-	query := fmt.Sprintf("CREATE CHANGEFEED FOR TABLE %s INTO 'experimental-%s/test.sql'", ti.getFullName(), url)
+type jobInfo struct {
+	db *sql.DB
+	id int
+}
+
+func (ji *jobInfo) cancelJob(t *testing.T) {
+	if ji.id == 0 {
+		return
+	}
+	if _, err := ji.db.Exec(fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
+		t.Fatal(err)
+	}
+	ji.id = 0
+}
+
+func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jobInfo {
+	query := "CREATE CHANGEFEED FOR TABLE "
+	for i := 0; i < len(tis); i++ {
+		if i != 0 {
+			query += fmt.Sprintf(", ")
+		}
+		query += fmt.Sprintf(tis[i].getFullName())
+	}
+	query += fmt.Sprintf(" INTO 'experimental-%s/test.sql' WITH updated,resolved", url)
 	t.Logf(query)
-	row := ti.db.QueryRow(
-		fmt.Sprintf("CREATE CHANGEFEED FOR TABLE %s INTO 'experimental-%s/test.sql'", ti.getFullName(), url),
-	)
+	row := db.QueryRow(query)
 	var jobID int
 	if err := row.Scan(&jobID); err != nil {
 		t.Fatal(err)
 	}
 	return jobInfo{
-		db: ti.db,
+		db: db,
 		id: jobID,
 	}
 }
@@ -183,36 +189,58 @@ func TestDB(t *testing.T) {
 }
 
 func TestFeedImport(t *testing.T) {
-
 	// Create the test db
 	db, dbName, dbClose := getDB(t)
 	defer dbClose()
 
+	// Drop the previous _cdc_sink db
+	if err := DropSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new _cdc_sink db
+	if err := CreateSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the table to import from
+	tableFrom := createTestTable(t, db, dbName)
+
+	// Create the table to receive into
+	tableTo := createTestTable(t, db, dbName)
+
+	// Give the from table a few rows
+	tableFrom.populateTable(t, 10)
+	if count := tableFrom.getTableCount(t); count != 10 {
+		t.Fatalf("Expected Rows 10, actual %d", count)
+	}
+
+	// Create the sinks and sink
+	sinks := CreateSinks()
+	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+		t.Fatal(err)
+	}
+
 	// Create a test http server
+	handler := createHandler(db, sinks)
 	server := httptest.NewServer(
 		http.HandlerFunc(handler),
 	)
 	defer server.Close()
 	t.Log(server.URL)
 
-	// Create the test table, give it a few rows.
-	table := createTestTable(t, db, dbName)
-	table.populateTable(t, 10)
-	if count := table.getTableCount(t); count != 10 {
-		t.Fatalf("Expected Rows 10, actual %d", count)
-	}
-
-	job := table.createChangeFeed(t, server.URL)
+	job := createChangeFeed(t, db, server.URL, tableFrom)
 	defer job.cancelJob(t)
 
-	/*client := server.Client()
-	  content := strings.NewReader("my request")
-	  resp, err := client.Post(server.URL, "text/html", content)
-	  if err != nil {
-	  	t.Fatal(err)
-	  }
-	  if resp.StatusCode != http.StatusOK {
-	  	t.Fatalf("Got Response Code: %d", resp.StatusCode)
-	  }*/
+	tableFrom.populateTable(t, 10)
 
+	client := server.Client()
+	content := strings.NewReader("my request")
+	resp, err := client.Post(server.URL, "text/html", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Got Response Code: %d", resp.StatusCode)
+	}
 }
