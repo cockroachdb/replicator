@@ -35,6 +35,11 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 		fmt.Printf("%s\n", r.Header)
 		fmt.Printf("%s\n", r.RequestURI)
 		fmt.Printf("%s\n", body)
+
+		_, err = parseNdjsonURL(r.RequestURI)
+		if err != nil {
+			log.Printf(err.Error())
+		}
 	}
 }
 
