@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 
@@ -25,20 +24,18 @@ var dropDB = flag.Bool("drop", false, "Drop the sink db before starting?")
 
 func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "%+s\n", r.RequestURI)
-
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Fprintf(w, "%s\n", body)
 		fmt.Printf("%s\n", r.Header)
 		fmt.Printf("%s\n", r.RequestURI)
-		fmt.Printf("%s\n", body)
 
-		_, err = parseNdjsonURL(r.RequestURI)
+		ndjson, err := parseNdjsonURL(r.RequestURI)
 		if err != nil {
 			log.Printf(err.Error())
+		}
+
+		sink := sinks.FindSink(db, ndjson.topic)
+		if sink != nil {
+			log.Printf("Found Sink: %s", sink.originalTable)
+			sink.HandleRequest(db, w, r)
 		}
 	}
 }

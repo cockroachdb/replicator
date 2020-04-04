@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
 	"fmt"
+	"log"
+	"net/http"
 
 	_ "github.com/lib/pq"
 )
@@ -41,4 +44,23 @@ func CreateSink(
 	}
 
 	return sink, nil
+}
+
+// HandleRequest is a handler used for this specific sink.
+func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+	scanner := bufio.NewScanner(r.Body)
+	defer r.Body.Close()
+	for scanner.Scan() {
+		line, err := parseLine(scanner.Bytes())
+		if err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+		if err := line.WriteToSinkTable(db, s.sinkDBTable); err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}
 }

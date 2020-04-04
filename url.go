@@ -11,14 +11,52 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// Example: /test.sql/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-_test_table_4064-1.ndjson
-// Format is: /[endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schame-id]
-// var ndjsonRegex = regexp.MustCompile(`/(?P<date>\d{4}-\d{2}-\d{2})/(?P<timestamp>\d{33})-(?P<uniquer>[0-9a-g]*-\d*-\d*-\d*)-(?P<topic>.*)-(?P<schema_id>\d*).ndjson$`)
-var ndjsonRegex = regexp.MustCompile(`/(?P<date>\d{4}-\d{2}-\d{2})/(?P<timestamp>\d{33})-(?P<uniquer>(?P<session_id>[0-9a-g]*)-(?P<node_id>\d*)-(?P<sink_id>\d*)-(?P<file_id>\d*))-(?P<topic>.*)-(?P<schema_id>\d*).ndjson$`)
-
-// YYYYMMDDHHMMSSNNNNNNNNNLLLLLLLLLL
-// formatting const stolen from https://github.com/cockroachdb/cockroach/blob/master/pkg/ccl/changefeedccl/sink_cloudstorage.go#L48
+// This is the timestamp format:  YYYYMMDDHHMMSSNNNNNNNNNLLLLLLLLLL
+// Formatting const stolen from https://github.com/cockroachdb/cockroach/blob/master/pkg/ccl/changefeedccl/sink_cloudstorage.go#L48
 const timestampDateTimeFormat = "20060102150405"
+
+func parseTimestamp(timestamp string, logical string) (time.Time, int, error) {
+	if len(timestamp) != 23 {
+		return time.Time{}, 0, fmt.Errorf("Can't parse timestamp %s", timestamp)
+	}
+	if len(logical) != 10 {
+		return time.Time{}, 0, fmt.Errorf("Can't parse logical timestamp %s", logical)
+	}
+
+	// Parse the date and time.
+	timestampParsed, err := time.Parse(timestampDateTimeFormat, timestamp[0:14])
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+
+	log.Printf("time: %s", timestamp[0:14])
+	log.Printf("time: %s", timestampParsed.Format(timestampDateTimeFormat))
+
+	// Parse out the nanos
+	nanos, err := time.ParseDuration(timestamp[14:23] + "ns")
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	timestampParsed.Add(nanos)
+
+	log.Printf("nanos: %s", timestamp[14:23])
+	log.Printf("nanos: %d", nanos.Nanoseconds())
+
+	// Parse out the logical timestamp
+	logicalParsed, err := strconv.Atoi(logical)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	log.Printf("logical: %s", logical)
+	log.Printf("logical: %d", logicalParsed)
+
+	return timestampParsed, logicalParsed, nil
+}
+
+// Example: /test.sql/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-_test_table_4064-1.ndjson
+// Format is: /[endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
+// See https://github.com/cockroachdb/cockroach/blob/master/pkg/ccl/changefeedccl/sink_cloudstorage.go#L139
+var ndjsonRegex = regexp.MustCompile(`/(?P<date>\d{4}-\d{2}-\d{2})/(?P<timestamp>\d{33})-(?P<uniquer>(?P<session_id>[0-9a-g]*)-(?P<node_id>\d*)-(?P<sink_id>\d*)-(?P<file_id>\d*))-(?P<topic>.*)-(?P<schema_id>\d*).ndjson$`)
 
 // Ndjson contains all the parsed info from an ndjson url.
 type Ndjson struct {
@@ -52,35 +90,13 @@ func parseNdjsonURL(url string) (Ndjson, error) {
 					len(match[i]), match[i],
 				)
 			}
-
-			// Parse the date and time.
 			var err error
-			ndjson.timestamp, err = time.Parse(timestampDateTimeFormat, match[i][0:14])
+			ndjson.timestamp, ndjson.timestampLogical, err = parseTimestamp(
+				match[i][0:23], match[i][23:33],
+			)
 			if err != nil {
 				return Ndjson{}, err
 			}
-
-			log.Printf("time: %s", match[i][0:14])
-			log.Printf("time: %s", ndjson.timestamp.Format(timestampDateTimeFormat))
-
-			// Parse out the nanos
-			nanos, err := time.ParseDuration(match[i][14:23] + "ns")
-			if err != nil {
-				return Ndjson{}, err
-			}
-			ndjson.timestamp.Add(nanos)
-
-			log.Printf("nanos: %s", match[i][14:23])
-			log.Printf("nanos: %d", nanos.Nanoseconds())
-
-			// Parse out the logical timestamp
-			ndjson.timestampLogical, err = strconv.Atoi(match[i][23:])
-			if err != nil {
-				return Ndjson{}, err
-			}
-			log.Printf("logical: %s", match[i][23:33])
-			log.Printf("logical: %d", ndjson.timestampLogical)
-
 		case "uniquer":
 			ndjson.uniquer = strings.ToLower(match[i])
 		case "session_id":
