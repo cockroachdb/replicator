@@ -53,14 +53,6 @@ func parseTimestamp(timestamp string, logical string) (time.Time, int, error) {
 	return timestampParsed, logicalParsed, nil
 }
 
-func parseSplitTimestamp(timestamp string) (time.Time, int, error) {
-	splits := strings.Split(timestamp, ".")
-	if len(splits) != 2 {
-		return time.Time{}, 0, fmt.Errorf("Can't parse timestamp %s", timestamp)
-	}
-	return parseTimestamp(splits[0], splits[1])
-}
-
 // Example: /test.sql/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-_test_table_4064-1.ndjson
 // Format is: /[endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
 // See https://github.com/cockroachdb/cockroach/blob/master/pkg/ccl/changefeedccl/sink_cloudstorage.go#L139
