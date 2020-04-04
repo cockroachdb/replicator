@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS %s (
 `
 const writeSinkTable = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
 
-// SinkDBTableName creates the conjoined db/table name to be used by the sink table.
+// SinkDBTableName creates the conjoined db/table name to be used by the sink
+// table.
 func SinkDBTableName(resultDB string, resultTable string) string {
 	return fmt.Sprintf("%s.%s_%s", *sinkDB, resultDB, resultTable)
 }
@@ -42,14 +43,19 @@ type Line struct {
 	key     string
 }
 
+// parseSplitTimestamp splits a timestmap of tte format NNNN.LLL into an int64
+// for the nanos and an int for the logical component.
 func parseSplitTimestamp(timestamp string) (int64, int, error) {
 	splits := strings.Split(timestamp, ".")
 	if len(splits) != 2 {
-		return 0, 0, fmt.Errorf("Can't parse timestamp %s", timestamp)
+		return 0, 0, fmt.Errorf("can't parse timestamp %s", timestamp)
 	}
 	nanos, err := strconv.ParseInt(splits[0], 0, 0)
 	if err != nil {
 		return 0, 0, err
+	}
+	if nanos <= 0 {
+		return 0, 0, fmt.Errorf("nanos must be greater than 0: %d", nanos)
 	}
 	logical, err := strconv.Atoi(splits[1])
 	if err != nil {
@@ -64,6 +70,7 @@ func parseSplitTimestamp(timestamp string) (int64, int, error) {
 func parseLine(rawBytes []byte) (Line, error) {
 	var line Line
 	json.Unmarshal(rawBytes, &line)
+	log.Print(string(rawBytes))
 
 	// Prase the timestamp into nanos and logical.
 	var err error
@@ -86,6 +93,9 @@ func parseLine(rawBytes []byte) (Line, error) {
 	line.after = string(afterBytes)
 
 	// Convert the key line back to json.
+	if len(line.Key) <= 0 {
+		return Line{}, fmt.Errorf("no value present in 'key' field")
+	}
 	keyBytes, err := json.Marshal(line.Key)
 	if err != nil {
 		return Line{}, err

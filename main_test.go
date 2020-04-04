@@ -51,6 +51,15 @@ func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
 	return
 }
 
+func getRowCount(t *testing.T, db *sql.DB, fullTableName string) int {
+	row := db.QueryRow("SELECT COUNT(*) FROM " + fullTableName)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
 const tableStyle1 = `
 CREATE TABLE %s.%s (
 	a INT PRIMARY KEY,
@@ -78,13 +87,8 @@ func (ti *tableInfo) populateTable(t *testing.T, count int) {
 	}
 }
 
-func (ti tableInfo) getTableCount(t *testing.T) int {
-	row := ti.db.QueryRow("SELECT COUNT(*) FROM " + ti.getFullName())
-	var count int
-	if err := row.Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	return count
+func (ti tableInfo) getTableRowCount(t *testing.T) int {
+	return getRowCount(t, ti.db, ti.getFullName())
 }
 
 type jobInfo struct {
@@ -183,7 +187,7 @@ func TestDB(t *testing.T) {
 	// Create a test table and insert some rows
 	table := createTestTable(t, db, dbName)
 	table.populateTable(t, 10)
-	if count := table.getTableCount(t); count != 10 {
+	if count := table.getTableRowCount(t); count != 10 {
 		t.Fatalf("Expected Rows 10, actual %d", count)
 	}
 }
@@ -211,7 +215,7 @@ func TestFeedImport(t *testing.T) {
 
 	// Give the from table a few rows
 	tableFrom.populateTable(t, 10)
-	if count := tableFrom.getTableCount(t); count != 10 {
+	if count := tableFrom.getTableRowCount(t); count != 10 {
 		t.Fatalf("Expected Rows 10, actual %d", count)
 	}
 
