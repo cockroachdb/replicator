@@ -24,19 +24,38 @@ var dropDB = flag.Bool("drop", false, "Drop the sink db before starting?")
 
 func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("%s\n", r.Header)
-		fmt.Printf("%s\n", r.RequestURI)
+		log.Printf("Request: %s", r.RequestURI)
+		log.Printf("HEader: %s", r.Header)
 
-		ndjson, err := parseNdjsonURL(r.RequestURI)
-		if err != nil {
-			log.Printf(err.Error())
+		// Is it an ndjson url?
+		ndjson, ndjsonErr := parseNdjsonURL(r.RequestURI)
+		if ndjsonErr == nil {
+			sink := sinks.FindSink(db, ndjson.topic)
+			if sink != nil {
+				log.Printf("Found Sink: %s", sink.originalTable)
+				sink.HandleRequest(db, w, r)
+				return
+			}
+
+			// No sink found, throw an error.
+			fmt.Fprintf(w, "could not find a sync for %s", ndjson.topic)
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
 
-		sink := sinks.FindSink(db, ndjson.topic)
-		if sink != nil {
-			log.Printf("Found Sink: %s", sink.originalTable)
-			sink.HandleRequest(db, w, r)
+		// Is it a resolved url?
+		_, resolvedErr := parseResolvedURL(r.RequestURI)
+		if resolvedErr == nil {
+
+			return
 		}
+
+		// Could not recognize url.
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "URL pattern does not match either an ndjson (%s) or a resolved (%s)",
+			ndjsonErr, resolvedErr,
+		)
+		return
 	}
 }
 

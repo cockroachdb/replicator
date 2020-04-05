@@ -70,7 +70,6 @@ func parseSplitTimestamp(timestamp string) (int64, int, error) {
 func parseLine(rawBytes []byte) (Line, error) {
 	var line Line
 	json.Unmarshal(rawBytes, &line)
-	log.Print(string(rawBytes))
 
 	// Prase the timestamp into nanos and logical.
 	var err error
