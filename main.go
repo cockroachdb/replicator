@@ -44,9 +44,9 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 		}
 
 		// Is it a resolved url?
-		_, resolvedErr := parseResolvedURL(r.RequestURI)
+		resolved, resolvedErr := parseResolvedURL(r.RequestURI)
 		if resolvedErr == nil {
-
+			sinks.HandleResolvedRequest(db, resolved, w, r)
 			return
 		}
 

@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"database/sql"
+	"fmt"
+	"log"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -48,4 +52,23 @@ func (s *Sinks) FindSink(db *sql.DB, table string) *Sink {
 	defer s.RUnlock()
 	result, _ := s.sinks[table]
 	return result
+}
+
+// HandleResolvedRequest parses and applies all the resolved upserts.
+func (s *Sinks) HandleResolvedRequest(
+	db *sql.DB, rURL resolvedURL, w http.ResponseWriter, r *http.Request,
+) {
+	scanner := bufio.NewScanner(r.Body)
+	defer r.Body.Close()
+	for scanner.Scan() {
+		resolvedLine, err := parseResolvedLine(scanner.Bytes(), rURL.endpoint)
+		if err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("ResolvedLine: %+v", resolvedLine)
+	}
 }
