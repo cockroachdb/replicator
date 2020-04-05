@@ -142,7 +142,7 @@ func TestWriteToSinkTable(t *testing.T) {
 	}
 
 	// Make sure there are no rows in the table yet.
-	if rowCount := getRowCount(t, db, sink.sinkDBTable); rowCount != 0 {
+	if rowCount := getRowCount(t, db, sink.sinkTableFullName); rowCount != 0 {
 		t.Fatalf("Expected 0 rows, got %d", rowCount)
 	}
 
@@ -154,11 +154,11 @@ func TestWriteToSinkTable(t *testing.T) {
 			key:     fmt.Sprintf("[%d]", i),
 			after:   fmt.Sprintf(`{"a": %d`, i),
 		}
-		line.WriteToSinkTable(db, sink.sinkDBTable)
+		line.WriteToSinkTable(db, sink.sinkTableFullName)
 	}
 
 	// Check to see if there are indeed 100 rows in the table.
-	if rowCount := getRowCount(t, db, sink.sinkDBTable); rowCount != 100 {
+	if rowCount := getRowCount(t, db, sink.sinkTableFullName); rowCount != 100 {
 		t.Fatalf("Expected 0 rows, got %d", rowCount)
 	}
 }

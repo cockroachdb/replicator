@@ -22,9 +22,9 @@ CREATE TABLE IF NOT EXISTS %s (
 `
 const writeSinkTable = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
 
-// SinkDBTableName creates the conjoined db/table name to be used by the sink
+// SinkTableFullName creates the conjoined db/table name to be used by the sink
 // table.
-func SinkDBTableName(resultDB string, resultTable string) string {
+func SinkTableFullName(resultDB string, resultTable string) string {
 	return fmt.Sprintf("%s.%s_%s", *sinkDB, resultDB, resultTable)
 }
 
@@ -109,16 +109,16 @@ func parseLine(rawBytes []byte) (Line, error) {
 }
 
 // CreateSinkTable creates if it does not exist, the a table used for sinking.
-func CreateSinkTable(db *sql.DB, sinkDBTable string) error {
+func CreateSinkTable(db *sql.DB, sinkTableFullName string) error {
 	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(sinkTableSchema, sinkDBTable))
+	_, err := db.Exec(fmt.Sprintf(sinkTableSchema, sinkTableFullName))
 	return err
 }
 
 // WriteToSinkTable upserts a single line to the sink table.
-func (line Line) WriteToSinkTable(db *sql.DB, sinkDBTable string) error {
+func (line Line) WriteToSinkTable(db *sql.DB, sinkTableFullName string) error {
 	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(writeSinkTable, sinkDBTable),
+	_, err := db.Exec(fmt.Sprintf(writeSinkTable, sinkTableFullName),
 		line.nanos, line.logical, line.key, line.after,
 	)
 	return err

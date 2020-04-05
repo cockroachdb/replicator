@@ -12,9 +12,9 @@ import (
 
 // Sink holds all the info needed for a specific table.
 type Sink struct {
-	originalTable string
-	resultDBTable string
-	sinkDBTable   string
+	originalTableName   string
+	resultTableFullName string
+	sinkTableFullName   string
 }
 
 // CreateSink creates all the required tables and returns a new Sink.
@@ -22,25 +22,25 @@ func CreateSink(
 	db *sql.DB, originalTable string, resultDB string, resultTable string,
 ) (*Sink, error) {
 	// Check to make sure the table exists.
-	resultDBTable := fmt.Sprintf("%s.%s", resultDB, resultTable)
+	resultTableFullName := fmt.Sprintf("%s.%s", resultDB, resultTable)
 	exists, err := TableExists(db, resultDB, resultTable)
 	if err != nil {
 		return nil, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("Table %s could not be found", resultDBTable)
+		return nil, fmt.Errorf("Table %s could not be found", resultTableFullName)
 	}
 
 	// Grab all the columns here.
-	sinkDBTable := SinkDBTableName(resultDB, resultTable)
-	if err := CreateSinkTable(db, sinkDBTable); err != nil {
+	sinkTableFullName := SinkTableFullName(resultDB, resultTable)
+	if err := CreateSinkTable(db, sinkTableFullName); err != nil {
 		return nil, err
 	}
 
 	sink := &Sink{
-		originalTable: originalTable,
-		resultDBTable: resultDBTable,
-		sinkDBTable:   sinkDBTable,
+		originalTableName:   originalTable,
+		resultTableFullName: resultTableFullName,
+		sinkTableFullName:   sinkTableFullName,
 	}
 
 	return sink, nil
@@ -58,7 +58,7 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if err := line.WriteToSinkTable(db, s.sinkDBTable); err != nil {
+		if err := line.WriteToSinkTable(db, s.sinkTableFullName); err != nil {
 			log.Print(err)
 			fmt.Fprint(w, err)
 			w.WriteHeader(http.StatusBadRequest)
