@@ -1,12 +1,39 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"testing"
 )
 
 // These test require an insecure cockroach server is running on the default
 // port with the default root user with no password.
+
+func (rl ResolvedLine) writeUpdatedDB(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := rl.writeUpdated(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func getPreviousResolvedDB(db *sql.DB, endpoint string) (ResolvedLine, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return ResolvedLine{}, err
+	}
+	resolvedLine, err := getPreviousResolved(tx, endpoint)
+	if err != nil {
+		return ResolvedLine{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ResolvedLine{}, err
+	}
+	return resolvedLine, nil
+}
 
 func TestParseResolvedLine(t *testing.T) {
 	tests := []struct {
@@ -93,7 +120,7 @@ func TestResolvedTable(t *testing.T) {
 	}
 
 	// Find no previous value for endpoint "one".
-	one, err := getPreviousResolved(db, "one")
+	one, err := getPreviousResolvedDB(db, "one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,10 +133,10 @@ func TestResolvedTable(t *testing.T) {
 			nanos:    int64(i),
 			logical:  i,
 		}
-		if err := newOne.writeUpdated(db); err != nil {
+		if err := newOne.writeUpdatedDB(db); err != nil {
 			t.Fatal(err)
 		}
-		previousOne, err := getPreviousResolved(db, "one")
+		previousOne, err := getPreviousResolvedDB(db, "one")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +144,7 @@ func TestResolvedTable(t *testing.T) {
 	}
 
 	// Now do the same for a second endpoint.
-	two, err := getPreviousResolved(db, "two")
+	two, err := getPreviousResolvedDB(db, "two")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,10 +157,10 @@ func TestResolvedTable(t *testing.T) {
 			nanos:    int64(i),
 			logical:  i,
 		}
-		if err := newOne.writeUpdated(db); err != nil {
+		if err := newOne.writeUpdatedDB(db); err != nil {
 			t.Fatal(err)
 		}
-		previousOne, err := getPreviousResolved(db, "two")
+		previousOne, err := getPreviousResolvedDB(db, "two")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,10 +179,10 @@ func TestResolvedTable(t *testing.T) {
 			newResolved.endpoint = "two"
 		}
 
-		if err := newResolved.writeUpdated(db); err != nil {
+		if err := newResolved.writeUpdatedDB(db); err != nil {
 			t.Fatal(err)
 		}
-		previousResolved, err := getPreviousResolved(db, newResolved.endpoint)
+		previousResolved, err := getPreviousResolvedDB(db, newResolved.endpoint)
 		if err != nil {
 			t.Fatal(err)
 		}

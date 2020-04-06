@@ -17,10 +17,20 @@ CREATE TABLE IF NOT EXISTS %s (
   logical INT NOT NULL,
 	key STRING NOT NULL,
 	after STRING,
-	PRIMARY KEY (nanos, logical)
+	PRIMARY KEY (nanos, logical, key)
 )
 `
-const writeSinkTable = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
+const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
+
+// Timestamps are less than and up to the resolved ones.
+// For this $1 and $2 are previous resolved, $3 and $4 are the current
+// resolved.
+const sinkTableQueryRows = `
+SELECT nanos, logical, key, after
+FROM %s
+WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
+			((nanos = $3 AND logical <= $4) OR (nanos < $3))
+`
 
 // SinkTableFullName creates the conjoined db/table name to be used by the sink
 // table.
@@ -118,8 +128,29 @@ func CreateSinkTable(db *sql.DB, sinkTableFullName string) error {
 // WriteToSinkTable upserts a single line to the sink table.
 func (line Line) WriteToSinkTable(db *sql.DB, sinkTableFullName string) error {
 	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(writeSinkTable, sinkTableFullName),
+	_, err := db.Exec(fmt.Sprintf(sinkTableWrite, sinkTableFullName),
 		line.nanos, line.logical, line.key, line.after,
 	)
 	return err
+}
+
+// FindAllRowsToUpdate returns all the rows that need to be updated from the
+// sink table.
+func FindAllRowsToUpdate(
+	tx *sql.Tx, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
+) ([]Line, error) {
+	rows, err := tx.Query(fmt.Sprintf(sinkTableQueryRows, sinkTableFullName),
+		prev.nanos, prev.logical, next.nanos, next.logical,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lines []Line
+	var line Line
+	for rows.Next() {
+		rows.Scan(&(line.nanos), &(line.logical), &(line.key), &(line.after))
+		lines = append(lines, line)
+	}
+	return lines, nil
 }

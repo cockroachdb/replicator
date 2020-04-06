@@ -8,12 +8,17 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// CreateSinkDB creates a new sink db if one does not exist yet.
+// CreateSinkDB creates a new sink db if one does not exist yet and also adds
+// the resolved table.
 func CreateSinkDB(db *sql.DB) error {
 	// Needs retry.
 	// TODO - Set the zone configs to be small here.
 	_, err := db.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", *sinkDB))
-	return err
+	if err != nil {
+		return err
+	}
+
+	return CreateResolvedTable(db)
 }
 
 // DropSinkDB drops the sinkDB and all data in it.

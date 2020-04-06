@@ -54,6 +54,17 @@ func (s *Sinks) FindSink(db *sql.DB, table string) *Sink {
 	return result
 }
 
+// GetAllSinks gets a list of all known sinks.
+func (s *Sinks) GetAllSinks() []*Sink {
+	s.RLock()
+	defer s.RUnlock()
+	var allSinks []*Sink
+	for _, sink := range s.sinks {
+		allSinks = append(allSinks, sink)
+	}
+	return allSinks
+}
+
 // HandleResolvedRequest parses and applies all the resolved upserts.
 func (s *Sinks) HandleResolvedRequest(
 	db *sql.DB, rURL resolvedURL, w http.ResponseWriter, r *http.Request,
@@ -61,7 +72,7 @@ func (s *Sinks) HandleResolvedRequest(
 	scanner := bufio.NewScanner(r.Body)
 	defer r.Body.Close()
 	for scanner.Scan() {
-		resolvedLine, err := parseResolvedLine(scanner.Bytes(), rURL.endpoint)
+		next, err := parseResolvedLine(scanner.Bytes(), rURL.endpoint)
 		if err != nil {
 			log.Print(err)
 			fmt.Fprint(w, err)
@@ -69,6 +80,58 @@ func (s *Sinks) HandleResolvedRequest(
 			return
 		}
 
-		log.Printf("ResolvedLine: %+v", resolvedLine)
+		log.Printf("Current Resolved: %+v", next)
+
+		// Start the transation
+		tx, err := db.Begin()
+		if err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// Get the previous resolved
+		prev, err := getPreviousResolved(tx, rURL.endpoint)
+		if err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("Previous Resolved: %+v", prev)
+
+		// Find all rows to update and upsert them.
+		allSinks := s.GetAllSinks()
+		for _, sink := range allSinks {
+			log.Printf("Updating Sink %s", sink.resultTableFullName)
+			lines, err := sink.FindAllRowsToUpdate(tx, prev, next)
+			if err != nil {
+				log.Print(err)
+				fmt.Fprint(w, err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			for _, line := range lines {
+				log.Printf("line to update: %+v", line)
+			}
+		}
+
+		// Write the updated resolved.
+		if err := next.writeUpdated(tx); err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// Needs Retry.
+		if err := tx.Commit(); err != nil {
+			log.Print(err)
+			fmt.Fprint(w, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 	}
 }

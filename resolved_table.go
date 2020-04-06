@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 
 	_ "github.com/lib/pq"
 )
@@ -52,7 +51,6 @@ func parseResolvedLine(rawBytes []byte, endpoint string) (ResolvedLine, error) {
 		endpoint: endpoint,
 	}
 	json.Unmarshal(rawBytes, &resolvedLine)
-	log.Printf("resolved line: %s", string(rawBytes))
 
 	// Prase the timestamp into nanos and logical.
 	var err error
@@ -64,16 +62,14 @@ func parseResolvedLine(rawBytes []byte, endpoint string) (ResolvedLine, error) {
 		return ResolvedLine{}, fmt.Errorf("no nano component to the 'updated' timestamp field")
 	}
 
-	log.Printf("resolved: %+v", resolvedLine)
-
 	return resolvedLine, nil
 }
 
 // getPreviousResolvedTimestamp returns the last recorded resolved for a
 // specific endpoint.
-func getPreviousResolved(db *sql.DB, endpoint string) (ResolvedLine, error) {
+func getPreviousResolved(tx *sql.Tx, endpoint string) (ResolvedLine, error) {
 	// Needs retry.
-	row := db.QueryRow(fmt.Sprintf(resolvedTableQuery, resolvedFullTableName()), endpoint)
+	row := tx.QueryRow(fmt.Sprintf(resolvedTableQuery, resolvedFullTableName()), endpoint)
 	var resolvedLine ResolvedLine
 	err := row.Scan(&(resolvedLine.endpoint), &(resolvedLine.nanos), &(resolvedLine.logical))
 	switch err {
@@ -89,9 +85,9 @@ func getPreviousResolved(db *sql.DB, endpoint string) (ResolvedLine, error) {
 }
 
 // Writes the updated timestamp to the resolved table.
-func (rl ResolvedLine) writeUpdated(db *sql.DB) error {
+func (rl ResolvedLine) writeUpdated(tx *sql.Tx) error {
 	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(resolvedTableWrite, resolvedFullTableName()),
+	_, err := tx.Exec(fmt.Sprintf(resolvedTableWrite, resolvedFullTableName()),
 		rl.endpoint, rl.nanos, rl.logical,
 	)
 	return err

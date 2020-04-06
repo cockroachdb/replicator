@@ -66,3 +66,9 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 		}
 	}
 }
+
+// FindAllRowsToUpdate returns all the rows that need to be updated from the
+// sink table.
+func (s *Sink) FindAllRowsToUpdate(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) ([]Line, error) {
+	return FindAllRowsToUpdate(tx, s.sinkTableFullName, prev, next)
+}
