@@ -15,6 +15,7 @@ type Sink struct {
 	originalTableName   string
 	resultTableFullName string
 	sinkTableFullName   string
+	primaryKeyColumns   []string
 }
 
 // CreateSink creates all the required tables and returns a new Sink.
@@ -31,9 +32,13 @@ func CreateSink(
 		return nil, fmt.Errorf("Table %s could not be found", resultTableFullName)
 	}
 
-	// Grab all the columns here.
 	sinkTableFullName := SinkTableFullName(resultDB, resultTable)
 	if err := CreateSinkTable(db, sinkTableFullName); err != nil {
+		return nil, err
+	}
+
+	columns, err := GetPrimaryKeyColumns(db, resultTableFullName)
+	if err != nil {
 		return nil, err
 	}
 
@@ -41,6 +46,7 @@ func CreateSink(
 		originalTableName:   originalTable,
 		resultTableFullName: resultTableFullName,
 		sinkTableFullName:   sinkTableFullName,
+		primaryKeyColumns:   columns,
 	}
 
 	return sink, nil
@@ -69,6 +75,8 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 
 // FindAllRowsToUpdate returns all the rows that need to be updated from the
 // sink table.
-func (s *Sink) FindAllRowsToUpdate(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) ([]Line, error) {
+func (s *Sink) FindAllRowsToUpdate(
+	tx *sql.Tx, prev ResolvedLine, next ResolvedLine,
+) ([]Line, error) {
 	return FindAllRowsToUpdate(tx, s.sinkTableFullName, prev, next)
 }

@@ -28,13 +28,12 @@ func DropSinkDB(db *sql.DB) error {
 	return err
 }
 
+const sqlTableExistsQuery = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = '%s'`
+
 // TableExists checks for the existence of a table.
 func TableExists(db *sql.DB, dbName string, tableName string) (bool, error) {
 	// Needs retry.
-	findTableSQL := fmt.Sprintf(
-		"SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = '%s'",
-		dbName, tableName,
-	)
+	findTableSQL := fmt.Sprintf(sqlTableExistsQuery, dbName, tableName)
 	log.Printf(findTableSQL)
 	row := db.QueryRow(findTableSQL)
 	var tableFound string
@@ -48,4 +47,31 @@ func TableExists(db *sql.DB, dbName string, tableName string) (bool, error) {
 	default:
 		return false, err
 	}
+}
+
+const sqlGetPrimaryKeyColumnsQuery = `
+SELECT column_name FROM [SHOW INDEX FROM %s] WHERE index_name = 'primary' ORDER BY seq_in_index
+`
+
+// GetPrimaryKeyColumns returns the column names for the primary key index for
+// a table, in order.
+func GetPrimaryKeyColumns(db *sql.DB, tableFullName string) ([]string, error) {
+	// Needs retry.
+	findKeyColumns := fmt.Sprintf(sqlGetPrimaryKeyColumnsQuery, tableFullName)
+	log.Printf(findKeyColumns)
+	rows, err := db.Query(findKeyColumns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return nil, err
+		}
+		columns = append(columns, column)
+	}
+	log.Printf("Primary Keys for %s: %v", tableFullName, columns)
+	return columns, nil
 }
