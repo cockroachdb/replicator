@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -238,13 +237,21 @@ func TestFeedImport(t *testing.T) {
 
 	tableFrom.populateTable(t, 10)
 
-	client := server.Client()
-	content := strings.NewReader("my request")
-	resp, err := client.Post(server.URL, "text/html", content)
-	if err != nil {
-		t.Fatal(err)
+	for tableTo.getTableRowCount(t) != 20 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 100)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("Got Response Code: %d", resp.StatusCode)
+
+	tableFrom.populateTable(t, 10)
+
+	for tableTo.getTableRowCount(t) != 30 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	// Make sure sink table is empty here.
+	sink := sinks.FindSink(tableFrom.name)
+	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
+		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
 }

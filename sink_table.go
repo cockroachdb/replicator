@@ -17,14 +17,26 @@ CREATE TABLE IF NOT EXISTS %s (
   logical INT NOT NULL,
 	key STRING NOT NULL,
 	after STRING,
-	PRIMARY KEY (nanos, logical)
+	PRIMARY KEY (nanos, logical, key)
 )
 `
-const writeSinkTable = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
+const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
 
-// SinkDBTableName creates the conjoined db/table name to be used by the sink
+const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
+
+// Timestamps are less than and up to the resolved ones.
+// For this $1 and $2 are previous resolved, $3 and $4 are the current
+// resolved.
+const sinkTableQueryRows = `
+SELECT nanos, logical, key, after
+FROM %s
+WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
+			((nanos = $3 AND logical <= $4) OR (nanos < $3))
+`
+
+// SinkTableFullName creates the conjoined db/table name to be used by the sink
 // table.
-func SinkDBTableName(resultDB string, resultTable string) string {
+func SinkTableFullName(resultDB string, resultTable string) string {
 	return fmt.Sprintf("%s.%s_%s", *sinkDB, resultDB, resultTable)
 }
 
@@ -70,7 +82,6 @@ func parseSplitTimestamp(timestamp string) (int64, int, error) {
 func parseLine(rawBytes []byte) (Line, error) {
 	var line Line
 	json.Unmarshal(rawBytes, &line)
-	log.Print(string(rawBytes))
 
 	// Prase the timestamp into nanos and logical.
 	var err error
@@ -110,17 +121,47 @@ func parseLine(rawBytes []byte) (Line, error) {
 }
 
 // CreateSinkTable creates if it does not exist, the a table used for sinking.
-func CreateSinkTable(db *sql.DB, sinkDBTable string) error {
+func CreateSinkTable(db *sql.DB, sinkTableFullName string) error {
 	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(sinkTableSchema, sinkDBTable))
+	_, err := db.Exec(fmt.Sprintf(sinkTableSchema, sinkTableFullName))
 	return err
 }
 
 // WriteToSinkTable upserts a single line to the sink table.
-func (line Line) WriteToSinkTable(db *sql.DB, sinkDBTable string) error {
+func (line Line) WriteToSinkTable(db *sql.DB, sinkTableFullName string) error {
 	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(writeSinkTable, sinkDBTable),
+	_, err := db.Exec(fmt.Sprintf(sinkTableWrite, sinkTableFullName),
 		line.nanos, line.logical, line.key, line.after,
+	)
+	return err
+}
+
+// FindAllRowsToUpdate returns all the rows that need to be updated from the
+// sink table.
+func FindAllRowsToUpdate(
+	tx *sql.Tx, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
+) ([]Line, error) {
+	rows, err := tx.Query(fmt.Sprintf(sinkTableQueryRows, sinkTableFullName),
+		prev.nanos, prev.logical, next.nanos, next.logical,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lines []Line
+	var line Line
+	for rows.Next() {
+		rows.Scan(&(line.nanos), &(line.logical), &(line.key), &(line.after))
+		lines = append(lines, line)
+	}
+	return lines, nil
+}
+
+// DeleteLine removes the line from the sinktable.
+// const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
+func (line Line) DeleteLine(tx *sql.Tx, sinkTableFullName string) error {
+	_, err := tx.Exec(fmt.Sprintf(sinkTableDelete, sinkTableFullName),
+		line.nanos, line.logical, line.key,
 	)
 	return err
 }
