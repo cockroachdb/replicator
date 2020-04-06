@@ -237,19 +237,21 @@ func TestFeedImport(t *testing.T) {
 
 	tableFrom.populateTable(t, 10)
 
-	//time.Sleep(10 * time.Second)
-
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
+		time.Sleep(time.Millisecond * 100)
 	}
 
 	tableFrom.populateTable(t, 10)
 
 	for tableTo.getTableRowCount(t) != 30 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
+		time.Sleep(time.Millisecond * 100)
 	}
 
 	// Make sure sink table is empty here.
+	sink := sinks.FindSink(tableFrom.name)
+	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
+		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
+	}
 }

@@ -47,7 +47,7 @@ func (s *Sinks) AddSink(
 }
 
 // FindSink returns a sink for a given table name.
-func (s *Sinks) FindSink(db *sql.DB, table string) *Sink {
+func (s *Sinks) FindSink(table string) *Sink {
 	s.RLock()
 	defer s.RUnlock()
 	result, _ := s.sinks[table]

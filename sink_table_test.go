@@ -156,7 +156,7 @@ func TestWriteToSinkTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sink := sinks.FindSink(db, tableFrom.name)
+	sink := sinks.FindSink(tableFrom.name)
 	if sink == nil {
 		t.Fatalf("Expected sink, found none")
 	}
@@ -211,7 +211,7 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 	}
 
 	// Insert 100 rows into the table.
-	sink := sinks.FindSink(db, tableFrom.name)
+	sink := sinks.FindSink(tableFrom.name)
 	for i := 0; i < 10; i++ {
 		for j := 0; j < 10; j++ {
 			line := Line{

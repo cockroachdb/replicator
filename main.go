@@ -30,7 +30,7 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 		// Is it an ndjson url?
 		ndjson, ndjsonErr := parseNdjsonURL(r.RequestURI)
 		if ndjsonErr == nil {
-			sink := sinks.FindSink(db, ndjson.topic)
+			sink := sinks.FindSink(ndjson.topic)
 			if sink != nil {
 				log.Printf("Found Sink: %s", sink.originalTableName)
 				sink.HandleRequest(db, w, r)
