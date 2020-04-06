@@ -237,16 +237,19 @@ func TestFeedImport(t *testing.T) {
 
 	tableFrom.populateTable(t, 10)
 
-	time.Sleep(10 * time.Second)
+	//time.Sleep(10 * time.Second)
 
-	/*
-		client := server.Client()
-		content := strings.NewReader("my request")
-		resp, err := client.Post(server.URL, "text/html", content)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("Got Response Code: %d", resp.StatusCode)
-		}*/
+	for tableTo.getTableRowCount(t) != 20 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 10)
+	}
+
+	tableFrom.populateTable(t, 10)
+
+	for tableTo.getTableRowCount(t) != 30 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 10)
+	}
+
+	// Make sure sink table is empty here.
 }

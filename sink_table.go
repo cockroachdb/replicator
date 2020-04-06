@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS %s (
 `
 const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
 
+const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
+
 // Timestamps are less than and up to the resolved ones.
 // For this $1 and $2 are previous resolved, $3 and $4 are the current
 // resolved.
@@ -153,4 +155,13 @@ func FindAllRowsToUpdate(
 		lines = append(lines, line)
 	}
 	return lines, nil
+}
+
+// DeleteLine removes the line from the sinktable.
+// const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
+func (line Line) DeleteLine(tx *sql.Tx, sinkTableFullName string) error {
+	_, err := tx.Exec(fmt.Sprintf(sinkTableDelete, sinkTableFullName),
+		line.nanos, line.logical, line.key,
+	)
+	return err
 }
