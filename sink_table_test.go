@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"testing"
@@ -8,6 +9,25 @@ import (
 
 // These test require an insecure cockroach server is running on the default
 // port with the default root user with no password.
+
+// findAllRowsToUpdateDB is a wrapper around FindAllRowsToUpdate that handles
+// the transaction for testing.
+func findAllRowsToUpdateDB(
+	db *sql.DB, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
+) ([]Line, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	lines, err := FindAllRowsToUpdate(tx, sinkTableFullName, prev, next)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return lines, nil
+}
 
 func TestParseSplitTimestamp(t *testing.T) {
 	tests := []struct {
@@ -160,5 +180,91 @@ func TestWriteToSinkTable(t *testing.T) {
 	// Check to see if there are indeed 100 rows in the table.
 	if rowCount := getRowCount(t, db, sink.sinkTableFullName); rowCount != 100 {
 		t.Fatalf("Expected 0 rows, got %d", rowCount)
+	}
+}
+
+func TestFindAllRowsToUpdate(t *testing.T) {
+	// Create the test db
+	db, dbName, dbClose := getDB(t)
+	defer dbClose()
+
+	// Drop the previous _cdc_sink db
+	if err := DropSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new _cdc_sink db
+	if err := CreateSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the table to import from
+	tableFrom := createTestTable(t, db, dbName)
+
+	// Create the table to receive into
+	tableTo := createTestTable(t, db, dbName)
+
+	// Create the sinks and sink
+	sinks := CreateSinks()
+	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert 100 rows into the table.
+	sink := sinks.FindSink(db, tableFrom.name)
+	for i := 0; i < 10; i++ {
+		for j := 0; j < 10; j++ {
+			line := Line{
+				nanos:   int64(i),
+				logical: j,
+				after:   fmt.Sprintf("{a=%d,b=%d}", i, j),
+				key:     fmt.Sprintf("[%d]", i),
+			}
+			if err := line.WriteToSinkTable(db, sink.sinkTableFullName); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Now find those rows from the start.
+	for i := 0; i < 10; i++ {
+		prev := ResolvedLine{
+			endpoint: "test",
+			nanos:    0,
+			logical:  0,
+		}
+		next := ResolvedLine{
+			endpoint: "test",
+			nanos:    int64(i),
+			logical:  i,
+		}
+		lines, err := findAllRowsToUpdateDB(db, sink.sinkTableFullName, prev, next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(lines) != i*11 {
+			t.Errorf("expected %d lines, got %d", i*11, len(lines))
+		}
+	}
+
+	// And again but from the previous.
+	for i := 1; i < 10; i++ {
+		prev := ResolvedLine{
+			endpoint: "test",
+			nanos:    int64(i - 1),
+			logical:  i - 1,
+		}
+		next := ResolvedLine{
+			endpoint: "test",
+			nanos:    int64(i),
+			logical:  i,
+		}
+		lines, err := findAllRowsToUpdateDB(db, sink.sinkTableFullName, prev, next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(lines) != 11 {
+			t.Errorf("expected %d lines, got %d", 11, len(lines))
+		}
 	}
 }
