@@ -13,7 +13,7 @@ import (
 var connectionString = flag.String("conn", "postgresql://root@localhost:26257/defaultdb?sslmode=disable", "cockroach connection string")
 var port = flag.Int("port", 26258, "http server listening port")
 
-var sendTable = flag.String("send_table", "", "Name of the table sending data")
+var sourceTable = flag.String("source_table", "", "Name of the source table sending data")
 
 var resultDB = flag.String("db", "defaultdb", "database for the receiving table")
 var resultTable = flag.String("table", "", "receiving table, must exist")
@@ -25,7 +25,7 @@ var dropDB = flag.Bool("drop", false, "Drop the sink db before starting?")
 func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Request: %s", r.RequestURI)
-		log.Printf("HEader: %s", r.Header)
+		log.Printf("Header: %s", r.Header)
 
 		// Is it an ndjson url?
 		ndjson, ndjsonErr := parseNdjsonURL(r.RequestURI)
@@ -79,7 +79,7 @@ func main() {
 	sinks := CreateSinks()
 
 	// Add all the sinks here
-	if err := sinks.AddSink(db, *sendTable, *resultDB, *resultTable); err != nil {
+	if err := sinks.AddSink(db, *sourceTable, *resultDB, *resultTable); err != nil {
 		log.Fatal(err)
 	}
 
