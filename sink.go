@@ -96,7 +96,12 @@ func (s *Sink) deleteRow(tx *sql.Tx, line Line) error {
 
 // upsertRow performs an upsert on a single row.
 func (s *Sink) upsertRow(tx *sql.Tx, line Line) error {
-	// Find all the columns that need to be part of the upsert.
+	// Parse the after columns
+	if err := json.Unmarshal([]byte(line.after), &(line.After)); err != nil {
+		return err
+	}
+
+	// Find all the columns that need to be part of the upsert statement.
 	columns := make(map[string]interface{})
 	for name, value := range line.After {
 		columns[name] = value
@@ -126,46 +131,6 @@ func (s *Sink) upsertRow(tx *sql.Tx, line Line) error {
 	}
 	fmt.Fprint(&statement, ")")
 	log.Printf("Upsert Statement: %s", statement.String())
-
-	// Upsert the line
-	_, err := tx.Exec(statement.String(), values...)
-	return err
-}
-
-// updateRow performs an update on a single row.
-func (s *Sink) updateRow(tx *sql.Tx, line Line) error {
-	// Find all the columns that need to be part of the upsert.
-	columns := make(map[string]interface{})
-	for name, value := range line.After {
-		columns[name] = value
-	}
-	for i, column := range s.primaryKeyColumns {
-		columns[column] = line.Key[i]
-	}
-
-	// Build the statement.
-	var statement strings.Builder
-	fmt.Fprintf(&statement, "UPDATE %s SET ", s.resultTableFullName)
-	var values []interface{}
-	for name, value := range line.After {
-		if len(values) > 1 {
-			fmt.Fprint(&statement, " AND ")
-		}
-		values = append(values, value)
-		// Placeholder index always starts at 1.
-		fmt.Fprintf(&statement, "%s = $%d", name, len(values)+1)
-	}
-	fmt.Fprint(&statement, " WHERE ")
-	for i, column := range s.primaryKeyColumns {
-		if i > 0 {
-			fmt.Fprint(&statement, " AND ")
-		}
-		// Placeholder index always starts at 1.
-		fmt.Fprintf(&statement, "%s = $%d", column, len(values)+i)
-	}
-	values = append(values, line.Key...)
-
-	log.Printf("Update Statement: %s", statement.String())
 
 	// Upsert the line
 	_, err := tx.Exec(statement.String(), values...)
@@ -203,7 +168,6 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 
 		// Is this a delete?
 		if line.after == "null" {
-			log.Print("***DELETE***")
 			if err := s.deleteRow(tx, line); err != nil {
 				return err
 			}
@@ -213,38 +177,7 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 			continue
 		}
 
-		// Parse the after columns
-		if err := json.Unmarshal([]byte(line.after), &(line.After)); err != nil {
-			return err
-		}
-
-		var primaryKeyUpdate bool
-		for i, column := range s.primaryKeyColumns {
-			if value, exists := line.After[column]; exists {
-				log.Printf("line.Key[i]:%v != value:%v", line.Key[i], value)
-				if line.Key[i] != value {
-					// This requires an update statement
-					primaryKeyUpdate = true
-					break
-				}
-			}
-		}
-
-		// This requires an update statement.
-		if primaryKeyUpdate {
-			// From what I can tell, this will never happen.
-			log.Print("***UPDATE***")
-			if err := s.updateRow(tx, line); err != nil {
-				return err
-			}
-			if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
-				return err
-			}
-			continue
-		}
-
 		// This can be an upsert statement.
-		log.Print("***UPSERT***")
 		if err := s.upsertRow(tx, line); err != nil {
 			return err
 		}
