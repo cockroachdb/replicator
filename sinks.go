@@ -105,7 +105,7 @@ func (s *Sinks) HandleResolvedRequest(
 		// Find all rows to update and upsert them.
 		allSinks := s.GetAllSinks()
 		for _, sink := range allSinks {
-			if err := sink.UpsertRows(tx, prev, next); err != nil {
+			if err := sink.UpdateRows(tx, prev, next); err != nil {
 				log.Print(err)
 				fmt.Fprint(w, err)
 				w.WriteHeader(http.StatusBadRequest)
