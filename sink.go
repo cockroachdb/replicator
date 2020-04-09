@@ -75,8 +75,105 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// UpsertRows upserts all changed rows.
-func (s *Sink) UpsertRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) error {
+// deleteRow preforms a delete on a single row.
+func (s *Sink) deleteRow(tx *sql.Tx, line Line) error {
+	// Build the statement.
+	var statement strings.Builder
+	fmt.Fprintf(&statement, "DELETE FROM %s WHERE ", s.resultTableFullName)
+	for i, column := range s.primaryKeyColumns {
+		if i > 0 {
+			fmt.Fprint(&statement, " AND ")
+		}
+		// Placeholder index always starts at 1.
+		fmt.Fprintf(&statement, "%s = $%d", column, i+1)
+	}
+	log.Printf("Delete Statement: %s", statement.String())
+
+	// Upsert the line
+	_, err := tx.Exec(statement.String(), line.Key...)
+	return err
+}
+
+// upsertRow performs an upsert on a single row.
+func (s *Sink) upsertRow(tx *sql.Tx, line Line) error {
+	// Find all the columns that need to be part of the upsert.
+	columns := make(map[string]interface{})
+	for name, value := range line.After {
+		columns[name] = value
+	}
+	for i, column := range s.primaryKeyColumns {
+		columns[column] = line.Key[i]
+	}
+
+	// Build the statement.
+	var statement strings.Builder
+	fmt.Fprintf(&statement, "UPSERT INTO %s (", s.resultTableFullName)
+	var values []interface{}
+	for name, value := range columns {
+		if len(values) > 0 {
+			fmt.Fprint(&statement, ", ")
+		}
+		fmt.Fprint(&statement, name)
+		values = append(values, value)
+	}
+	fmt.Fprint(&statement, ") VALUES (")
+	for i := 0; i < len(values); i++ {
+		if i > 0 {
+			fmt.Fprint(&statement, ", ")
+		}
+		// Placeholder index always starts at 1.
+		fmt.Fprintf(&statement, "$%d", i+1)
+	}
+	fmt.Fprint(&statement, ")")
+	log.Printf("Upsert Statement: %s", statement.String())
+
+	// Upsert the line
+	_, err := tx.Exec(statement.String(), values...)
+	return err
+}
+
+// updateRow performs an update on a single row.
+func (s *Sink) updateRow(tx *sql.Tx, line Line) error {
+	// Find all the columns that need to be part of the upsert.
+	columns := make(map[string]interface{})
+	for name, value := range line.After {
+		columns[name] = value
+	}
+	for i, column := range s.primaryKeyColumns {
+		columns[column] = line.Key[i]
+	}
+
+	// Build the statement.
+	var statement strings.Builder
+	fmt.Fprintf(&statement, "UPDATE %s SET ", s.resultTableFullName)
+	var values []interface{}
+	for name, value := range line.After {
+		if len(values) > 1 {
+			fmt.Fprint(&statement, " AND ")
+		}
+		values = append(values, value)
+		// Placeholder index always starts at 1.
+		fmt.Fprintf(&statement, "%s = $%d", name, len(values)+1)
+	}
+	fmt.Fprint(&statement, " WHERE ")
+	for i, column := range s.primaryKeyColumns {
+		if i > 0 {
+			fmt.Fprint(&statement, " AND ")
+		}
+		// Placeholder index always starts at 1.
+		fmt.Fprintf(&statement, "%s = $%d", column, len(values)+i)
+	}
+	values = append(values, line.Key...)
+
+	log.Printf("Update Statement: %s", statement.String())
+
+	// Upsert the line
+	_, err := tx.Exec(statement.String(), values...)
+	return err
+}
+
+// UpdateRows updates all changed rows.
+func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) error {
 	log.Printf("Updating Sink %s", s.resultTableFullName)
 
 	// First, gather all the rows to update.
@@ -84,11 +181,9 @@ func (s *Sink) UpsertRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 	if err != nil {
 		return err
 	}
-	for _, line := range lines {
-		log.Printf("line to update: %+v", line)
-	}
 
 	for _, line := range lines {
+		log.Printf("line to update: %+v", line)
 		// Parse the key into columns
 		if err := json.Unmarshal([]byte(line.key), &(line.Key)); err != nil {
 			return err
@@ -106,44 +201,56 @@ func (s *Sink) UpsertRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 			)
 		}
 
+		// Is this a delete?
+		if line.after == "null" {
+			log.Print("***DELETE***")
+			if err := s.deleteRow(tx, line); err != nil {
+				return err
+			}
+			if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
+				return err
+			}
+			continue
+		}
+
 		// Parse the after columns
 		if err := json.Unmarshal([]byte(line.after), &(line.After)); err != nil {
 			return err
 		}
 
-		// Find all the columns that need to be part of the upsert.
-		columns := make(map[string]interface{})
-		for name, value := range line.After {
-			columns[name] = value
-		}
+		var primaryKeyUpdate bool
 		for i, column := range s.primaryKeyColumns {
-			columns[column] = line.Key[i]
-		}
-
-		// Build the statement.
-		var statement, values strings.Builder
-		fmt.Fprintf(&statement, "UPSERT INTO %s (", s.resultTableFullName)
-		first := true
-		for name, value := range columns {
-			if first {
-				first = false
-			} else {
-				fmt.Fprint(&statement, ", ")
-				fmt.Fprint(&values, ", ")
+			if value, exists := line.After[column]; exists {
+				log.Printf("line.Key[i]:%v != value:%v", line.Key[i], value)
+				if line.Key[i] != value {
+					// This requires an update statement
+					primaryKeyUpdate = true
+					break
+				}
 			}
-			fmt.Fprint(&statement, name)
-			fmt.Fprint(&values, value)
 		}
-		fmt.Fprintf(&statement, ") VALUES (%s)", values.String())
-		log.Printf("Upsert Statement: %s", statement.String())
 
-		// Upsert the line
-		if _, err := tx.Exec(statement.String()); err != nil {
+		// This requires an update statement.
+		if primaryKeyUpdate {
+			// From what I can tell, this will never happen.
+			log.Print("***UPDATE***")
+			if err := s.updateRow(tx, line); err != nil {
+				return err
+			}
+			if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// This can be an upsert statement.
+		log.Print("***UPSERT***")
+		if err := s.upsertRow(tx, line); err != nil {
 			return err
 		}
-
-		// Delete the line from the sink table.
-		line.DeleteLine(tx, s.sinkTableFullName)
+		if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
+			return err
+		}
 	}
 
 	return nil

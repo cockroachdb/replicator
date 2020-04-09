@@ -1,6 +1,6 @@
 # cdc-sink
 
-This tool lets one CockraochDB cluster take a single CDC feed from another
+This tool lets one CockroachDB cluster take a single CDC feed from another
 cluster. This feed can send one or more tables.
 
 ***Note, only single table works at this time***
@@ -56,8 +56,6 @@ below
 ## Limitations (for now)
 
 * single source table only
-* deletes do not work
-* updates that change the primary key do not work
 * only one change feed per cdc-sink instance
 * data-types - these are just untested
   * arrays

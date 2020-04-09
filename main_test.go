@@ -94,6 +94,27 @@ func (ti *tableInfo) deleteAll(t *testing.T) {
 	}
 }
 
+func (ti *tableInfo) updateNoneKeyColumns(t *testing.T) {
+	if _, err := ti.db.Exec(fmt.Sprintf("UPDATE %s SET b=b*100 WHERE true", ti.getFullName())); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (ti *tableInfo) updateAll(t *testing.T) {
+	if _, err := ti.db.Exec(fmt.Sprintf("UPDATE %s SET a=a*100, b=b*100 WHERE true", ti.getFullName())); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (ti *tableInfo) maxB(t *testing.T) int {
+	row := ti.db.QueryRow(fmt.Sprintf("SELECT max(b) FROM %s", ti.getFullName()))
+	var max int
+	if err := row.Scan(&max); err != nil {
+		t.Fatal(err)
+	}
+	return max
+}
+
 func (ti tableInfo) getTableRowCount(t *testing.T) int {
 	return getRowCount(t, ti.db, ti.getFullName())
 }
@@ -265,7 +286,6 @@ func TestFeedInsert(t *testing.T) {
 }
 
 func TestFeedDelete(t *testing.T) {
-	t.Skip("deletes are not yet supported")
 	// Create the test db
 	db, dbName, dbClose := getDB(t)
 	defer dbClose()
@@ -319,6 +339,136 @@ func TestFeedDelete(t *testing.T) {
 	tableFrom.deleteAll(t)
 
 	for tableTo.getTableRowCount(t) != 0 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	// Make sure sink table is empty here.
+	sink := sinks.FindSink(tableFrom.name)
+	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
+		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
+	}
+}
+
+func TestFeedUpdateNonPrimary(t *testing.T) {
+	// Create the test db
+	db, dbName, dbClose := getDB(t)
+	defer dbClose()
+
+	// Drop the previous _cdc_sink db
+	if err := DropSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new _cdc_sink db
+	if err := CreateSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the table to import from
+	tableFrom := createTestTable(t, db, dbName)
+
+	// Create the table to receive into
+	tableTo := createTestTable(t, db, dbName)
+
+	// Give the from table a few rows
+	tableFrom.populateTable(t, 10)
+	if count := tableFrom.getTableRowCount(t); count != 10 {
+		t.Fatalf("Expected Rows 10, actual %d", count)
+	}
+
+	// Create the sinks and sink
+	sinks := CreateSinks()
+	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a test http server
+	handler := createHandler(db, sinks)
+	server := httptest.NewServer(
+		http.HandlerFunc(handler),
+	)
+	defer server.Close()
+	t.Log(server.URL)
+
+	job := createChangeFeed(t, db, server.URL, tableFrom)
+	defer job.cancelJob(t)
+
+	tableFrom.populateTable(t, 10)
+
+	for tableTo.getTableRowCount(t) != 20 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	tableFrom.updateNoneKeyColumns(t)
+
+	for tableTo.maxB(t) != 2000 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	// Make sure sink table is empty here.
+	sink := sinks.FindSink(tableFrom.name)
+	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
+		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
+	}
+}
+
+func TestFeedUpdatePrimary(t *testing.T) {
+	// Create the test db
+	db, dbName, dbClose := getDB(t)
+	defer dbClose()
+
+	// Drop the previous _cdc_sink db
+	if err := DropSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new _cdc_sink db
+	if err := CreateSinkDB(db); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the table to import from
+	tableFrom := createTestTable(t, db, dbName)
+
+	// Create the table to receive into
+	tableTo := createTestTable(t, db, dbName)
+
+	// Give the from table a few rows
+	tableFrom.populateTable(t, 10)
+	if count := tableFrom.getTableRowCount(t); count != 10 {
+		t.Fatalf("Expected Rows 10, actual %d", count)
+	}
+
+	// Create the sinks and sink
+	sinks := CreateSinks()
+	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a test http server
+	handler := createHandler(db, sinks)
+	server := httptest.NewServer(
+		http.HandlerFunc(handler),
+	)
+	defer server.Close()
+	t.Log(server.URL)
+
+	job := createChangeFeed(t, db, server.URL, tableFrom)
+	defer job.cancelJob(t)
+
+	tableFrom.populateTable(t, 10)
+
+	for tableTo.getTableRowCount(t) != 20 {
+		// add a stopper here from a wrapper around the handler.
+		time.Sleep(time.Millisecond * 100)
+	}
+
+	tableFrom.updateAll(t)
+
+	for tableTo.maxB(t) != 2000 {
 		// add a stopper here from a wrapper around the handler.
 		time.Sleep(time.Millisecond * 100)
 	}
