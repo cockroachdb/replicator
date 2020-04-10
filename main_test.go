@@ -58,18 +58,10 @@ func getRowCount(t *testing.T, db *sql.DB, fullTableName string) int {
 	return count
 }
 
-const tableStyle1 = `
-CREATE TABLE %s.%s (
-	a INT PRIMARY KEY,
-	b INT
-)
-`
-
 type tableInfo struct {
-	db       *sql.DB
-	dbName   string
-	name     string
-	rowCount int
+	db     *sql.DB
+	dbName string
+	name   string
 }
 
 func (ti tableInfo) getFullName() string {
@@ -92,38 +84,94 @@ func (ti tableInfo) dropTable(t *testing.T) {
 	}
 }
 
-// These next 4 functions should be in another struct that embeds a tableinfo.
+// This function creates a test table and returns its name.
+func createTestTable(t *testing.T, db *sql.DB, dbName string, schema string) tableInfo {
+	var tableName string
 
-// populateTable assumes tableStyle1 schema.
-func (ti *tableInfo) populateTable(t *testing.T, count int) {
+outer:
+	for {
+		// Create the testing database
+		tableNum := r.Intn(10000)
+		tableName = fmt.Sprintf("_test_table_%d", tableNum)
+
+		// Find the DB.
+		var actualTableName string
+		row := db.QueryRow(
+			fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
+			tableName,
+		)
+		err := row.Scan(&actualTableName)
+		switch err {
+		case sql.ErrNoRows:
+			break outer
+		case nil:
+			continue
+		default:
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := db.Exec(
+		fmt.Sprintf(tableSimpleSchema, dbName, tableName)); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("Testing Table: %s.%s", dbName, tableName)
+	return tableInfo{
+		db:     db,
+		dbName: dbName,
+		name:   tableName,
+	}
+}
+
+type tableInfoSimple struct {
+	tableInfo
+	rowCount int
+}
+
+const tableSimpleSchema = `
+CREATE TABLE %s.%s (
+	a INT PRIMARY KEY,
+	b INT
+)
+`
+
+func createTestSimpleTable(t *testing.T, db *sql.DB, dbName string) tableInfoSimple {
+	return tableInfoSimple{
+		tableInfo: createTestTable(t, db, dbName, tableSimpleSchema),
+	}
+}
+
+func (tis *tableInfoSimple) populateTable(t *testing.T, count int) {
 	for i := 0; i < count; i++ {
-		if _, err := ti.db.Exec(
-			fmt.Sprintf("INSERT INTO %s VALUES ($1, $1)", ti.getFullName()),
-			ti.rowCount+1,
+		if _, err := tis.db.Exec(
+			fmt.Sprintf("INSERT INTO %s VALUES ($1, $1)", tis.getFullName()),
+			tis.rowCount+1,
 		); err != nil {
 			t.Fatal(err)
 		}
-		ti.rowCount++
+		tis.rowCount++
 	}
 }
 
-// updateNoneKeyColumns assumes tableStyle1 schema.
-func (ti *tableInfo) updateNoneKeyColumns(t *testing.T) {
-	if _, err := ti.db.Exec(fmt.Sprintf("UPDATE %s SET b=b*100 WHERE true", ti.getFullName())); err != nil {
+func (tis *tableInfoSimple) updateNoneKeyColumns(t *testing.T) {
+	if _, err := tis.db.Exec(
+		fmt.Sprintf("UPDATE %s SET b=b*100 WHERE true", tis.getFullName()),
+	); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// updateAll assumes tableStyle1 schema.
-func (ti *tableInfo) updateAll(t *testing.T) {
-	if _, err := ti.db.Exec(fmt.Sprintf("UPDATE %s SET a=a*100, b=b*100 WHERE true", ti.getFullName())); err != nil {
+func (tis *tableInfoSimple) updateAll(t *testing.T) {
+	if _, err := tis.db.Exec(
+		fmt.Sprintf("UPDATE %s SET a=a*100, b=b*100 WHERE true", tis.getFullName()),
+	); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// maxB assumes tableStyle1 schema.
-func (ti *tableInfo) maxB(t *testing.T) int {
-	row := ti.db.QueryRow(fmt.Sprintf("SELECT max(b) FROM %s", ti.getFullName()))
+func (tis *tableInfoSimple) maxB(t *testing.T) int {
+	row := tis.db.QueryRow(fmt.Sprintf("SELECT max(b) FROM %s", tis.getFullName()))
 	var max int
 	if err := row.Scan(&max); err != nil {
 		t.Fatal(err)
@@ -167,46 +215,6 @@ func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jo
 	}
 }
 
-// This function creates a test table and returns its name.
-func createTestTable(t *testing.T, db *sql.DB, dbName string) tableInfo {
-	var tableName string
-
-outer:
-	for {
-		// Create the testing database
-		tableNum := r.Intn(10000)
-		tableName = fmt.Sprintf("_test_table_%d", tableNum)
-
-		// Find the DB.
-		var actualTableName string
-		row := db.QueryRow(
-			fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
-			tableName,
-		)
-		err := row.Scan(&actualTableName)
-		switch err {
-		case sql.ErrNoRows:
-			break outer
-		case nil:
-			continue
-		default:
-			t.Fatal(err)
-		}
-	}
-
-	if _, err := db.Exec(
-		fmt.Sprintf(tableStyle1, dbName, tableName)); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Logf("Testing Table: %s.%s", dbName, tableName)
-	return tableInfo{
-		db:     db,
-		dbName: dbName,
-		name:   tableName,
-	}
-}
-
 // dropSinkDB is just a wrapper around DropSinkDB for testing.
 func dropSinkDB(t *testing.T, db *sql.DB) {
 	if err := DropSinkDB(db); err != nil {
@@ -240,7 +248,7 @@ func TestDB(t *testing.T) {
 	}
 
 	// Create a test table and insert some rows
-	table := createTestTable(t, db, dbName)
+	table := createTestSimpleTable(t, db, dbName)
 	table.populateTable(t, 10)
 	if count := table.getTableRowCount(t); count != 10 {
 		t.Fatalf("Expected Rows 10, actual %d", count)
@@ -257,10 +265,10 @@ func TestFeedInsert(t *testing.T) {
 	defer dropSinkDB(t, db)
 
 	// Create the table to import from
-	tableFrom := createTestTable(t, db, dbName)
+	tableFrom := createTestSimpleTable(t, db, dbName)
 
 	// Create the table to receive into
-	tableTo := createTestTable(t, db, dbName)
+	tableTo := createTestSimpleTable(t, db, dbName)
 
 	// Give the from table a few rows
 	tableFrom.populateTable(t, 10)
@@ -282,7 +290,7 @@ func TestFeedInsert(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom)
+	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
@@ -316,10 +324,10 @@ func TestFeedDelete(t *testing.T) {
 	defer dropSinkDB(t, db)
 
 	// Create the table to import from
-	tableFrom := createTestTable(t, db, dbName)
+	tableFrom := createTestSimpleTable(t, db, dbName)
 
 	// Create the table to receive into
-	tableTo := createTestTable(t, db, dbName)
+	tableTo := createTestSimpleTable(t, db, dbName)
 
 	// Give the from table a few rows
 	tableFrom.populateTable(t, 10)
@@ -341,7 +349,7 @@ func TestFeedDelete(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom)
+	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
@@ -375,10 +383,10 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	defer dropSinkDB(t, db)
 
 	// Create the table to import from
-	tableFrom := createTestTable(t, db, dbName)
+	tableFrom := createTestSimpleTable(t, db, dbName)
 
 	// Create the table to receive into
-	tableTo := createTestTable(t, db, dbName)
+	tableTo := createTestSimpleTable(t, db, dbName)
 
 	// Give the from table a few rows
 	tableFrom.populateTable(t, 10)
@@ -400,7 +408,7 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom)
+	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
@@ -434,10 +442,10 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	defer dropSinkDB(t, db)
 
 	// Create the table to import from
-	tableFrom := createTestTable(t, db, dbName)
+	tableFrom := createTestSimpleTable(t, db, dbName)
 
 	// Create the table to receive into
-	tableTo := createTestTable(t, db, dbName)
+	tableTo := createTestSimpleTable(t, db, dbName)
 
 	// Give the from table a few rows
 	tableFrom.populateTable(t, 10)
@@ -459,7 +467,7 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom)
+	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
