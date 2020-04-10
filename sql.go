@@ -35,9 +35,8 @@ func TableExists(db *sql.DB, dbName string, tableName string) (bool, error) {
 	// Needs retry.
 	findTableSQL := fmt.Sprintf(sqlTableExistsQuery, dbName, tableName)
 	log.Printf(findTableSQL)
-	row := db.QueryRow(findTableSQL)
 	var tableFound string
-	err := row.Scan(&tableFound)
+	err := db.QueryRow(findTableSQL).Scan(&tableFound)
 	switch err {
 	case sql.ErrNoRows:
 		return false, nil

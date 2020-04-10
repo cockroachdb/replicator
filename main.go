@@ -32,7 +32,6 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 		if ndjsonErr == nil {
 			sink := sinks.FindSink(ndjson.topic)
 			if sink != nil {
-				log.Printf("Found Sink: %s", sink.originalTableName)
 				sink.HandleRequest(db, w, r)
 				return
 			}
