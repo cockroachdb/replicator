@@ -88,15 +88,9 @@ func TestResolvedTable(t *testing.T) {
 	db, _, dbClose := getDB(t)
 	defer dbClose()
 
-	// Drop the previous _cdc_sink db
-	if err := DropSinkDB(db); err != nil {
-		t.Fatal(err)
-	}
-
 	// Create a new _cdc_sink db
-	if err := CreateSinkDB(db); err != nil {
-		t.Fatal(err)
-	}
+	createSinkDB(t, db)
+	defer dropSinkDB(t, db)
 
 	if err := CreateResolvedTable(db); err != nil {
 		t.Fatal(err)

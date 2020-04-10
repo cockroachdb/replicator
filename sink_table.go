@@ -116,7 +116,8 @@ func parseLine(rawBytes []byte) (Line, error) {
 	}
 	line.key = string(keyBytes)
 
-	log.Printf("line: %+v\n", line)
+	log.Printf("lineRaw: %s", string(rawBytes))
+	log.Printf("line: %+v", line)
 	return line, err
 }
 
