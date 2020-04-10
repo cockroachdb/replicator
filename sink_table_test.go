@@ -132,10 +132,10 @@ func TestWriteToSinkTable(t *testing.T) {
 	defer dropSinkDB(t, db)
 
 	// Create the table to import from
-	tableFrom := createTestTable(t, db, dbName)
+	tableFrom := createTestSimpleTable(t, db, dbName)
 
 	// Create the table to receive into
-	tableTo := createTestTable(t, db, dbName)
+	tableTo := createTestSimpleTable(t, db, dbName)
 
 	// Give the from table a few rows
 	tableFrom.populateTable(t, 10)
@@ -186,10 +186,10 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 	defer dropSinkDB(t, db)
 
 	// Create the table to import from
-	tableFrom := createTestTable(t, db, dbName)
+	tableFrom := createTestSimpleTable(t, db, dbName)
 
 	// Create the table to receive into
-	tableTo := createTestTable(t, db, dbName)
+	tableTo := createTestSimpleTable(t, db, dbName)
 
 	// Create the sinks and sink
 	sinks := CreateSinks()

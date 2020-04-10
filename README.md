@@ -63,7 +63,7 @@ below
   * jsonb
   * serial
   * collated strings are also untested still
-  * I'm worried about larger ints/floats and they need to be tested too
+  * I'm worried about larger inets/floats and they need to be tested too
 
 ## Limitations
 
