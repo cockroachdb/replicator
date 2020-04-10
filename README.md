@@ -57,13 +57,13 @@ below
 
 * single source table only
 * only one change feed per cdc-sink instance
-* data-types - these are just untested
+* data-types that don't work.
   * arrays
-  * json
-  * decimals & floats
-  * inet
-  * timestamps
-* I'm sure there's more.
+  * bytes
+  * jsonb
+  * serial
+  * collated strings are also untested still
+  * I'm worried about larger ints/floats and they need to be tested too
 
 ## Limitations
 

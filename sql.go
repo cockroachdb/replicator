@@ -24,7 +24,7 @@ func CreateSinkDB(db *sql.DB) error {
 // DropSinkDB drops the sinkDB and all data in it.
 func DropSinkDB(db *sql.DB) error {
 	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(`DROP DATABASE %s CASCADE`, *sinkDB))
+	_, err := db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS %s CASCADE`, *sinkDB))
 	return err
 }
 

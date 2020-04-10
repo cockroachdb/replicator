@@ -128,15 +128,8 @@ func TestWriteToSinkTable(t *testing.T) {
 	db, dbName, dbClose := getDB(t)
 	defer dbClose()
 
-	// Drop the previous _cdc_sink db
-	if err := DropSinkDB(db); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a new _cdc_sink db
-	if err := CreateSinkDB(db); err != nil {
-		t.Fatal(err)
-	}
+	createSinkDB(t, db)
+	defer dropSinkDB(t, db)
 
 	// Create the table to import from
 	tableFrom := createTestTable(t, db, dbName)
@@ -188,15 +181,9 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 	db, dbName, dbClose := getDB(t)
 	defer dbClose()
 
-	// Drop the previous _cdc_sink db
-	if err := DropSinkDB(db); err != nil {
-		t.Fatal(err)
-	}
-
 	// Create a new _cdc_sink db
-	if err := CreateSinkDB(db); err != nil {
-		t.Fatal(err)
-	}
+	createSinkDB(t, db)
+	defer dropSinkDB(t, db)
 
 	// Create the table to import from
 	tableFrom := createTestTable(t, db, dbName)
