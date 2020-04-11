@@ -61,9 +61,7 @@ below
   * arrays
   * bytes
   * jsonb
-  * serial
   * collated strings are also untested still
-  * I'm worried about larger inets/floats and they need to be tested too
 
 ## Limitations
 

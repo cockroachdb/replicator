@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -76,12 +77,20 @@ func parseSplitTimestamp(timestamp string) (int64, int, error) {
 	return nanos, logical, nil
 }
 
-// parseLine takes a single line from an ndjson and parses it into json then converts some of
-// the components back to json for storage in the sink table. This parsing back and forth just
-// seemed safer than manually parsing the line json.
+// parseLine takes a single line from an ndjson and parses it into json then
+// converts some of the components back to json for storage in the sink table.
+// This parsing back and forth just seemed safer than manually parsing the line
+// json.
 func parseLine(rawBytes []byte) (Line, error) {
 	var line Line
-	json.Unmarshal(rawBytes, &line)
+
+	// Large numbers are not turned into strings, so the UseNumber option for
+	// the decoder is required.
+	dec := json.NewDecoder(bytes.NewReader(rawBytes))
+	dec.UseNumber()
+	if err := dec.Decode(&line); err != nil {
+		return Line{}, err
+	}
 
 	// Prase the timestamp into nanos and logical.
 	var err error

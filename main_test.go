@@ -529,7 +529,7 @@ func TestTypes(t *testing.T) {
 		{`int`, `INT`, `12345`, true},
 		{`interval`, `INTERVAL`, `2h30m30s`, true},
 		// {`jsonb`, `JSONB`, `'{"first_name": "Lola", "last_name": "Dog", "location": "NYC", "online" : true, "friends" : 547}'`, false}, -- error in test, maybe pgx?
-		// {`serial`, `SERIAL`, `148591304110702593`, true}, -- error on cdc-sink side?
+		{`serial`, `SERIAL`, `148591304110702593`, true},
 		{`string`, `STRING`, `a1b2c3`, true},
 		{`time`, `TIME`, `01:23:45.123456`, true},
 		{`timestamp`, `TIMESTAMP`, `2016-01-25 10:10:10`, true},

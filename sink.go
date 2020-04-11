@@ -97,7 +97,11 @@ func (s *Sink) deleteRow(tx *sql.Tx, line Line) error {
 // upsertRow performs an upsert on a single row.
 func (s *Sink) upsertRow(tx *sql.Tx, line Line) error {
 	// Parse the after columns
-	if err := json.Unmarshal([]byte(line.after), &(line.After)); err != nil {
+	// Large numbers are not turned into strings, so the UseNumber option for
+	// the decoder is required.
+	dec := json.NewDecoder(strings.NewReader(line.after))
+	dec.UseNumber()
+	if err := dec.Decode(&(line.After)); err != nil {
 		return err
 	}
 
@@ -150,9 +154,14 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 	for _, line := range lines {
 		log.Printf("line to update: %+v", line)
 		// Parse the key into columns
-		if err := json.Unmarshal([]byte(line.key), &(line.Key)); err != nil {
+		// Large numbers are not turned into strings, so the UseNumber option for
+		// the decoder is required.
+		dec := json.NewDecoder(strings.NewReader(line.key))
+		dec.UseNumber()
+		if err := dec.Decode(&(line.Key)); err != nil {
 			return err
 		}
+
 		// Is this needed?  What if we have 2 primary key columns but the 2nd one
 		// nullable or has a default?  Does CDC send it?
 		if len(line.Key) != len(s.primaryKeyColumns) {
