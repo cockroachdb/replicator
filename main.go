@@ -37,8 +37,11 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 			}
 
 			// No sink found, throw an error.
-			fmt.Fprintf(w, "could not find a sync for %s", ndjson.topic)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(
+				w,
+				fmt.Sprintf("could not find a sync for %s", ndjson.topic),
+				http.StatusInternalServerError,
+			)
 			return
 		}
 
@@ -50,9 +53,12 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 		}
 
 		// Could not recognize url.
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "URL pattern does not match either an ndjson (%s) or a resolved (%s)",
-			ndjsonErr, resolvedErr,
+		http.Error(
+			w,
+			fmt.Sprintf("URL pattern does not match either an ndjson (%s) or a resolved (%s)",
+				ndjsonErr, resolvedErr,
+			),
+			http.StatusInternalServerError,
 		)
 		return
 	}

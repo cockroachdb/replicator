@@ -62,14 +62,12 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 		line, err := parseLine(scanner.Bytes())
 		if err != nil {
 			log.Print(err)
-			fmt.Fprint(w, err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if err := line.WriteToSinkTable(db, s.sinkTableFullName); err != nil {
 			log.Print(err)
-			fmt.Fprint(w, err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}

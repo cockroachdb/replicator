@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -75,8 +74,7 @@ func (s *Sinks) HandleResolvedRequest(
 		next, err := parseResolvedLine(scanner.Bytes(), rURL.endpoint)
 		if err != nil {
 			log.Print(err)
-			fmt.Fprint(w, err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -86,8 +84,7 @@ func (s *Sinks) HandleResolvedRequest(
 		tx, err := db.Begin()
 		if err != nil {
 			log.Print(err)
-			fmt.Fprint(w, err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -95,8 +92,7 @@ func (s *Sinks) HandleResolvedRequest(
 		prev, err := getPreviousResolved(tx, rURL.endpoint)
 		if err != nil {
 			log.Print(err)
-			fmt.Fprint(w, err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -107,8 +103,7 @@ func (s *Sinks) HandleResolvedRequest(
 		for _, sink := range allSinks {
 			if err := sink.UpdateRows(tx, prev, next); err != nil {
 				log.Print(err)
-				fmt.Fprint(w, err)
-				w.WriteHeader(http.StatusBadRequest)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
@@ -116,16 +111,14 @@ func (s *Sinks) HandleResolvedRequest(
 		// Write the updated resolved.
 		if err := next.writeUpdated(tx); err != nil {
 			log.Print(err)
-			fmt.Fprint(w, err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		// Needs Retry.
 		if err := tx.Commit(); err != nil {
 			log.Print(err)
-			fmt.Fprint(w, err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
