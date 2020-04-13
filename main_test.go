@@ -519,6 +519,7 @@ func TestTypes(t *testing.T) {
 	}{
 		{`string_array`, `STRING[]`, `{"sky","road","car"}`, false},
 		{`int_array`, `INT[]`, `{1,2,3}`, false},
+		{`serial_array`, `SERIAL[]`, `{148591304110702593,148591304110702594,148591304110702595}`, false},
 		{`bit`, `VARBIT`, `10010101`, true},
 		{`bool`, `BOOL`, `true`, true},
 		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
