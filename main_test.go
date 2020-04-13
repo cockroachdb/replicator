@@ -297,14 +297,14 @@ func TestFeedInsert(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.populateTable(t, 10)
 
 	for tableTo.getTableRowCount(t) != 30 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -356,14 +356,14 @@ func TestFeedDelete(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.deleteAll(t)
 
 	for tableTo.getTableRowCount(t) != 0 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -415,14 +415,14 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.updateNoneKeyColumns(t)
 
 	for tableTo.maxB(t) != 2000 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -474,14 +474,14 @@ func TestFeedUpdatePrimary(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.updateAll(t)
 
 	for tableTo.maxB(t) != 2000 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -517,10 +517,11 @@ func TestTypes(t *testing.T) {
 		columnValue string
 		indexable   bool
 	}{
-		// {`array`, `STRING[]`, `{"sky","road","car"}`, false}, -- sql: converting argument $1 type: unsupported type []interface {}, a slice of interface
+		{`string_array`, `STRING[]`, `{"sky","road","car"}`, false},
+		{`int_array`, `INT[]`, `{1,2,3}`, false},
 		{`bit`, `VARBIT`, `10010101`, true},
 		{`bool`, `BOOL`, `true`, true},
-		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true}, -- error on cdc-sink side
+		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
 		// {`collate`, `COLLATE`, `'a1b2c3' COLLATE en`, true}, -- test not implemented yet
 		{`date`, `DATE`, `2016-01-25`, true},
 		{`decimal`, `DECIMAL`, `1.2345`, true},
@@ -629,7 +630,7 @@ func TestTypes(t *testing.T) {
 			// Wait until the out table has a row.
 			for tableOut.getTableRowCount(t) != 1 {
 				// add a stopper here from a wrapper around the handler.
-				time.Sleep(time.Millisecond * 100)
+				time.Sleep(time.Millisecond * 10)
 			}
 
 			// Now fetch that rows and compare them.
