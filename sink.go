@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // Sink holds all the info needed for a specific table.
@@ -92,6 +92,32 @@ func (s *Sink) deleteRow(tx *sql.Tx, line Line) error {
 	return err
 }
 
+// cleanValue will check the type of the value being upserted to ensure it
+// can be handled by pq.
+func cleanValue(value interface{}) (interface{}, error) {
+	switch t := value.(type) {
+	case bool:
+		// bool
+		log.Printf("Type: %T, value: %s", t, value)
+		return value, nil
+	case string:
+		// bit, date, inet, interval, string, time, timestamp, timestamptz, uuid
+		log.Printf("Type: %T, value: %s", t, value)
+		return value, nil
+	case json.Number:
+		// decimal, float, int, serial
+		return value, nil
+	case []interface{}:
+		// array
+		// These must be converted using the specialized pq function.
+		log.Printf("Type: %T, value: %s", t, value)
+		return pq.Array(value.([]interface{})), nil
+	default:
+		log.Printf("Type: %T, value: %s", t, value)
+		return nil, fmt.Errorf("unsupported type %T", t)
+	}
+}
+
 // upsertRow performs an upsert on a single row.
 func (s *Sink) upsertRow(tx *sql.Tx, line Line) error {
 	// Parse the after columns
@@ -121,7 +147,11 @@ func (s *Sink) upsertRow(tx *sql.Tx, line Line) error {
 			fmt.Fprint(&statement, ", ")
 		}
 		fmt.Fprint(&statement, name)
-		values = append(values, value)
+		insertableValue, err := cleanValue(value)
+		if err != nil {
+			return err
+		}
+		values = append(values, insertableValue)
 	}
 	fmt.Fprint(&statement, ") VALUES (")
 	for i := 0; i < len(values); i++ {

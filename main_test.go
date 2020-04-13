@@ -517,10 +517,11 @@ func TestTypes(t *testing.T) {
 		columnValue string
 		indexable   bool
 	}{
-		// {`array`, `STRING[]`, `{"sky","road","car"}`, false}, -- sql: converting argument $1 type: unsupported type []interface {}, a slice of interface
+		{`string_array`, `STRING[]`, `{"sky","road","car"}`, false},
+		{`int_array`, `INT[]`, `{1,2,3}`, false},
 		{`bit`, `VARBIT`, `10010101`, true},
 		{`bool`, `BOOL`, `true`, true},
-		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true}, -- error on cdc-sink side
+		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
 		// {`collate`, `COLLATE`, `'a1b2c3' COLLATE en`, true}, -- test not implemented yet
 		{`date`, `DATE`, `2016-01-25`, true},
 		{`decimal`, `DECIMAL`, `1.2345`, true},
