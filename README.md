@@ -58,7 +58,6 @@ below
 * single source table only
 * only one change feed per cdc-sink instance
 * data-types that don't work.
-  * arrays
   * bytes
   * jsonb
   * collated strings are also untested still
