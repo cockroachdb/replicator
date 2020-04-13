@@ -101,7 +101,8 @@ func cleanValue(value interface{}) (interface{}, error) {
 		log.Printf("Type: %T, value: %s", t, value)
 		return value, nil
 	case string:
-		// bit, date, inet, interval, string, time, timestamp, timestamptz, uuid
+		// bit, date, inet, interval, string, time, timestamp, timestamptz, uuid,
+		// collated strings
 		log.Printf("Type: %T, value: %s", t, value)
 		return value, nil
 	case json.Number:

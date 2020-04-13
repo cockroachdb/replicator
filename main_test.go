@@ -522,8 +522,8 @@ func TestTypes(t *testing.T) {
 		{`serial_array`, `SERIAL[]`, `{148591304110702593,148591304110702594,148591304110702595}`, false},
 		{`bit`, `VARBIT`, `10010101`, true},
 		{`bool`, `BOOL`, `true`, true},
-		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true}, 
-		// {`collate`, `COLLATE`, `'a1b2c3' COLLATE en`, true}, -- test not implemented yet
+		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
+		{`collate`, `STRING COLLATE de`, `'a1b2c3' COLLATE de`, true},
 		{`date`, `DATE`, `2016-01-25`, true},
 		{`decimal`, `DECIMAL`, `1.2345`, true},
 		{`float`, `FLOAT`, `1.2345`, true},

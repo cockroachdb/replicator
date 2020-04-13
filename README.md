@@ -59,7 +59,6 @@ below
 * only one change feed per cdc-sink instance
 * data-types that don't work.
   * bytes
-  * collated strings are also untested still
 
 ## Limitations
 
