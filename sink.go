@@ -112,6 +112,12 @@ func cleanValue(value interface{}) (interface{}, error) {
 		// These must be converted using the specialized pq function.
 		log.Printf("Type: %T, value: %s", t, value)
 		return pq.Array(value.([]interface{})), nil
+	case map[string]interface{}:
+		// jsonb
+		// This must be marshalled or pq won't be able to insert it.
+		marshalled, err := json.Marshal(value)
+		log.Printf("Type: %T, value: %s, marshalled: %s", t, value, marshalled)
+		return marshalled, err
 	default:
 		log.Printf("Type: %T, value: %s", t, value)
 		return nil, fmt.Errorf("unsupported type %T", t)
