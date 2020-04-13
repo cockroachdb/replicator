@@ -69,9 +69,10 @@ func parseResolvedLine(rawBytes []byte, endpoint string) (ResolvedLine, error) {
 // specific endpoint.
 func getPreviousResolved(tx *sql.Tx, endpoint string) (ResolvedLine, error) {
 	// Needs retry.
-	row := tx.QueryRow(fmt.Sprintf(resolvedTableQuery, resolvedFullTableName()), endpoint)
 	var resolvedLine ResolvedLine
-	err := row.Scan(&(resolvedLine.endpoint), &(resolvedLine.nanos), &(resolvedLine.logical))
+	err := tx.QueryRow(
+		fmt.Sprintf(resolvedTableQuery, resolvedFullTableName()), endpoint,
+	).Scan(&(resolvedLine.endpoint), &(resolvedLine.nanos), &(resolvedLine.logical))
 	switch err {
 	case sql.ErrNoRows:
 		// No line exists yet, go back to the start of time.

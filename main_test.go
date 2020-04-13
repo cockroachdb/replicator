@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,9 +51,8 @@ func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
 }
 
 func getRowCount(t *testing.T, db *sql.DB, fullTableName string) int {
-	row := db.QueryRow("SELECT COUNT(*) FROM " + fullTableName)
 	var count int
-	if err := row.Scan(&count); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM " + fullTableName).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	return count
@@ -96,11 +96,10 @@ outer:
 
 		// Find the DB.
 		var actualTableName string
-		row := db.QueryRow(
+		err := db.QueryRow(
 			fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
 			tableName,
-		)
-		err := row.Scan(&actualTableName)
+		).Scan(&actualTableName)
 		switch err {
 		case sql.ErrNoRows:
 			break outer
@@ -171,9 +170,10 @@ func (tis *tableInfoSimple) updateAll(t *testing.T) {
 }
 
 func (tis *tableInfoSimple) maxB(t *testing.T) int {
-	row := tis.db.QueryRow(fmt.Sprintf("SELECT max(b) FROM %s", tis.getFullName()))
 	var max int
-	if err := row.Scan(&max); err != nil {
+	if err := tis.db.QueryRow(
+		fmt.Sprintf("SELECT max(b) FROM %s", tis.getFullName()),
+	).Scan(&max); err != nil {
 		t.Fatal(err)
 	}
 	return max
@@ -195,18 +195,17 @@ func (ji *jobInfo) cancelJob(t *testing.T) {
 }
 
 func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jobInfo {
-	query := "CREATE CHANGEFEED FOR TABLE "
+	var query strings.Builder
+	fmt.Fprint(&query, "CREATE CHANGEFEED FOR TABLE ")
 	for i := 0; i < len(tis); i++ {
 		if i != 0 {
-			query += fmt.Sprintf(", ")
+			fmt.Fprint(&query, ", ")
 		}
-		query += fmt.Sprintf(tis[i].getFullName())
+		fmt.Fprintf(&query, tis[i].getFullName())
 	}
-	query += fmt.Sprintf(" INTO 'experimental-%s/test.sql' WITH updated,resolved", url)
-	t.Logf(query)
-	row := db.QueryRow(query)
+	fmt.Fprintf(&query, " INTO 'experimental-%s/test.sql' WITH updated,resolved", url)
 	var jobID int
-	if err := row.Scan(&jobID); err != nil {
+	if err := db.QueryRow(query.String()).Scan(&jobID); err != nil {
 		t.Fatal(err)
 	}
 	return jobInfo{
@@ -238,8 +237,9 @@ func TestDB(t *testing.T) {
 
 	// Find the DB.
 	var actualDBName string
-	row := db.QueryRow(`SELECT database_name FROM [SHOW DATABASES] WHERE database_name = $1`, dbName)
-	if err := row.Scan(&actualDBName); err != nil {
+	if err := db.QueryRow(
+		`SELECT database_name FROM [SHOW DATABASES] WHERE database_name = $1`, dbName,
+	).Scan(&actualDBName); err != nil {
 		t.Fatal(err)
 	}
 
@@ -529,13 +529,25 @@ func TestTypes(t *testing.T) {
 		{`int`, `INT`, `12345`, true},
 		{`interval`, `INTERVAL`, `2h30m30s`, true},
 		// {`jsonb`, `JSONB`, `'{"first_name": "Lola", "last_name": "Dog", "location": "NYC", "online" : true, "friends" : 547}'`, false}, -- error in test, maybe pgx?
-		// {`serial`, `SERIAL`, `148591304110702593`, true}, -- error on cdc-sink side?
+		{`serial`, `SERIAL`, `148591304110702593`, true},
 		{`string`, `STRING`, `a1b2c3`, true},
 		{`time`, `TIME`, `01:23:45.123456`, true},
 		{`timestamp`, `TIMESTAMP`, `2016-01-25 10:10:10`, true},
 		{`timestamptz`, `TIMESTAMPTZ`, `2016-01-25 10:10:10-05:00`, true},
 		{`uuid`, `UUID`, `7f9c24e8-3b12-4fef-91e0-56a2d5a246ec`, true},
 	}
+
+	/*
+	   {"after":
+
+	   {"a": "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327", "b":
+	   "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"}, "key": ["\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"], "updated": "1586568963316966000.0000000000"}
+
+
+	   UPSERT INTO _test_db_9945.out_bytes(a, b) VALUES ($1, $2)" $1:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'",     $2:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'"
+
+
+	*/
 
 	tableIndexableSchema := `CREATE TABLE %s (a %s PRIMARY KEY,	b %s)`
 	tableNonIndexableSchema := `CREATE TABLE %s (a INT PRIMARY KEY,	b %s)`
@@ -621,14 +633,16 @@ func TestTypes(t *testing.T) {
 			}
 
 			// Now fetch that rows and compare them.
-			inRow := db.QueryRow(fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableIn.getFullName()))
 			var inA, inB interface{}
-			if err := inRow.Scan(&inA, &inB); err != nil {
+			if err := db.QueryRow(
+				fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableIn.getFullName()),
+			).Scan(&inA, &inB); err != nil {
 				t.Fatal(err)
 			}
-			outRow := db.QueryRow(fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableOut.getFullName()))
 			var outA, outB interface{}
-			if err := outRow.Scan(&outA, &outB); err != nil {
+			if err := db.QueryRow(
+				fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableOut.getFullName()),
+			).Scan(&outA, &outB); err != nil {
 				t.Fatal(err)
 			}
 			if fmt.Sprintf("%v", inA) != fmt.Sprintf("%v", outA) {
