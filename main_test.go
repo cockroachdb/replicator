@@ -522,7 +522,7 @@ func TestTypes(t *testing.T) {
 		{`serial_array`, `SERIAL[]`, `{148591304110702593,148591304110702594,148591304110702595}`, false},
 		{`bit`, `VARBIT`, `10010101`, true},
 		{`bool`, `BOOL`, `true`, true},
-		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
+		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true}, 
 		// {`collate`, `COLLATE`, `'a1b2c3' COLLATE en`, true}, -- test not implemented yet
 		{`date`, `DATE`, `2016-01-25`, true},
 		{`decimal`, `DECIMAL`, `1.2345`, true},
@@ -530,7 +530,85 @@ func TestTypes(t *testing.T) {
 		{`inet`, `INET`, `192.168.0.1`, true},
 		{`int`, `INT`, `12345`, true},
 		{`interval`, `INTERVAL`, `2h30m30s`, true},
-		// {`jsonb`, `JSONB`, `'{"first_name": "Lola", "last_name": "Dog", "location": "NYC", "online" : true, "friends" : 547}'`, false}, -- error in test, maybe pgx?
+		{
+			`jsonb`,
+			`JSONB`,
+			`
+			{
+				"string": "Lola",
+				"bool": true,
+				"number": 547,
+				"float": 123.456,
+				"array": [
+					"lola",
+					true,
+					547,
+					123.456,
+					[
+						"lola",
+						true,
+						547,
+						123.456
+					],
+					{
+						"string": "Lola",
+						"bool": true,
+						"number": 547,
+						"float": 123.456,
+						"array": [
+							"lola",
+							true,
+							547,
+							123.456,
+							[
+								"lola",
+								true,
+								547,
+								123.456
+							]
+						]
+					}
+				],
+				"map": {
+					"string": "Lola",
+					"bool": true,
+					"number": 547,
+					"float": 123.456,
+					"array": [
+						"lola",
+						true,
+						547,
+						123.456,
+						[
+							"lola",
+							true,
+							547,
+							123.456
+						],
+						{
+							"string": "Lola",
+							"bool": true,
+							"number": 547,
+							"float": 123.456,
+							"array": [
+								"lola",
+								true,
+								547,
+								123.456,
+								[
+									"lola",
+									true,
+									547,
+									123.456
+								]
+							]
+						}
+					]
+				}
+			}
+			`,
+			false,
+		},
 		{`serial`, `SERIAL`, `148591304110702593`, true},
 		{`string`, `STRING`, `a1b2c3`, true},
 		{`time`, `TIME`, `01:23:45.123456`, true},
@@ -540,15 +618,14 @@ func TestTypes(t *testing.T) {
 	}
 
 	/*
-	   {"after":
+			weird bytes issue
+		   {"after":
 
-	   {"a": "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327", "b":
-	   "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"}, "key": ["\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"], "updated": "1586568963316966000.0000000000"}
-
-
-	   UPSERT INTO _test_db_9945.out_bytes(a, b) VALUES ($1, $2)" $1:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'",     $2:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'"
+		   {"a": "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327", "b":
+		   "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"}, "key": ["\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"], "updated": "1586568963316966000.0000000000"}
 
 
+		   UPSERT INTO _test_db_9945.out_bytes(a, b) VALUES ($1, $2)" $1:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'",     $2:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'"
 	*/
 
 	tableIndexableSchema := `CREATE TABLE %s (a %s PRIMARY KEY,	b %s)`
