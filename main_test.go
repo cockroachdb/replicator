@@ -297,14 +297,14 @@ func TestFeedInsert(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.populateTable(t, 10)
 
 	for tableTo.getTableRowCount(t) != 30 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -356,14 +356,14 @@ func TestFeedDelete(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.deleteAll(t)
 
 	for tableTo.getTableRowCount(t) != 0 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -415,14 +415,14 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.updateNoneKeyColumns(t)
 
 	for tableTo.maxB(t) != 2000 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -474,14 +474,14 @@ func TestFeedUpdatePrimary(t *testing.T) {
 
 	for tableTo.getTableRowCount(t) != 20 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.updateAll(t)
 
 	for tableTo.maxB(t) != 2000 {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -629,7 +629,7 @@ func TestTypes(t *testing.T) {
 			// Wait until the out table has a row.
 			for tableOut.getTableRowCount(t) != 1 {
 				// add a stopper here from a wrapper around the handler.
-				time.Sleep(time.Millisecond * 100)
+				time.Sleep(time.Millisecond * 10)
 			}
 
 			// Now fetch that rows and compare them.
