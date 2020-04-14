@@ -1,35 +1,30 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
+
+	"github.com/cockroachdb/cockroach-go/crdb"
 )
 
 // These test require an insecure cockroach server is running on the default
 // port with the default root user with no password.
 
 func (rl ResolvedLine) writeUpdatedDB(db *sql.DB) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	if err := rl.writeUpdated(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		return rl.writeUpdated(tx)
+	})
 }
 
 func getPreviousResolvedDB(db *sql.DB, endpoint string) (ResolvedLine, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return ResolvedLine{}, err
-	}
-	resolvedLine, err := getPreviousResolved(tx, endpoint)
-	if err != nil {
-		return ResolvedLine{}, err
-	}
-	if err := tx.Commit(); err != nil {
+	var resolvedLine ResolvedLine
+	if err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		var err error
+		resolvedLine, err = getPreviousResolved(tx, endpoint)
+		return err
+	}); err != nil {
 		return ResolvedLine{}, err
 	}
 	return resolvedLine, nil
