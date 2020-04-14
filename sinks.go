@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 
+	"github.com/cockroachdb/cockroach-go/crdb"
 	_ "github.com/lib/pq"
 )
 
@@ -78,48 +80,28 @@ func (s *Sinks) HandleResolvedRequest(
 			return
 		}
 
-		log.Printf("Current Resolved: %+v", next)
-
 		// Start the transation
-		tx, err := db.Begin()
-		if err != nil {
-			log.Print(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Get the previous resolved
-		prev, err := getPreviousResolved(tx, rURL.endpoint)
-		if err != nil {
-			log.Print(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("Previous Resolved: %+v", prev)
-
-		// Find all rows to update and upsert them.
-		allSinks := s.GetAllSinks()
-		for _, sink := range allSinks {
-			if err := sink.UpdateRows(tx, prev, next); err != nil {
-				log.Print(err)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
+		if err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+			// Get the previous resolved
+			prev, err := getPreviousResolved(tx, rURL.endpoint)
+			if err != nil {
+				return err
 			}
-		}
+			log.Printf("Previous Resolved: %+v, Current Resolved: %+v", prev, next)
 
-		// Write the updated resolved.
-		if err := next.writeUpdated(tx); err != nil {
+			// Find all rows to update and upsert them.
+			allSinks := s.GetAllSinks()
+			for _, sink := range allSinks {
+				if err := sink.UpdateRows(tx, prev, next); err != nil {
+					return err
+				}
+			}
+
+			// Write the updated resolved.
+			return next.writeUpdated(tx)
+		}); err != nil {
 			log.Print(err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Needs Retry.
-		if err := tx.Commit(); err != nil {
-			log.Print(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
 	}
 }

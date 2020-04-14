@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/cockroach-go/crdb"
 )
 
 // These test require an insecure cockroach server is running on the default
@@ -35,13 +37,12 @@ func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
 
 	t.Logf("Testing Database: %s", dbName)
 
-	if _, err := db.Exec(
-		`CREATE DATABASE IF NOT EXISTS ` + dbName); err != nil {
+	if err := Execute(db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)); err != nil {
 		t.Fatal(err)
 	}
 
 	closer = func() {
-		if _, err := db.Exec(fmt.Sprintf("DROP DATABASE %s CASCADE", dbName)); err != nil {
+		if err := Execute(db, fmt.Sprintf("DROP DATABASE %s CASCADE", dbName)); err != nil {
 			t.Fatal(err)
 		}
 		db.Close()
@@ -52,7 +53,9 @@ func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
 
 func getRowCount(t *testing.T, db *sql.DB, fullTableName string) int {
 	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM " + fullTableName).Scan(&count); err != nil {
+	if err := crdb.Execute(func() error {
+		return db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", fullTableName)).Scan(&count)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return count
@@ -69,7 +72,7 @@ func (ti tableInfo) getFullName() string {
 }
 
 func (ti *tableInfo) deleteAll(t *testing.T) {
-	if _, err := ti.db.Exec(fmt.Sprintf("DELETE FROM %s WHERE true", ti.getFullName())); err != nil {
+	if err := Execute(ti.db, fmt.Sprintf("DELETE FROM %s WHERE true", ti.getFullName())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -79,7 +82,7 @@ func (ti tableInfo) getTableRowCount(t *testing.T) int {
 }
 
 func (ti tableInfo) dropTable(t *testing.T) {
-	if _, err := ti.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", ti.getFullName())); err != nil {
+	if err := Execute(ti.db, fmt.Sprintf("DROP TABLE IF EXISTS %s", ti.getFullName())); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -96,10 +99,12 @@ outer:
 
 		// Find the DB.
 		var actualTableName string
-		err := db.QueryRow(
-			fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
-			tableName,
-		).Scan(&actualTableName)
+		err := crdb.Execute(func() error {
+			return db.QueryRow(
+				fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
+				tableName,
+			).Scan(&actualTableName)
+		})
 		switch err {
 		case sql.ErrNoRows:
 			break outer
@@ -110,8 +115,7 @@ outer:
 		}
 	}
 
-	if _, err := db.Exec(
-		fmt.Sprintf(tableSimpleSchema, dbName, tableName)); err != nil {
+	if err := Execute(db, fmt.Sprintf(tableSimpleSchema, dbName, tableName)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,7 +147,8 @@ func createTestSimpleTable(t *testing.T, db *sql.DB, dbName string) tableInfoSim
 
 func (tis *tableInfoSimple) populateTable(t *testing.T, count int) {
 	for i := 0; i < count; i++ {
-		if _, err := tis.db.Exec(
+		if err := Execute(
+			tis.db,
 			fmt.Sprintf("INSERT INTO %s VALUES ($1, $1)", tis.getFullName()),
 			tis.rowCount+1,
 		); err != nil {
@@ -154,7 +159,8 @@ func (tis *tableInfoSimple) populateTable(t *testing.T, count int) {
 }
 
 func (tis *tableInfoSimple) updateNoneKeyColumns(t *testing.T) {
-	if _, err := tis.db.Exec(
+	if err := Execute(
+		tis.db,
 		fmt.Sprintf("UPDATE %s SET b=b*100 WHERE true", tis.getFullName()),
 	); err != nil {
 		t.Fatal(err)
@@ -162,7 +168,8 @@ func (tis *tableInfoSimple) updateNoneKeyColumns(t *testing.T) {
 }
 
 func (tis *tableInfoSimple) updateAll(t *testing.T) {
-	if _, err := tis.db.Exec(
+	if err := Execute(
+		tis.db,
 		fmt.Sprintf("UPDATE %s SET a=a*100, b=b*100 WHERE true", tis.getFullName()),
 	); err != nil {
 		t.Fatal(err)
@@ -171,9 +178,11 @@ func (tis *tableInfoSimple) updateAll(t *testing.T) {
 
 func (tis *tableInfoSimple) maxB(t *testing.T) int {
 	var max int
-	if err := tis.db.QueryRow(
-		fmt.Sprintf("SELECT max(b) FROM %s", tis.getFullName()),
-	).Scan(&max); err != nil {
+	if err := crdb.Execute(func() error {
+		return tis.db.QueryRow(
+			fmt.Sprintf("SELECT max(b) FROM %s", tis.getFullName()),
+		).Scan(&max)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return max
@@ -188,7 +197,7 @@ func (ji *jobInfo) cancelJob(t *testing.T) {
 	if ji.id == 0 {
 		return
 	}
-	if _, err := ji.db.Exec(fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
+	if err := Execute(ji.db, fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
 		t.Fatal(err)
 	}
 	ji.id = 0
@@ -205,7 +214,9 @@ func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jo
 	}
 	fmt.Fprintf(&query, " INTO 'experimental-%s/test.sql' WITH updated,resolved", url)
 	var jobID int
-	if err := db.QueryRow(query.String()).Scan(&jobID); err != nil {
+	if err := crdb.Execute(func() error {
+		return db.QueryRow(query.String()).Scan(&jobID)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return jobInfo{
@@ -237,9 +248,11 @@ func TestDB(t *testing.T) {
 
 	// Find the DB.
 	var actualDBName string
-	if err := db.QueryRow(
-		`SELECT database_name FROM [SHOW DATABASES] WHERE database_name = $1`, dbName,
-	).Scan(&actualDBName); err != nil {
+	if err := crdb.Execute(func() error {
+		return db.QueryRow(
+			`SELECT database_name FROM [SHOW DATABASES] WHERE database_name = $1`, dbName,
+		).Scan(&actualDBName)
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -611,6 +624,7 @@ func TestTypes(t *testing.T) {
 		},
 		{`serial`, `SERIAL`, `148591304110702593`, true},
 		{`string`, `STRING`, `a1b2c3`, true},
+		{`string_escape`, `STRING`, `a1\b/2?c"3`, true},
 		{`time`, `TIME`, `01:23:45.123456`, true},
 		{`timestamp`, `TIMESTAMP`, `2016-01-25 10:10:10`, true},
 		{`timestamptz`, `TIMESTAMPTZ`, `2016-01-25 10:10:10-05:00`, true},
@@ -650,24 +664,24 @@ func TestTypes(t *testing.T) {
 
 			// Create both tables.
 			if test.indexable {
-				if _, err := db.Exec(fmt.Sprintf(tableIndexableSchema,
-					tableIn.getFullName(), test.columnType, test.columnType,
+				if err := Execute(db, fmt.Sprintf(
+					tableIndexableSchema, tableIn.getFullName(), test.columnType, test.columnType,
 				)); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := db.Exec(fmt.Sprintf(tableIndexableSchema,
-					tableOut.getFullName(), test.columnType, test.columnType,
+				if err := Execute(db, fmt.Sprintf(
+					tableIndexableSchema, tableOut.getFullName(), test.columnType, test.columnType,
 				)); err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := db.Exec(fmt.Sprintf(tableNonIndexableSchema,
-					tableIn.getFullName(), test.columnType,
+				if err := Execute(db, fmt.Sprintf(
+					tableNonIndexableSchema, tableIn.getFullName(), test.columnType,
 				)); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := db.Exec(fmt.Sprintf(tableNonIndexableSchema,
-					tableOut.getFullName(), test.columnType,
+				if err := Execute(db, fmt.Sprintf(
+					tableNonIndexableSchema, tableOut.getFullName(), test.columnType,
 				)); err != nil {
 					t.Fatal(err)
 				}
@@ -690,14 +704,14 @@ func TestTypes(t *testing.T) {
 
 			// Insert a row into the in table.
 			if test.indexable {
-				if _, err := db.Exec(
+				if err := Execute(db,
 					fmt.Sprintf("INSERT INTO %s (a,b) VALUES ($1,$2)", tableIn.getFullName()),
 					test.columnValue, test.columnValue,
 				); err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := db.Exec(
+				if err := Execute(db,
 					fmt.Sprintf("INSERT INTO %s (a, b) VALUES (1, $1)", tableIn.getFullName()),
 					test.columnValue,
 				); err != nil {
@@ -713,15 +727,19 @@ func TestTypes(t *testing.T) {
 
 			// Now fetch that rows and compare them.
 			var inA, inB interface{}
-			if err := db.QueryRow(
-				fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableIn.getFullName()),
-			).Scan(&inA, &inB); err != nil {
+			if err := crdb.Execute(func() error {
+				return db.QueryRow(
+					fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableIn.getFullName()),
+				).Scan(&inA, &inB)
+			}); err != nil {
 				t.Fatal(err)
 			}
 			var outA, outB interface{}
-			if err := db.QueryRow(
-				fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableOut.getFullName()),
-			).Scan(&outA, &outB); err != nil {
+			if err := crdb.Execute(func() error {
+				return db.QueryRow(
+					fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableOut.getFullName()),
+				).Scan(&outA, &outB)
+			}); err != nil {
 				t.Fatal(err)
 			}
 			if fmt.Sprintf("%v", inA) != fmt.Sprintf("%v", outA) {

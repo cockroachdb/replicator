@@ -10,7 +10,11 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var connectionString = flag.String("conn", "postgresql://root@localhost:26257/defaultdb?sslmode=disable", "cockroach connection string")
+var connectionString = flag.String(
+	"conn",
+	"postgresql://root@localhost:26257/defaultdb?sslmode=disable",
+	"cockroach connection string",
+)
 var port = flag.Int("port", 26258, "http server listening port")
 
 var sourceTable = flag.String("source_table", "", "Name of the source table sending data")
@@ -19,6 +23,11 @@ var resultDB = flag.String("db", "defaultdb", "database for the receiving table"
 var resultTable = flag.String("table", "", "receiving table, must exist")
 
 var sinkDB = flag.String("sink_db", "_CDC_SINK", "db for storing temp sink tables")
+var sinkDBZone = flag.Bool(
+	"sink_db_zone_override",
+	true,
+	"allow sink_db zone config to be overridden with the cdc-sink default values",
+)
 
 var dropDB = flag.Bool("drop", false, "Drop the sink db before starting?")
 

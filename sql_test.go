@@ -43,7 +43,8 @@ func TestGetPrimaryKeyColumns(t *testing.T) {
 	for i, test := range testcases {
 		t.Run(fmt.Sprintf("%d:%s", i, test.tableSchema), func(t *testing.T) {
 			tableFullName := fmt.Sprintf("%s.test_%d", dbName, i)
-			if _, err := db.Exec(
+			if err := Execute(
+				db,
 				fmt.Sprintf(`CREATE TABLE %s ( %s )`, tableFullName, test.tableSchema),
 			); err != nil {
 				t.Fatal(err)
@@ -57,5 +58,4 @@ func TestGetPrimaryKeyColumns(t *testing.T) {
 			}
 		})
 	}
-
 }

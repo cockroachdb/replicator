@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math"
 	"testing"
+
+	"github.com/cockroachdb/cockroach-go/crdb"
 )
 
 // These test require an insecure cockroach server is running on the default
@@ -15,15 +18,12 @@ import (
 func findAllRowsToUpdateDB(
 	db *sql.DB, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
 ) ([]Line, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	lines, err := FindAllRowsToUpdate(tx, sinkTableFullName, prev, next)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
+	var lines []Line
+	if err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		var err error
+		lines, err = FindAllRowsToUpdate(tx, sinkTableFullName, prev, next)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	return lines, nil

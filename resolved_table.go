@@ -29,9 +29,7 @@ func resolvedFullTableName() string {
 
 // CreateResolvedTable creates a release table if none exists.
 func CreateResolvedTable(db *sql.DB) error {
-	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(resolvedTableSchema, resolvedFullTableName()))
-	return err
+	return Execute(db, fmt.Sprintf(resolvedTableSchema, resolvedFullTableName()))
 }
 
 // ResolvedLine is used to parse a json line in the request body of a resolved

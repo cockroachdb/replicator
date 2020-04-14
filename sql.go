@@ -3,45 +3,45 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"log"
 
+	"github.com/cockroachdb/cockroach-go/crdb"
 	_ "github.com/lib/pq"
 )
+
+const sinkDBZoneConfig = `ALTER DATABASE %s CONFIGURE ZONE USING gc.ttlseconds = 600;`
 
 // CreateSinkDB creates a new sink db if one does not exist yet and also adds
 // the resolved table.
 func CreateSinkDB(db *sql.DB) error {
-	// Needs retry.
-	// TODO - Set the zone configs to be small here.
-	_, err := db.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", *sinkDB))
-	if err != nil {
+	if err := Execute(db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", *sinkDB)); err != nil {
 		return err
 	}
-
+	if *sinkDBZone {
+		if err := Execute(db, fmt.Sprintf(sinkDBZoneConfig, *sinkDB)); err != nil {
+			return err
+		}
+	}
 	return CreateResolvedTable(db)
 }
 
 // DropSinkDB drops the sinkDB and all data in it.
 func DropSinkDB(db *sql.DB) error {
-	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS %s CASCADE`, *sinkDB))
-	return err
+	return Execute(db, fmt.Sprintf(`DROP DATABASE IF EXISTS %s CASCADE`, *sinkDB))
 }
 
 const sqlTableExistsQuery = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = '%s'`
 
 // TableExists checks for the existence of a table.
 func TableExists(db *sql.DB, dbName string, tableName string) (bool, error) {
-	// Needs retry.
 	findTableSQL := fmt.Sprintf(sqlTableExistsQuery, dbName, tableName)
-	log.Printf(findTableSQL)
 	var tableFound string
-	err := db.QueryRow(findTableSQL).Scan(&tableFound)
+	err := crdb.Execute(func() error {
+		return db.QueryRow(findTableSQL).Scan(&tableFound)
+	})
 	switch err {
 	case sql.ErrNoRows:
 		return false, nil
 	case nil:
-		log.Printf("Found: %s", tableFound)
 		return true, nil
 	default:
 		return false, err
@@ -57,20 +57,35 @@ SELECT column_name FROM [SHOW INDEX FROM %s] WHERE index_name = 'primary' ORDER 
 func GetPrimaryKeyColumns(db *sql.DB, tableFullName string) ([]string, error) {
 	// Needs retry.
 	findKeyColumns := fmt.Sprintf(sqlGetPrimaryKeyColumnsQuery, tableFullName)
-	log.Printf(findKeyColumns)
-	rows, err := db.Query(findKeyColumns)
-	if err != nil {
+	var columns []string
+	if err := crdb.Execute(func() error {
+		var columnsInternal []string
+		rows, err := db.Query(findKeyColumns)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var column string
+			if err := rows.Scan(&column); err != nil {
+				return err
+			}
+			columnsInternal = append(columnsInternal, column)
+		}
+		columns = columnsInternal
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var columns []string
-	for rows.Next() {
-		var column string
-		if err := rows.Scan(&column); err != nil {
-			return nil, err
-		}
-		columns = append(columns, column)
-	}
-	log.Printf("Primary Keys for %s: %v", tableFullName, columns)
 	return columns, nil
+}
+
+// Execute is just a wrapper around crdb.Execute that can be used for sql
+// queries that don't have any return values.
+func Execute(db *sql.DB, query string, args ...interface{}) error {
+	return crdb.Execute(func() error {
+		_, err := db.Exec(query, args...)
+		return err
+	})
 }
