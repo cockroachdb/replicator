@@ -13,31 +13,20 @@ const sinkDBZoneConfig = `ALTER DATABASE %s CONFIGURE ZONE USING gc.ttlseconds =
 // CreateSinkDB creates a new sink db if one does not exist yet and also adds
 // the resolved table.
 func CreateSinkDB(db *sql.DB) error {
-	if err := crdb.Execute(func() error {
-		_, err := db.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", *sinkDB))
-		return err
-	}); err != nil {
+	if err := Execute(db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", *sinkDB)); err != nil {
 		return err
 	}
-
 	if *sinkDBZone {
-		if err := crdb.Execute(func() error {
-			_, err := db.Exec(fmt.Sprintf(sinkDBZoneConfig, *sinkDB))
-			return err
-		}); err != nil {
+		if err := Execute(db, fmt.Sprintf(sinkDBZoneConfig, *sinkDB)); err != nil {
 			return err
 		}
 	}
-
 	return CreateResolvedTable(db)
 }
 
 // DropSinkDB drops the sinkDB and all data in it.
 func DropSinkDB(db *sql.DB) error {
-	return crdb.Execute(func() error {
-		_, err := db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS %s CASCADE`, *sinkDB))
-		return err
-	})
+	return Execute(db, fmt.Sprintf(`DROP DATABASE IF EXISTS %s CASCADE`, *sinkDB))
 }
 
 const sqlTableExistsQuery = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = '%s'`
@@ -90,4 +79,13 @@ func GetPrimaryKeyColumns(db *sql.DB, tableFullName string) ([]string, error) {
 		return nil, err
 	}
 	return columns, nil
+}
+
+// Execute is just a wrapper around crdb.Execute that can be used for sql
+// queries that don't have any return values.
+func Execute(db *sql.DB, query string, args ...interface{}) error {
+	return crdb.Execute(func() error {
+		_, err := db.Exec(query, args...)
+		return err
+	})
 }

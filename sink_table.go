@@ -132,18 +132,15 @@ func parseLine(rawBytes []byte) (Line, error) {
 
 // CreateSinkTable creates if it does not exist, the a table used for sinking.
 func CreateSinkTable(db *sql.DB, sinkTableFullName string) error {
-	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(sinkTableSchema, sinkTableFullName))
-	return err
+	return Execute(db, fmt.Sprintf(sinkTableSchema, sinkTableFullName))
 }
 
 // WriteToSinkTable upserts a single line to the sink table.
 func (line Line) WriteToSinkTable(db *sql.DB, sinkTableFullName string) error {
-	// Needs retry.
-	_, err := db.Exec(fmt.Sprintf(sinkTableWrite, sinkTableFullName),
+	return Execute(db,
+		fmt.Sprintf(sinkTableWrite, sinkTableFullName),
 		line.nanos, line.logical, line.key, line.after,
 	)
-	return err
 }
 
 // FindAllRowsToUpdate returns all the rows that need to be updated from the
