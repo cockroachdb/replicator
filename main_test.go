@@ -611,6 +611,7 @@ func TestTypes(t *testing.T) {
 		},
 		{`serial`, `SERIAL`, `148591304110702593`, true},
 		{`string`, `STRING`, `a1b2c3`, true},
+		{`string_escape`, `STRING`, `a1\b/2?c"3`, true},
 		{`time`, `TIME`, `01:23:45.123456`, true},
 		{`timestamp`, `TIMESTAMP`, `2016-01-25 10:10:10`, true},
 		{`timestamptz`, `TIMESTAMPTZ`, `2016-01-25 10:10:10-05:00`, true},
