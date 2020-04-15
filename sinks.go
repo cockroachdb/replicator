@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -15,43 +16,70 @@ import (
 
 // Sinks holds a map of all known sinks.
 type Sinks struct {
-	// Is this mutex overkill?  Is it needed?
+	// Is this mutex overkill?  Is it needed? There should never be any writes
+	// to the map after initialization. But guidance here is fuzzy, so I'll keep
+	// it in.
 	sync.RWMutex
-	sinks map[string]*Sink
+
+	// TODO: Consider changing this to just sinksByTableByEndpoint
+	// map[string]map[string]*Sink when allowing multiple endpoints.
+	sinksBySourceTable map[string]*Sink
+	tablesByEndpoint   map[string][]string
 }
 
-// CreateSinks creates a new table sink.
-func CreateSinks() *Sinks {
-	return &Sinks{
-		sinks: make(map[string]*Sink),
+// CreateSinks creates a new table sink and populates it based on the pass in
+// config.
+func CreateSinks(db *sql.DB, config Config) (*Sinks, error) {
+	sinks := &Sinks{
+		sinksBySourceTable: make(map[string]*Sink),
+		tablesByEndpoint:   make(map[string][]string),
 	}
+
+	for _, entry := range config {
+		if err := sinks.AddSink(db, entry); err != nil {
+			return nil, err
+		}
+	}
+
+	return sinks, nil
 }
 
 // AddSink creates and adds a new sink to the sinks map.
-func (s *Sinks) AddSink(
-	db *sql.DB, originalTable string, resultDB string, resultTable string,
-) error {
+func (s *Sinks) AddSink(db *sql.DB, entry ConfigEntry) error {
 	s.Lock()
 	defer s.Unlock()
 
-	originalTableLower := strings.ToLower(originalTable)
-	resultDBLower := strings.ToLower(resultDB)
-	resultTableLower := strings.ToLower(resultTable)
+	sourceTable := strings.ToLower(strings.TrimSpace(entry.SourceTable))
+	destinationDB := strings.ToLower(strings.TrimSpace(entry.DestinationDatabase))
+	destinationTable := strings.ToLower(strings.TrimSpace(entry.DestinationTable))
+	endpoint := strings.TrimSpace(entry.Endpoint)
 
-	sink, err := CreateSink(db, originalTableLower, resultDBLower, resultTableLower)
+	// Check for a double table
+	if _, exist := s.sinksBySourceTable[sourceTable]; exist {
+		return fmt.Errorf("Duplicate table configuration entry found: %s", sourceTable)
+	}
+
+	sink, err := CreateSink(db, sourceTable, destinationDB, destinationTable)
 	if err != nil {
 		return err
 	}
+	s.sinksBySourceTable[sourceTable] = sink
 
-	s.sinks[originalTableLower] = sink
+	endpointTables, exist := s.tablesByEndpoint[endpoint]
+	if !exist {
+		endpointTables = []string{}
+	}
+	endpointTables = append(endpointTables, sourceTable)
+	s.tablesByEndpoint[endpoint] = endpointTables
+
 	return nil
 }
 
-// FindSink returns a sink for a given table name.
-func (s *Sinks) FindSink(table string) *Sink {
+// FindSinkByTable returns a sink for a given table name.
+func (s *Sinks) FindSinkByTable(table string) *Sink {
 	s.RLock()
 	defer s.RUnlock()
-	result, _ := s.sinks[table]
+	result, _ := s.sinksBySourceTable[table]
 	return result
 }
 
@@ -60,7 +88,7 @@ func (s *Sinks) GetAllSinks() []*Sink {
 	s.RLock()
 	defer s.RUnlock()
 	var allSinks []*Sink
-	for _, sink := range s.sinks {
+	for _, sink := range s.sinksBySourceTable {
 		allSinks = append(allSinks, sink)
 	}
 	return allSinks

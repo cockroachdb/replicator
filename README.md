@@ -37,25 +37,65 @@ below
 * **port**
   * the port that cdc-sink will listen on
   * *default:* 26258
-* **source_table**
-  * the name of the source table
-  * *no default, must be provided*
-* **db**
-  * the destination db
-  * ***this must already exist***
-  * *default:* defaultdb
-* **table**
-  * th destination table
-  * ***this must already exist***
-  * *no default, must be provided*
 * **sinkDB**
   * the database to hold all temp sink data in the destination cluster
   * probably best not to change this from the default
   * *default:* _CDC_SINK
+* **config**
+  * This flag must be set. It requires a single line for each table passed in.
+  * The format is the following:
+
+  ```json
+  [
+    {"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
+    {"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
+  ]
+  ```
+
+  * Each table being updated requires a single line. Note that source database is
+not required.
+  * Each changefeed requires the same endpoint and you can have more than one table
+in a single changefeed.
+  * Note that as of right now, only a single endpoint is supported.
+  * Here are two examples:
+    * Single table changefeed.
+      * Source table and destination table are both called
+users:
+
+      ```json
+      [{"endpoint":"cdc.sql", "source_table":"users", "destination_database":"defaultdb", "destination_table":"users"}]
+      ```
+
+      * The changefeed is initialized on the source database:
+
+      ```sql
+      CREATE CHANGEFEED FOR TABLE users INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
+      ```
+
+    * Two table changefeed.
+      * Two tables this time, users and customers to two different databases:
+
+      ```json
+      [
+       {"endpoint":"cdc.sql", "source_table":"users", "destination_database":"global", "destination_table":"users"},
+       {"endpoint":"cdc.sql", "source_table":"customers", "destination_database":"success", "destination_table":"customers"},
+      ]
+      ```
+
+      * The changefeed is initialized on the source database:
+
+      ```sql
+      CREATE CHANGEFEED FOR TABLE users,customers INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
+      ```
+
+  * And don't forget to escape the quotation marks in the prompt:
+
+    ```bash
+    ./cdc-sink --config="[{\"endpoint\":\"test.sql\", \"source_table\":\"in_test1\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test1\"},{\"endpoint\":\"test.sql\", \"source_table\":\"in_test2\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test2\"}]"
+    ```
 
 ## Limitations (for now)
 
-* single source table only
 * only one change feed per cdc-sink instance
 * data-types that don't work.
   * bytes
