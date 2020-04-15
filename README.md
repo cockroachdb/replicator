@@ -47,8 +47,8 @@ below
 
   ```json
   [
-    {endpoint:"", source_table:"", destination_database:"", destination_table:""},
-    {endpoint:"", source_table:"", destination_database:"", destination_table:""},
+    {"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
+    {"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
   ]
   ```
 
@@ -63,7 +63,7 @@ in a single changefeed.
 users.
 
       ```json
-      [{endpoint:"cdc.sql", source_table:"users", destination_database:"defaultdb", destination_table:"users"}]
+      [{"endpoint":"cdc.sql", "source_table":"users", "destination_database":"defaultdb", "destination_table":"users"}]
       ```
 
       * And the changefeed would be called on the source database
@@ -77,8 +77,8 @@ users.
 
       ```json
       [
-       {endpoint:"cdc.sql", source_table:"users", destination_database:"global", destination_table:"users"},
-       {endpoint:"cdc.sql", source_table:"customers", destination_database:"success", destination_table:"customers"},
+       {"endpoint":"cdc.sql", "source_table":"users", "destination_database":"global", "destination_table":"users"},
+       {"endpoint":"cdc.sql", "source_table":"customers", "destination_database":"success", "destination_table":"customers"},
       ]
       ```
 
@@ -87,6 +87,12 @@ users.
       ```sql
       CREATE CHANGEFEED FOR TABLE users,customers INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
       ```
+
+  * And don't forget to escape the quotation marks in the prompt:
+
+    ```bash
+    ./cdc-sink --config="[{\"endpoint\":\"test.sql\", \"source_table\":\"in_test1\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test1\"},{\"endpoint\":\"test.sql\", \"source_table\":\"in_test2\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test2\"}]"
+    ```
 
 ## Limitations (for now)
 

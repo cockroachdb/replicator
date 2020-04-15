@@ -19,6 +19,7 @@ var connectionString = flag.String(
 var port = flag.Int("port", 26258, "http server listening port")
 
 var sinkDB = flag.String("sink_db", "_CDC_SINK", "db for storing temp sink tables")
+var dropDB = flag.Bool("drop", false, "Drop the sink db before starting?")
 var sinkDBZone = flag.Bool(
 	"sink_db_zone_override",
 	true,
@@ -29,8 +30,8 @@ var configuration = flag.String("config", "", `
 This flag must be set. It requires a single line for each table passed in.
 The format is the following:
 [
-	{endpoint:"", source_table:"", destination_database:"", destination_table:""},
-	{endpoint:"", source_table:"", destination_database:"", destination_table:""},
+	{"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
+	{"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
 ]
 
 Each table being updated requires a single line. Note that source database is
@@ -51,8 +52,8 @@ CREATE CHANGEFEED FOR TABLE users INTO 'experimental-[cdc-sink-url:port]/cdc.sql
 2) Two table changefeed. Two tables this time, users and customers.
 
 [
-	{endpoint:"cdc.sql", source_table:"users", destination_database:"defaultdb", destination_table:"users"},
-	{endpoint:"cdc.sql", source_table:"customers", destination_database:"defaultdb", destination_table:"customers"},
+	{"endpoint":"cdc.sql", "source_table":"users", "destination_database":"defaultdb", "destination_table":"users"},
+	{"endpoint":"cdc.sql", "source_table":"customers", "destination_database":"defaultdb", "destination_table":"customers"},
 ]
 
 And the changefeed would be called by
@@ -60,8 +61,6 @@ CREATE CHANGEFEED FOR TABLE users,customers INTO 'experimental-[cdc-sink-url:por
 
 As of right now, only a single endpoint is supported.
 `)
-
-var dropDB = flag.Bool("drop", false, "Drop the sink db before starting?")
 
 func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -149,10 +148,13 @@ func parseConfig(rawConfig string) (Config, error) {
 
 func main() {
 	// First, parse the config.
+	flag.Parse()
 	config, err := parseConfig(*configuration)
 	if err != nil {
+		log.Print(*configuration)
 		log.Fatal(err)
 	}
+	log.Printf("Config: %+v", config)
 
 	db, err := sql.Open("postgres", *connectionString)
 	if err != nil {
