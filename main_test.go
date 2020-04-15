@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -268,6 +269,17 @@ func TestDB(t *testing.T) {
 	}
 }
 
+func createConfig(source tableInfo, destination tableInfo, endpoint string) Config {
+	return Config{
+		ConfigEntry{
+			Endpoint:            endpoint,
+			SourceTable:         source.name,
+			DestinationDatabase: destination.dbName,
+			DestinationTable:    destination.name,
+		},
+	}
+}
+
 func TestFeedInsert(t *testing.T) {
 	// Create the test db
 	db, dbName, dbClose := getDB(t)
@@ -290,8 +302,8 @@ func TestFeedInsert(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks := CreateSinks()
-	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -321,7 +333,7 @@ func TestFeedInsert(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSink(tableFrom.name)
+	sink := sinks.FindSinkByTable(tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -349,8 +361,8 @@ func TestFeedDelete(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks := CreateSinks()
-	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -380,7 +392,7 @@ func TestFeedDelete(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSink(tableFrom.name)
+	sink := sinks.FindSinkByTable(tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -408,8 +420,8 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks := CreateSinks()
-	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -439,7 +451,7 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSink(tableFrom.name)
+	sink := sinks.FindSinkByTable(tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -467,8 +479,8 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks := CreateSinks()
-	if err := sinks.AddSink(db, tableFrom.name, tableTo.dbName, tableTo.name); err != nil {
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -498,7 +510,7 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSink(tableFrom.name)
+	sink := sinks.FindSinkByTable(tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -514,7 +526,10 @@ func TestTypes(t *testing.T) {
 	defer dropSinkDB(t, db)
 
 	// Create the sinks
-	sinks := CreateSinks()
+	sinks, err := CreateSinks(db, []ConfigEntry{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a test http server
 	handler := createHandler(db, sinks)
@@ -694,7 +709,12 @@ func TestTypes(t *testing.T) {
 			// Create the sink
 			// There is no way to remove a sink at this time, and that should be ok
 			// for these tests.
-			if err := sinks.AddSink(db, tableIn.name, dbName, tableOut.name); err != nil {
+			if err := sinks.AddSink(db, ConfigEntry{
+				Endpoint:            "test",
+				DestinationDatabase: dbName,
+				DestinationTable:    tableOut.name,
+				SourceTable:         tableIn.name,
+			}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -747,6 +767,120 @@ func TestTypes(t *testing.T) {
 			}
 			if fmt.Sprintf("%v", inB) != fmt.Sprintf("%v", outB) {
 				t.Errorf("B: expected %v, got %v", inB, outB)
+			}
+		})
+	}
+}
+
+func TestConfig(t *testing.T) {
+	testCases := []struct {
+		name           string
+		testJSON       string
+		expectedPass   bool
+		expectedConfig Config
+	}{
+		{
+			name:         "empty",
+			testJSON:     "",
+			expectedPass: false,
+		},
+		{
+			name:         "empty2",
+			testJSON:     "[]",
+			expectedPass: false,
+		},
+		{
+			name:         "empty3",
+			testJSON:     "[{}]",
+			expectedPass: false,
+		},
+		{
+			name:         "missing endpoint",
+			testJSON:     `[{"source_table":"s_tbl", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "missing source table",
+			testJSON:     `[{"endpoint":"test.sql", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "missing destination database",
+			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_table":"dt_tbl"}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "missing destination table",
+			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db"}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "empty endpoint",
+			testJSON:     `[{"endpoint":"", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "empty source table",
+			testJSON:     `[{"endpoint":"test.sql", "source_table":"", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "empty destination database",
+			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"", "destination_table":"dt_tbl"}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "empty destination table",
+			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":""}]`,
+			expectedPass: false,
+		},
+		{
+			name:         "single",
+			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":"d_tbl"}]`,
+			expectedPass: true,
+			expectedConfig: Config{
+				ConfigEntry{Endpoint: "test.sql", SourceTable: "s_tbl", DestinationDatabase: "d_db", DestinationTable: "d_tbl"},
+			},
+		},
+		{
+			name: "double",
+			testJSON: `[
+	{"endpoint":"test.sql", "source_table":"s_tbl1", "destination_database":"d_db", "destination_table":"d_tbl1"},
+	{"endpoint":"test.sql", "source_table":"s_tbl2", "destination_database":"d_db", "destination_table":"d_tbl2"}
+]`,
+			expectedPass: true,
+			expectedConfig: Config{
+				ConfigEntry{Endpoint: "test.sql", SourceTable: "s_tbl1", DestinationDatabase: "d_db", DestinationTable: "d_tbl1"},
+				ConfigEntry{Endpoint: "test.sql", SourceTable: "s_tbl2", DestinationDatabase: "d_db", DestinationTable: "d_tbl2"},
+			},
+		},
+		{
+			name: "triple",
+			testJSON: `[
+	{"endpoint":"test1.sql", "source_table":"s_tbl1", "destination_database":"d_db1", "destination_table":"d_tbl1"},
+	{"endpoint":"test1.sql", "source_table":"s_tbl2", "destination_database":"d_db1", "destination_table":"d_tbl2"},
+	{"endpoint":"test2.sql", "source_table":"s_tbl3", "destination_database":"d_db2", "destination_table":"d_tbl3"}
+]`,
+			expectedPass: true,
+			expectedConfig: Config{
+				ConfigEntry{Endpoint: "test1.sql", SourceTable: "s_tbl1", DestinationDatabase: "d_db1", DestinationTable: "d_tbl1"},
+				ConfigEntry{Endpoint: "test1.sql", SourceTable: "s_tbl2", DestinationDatabase: "d_db1", DestinationTable: "d_tbl2"},
+				ConfigEntry{Endpoint: "test2.sql", SourceTable: "s_tbl3", DestinationDatabase: "d_db2", DestinationTable: "d_tbl3"},
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := parseConfig(test.testJSON)
+			if test.expectedPass != (err == nil) {
+				t.Errorf("Expected %t, actual %t", test.expectedPass, err == nil)
+				if err != nil {
+					t.Errorf("Got error: %s", err.Error())
+				}
+			}
+			if test.expectedPass && !reflect.DeepEqual(test.expectedConfig, actual) {
+				t.Errorf("Expected %+v, actual %+v", test.expectedConfig, actual)
 			}
 		})
 	}
