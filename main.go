@@ -26,8 +26,10 @@ var sinkDBZone = flag.Bool(
 	"allow sink_db zone config to be overridden with the cdc-sink default values",
 )
 
-var configuration = flag.String("config", "", `
-This flag must be set. It requires a single line for each table passed in.
+var configuration = flag.String(
+	"config",
+	"",
+	`This flag must be set. It requires a single line for each table passed in.
 The format is the following:
 [
 	{"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
@@ -42,25 +44,28 @@ in a single changefeed.
 Here are two examples:
 
 1) Single table changefeed.  Source table and destination table are both called
-users.
+users:
 
 [{endpoint:"cdc.sql", source_table:"users", destination_database:"defaultdb", destination_table:"users"}]
 
-And the changefeed would be called by
+The changefeed is initialized on the source database:
 CREATE CHANGEFEED FOR TABLE users INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
 
-2) Two table changefeed. Two tables this time, users and customers.
+2) Two table changefeed. Two tables this time, users and customers:
 
 [
 	{"endpoint":"cdc.sql", "source_table":"users", "destination_database":"defaultdb", "destination_table":"users"},
 	{"endpoint":"cdc.sql", "source_table":"customers", "destination_database":"defaultdb", "destination_table":"customers"},
 ]
 
-And the changefeed would be called by
+The changefeed is initialized on the source database:
 CREATE CHANGEFEED FOR TABLE users,customers INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
 
 As of right now, only a single endpoint is supported.
-`)
+
+Don't forget to escape the json quotes:
+./cdc-sink --config="[{\"endpoint\":\"test.sql\", \"source_table\":\"in_test1\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test1\"},{\"endpoint\":\"test.sql\", \"source_table\":\"in_test2\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test2\"}]"`,
+)
 
 func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +154,7 @@ func parseConfig(rawConfig string) (Config, error) {
 func main() {
 	// First, parse the config.
 	flag.Parse()
+
 	config, err := parseConfig(*configuration)
 	if err != nil {
 		log.Print(*configuration)

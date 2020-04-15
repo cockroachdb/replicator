@@ -60,20 +60,20 @@ in a single changefeed.
   * Here are two examples:
     * Single table changefeed.
       * Source table and destination table are both called
-users.
+users:
 
       ```json
       [{"endpoint":"cdc.sql", "source_table":"users", "destination_database":"defaultdb", "destination_table":"users"}]
       ```
 
-      * And the changefeed would be called on the source database
+      * The changefeed is initialized on the source database:
 
       ```sql
       CREATE CHANGEFEED FOR TABLE users INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
       ```
 
     * Two table changefeed.
-      * Two tables this time, users and customers to two different databases.
+      * Two tables this time, users and customers to two different databases:
 
       ```json
       [
@@ -82,7 +82,7 @@ users.
       ]
       ```
 
-      * And the changefeed would be called on the source database
+      * The changefeed is initialized on the source database:
 
       ```sql
       CREATE CHANGEFEED FOR TABLE users,customers INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
