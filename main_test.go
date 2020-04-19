@@ -23,6 +23,8 @@ func init() {
 	r = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
+const endpointTest = "test.sql"
+
 // getDB creates a new testing DB, return the name of that db and a closer that
 // will drop the table and close the db connection.
 func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
@@ -213,7 +215,7 @@ func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jo
 		}
 		fmt.Fprintf(&query, tis[i].getFullName())
 	}
-	fmt.Fprintf(&query, " INTO 'experimental-%s/test.sql' WITH updated,resolved", url)
+	fmt.Fprintf(&query, " INTO 'experimental-%s/%s' WITH updated,resolved", url, endpointTest)
 	var jobID int
 	if err := crdb.Execute(func() error {
 		return db.QueryRow(query.String()).Scan(&jobID)
@@ -302,7 +304,7 @@ func TestFeedInsert(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +335,7 @@ func TestFeedInsert(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -361,7 +363,7 @@ func TestFeedDelete(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +394,7 @@ func TestFeedDelete(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -420,7 +422,7 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +453,7 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -479,7 +481,7 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +512,7 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -710,7 +712,7 @@ func TestTypes(t *testing.T) {
 			// There is no way to remove a sink at this time, and that should be ok
 			// for these tests.
 			if err := sinks.AddSink(db, ConfigEntry{
-				Endpoint:            "test",
+				Endpoint:            endpointTest,
 				DestinationDatabase: dbName,
 				DestinationTable:    tableOut.name,
 				SourceTable:         tableIn.name,

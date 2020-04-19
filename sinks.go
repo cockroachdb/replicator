@@ -21,18 +21,15 @@ type Sinks struct {
 	// it in.
 	sync.RWMutex
 
-	// TODO: Consider changing this to just sinksByTableByEndpoint
-	// map[string]map[string]*Sink when allowing multiple endpoints.
-	sinksBySourceTable map[string]*Sink
-	tablesByEndpoint   map[string][]string
+	// endpoints can have multiple tables
+	sinksByTableByEndpoint map[string]map[string]*Sink
 }
 
 // CreateSinks creates a new table sink and populates it based on the pass in
 // config.
 func CreateSinks(db *sql.DB, config Config) (*Sinks, error) {
 	sinks := &Sinks{
-		sinksBySourceTable: make(map[string]*Sink),
-		tablesByEndpoint:   make(map[string][]string),
+		sinksByTableByEndpoint: make(map[string]map[string]*Sink),
 	}
 
 	for _, entry := range config {
@@ -52,10 +49,18 @@ func (s *Sinks) AddSink(db *sql.DB, entry ConfigEntry) error {
 	sourceTable := strings.ToLower(strings.TrimSpace(entry.SourceTable))
 	destinationDB := strings.ToLower(strings.TrimSpace(entry.DestinationDatabase))
 	destinationTable := strings.ToLower(strings.TrimSpace(entry.DestinationTable))
-	endpoint := strings.TrimSpace(entry.Endpoint)
+	endpoint := strings.ToLower(strings.TrimSpace(entry.Endpoint))
+
+	// First check to make sure the endpoint exists, if it doesn't create one.
+	var sinksByTable map[string]*Sink
+	var exist bool
+	if sinksByTable, exist = s.sinksByTableByEndpoint[endpoint]; !exist {
+		sinksByTable = make(map[string]*Sink)
+		s.sinksByTableByEndpoint[endpoint] = sinksByTable
+	}
 
 	// Check for a double table
-	if _, exist := s.sinksBySourceTable[sourceTable]; exist {
+	if _, exist := sinksByTable[sourceTable]; exist {
 		return fmt.Errorf("Duplicate table configuration entry found: %s", sourceTable)
 	}
 
@@ -63,33 +68,32 @@ func (s *Sinks) AddSink(db *sql.DB, entry ConfigEntry) error {
 	if err != nil {
 		return err
 	}
-	s.sinksBySourceTable[sourceTable] = sink
-
-	endpointTables, exist := s.tablesByEndpoint[endpoint]
-	if !exist {
-		endpointTables = []string{}
-	}
-	endpointTables = append(endpointTables, sourceTable)
-	s.tablesByEndpoint[endpoint] = endpointTables
-
+	sinksByTable[sourceTable] = sink
+	s.sinksByTableByEndpoint[endpoint] = sinksByTable
 	return nil
 }
 
-// FindSinkByTable returns a sink for a given table name.
-func (s *Sinks) FindSinkByTable(table string) *Sink {
+// FindSink returns a sink for a given table name and endpoint.
+func (s *Sinks) FindSink(endpoint string, table string) *Sink {
 	s.RLock()
 	defer s.RUnlock()
-	result, _ := s.sinksBySourceTable[table]
+	sinksByTable, exist := s.sinksByTableByEndpoint[endpoint]
+	if !exist {
+		return nil
+	}
+	result, _ := sinksByTable[table]
 	return result
 }
 
-// GetAllSinks gets a list of all known sinks.
-func (s *Sinks) GetAllSinks() []*Sink {
+// GetAllSinksByEndpoint gets a list of all known sinks.
+func (s *Sinks) GetAllSinksByEndpoint(endpoint string) []*Sink {
 	s.RLock()
 	defer s.RUnlock()
 	var allSinks []*Sink
-	for _, sink := range s.sinksBySourceTable {
-		allSinks = append(allSinks, sink)
+	if sinksByTable, exists := s.sinksByTableByEndpoint[endpoint]; exists {
+		for _, sink := range sinksByTable {
+			allSinks = append(allSinks, sink)
+		}
 	}
 	return allSinks
 }
@@ -118,7 +122,7 @@ func (s *Sinks) HandleResolvedRequest(
 			log.Printf("Previous Resolved: %+v, Current Resolved: %+v", prev, next)
 
 			// Find all rows to update and upsert them.
-			allSinks := s.GetAllSinks()
+			allSinks := s.GetAllSinksByEndpoint(rURL.endpoint)
 			for _, sink := range allSinks {
 				if err := sink.UpdateRows(tx, prev, next); err != nil {
 					return err
