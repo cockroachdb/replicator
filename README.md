@@ -24,7 +24,9 @@ exactly.
     * one or more servers that can reach the destination cluster
 4. startup CDC-SINK on all servers that it's running on using the flags listed
 below
-5. Once it starts up, enable a cdc feed from the source cluster
+5. Set the cluster setting of the source cluster to enable range feeds:
+`SET CLUSTER SETTING kv.rangefeed.enabled = true`
+6. Once it starts up, enable a cdc feed from the source cluster
     * `CREATE CHANGEFEED FOR TABLE [source_table] INTO 'experimental-[cdc-sink-url:port]/test.sql' WITH updated,resolved`
     * Be sure to always use the options `updated` and `resolved` as these are
     required for this to work
@@ -96,9 +98,9 @@ users:
 
 ## Limitations (for now)
 
-* only one change feed per cdc-sink instance
 * data-types that don't work.
   * bytes
+* https is not yet supported, only http
 
 ## Limitations
 

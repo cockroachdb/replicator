@@ -75,7 +75,7 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 		// Is it an ndjson url?
 		ndjson, ndjsonErr := parseNdjsonURL(r.RequestURI)
 		if ndjsonErr == nil {
-			sink := sinks.FindSinkByTable(ndjson.topic)
+			sink := sinks.FindSink(ndjson.endpoint, ndjson.topic)
 			if sink != nil {
 				sink.HandleRequest(db, w, r)
 				return

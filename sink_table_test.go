@@ -144,12 +144,12 @@ func TestWriteToSinkTable(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sink == nil {
 		t.Fatalf("Expected sink, found none")
 	}
@@ -192,13 +192,13 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 	tableTo := createTestSimpleTable(t, db, dbName)
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert 100 rows into the table.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	for i := 0; i < 10; i++ {
 		for j := 0; j < 10; j++ {
 			line := Line{

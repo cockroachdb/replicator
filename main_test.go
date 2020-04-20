@@ -23,6 +23,8 @@ func init() {
 	r = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
+const endpointTest = "test.sql"
+
 // getDB creates a new testing DB, return the name of that db and a closer that
 // will drop the table and close the db connection.
 func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
@@ -39,6 +41,14 @@ func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
 	t.Logf("Testing Database: %s", dbName)
 
 	if err := Execute(db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Execute(db, fmt.Sprintf(sinkDBZoneConfig, dbName)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Execute(db, "SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +214,9 @@ func (ji *jobInfo) cancelJob(t *testing.T) {
 	ji.id = 0
 }
 
-func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jobInfo {
+func createChangeFeed(
+	t *testing.T, db *sql.DB, url string, endpoint string, tis ...tableInfo,
+) jobInfo {
 	var query strings.Builder
 	fmt.Fprint(&query, "CREATE CHANGEFEED FOR TABLE ")
 	for i := 0; i < len(tis); i++ {
@@ -213,7 +225,7 @@ func createChangeFeed(t *testing.T, db *sql.DB, url string, tis ...tableInfo) jo
 		}
 		fmt.Fprintf(&query, tis[i].getFullName())
 	}
-	fmt.Fprintf(&query, " INTO 'experimental-%s/test.sql' WITH updated,resolved", url)
+	fmt.Fprintf(&query, " INTO 'experimental-%s/%s' WITH updated,resolved", url, endpoint)
 	var jobID int
 	if err := crdb.Execute(func() error {
 		return db.QueryRow(query.String()).Scan(&jobID)
@@ -302,7 +314,7 @@ func TestFeedInsert(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +327,7 @@ func TestFeedInsert(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
+	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
@@ -333,7 +345,7 @@ func TestFeedInsert(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -361,7 +373,7 @@ func TestFeedDelete(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +386,7 @@ func TestFeedDelete(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
+	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
@@ -392,7 +404,7 @@ func TestFeedDelete(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -420,7 +432,7 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +445,7 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
+	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
@@ -451,7 +463,7 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -479,7 +491,7 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, "test.sql"))
+	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +504,7 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, tableFrom.tableInfo)
+	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
 	defer job.cancelJob(t)
 
 	tableFrom.populateTable(t, 10)
@@ -510,7 +522,7 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	}
 
 	// Make sure sink table is empty here.
-	sink := sinks.FindSinkByTable(tableFrom.name)
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
 		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
 	}
@@ -710,7 +722,7 @@ func TestTypes(t *testing.T) {
 			// There is no way to remove a sink at this time, and that should be ok
 			// for these tests.
 			if err := sinks.AddSink(db, ConfigEntry{
-				Endpoint:            "test",
+				Endpoint:            endpointTest,
 				DestinationDatabase: dbName,
 				DestinationTable:    tableOut.name,
 				SourceTable:         tableIn.name,
@@ -719,7 +731,7 @@ func TestTypes(t *testing.T) {
 			}
 
 			// Create the CDC feed.
-			job := createChangeFeed(t, db, server.URL, tableIn)
+			job := createChangeFeed(t, db, server.URL, endpointTest, tableIn)
 			defer job.cancelJob(t)
 
 			// Insert a row into the in table.
@@ -881,6 +893,148 @@ func TestConfig(t *testing.T) {
 			}
 			if test.expectedPass && !reflect.DeepEqual(test.expectedConfig, actual) {
 				t.Errorf("Expected %+v, actual %+v", test.expectedConfig, actual)
+			}
+		})
+	}
+}
+
+func TestMultipleFeeds(t *testing.T) {
+	// Create the test db
+	db, dbName, dbClose := getDB(t)
+	defer dbClose()
+
+	testcases := []struct {
+		feedCount     int
+		tablesPerFeed int
+	}{
+		{1, 1},
+		{1, 2},
+		{1, 3},
+		{2, 1},
+		{2, 2},
+		{2, 3},
+		{3, 1},
+		{3, 2},
+		{3, 3},
+	}
+
+	nameEndpoint := func(feedID int) string {
+		return fmt.Sprintf("test_%d_%s", feedID, endpointTest)
+	}
+
+	for _, testcase := range testcases {
+		t.Run(fmt.Sprintf("Feeds_%d_Tables_%d", testcase.feedCount, testcase.tablesPerFeed), func(t *testing.T) {
+
+			// Create a new _cdc_sink db
+			createSinkDB(t, db)
+			defer dropSinkDB(t, db)
+
+			// Create all the tables
+			var sourceTablesByFeed [][]*tableInfoSimple
+			var destinationTablesByFeed [][]*tableInfoSimple
+			for i := 0; i < testcase.feedCount; i++ {
+				var sourceTables []*tableInfoSimple
+				var destinationTables []*tableInfoSimple
+				for j := 0; j < testcase.tablesPerFeed; j++ {
+					sourceTable := createTestSimpleTable(t, db, dbName)
+					sourceTables = append(sourceTables, &sourceTable)
+					destinationTable := createTestSimpleTable(t, db, dbName)
+					destinationTables = append(destinationTables, &destinationTable)
+				}
+				sourceTablesByFeed = append(sourceTablesByFeed, sourceTables)
+				destinationTablesByFeed = append(destinationTablesByFeed, destinationTables)
+			}
+
+			// Populate all the source tables
+			for _, feedTables := range sourceTablesByFeed {
+				for _, table := range feedTables {
+					table.populateTable(t, 10)
+				}
+			}
+
+			// Create the sinks
+			sinks, err := CreateSinks(db, []ConfigEntry{})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Create all the sinks
+			for i := 0; i < testcase.feedCount; i++ {
+				for j := 0; j < testcase.tablesPerFeed; j++ {
+					if err := sinks.AddSink(db, ConfigEntry{
+						Endpoint:            nameEndpoint(i),
+						DestinationDatabase: destinationTablesByFeed[i][j].dbName,
+						DestinationTable:    destinationTablesByFeed[i][j].name,
+						SourceTable:         sourceTablesByFeed[i][j].name,
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			// Create a test http server
+			handler := createHandler(db, sinks)
+			server := httptest.NewServer(http.HandlerFunc(handler))
+			defer server.Close()
+
+			// Create the changefeeds
+			for i := 0; i < testcase.feedCount; i++ {
+				var tableInfos []tableInfo
+				for _, table := range sourceTablesByFeed[i] {
+					tableInfos = append(tableInfos, table.tableInfo)
+				}
+				job := createChangeFeed(t, db, server.URL, nameEndpoint(i), tableInfos...)
+				defer job.cancelJob(t)
+			}
+
+			// Add some more lines to each table.
+			// Populate all the source tables
+			for _, feedTables := range sourceTablesByFeed {
+				for _, table := range feedTables {
+					table.populateTable(t, 10)
+				}
+			}
+
+			// Make sure each table has 20 rows
+			for _, feedTables := range destinationTablesByFeed {
+				for _, table := range feedTables {
+					for table.getTableRowCount(t) != 20 {
+						time.Sleep(time.Millisecond * 10)
+					}
+				}
+			}
+
+			// Update all rows in the source table.
+			for _, feedTables := range sourceTablesByFeed {
+				for _, table := range feedTables {
+					table.updateAll(t)
+				}
+			}
+
+			// Make sure each table has 20 rows
+			for _, feedTables := range destinationTablesByFeed {
+				for _, table := range feedTables {
+					for table.maxB(t) != 2000 {
+						time.Sleep(time.Millisecond * 10)
+					}
+				}
+			}
+
+			// Delete all rows in the table.
+			// Update all rows in the source table.
+			for _, feedTables := range sourceTablesByFeed {
+				for _, table := range feedTables {
+					table.deleteAll(t)
+				}
+			}
+
+			// Make sure each table has 20 rows
+			for _, feedTables := range destinationTablesByFeed {
+				for _, table := range feedTables {
+					for table.getTableRowCount(t) != 0 {
+						time.Sleep(time.Millisecond * 10)
+					}
+				}
 			}
 		})
 	}
