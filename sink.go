@@ -74,21 +74,38 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 }
 
 // deleteRow preforms a delete on a single row.
-func (s *Sink) deleteRow(tx *sql.Tx, line Line) error {
+func (s *Sink) deleteRows(tx *sql.Tx, lines []Line) error {
+	if len(lines) == 0 {
+		return nil
+	}
 	// Build the statement.
 	var statement strings.Builder
-	fmt.Fprintf(&statement, "DELETE FROM %s WHERE ", s.resultTableFullName)
+	fmt.Fprintf(&statement, "DELETE FROM %s WHERE (", s.resultTableFullName)
 	for i, column := range s.primaryKeyColumns {
 		if i > 0 {
-			fmt.Fprint(&statement, " AND ")
+			fmt.Fprint(&statement, ",")
 		}
 		// Placeholder index always starts at 1.
-		fmt.Fprintf(&statement, "%s = $%d", column, i+1)
+		fmt.Fprintf(&statement, "%s", column)
 	}
+	fmt.Fprintf(&statement, ") IN (")
+	var keys []interface{}
+	for i, line := range lines {
+		if i > 0 {
+			fmt.Fprintf(&statement, ",")
+		}
+		fmt.Fprintf(&statement, "(")
+		for _, key := range line.Key {
+			keys = append(keys, key)
+			fmt.Fprintf(&statement, "$%d", len(keys))
+		}
+		fmt.Fprintf(&statement, ")")
+	}
+	fmt.Fprintf(&statement, ")")
 	log.Printf("Delete Statement: %s", statement.String())
 
 	// Upsert the line
-	_, err := tx.Exec(statement.String(), line.Key...)
+	_, err := tx.Exec(statement.String(), keys...)
 	return err
 }
 
@@ -186,8 +203,27 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 		return err
 	}
 
-	for _, line := range lines {
+	//var upserts []Line
+	var deletes []Line
+
+	// This must happen in reverse order and all keys must be kept track of.
+	// This way, we can ensure that more recent changes overwrite earlier ones
+	// without having to perform multiple upserts/deletes to the db.
+	usedKeys := make(map[string]struct{})
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
 		log.Printf("line to update: %+v", line)
+
+		// Did we updates this line already? If so, don't perform this update.
+		if _, exist := usedKeys[line.key]; exist {
+			if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
+				return err
+			}
+			continue
+		} else {
+			usedKeys[line.key] = struct{}{}
+		}
+
 		// Parse the key into columns
 		// Large numbers are not turned into strings, so the UseNumber option for
 		// the decoder is required.
@@ -212,9 +248,7 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 
 		// Is this a delete?
 		if line.after == "null" {
-			if err := s.deleteRow(tx, line); err != nil {
-				return err
-			}
+			deletes = append(deletes, line)
 			if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
 				return err
 			}
@@ -229,6 +263,13 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 			return err
 		}
 	}
+
+	// Delete all rows
+	if err := s.deleteRows(tx, deletes); err != nil {
+		return err
+	}
+
+	// Upsert all rows
 
 	return nil
 }
