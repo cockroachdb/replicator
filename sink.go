@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/lib/pq"
@@ -102,7 +103,6 @@ func (s *Sink) deleteRows(tx *sql.Tx, lines []Line) error {
 		fmt.Fprintf(&statement, ")")
 	}
 	fmt.Fprintf(&statement, ")")
-	log.Printf("Delete Statement: %s", statement.String())
 
 	// Upsert the line
 	_, err := tx.Exec(statement.String(), keys...)
@@ -143,49 +143,60 @@ func cleanValue(value interface{}) (interface{}, error) {
 }
 
 // upsertRow performs an upsert on a single row.
-func (s *Sink) upsertRow(tx *sql.Tx, line Line) error {
-	// Parse the after columns
-	// Large numbers are not turned into strings, so the UseNumber option for
-	// the decoder is required.
-	dec := json.NewDecoder(strings.NewReader(line.after))
-	dec.UseNumber()
-	if err := dec.Decode(&(line.After)); err != nil {
-		return err
+func (s *Sink) upsertRows(tx *sql.Tx, lines []Line) error {
+	if len(lines) == 0 {
+		return nil
 	}
 
-	// Find all the columns that need to be part of the upsert statement.
-	columns := make(map[string]interface{})
-	for name, value := range line.After {
-		columns[name] = value
+	// Get all the column names and order them alphabetically.
+	line0 := lines[0]
+	if err := line0.parseAfter(); err != nil {
+		return err
 	}
-	for i, column := range s.primaryKeyColumns {
-		columns[column] = line.Key[i]
+	var columnNames []string
+	for name := range line0.After {
+		columnNames = append(columnNames, name)
 	}
+	sort.Strings(columnNames)
 
 	// Build the statement.
 	var statement strings.Builder
+	// TODO: This first part can be memoized as long as there are no schema
+	// changes.
 	fmt.Fprintf(&statement, "UPSERT INTO %s (", s.resultTableFullName)
-	var values []interface{}
-	for name, value := range columns {
-		if len(values) > 0 {
-			fmt.Fprint(&statement, ", ")
-		}
-		fmt.Fprint(&statement, name)
-		insertableValue, err := cleanValue(value)
-		if err != nil {
-			return err
-		}
-		values = append(values, insertableValue)
-	}
-	fmt.Fprint(&statement, ") VALUES (")
-	for i := 0; i < len(values); i++ {
+
+	for i, name := range columnNames {
 		if i > 0 {
-			fmt.Fprint(&statement, ", ")
+			fmt.Fprintf(&statement, ",")
 		}
-		// Placeholder index always starts at 1.
-		fmt.Fprintf(&statement, "$%d", i+1)
+		fmt.Fprintf(&statement, name)
 	}
-	fmt.Fprint(&statement, ")")
+	fmt.Fprint(&statement, ") VALUES ")
+
+	var values []interface{}
+	for i, line := range lines {
+		if err := line.parseAfter(); err != nil {
+			return nil
+		}
+		if i == 0 {
+			fmt.Fprintf(&statement, "(")
+		} else {
+			fmt.Fprintf(&statement, ",(")
+		}
+		for j, name := range columnNames {
+			insertableValue, err := cleanValue(line.After[name])
+			if err != nil {
+				return err
+			}
+			values = append(values, insertableValue)
+			if j == 0 {
+				fmt.Fprintf(&statement, "$%d", len(values))
+			} else {
+				fmt.Fprintf(&statement, ",$%d", len(values))
+			}
+		}
+		fmt.Fprintf(&statement, ")")
+	}
 	log.Printf("Upsert Statement: %s", statement.String())
 
 	// Upsert the line
@@ -203,7 +214,9 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 		return err
 	}
 
-	//var upserts []Line
+	// TODO: Batch these by 100 rows?  Not sure what the max should be.
+
+	var upserts []Line
 	var deletes []Line
 
 	// This must happen in reverse order and all keys must be kept track of.
@@ -256,9 +269,7 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 		}
 
 		// This can be an upsert statement.
-		if err := s.upsertRow(tx, line); err != nil {
-			return err
-		}
+		upserts = append(upserts, line)
 		if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
 			return err
 		}
@@ -270,6 +281,9 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 	}
 
 	// Upsert all rows
+	if err := s.upsertRows(tx, upserts); err != nil {
+		return err
+	}
 
 	return nil
 }

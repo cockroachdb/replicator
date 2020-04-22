@@ -56,6 +56,17 @@ type Line struct {
 	key     string
 }
 
+// parseAFter parses the after column (retrieved from the sink table back into
+// After so it can be used for upserting.
+func (line *Line) parseAfter() error {
+	// Parse the after columns
+	// Large numbers are not turned into strings, so the UseNumber option for
+	// the decoder is required.
+	dec := json.NewDecoder(strings.NewReader(line.after))
+	dec.UseNumber()
+	return dec.Decode(&(line.After))
+}
+
 // parseSplitTimestamp splits a timestmap of tte format NNNN.LLL into an int64
 // for the nanos and an int for the logical component.
 func parseSplitTimestamp(timestamp string) (int64, int, error) {
