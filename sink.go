@@ -229,13 +229,9 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 
 		// Did we updates this line already? If so, don't perform this update.
 		if _, exist := usedKeys[line.key]; exist {
-			if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
-				return err
-			}
 			continue
-		} else {
-			usedKeys[line.key] = struct{}{}
 		}
+		usedKeys[line.key] = struct{}{}
 
 		// Parse the key into columns
 		// Large numbers are not turned into strings, so the UseNumber option for
@@ -262,16 +258,9 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 		// Is this a delete?
 		if line.after == "null" {
 			deletes = append(deletes, line)
-			if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// This can be an upsert statement.
-		upserts = append(upserts, line)
-		if err := line.DeleteLine(tx, s.sinkTableFullName); err != nil {
-			return err
+		} else {
+			// This must be an upsert statement.
+			upserts = append(upserts, line)
 		}
 	}
 
@@ -285,5 +274,6 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 		return err
 	}
 
-	return nil
+	// Delete the rows in the sink table.
+	return DeleteSinkTableLines(tx, s.sinkTableFullName, prev, next)
 }

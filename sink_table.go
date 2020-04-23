@@ -23,13 +23,18 @@ CREATE TABLE IF NOT EXISTS %s (
 `
 const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
 
-const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
-
 // Timestamps are less than and up to the resolved ones.
 // For this $1 and $2 are previous resolved, $3 and $4 are the current
 // resolved.
 const sinkTableQueryRows = `
 SELECT nanos, logical, key, after
+FROM %s
+WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
+			((nanos = $3 AND logical <= $4) OR (nanos < $3))
+`
+
+const sinkTableDeleteRows = `
+DELETE
 FROM %s
 WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
 			((nanos = $3 AND logical <= $4) OR (nanos < $3))
@@ -175,11 +180,13 @@ func FindAllRowsToUpdate(
 	return lines, nil
 }
 
-// DeleteLine removes the line from the sinktable.
-// const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
-func (line Line) DeleteLine(tx *sql.Tx, sinkTableFullName string) error {
-	_, err := tx.Exec(fmt.Sprintf(sinkTableDelete, sinkTableFullName),
-		line.nanos, line.logical, line.key,
+// DeleteSinkTableLines removes all line from the sinktable that have been processed
+// based on the prev and next resolved line.
+func DeleteSinkTableLines(
+	tx *sql.Tx, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
+) error {
+	_, err := tx.Exec(fmt.Sprintf(sinkTableDeleteRows, sinkTableFullName),
+		prev.nanos, prev.logical, next.nanos, next.logical,
 	)
 	return err
 }
