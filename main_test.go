@@ -550,18 +550,30 @@ func TestTypes(t *testing.T) {
 		indexable   bool
 	}{
 		{`string_array`, `STRING[]`, `{"sky","road","car"}`, false},
+		{`string_array_null`, `STRING[]`, ``, false},
 		{`int_array`, `INT[]`, `{1,2,3}`, false},
+		{`int_array_null`, `INT[]`, ``, false},
 		{`serial_array`, `SERIAL[]`, `{148591304110702593,148591304110702594,148591304110702595}`, false},
+		{`serial_array_null`, `SERIAL[]`, ``, false},
 		{`bit`, `VARBIT`, `10010101`, true},
+		{`bit_null`, `VARBIT`, ``, false},
 		{`bool`, `BOOL`, `true`, true},
+		{`bool_null`, `BOOL`, ``, false},
 		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
 		{`collate`, `STRING COLLATE de`, `'a1b2c3' COLLATE de`, true},
+		{`collate_null`, `STRING COLLATE de`, ``, false},
 		{`date`, `DATE`, `2016-01-25`, true},
+		{`date_null`, `DATE`, ``, false},
 		{`decimal`, `DECIMAL`, `1.2345`, true},
+		{`decimal_null`, `DECIMAL`, ``, false},
 		{`float`, `FLOAT`, `1.2345`, true},
+		{`float_null`, `FLOAT`, ``, false},
 		{`inet`, `INET`, `192.168.0.1`, true},
+		{`inet_null`, `INET`, ``, false},
 		{`int`, `INT`, `12345`, true},
+		{`int_null`, `INT`, ``, false},
 		{`interval`, `INTERVAL`, `2h30m30s`, true},
+		{`interval_null`, `INTERVAL`, ``, false},
 		{
 			`jsonb`,
 			`JSONB`,
@@ -641,13 +653,20 @@ func TestTypes(t *testing.T) {
 			`,
 			false,
 		},
+		{`jsonb_null`, `JSONB`, ``, false},
 		{`serial`, `SERIAL`, `148591304110702593`, true},
+		// serial cannot be null
 		{`string`, `STRING`, `a1b2c3`, true},
+		{`string_null`, `STRING`, ``, false},
 		{`string_escape`, `STRING`, `a1\b/2?c"3`, true},
 		{`time`, `TIME`, `01:23:45.123456`, true},
+		{`time_null`, `TIME`, ``, false},
 		{`timestamp`, `TIMESTAMP`, `2016-01-25 10:10:10`, true},
+		{`timestamp_null`, `TIMESTAMP`, ``, false},
 		{`timestamptz`, `TIMESTAMPTZ`, `2016-01-25 10:10:10-05:00`, true},
+		{`timestamptz_null`, `TIMESTAMPTZ`, ``, false},
 		{`uuid`, `UUID`, `7f9c24e8-3b12-4fef-91e0-56a2d5a246ec`, true},
+		{`uuid_null`, `UUID`, ``, false},
 	}
 
 	/*
@@ -735,9 +754,13 @@ func TestTypes(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
+				value := interface{}(test.columnValue)
+				if len(test.columnValue) == 0 {
+					value = nil
+				}
 				if err := Execute(db,
 					fmt.Sprintf("INSERT INTO %s (a, b) VALUES (1, $1)", tableIn.getFullName()),
-					test.columnValue,
+					value,
 				); err != nil {
 					t.Fatal(err)
 				}
