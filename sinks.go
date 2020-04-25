@@ -64,7 +64,7 @@ func (s *Sinks) AddSink(db *sql.DB, entry ConfigEntry) error {
 		return fmt.Errorf("Duplicate table configuration entry found: %s", sourceTable)
 	}
 
-	sink, err := CreateSink(db, sourceTable, destinationDB, destinationTable)
+	sink, err := CreateSink(db, sourceTable, destinationDB, destinationTable, endpoint)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ func (s *Sinks) HandleResolvedRequest(
 			if err != nil {
 				return err
 			}
-			log.Printf("Previous Resolved: %+v, Current Resolved: %+v", prev, next)
+			log.Printf("%s: resolved - timestamp %d.%d", next.endpoint, next.nanos, next.logical)
 
 			// Find all rows to update and upsert them.
 			allSinks := s.GetAllSinksByEndpoint(rURL.endpoint)

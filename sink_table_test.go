@@ -160,14 +160,18 @@ func TestWriteToSinkTable(t *testing.T) {
 	}
 
 	// Write 100 rows to the table.
+	var lines []Line
 	for i := 0; i < 100; i++ {
-		line := Line{
+		lines = append(lines, Line{
 			nanos:   int64(i),
 			logical: i,
 			key:     fmt.Sprintf("[%d]", i),
 			after:   fmt.Sprintf(`{"a": %d`, i),
-		}
-		line.WriteToSinkTable(db, sink.sinkTableFullName)
+		})
+	}
+
+	if err := WriteToSinkTable(db, sink.sinkTableFullName, lines); err != nil {
+		t.Fatal(err)
 	}
 
 	// Check to see if there are indeed 100 rows in the table.
@@ -199,18 +203,19 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 
 	// Insert 100 rows into the table.
 	sink := sinks.FindSink(endpointTest, tableFrom.name)
+	var lines []Line
 	for i := 0; i < 10; i++ {
 		for j := 0; j < 10; j++ {
-			line := Line{
+			lines = append(lines, Line{
 				nanos:   int64(i),
 				logical: j,
 				after:   fmt.Sprintf("{a=%d,b=%d}", i, j),
 				key:     fmt.Sprintf("[%d]", i),
-			}
-			if err := line.WriteToSinkTable(db, sink.sinkTableFullName); err != nil {
-				t.Fatal(err)
-			}
+			})
 		}
+	}
+	if err := WriteToSinkTable(db, sink.sinkTableFullName, lines); err != nil {
+		t.Fatal(err)
 	}
 
 	// Now find those rows from the start.

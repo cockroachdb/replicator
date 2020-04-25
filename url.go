@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -127,9 +126,6 @@ func parseNdjsonURL(url string) (ndjsonURL, error) {
 		}
 	}
 
-	log.Printf("url: %+v", url)
-	log.Printf("ndjson: %+v", ndjson)
-
 	return ndjson, nil
 }
 
@@ -176,9 +172,6 @@ func parseResolvedURL(url string) (resolvedURL, error) {
 			// Skip all the rest.
 		}
 	}
-
-	log.Printf("url: %+v", url)
-	log.Printf("resolved: %+v", resolved)
 
 	return resolved, nil
 }

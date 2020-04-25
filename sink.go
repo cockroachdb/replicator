@@ -19,11 +19,12 @@ type Sink struct {
 	resultTableFullName string
 	sinkTableFullName   string
 	primaryKeyColumns   []string
+	endpoint            string
 }
 
 // CreateSink creates all the required tables and returns a new Sink.
 func CreateSink(
-	db *sql.DB, originalTable string, resultDB string, resultTable string,
+	db *sql.DB, originalTable string, resultDB string, resultTable string, endpoint string,
 ) (*Sink, error) {
 	// Check to make sure the table exists.
 	resultTableFullName := fmt.Sprintf("%s.%s", resultDB, resultTable)
@@ -50,15 +51,19 @@ func CreateSink(
 		resultTableFullName: resultTableFullName,
 		sinkTableFullName:   sinkTableFullName,
 		primaryKeyColumns:   columns,
+		endpoint:            endpoint,
 	}
 
 	return sink, nil
 }
 
+const chunkSize = 1000
+
 // HandleRequest is a handler used for this specific sink.
 func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	scanner := bufio.NewScanner(r.Body)
 	defer r.Body.Close()
+	var lines []Line
 	for scanner.Scan() {
 		line, err := parseLine(scanner.Bytes())
 		if err != nil {
@@ -66,47 +71,72 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := line.WriteToSinkTable(db, s.sinkTableFullName); err != nil {
-			log.Print(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		lines = append(lines, line)
+		if len(lines) >= chunkSize {
+			if err := WriteToSinkTable(db, s.sinkTableFullName, lines); err != nil {
+				log.Print(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			log.Printf("%s: added %d operations", s.endpoint, chunkSize)
+			lines = []Line{}
 		}
 	}
+	if err := WriteToSinkTable(db, s.sinkTableFullName, lines); err != nil {
+		log.Print(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("%s: added %d operations", s.endpoint, len(lines))
 }
 
-// deleteRow preforms a delete on a single row.
+// deleteRows preforms all the deletes specified in lines.
 func (s *Sink) deleteRows(tx *sql.Tx, lines []Line) error {
 	if len(lines) == 0 {
 		return nil
 	}
-	// Build the statement.
-	var statement strings.Builder
-	fmt.Fprintf(&statement, "DELETE FROM %s WHERE (", s.resultTableFullName)
-	for i, column := range s.primaryKeyColumns {
-		if i > 0 {
-			fmt.Fprint(&statement, ",")
+
+	var chunks [][]Line
+	for i := 0; i < len(lines); i += chunkSize {
+		end := i + chunkSize
+		if end > len(lines) {
+			end = len(lines)
 		}
-		// Placeholder index always starts at 1.
-		fmt.Fprintf(&statement, "%s", column)
+		chunks = append(chunks, lines[i:end])
 	}
-	fmt.Fprintf(&statement, ") IN (")
-	var keys []interface{}
-	for i, line := range lines {
-		if i > 0 {
-			fmt.Fprintf(&statement, ",")
+
+	for _, chunk := range chunks {
+		// Build the statement.
+		var statement strings.Builder
+		fmt.Fprintf(&statement, "DELETE FROM %s WHERE (", s.resultTableFullName)
+		for i, column := range s.primaryKeyColumns {
+			if i > 0 {
+				fmt.Fprint(&statement, ",")
+			}
+			// Placeholder index always starts at 1.
+			fmt.Fprintf(&statement, "%s", column)
 		}
-		fmt.Fprintf(&statement, "(")
-		for _, key := range line.Key {
-			keys = append(keys, key)
-			fmt.Fprintf(&statement, "$%d", len(keys))
+		fmt.Fprintf(&statement, ") IN (")
+		var keys []interface{}
+		for i, line := range chunk {
+			if i > 0 {
+				fmt.Fprintf(&statement, ",")
+			}
+			fmt.Fprintf(&statement, "(")
+			for _, key := range line.Key {
+				keys = append(keys, key)
+				fmt.Fprintf(&statement, "$%d", len(keys))
+			}
+			fmt.Fprintf(&statement, ")")
 		}
 		fmt.Fprintf(&statement, ")")
-	}
-	fmt.Fprintf(&statement, ")")
 
-	// Upsert the line
-	_, err := tx.Exec(statement.String(), keys...)
-	return err
+		// Upsert the line
+		if _, err := tx.Exec(statement.String(), keys...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // cleanValue will check the type of the value being upserted to ensure it
@@ -115,12 +145,10 @@ func cleanValue(value interface{}) (interface{}, error) {
 	switch t := value.(type) {
 	case bool:
 		// bool
-		log.Printf("Type: %T, value: %s", t, value)
 		return value, nil
 	case string:
 		// bit, date, inet, interval, string, time, timestamp, timestamptz, uuid,
 		// collated strings
-		log.Printf("Type: %T, value: %s", t, value)
 		return value, nil
 	case json.Number:
 		// decimal, float, int, serial
@@ -128,13 +156,11 @@ func cleanValue(value interface{}) (interface{}, error) {
 	case []interface{}:
 		// array
 		// These must be converted using the specialized pq function.
-		log.Printf("Type: %T, value: %s", t, value)
 		return pq.Array(value.([]interface{})), nil
 	case map[string]interface{}:
 		// jsonb
 		// This must be marshalled or pq won't be able to insert it.
 		marshalled, err := json.Marshal(value)
-		log.Printf("Type: %T, value: %s, marshalled: %s", t, value, marshalled)
 		return marshalled, err
 	default:
 		log.Printf("Type: %T, value: %s", t, value)
@@ -142,7 +168,7 @@ func cleanValue(value interface{}) (interface{}, error) {
 	}
 }
 
-// upsertRow performs an upsert on a single row.
+// upsertRows performs all upserts specified in lines.
 func (s *Sink) upsertRows(tx *sql.Tx, lines []Line) error {
 	if len(lines) == 0 {
 		return nil
@@ -159,60 +185,76 @@ func (s *Sink) upsertRows(tx *sql.Tx, lines []Line) error {
 	}
 	sort.Strings(columnNames)
 
-	// Build the statement.
-	var statement strings.Builder
-	// TODO: This first part can be memoized as long as there are no schema
-	// changes.
-	fmt.Fprintf(&statement, "UPSERT INTO %s (", s.resultTableFullName)
-
-	for i, name := range columnNames {
-		if i > 0 {
-			fmt.Fprintf(&statement, ",")
+	var chunks [][]Line
+	for i := 0; i < len(lines); i += chunkSize {
+		end := i + chunkSize
+		if end > len(lines) {
+			end = len(lines)
 		}
-		fmt.Fprintf(&statement, name)
+		chunks = append(chunks, lines[i:end])
 	}
-	fmt.Fprint(&statement, ") VALUES ")
 
-	var values []interface{}
-	for i, line := range lines {
-		if err := line.parseAfter(); err != nil {
-			return nil
-		}
-		if i == 0 {
-			fmt.Fprintf(&statement, "(")
-		} else {
-			fmt.Fprintf(&statement, ",(")
-		}
-		for j, name := range columnNames {
-			insertableValue, err := cleanValue(line.After[name])
-			if err != nil {
-				return err
+	for _, chunk := range chunks {
+		// Build the statement.
+		var statement strings.Builder
+		// TODO: This first part can be memoized as long as there are no schema
+		// changes.
+		fmt.Fprintf(&statement, "UPSERT INTO %s (", s.resultTableFullName)
+
+		for i, name := range columnNames {
+			if i > 0 {
+				fmt.Fprintf(&statement, ",")
 			}
-			values = append(values, insertableValue)
-			if j == 0 {
-				fmt.Fprintf(&statement, "$%d", len(values))
+			fmt.Fprintf(&statement, name)
+		}
+		fmt.Fprint(&statement, ") VALUES ")
+
+		var values []interface{}
+		for i, line := range chunk {
+			if err := line.parseAfter(); err != nil {
+				return nil
+			}
+			if i == 0 {
+				fmt.Fprintf(&statement, "(")
 			} else {
-				fmt.Fprintf(&statement, ",$%d", len(values))
+				fmt.Fprintf(&statement, ",(")
 			}
+			for j, name := range columnNames {
+				insertableValue, err := cleanValue(line.After[name])
+				if err != nil {
+					return err
+				}
+				values = append(values, insertableValue)
+				if j == 0 {
+					fmt.Fprintf(&statement, "$%d", len(values))
+				} else {
+					fmt.Fprintf(&statement, ",$%d", len(values))
+				}
+			}
+			fmt.Fprintf(&statement, ")")
 		}
-		fmt.Fprintf(&statement, ")")
-	}
-	log.Printf("Upsert Statement: %s", statement.String())
 
-	// Upsert the line
-	_, err := tx.Exec(statement.String(), values...)
-	return err
+		// Upsert the line
+		if _, err := tx.Exec(statement.String(), values...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // UpdateRows updates all changed rows.
 func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) error {
-	log.Printf("Updating Sink %s", s.resultTableFullName)
-
 	// First, gather all the rows to update.
 	lines, err := FindAllRowsToUpdate(tx, s.sinkTableFullName, prev, next)
 	if err != nil {
 		return err
 	}
+
+	if len(lines) == 0 {
+		return nil
+	}
+
+	log.Printf("%s: %s executed %d operations", s.endpoint, s.sinkTableFullName, len(lines))
 
 	// TODO: Batch these by 100 rows?  Not sure what the max should be.
 
@@ -225,7 +267,6 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 	usedKeys := make(map[string]struct{})
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
-		log.Printf("line to update: %+v", line)
 
 		// Did we updates this line already? If so, don't perform this update.
 		if _, exist := usedKeys[line.key]; exist {
