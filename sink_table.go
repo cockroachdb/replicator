@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -21,15 +20,20 @@ CREATE TABLE IF NOT EXISTS %s (
 	PRIMARY KEY (nanos, logical, key)
 )
 `
-const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES ($1, $2, $3, $4)`
-
-const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
+const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES `
 
 // Timestamps are less than and up to the resolved ones.
 // For this $1 and $2 are previous resolved, $3 and $4 are the current
 // resolved.
 const sinkTableQueryRows = `
 SELECT nanos, logical, key, after
+FROM %s
+WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
+			((nanos = $3 AND logical <= $4) OR (nanos < $3))
+`
+
+const sinkTableDeleteRows = `
+DELETE
 FROM %s
 WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
 			((nanos = $3 AND logical <= $4) OR (nanos < $3))
@@ -54,6 +58,23 @@ type Line struct {
 	logical int
 	after   string
 	key     string
+}
+
+// parseAFter parses the after column (retrieved from the sink table back into
+// After so it can be used for upserting.
+func (line *Line) parseAfter() error {
+	// Parse the after columns
+	// Large numbers are not turned into strings, so the UseNumber option for
+	// the decoder is required.
+	dec := json.NewDecoder(strings.NewReader(line.after))
+	dec.UseNumber()
+	return dec.Decode(&(line.After))
+}
+
+// getSinkTableValues is just the statements ordered as expected for the sink
+// table insert statement.
+func (line Line) getSinkTableValues() []interface{} {
+	return []interface{}{line.nanos, line.logical, line.key, line.after}
 }
 
 // parseSplitTimestamp splits a timestmap of tte format NNNN.LLL into an int64
@@ -124,9 +145,6 @@ func parseLine(rawBytes []byte) (Line, error) {
 		return Line{}, fmt.Errorf("no value present in 'key' field")
 	}
 	line.key = string(keyBytes)
-
-	log.Printf("lineRaw: %s", string(rawBytes))
-	log.Printf("line: %+v", line)
 	return line, err
 }
 
@@ -135,12 +153,32 @@ func CreateSinkTable(db *sql.DB, sinkTableFullName string) error {
 	return Execute(db, fmt.Sprintf(sinkTableSchema, sinkTableFullName))
 }
 
-// WriteToSinkTable upserts a single line to the sink table.
-func (line Line) WriteToSinkTable(db *sql.DB, sinkTableFullName string) error {
-	return Execute(db,
-		fmt.Sprintf(sinkTableWrite, sinkTableFullName),
-		line.nanos, line.logical, line.key, line.after,
-	)
+// WriteToSinkTable upserts all lines to the sink table. Never submit more than
+// 10,000 lines to this function at a time.
+func WriteToSinkTable(db *sql.DB, sinkTableFullName string, lines []Line) error {
+	if len(lines) == 0 {
+		return nil
+	}
+	var statement strings.Builder
+	if _, err := fmt.Fprintf(&statement, sinkTableWrite, sinkTableFullName); err != nil {
+		return err
+	}
+	var values []interface{}
+	for i, line := range lines {
+		values = append(values, line.getSinkTableValues()...)
+		if i == 0 {
+			if _, err := fmt.Fprint(&statement, "($1,$2,$3,$4)"); err != nil {
+				return err
+			}
+		} else {
+			j := i * 4
+			if _, err := fmt.Fprintf(&statement, ",($%d,$%d,$%d,$%d)", j+1, j+2, j+3, j+4); err != nil {
+				return err
+			}
+		}
+	}
+
+	return Execute(db, statement.String(), values...)
 }
 
 // FindAllRowsToUpdate returns all the rows that need to be updated from the
@@ -164,11 +202,13 @@ func FindAllRowsToUpdate(
 	return lines, nil
 }
 
-// DeleteLine removes the line from the sinktable.
-// const sinkTableDelete = `DELETE FROM %s WHERE nanos=$1 AND logical=$2 AND key=$3`
-func (line Line) DeleteLine(tx *sql.Tx, sinkTableFullName string) error {
-	_, err := tx.Exec(fmt.Sprintf(sinkTableDelete, sinkTableFullName),
-		line.nanos, line.logical, line.key,
+// DeleteSinkTableLines removes all line from the sinktable that have been processed
+// based on the prev and next resolved line.
+func DeleteSinkTableLines(
+	tx *sql.Tx, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
+) error {
+	_, err := tx.Exec(fmt.Sprintf(sinkTableDeleteRows, sinkTableFullName),
+		prev.nanos, prev.logical, next.nanos, next.logical,
 	)
 	return err
 }

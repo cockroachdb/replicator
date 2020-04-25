@@ -181,7 +181,7 @@ func (tis *tableInfoSimple) updateNoneKeyColumns(t *testing.T) {
 func (tis *tableInfoSimple) updateAll(t *testing.T) {
 	if err := Execute(
 		tis.db,
-		fmt.Sprintf("UPDATE %s SET a=a*100, b=b*100 WHERE true", tis.getFullName()),
+		fmt.Sprintf("UPDATE %s SET a=a*100000, b=b*100000 WHERE true", tis.getFullName()),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -332,16 +332,14 @@ func TestFeedInsert(t *testing.T) {
 
 	tableFrom.populateTable(t, 10)
 
-	for tableTo.getTableRowCount(t) != 20 {
+	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.populateTable(t, 10)
 
-	for tableTo.getTableRowCount(t) != 30 {
+	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -391,16 +389,14 @@ func TestFeedDelete(t *testing.T) {
 
 	tableFrom.populateTable(t, 10)
 
-	for tableTo.getTableRowCount(t) != 20 {
+	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.deleteAll(t)
 
-	for tableTo.getTableRowCount(t) != 0 {
+	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -450,16 +446,14 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 
 	tableFrom.populateTable(t, 10)
 
-	for tableTo.getTableRowCount(t) != 20 {
+	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.updateNoneKeyColumns(t)
 
-	for tableTo.maxB(t) != 2000 {
+	for tableTo.maxB(t) != tableFrom.maxB(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -509,16 +503,14 @@ func TestFeedUpdatePrimary(t *testing.T) {
 
 	tableFrom.populateTable(t, 10)
 
-	for tableTo.getTableRowCount(t) != 20 {
+	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	tableFrom.updateAll(t)
 
-	for tableTo.maxB(t) != 2000 {
+	for tableTo.maxB(t) != tableFrom.maxB(t) {
 		// add a stopper here from a wrapper around the handler.
-		time.Sleep(time.Millisecond * 10)
 	}
 
 	// Make sure sink table is empty here.
@@ -754,7 +746,7 @@ func TestTypes(t *testing.T) {
 			// Wait until the out table has a row.
 			for tableOut.getTableRowCount(t) != 1 {
 				// add a stopper here from a wrapper around the handler.
-				time.Sleep(time.Millisecond * 10)
+
 			}
 
 			// Now fetch that rows and compare them.
@@ -906,16 +898,17 @@ func TestMultipleFeeds(t *testing.T) {
 	testcases := []struct {
 		feedCount     int
 		tablesPerFeed int
+		populateCount int
 	}{
-		{1, 1},
-		{1, 2},
-		{1, 3},
-		{2, 1},
-		{2, 2},
-		{2, 3},
-		{3, 1},
-		{3, 2},
-		{3, 3},
+		{1, 1, 10000},
+		{1, 2, 10},
+		{1, 3, 10},
+		{2, 1, 10},
+		{2, 2, 10},
+		{2, 3, 10},
+		{3, 1, 10},
+		{3, 2, 10},
+		{3, 3, 10},
 	}
 
 	nameEndpoint := func(feedID int) string {
@@ -923,7 +916,9 @@ func TestMultipleFeeds(t *testing.T) {
 	}
 
 	for _, testcase := range testcases {
-		t.Run(fmt.Sprintf("Feeds_%d_Tables_%d", testcase.feedCount, testcase.tablesPerFeed), func(t *testing.T) {
+		t.Run(fmt.Sprintf("Feeds_%d_Tables_%d_Size_%d",
+			testcase.feedCount, testcase.tablesPerFeed, testcase.populateCount,
+		), func(t *testing.T) {
 
 			// Create a new _cdc_sink db
 			createSinkDB(t, db)
@@ -948,7 +943,7 @@ func TestMultipleFeeds(t *testing.T) {
 			// Populate all the source tables
 			for _, feedTables := range sourceTablesByFeed {
 				for _, table := range feedTables {
-					table.populateTable(t, 10)
+					table.populateTable(t, testcase.populateCount)
 				}
 			}
 
@@ -991,15 +986,15 @@ func TestMultipleFeeds(t *testing.T) {
 			// Populate all the source tables
 			for _, feedTables := range sourceTablesByFeed {
 				for _, table := range feedTables {
-					table.populateTable(t, 10)
+					table.populateTable(t, testcase.populateCount)
 				}
 			}
 
 			// Make sure each table has 20 rows
 			for _, feedTables := range destinationTablesByFeed {
 				for _, table := range feedTables {
-					for table.getTableRowCount(t) != 20 {
-						time.Sleep(time.Millisecond * 10)
+					for table.getTableRowCount(t) != testcase.populateCount*2 {
+
 					}
 				}
 			}
@@ -1012,10 +1007,9 @@ func TestMultipleFeeds(t *testing.T) {
 			}
 
 			// Make sure each table has 20 rows
-			for _, feedTables := range destinationTablesByFeed {
-				for _, table := range feedTables {
-					for table.maxB(t) != 2000 {
-						time.Sleep(time.Millisecond * 10)
+			for i, feedTables := range destinationTablesByFeed {
+				for j, table := range feedTables {
+					for table.maxB(t) != sourceTablesByFeed[i][j].maxB(t) {
 					}
 				}
 			}
@@ -1032,7 +1026,6 @@ func TestMultipleFeeds(t *testing.T) {
 			for _, feedTables := range destinationTablesByFeed {
 				for _, table := range feedTables {
 					for table.getTableRowCount(t) != 0 {
-						time.Sleep(time.Millisecond * 10)
 					}
 				}
 			}

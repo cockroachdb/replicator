@@ -69,9 +69,6 @@ Don't forget to escape the json quotes:
 
 func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Request: %s", r.RequestURI)
-		log.Printf("Header: %s", r.Header)
-
 		// Is it an ndjson url?
 		ndjson, ndjsonErr := parseNdjsonURL(r.RequestURI)
 		if ndjsonErr == nil {
@@ -160,7 +157,6 @@ func main() {
 		log.Print(*configuration)
 		log.Fatal(err)
 	}
-	log.Printf("Config: %+v", config)
 
 	db, err := sql.Open("postgres", *connectionString)
 	if err != nil {
