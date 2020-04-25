@@ -162,6 +162,9 @@ func cleanValue(value interface{}) (interface{}, error) {
 		// This must be marshalled or pq won't be able to insert it.
 		marshalled, err := json.Marshal(value)
 		return marshalled, err
+	case nil:
+		// null values, regardless of sql type
+		return nil, nil
 	default:
 		log.Printf("Type: %T, value: %s", t, value)
 		return nil, fmt.Errorf("unsupported type %T", t)
