@@ -1,6 +1,6 @@
 # cdc-sink
 
-This tool lets one CockroachDB cluster take a CDC feeds from one or more
+This tool lets one CockroachDB cluster take CDC feeds from one or more
 CockroachDB clusters.
 
 For more information on CDC, please see: <https://www.cockroachlabs.com/docs/dev/change-data-capture.html>
