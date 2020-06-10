@@ -3,7 +3,8 @@
 This tool lets one CockroachDB cluster take a single CDC feed from another
 cluster. This feed can send one or more tables.
 
-***Note, only single table works at this time***
+***This is just a prototype and is not officially supported by Cockroach Labs.***
+We cannot provide support for it at this time but may in the future.
 
 For more information on CDC, please see: <https://www.cockroachlabs.com/docs/dev/change-data-capture.html>
 
