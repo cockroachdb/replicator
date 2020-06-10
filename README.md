@@ -1,17 +1,17 @@
 # cdc-sink
 
-This tool lets one CockroachDB cluster take a single CDC feed from another
-cluster. This feed can send one or more tables.
-
-***This is just a prototype and is not officially supported by Cockroach Labs.***
-We cannot provide support for it at this time but may in the future.
+This tool lets one CockroachDB cluster take a CDC feeds from one or more
+CockroachDB clusters.
 
 For more information on CDC, please see: <https://www.cockroachlabs.com/docs/dev/change-data-capture.html>
 
+***This is just a prototype and is not officially supported by Cockroach Labs.***
+
+We cannot provide support for it at this time but may in the future.
+
 ## Instructions
 
-_Note that this is subject to change as this is under heavy development right
-now._
+_Note that this is subject to change as this is still under development._
 
 1. In the source cluster, choose the table(s) you would like to stream.
 2. In the destination cluster, re-create those tables and match the schema
