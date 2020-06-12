@@ -9,6 +9,35 @@ For more information on CDC, please see: <https://www.cockroachlabs.com/docs/dev
 
 We cannot provide support for it at this time but may in the future.
 
+## Overview
+
+- Source CRDB emits changes in realtime via CRDB CDC feature
+- CDC sink accepts the changes via the HTTP end point
+- CDC sink applies the changes to the target CRDB
+
+```
++---------------------+                          
+|     source CRDB     |                           
+|                     |                 
+| CDC {source_table}  |  
++---------------------+
+          |
+          V
+   http://ip:26258 
++---------------------+
+|       CDC sink      |
+|CDC SINK {end_point} |
++---------------------+
+          |
+          V
+ postgresql://ip:26257 
++---------------------+
+|    target CRDB      |
+| {destination_table} |
++---------------------+
+
+```
+
 ## Instructions
 
 _Note that this is subject to change as this is still under development._
@@ -31,6 +60,53 @@ below
     * `CREATE CHANGEFEED FOR TABLE [source_table] INTO 'experimental-[cdc-sink-url:port]/test.sql' WITH updated,resolved`
     * Be sure to always use the options `updated` and `resolved` as these are
     required for this to work
+
+### A short exmaple with YCSB workload
+
+```
+# install the cdc-sink
+go get github.com/cockroachdb/cdc-sink
+
+# source CRDB is single node 
+cockroach start-single-node --listen-addr :30000 --http-addr :30001 --store cockroach-data/30000 --insecure --background
+
+# target CRDB is single node as well -- does not need be
+cockroach start-single-node --listen-addr :30002 --http-addr :30003 --store cockroach-data/30002 --insecure --background
+
+# source ycsb.usertable is populated with 10 rows
+cockroach workload init ycsb postgresql://root@localhost:30000/ycsb?sslmode=disable --families=false --insert-count=10
+
+# target ycsb.usertable is empty
+cockroach workload init ycsb postgresql://root@localhost:30002/ycsb?sslmode=disable --families=false --insert-count=0
+
+# source has rows, target is empty
+cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
+cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
+
+# cdc-sink started as a background task
+cdc-sink --port 30004 --conn postgresql://root@localhost:30002/defaultdb?sslmode=disable --config="[{\"endpoint\":\"crdbusertable\", \"source_table\":\"usertable\", \"destination_database\":\"ycsb\", \"destination_table\":\"usertable\"}]" &
+
+# start the CDC that will send across the initial datashapshot 
+cockroach sql --insecure --port 30000 <<EOF
+-- add enterprise license
+-- SET CLUSTER SETTING cluster.organization = 'Acme Company';
+-- SET CLUSTER SETTING enterprise.license = 'xxxxxxxxxxxx';
+SET CLUSTER SETTING kv.rangefeed.enabled = true;
+CREATE CHANGEFEED FOR TABLE YCSB.USERTABLE INTO 'experimental-http://127.0.0.1:30004/crdbusertable' WITH updated,resolved='10s';
+EOF
+
+# source has rows, target is the same as the source
+cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
+cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
+
+# start YCSB workload and the incremental updates happens automagically
+cockroach workload run ycsb postgresql://root@localhost:30000/ycsb?sslmode=disable --families=false --insert-count=100 --max-rate=1 --concurrency=1 &
+
+# source updates are applied to the target
+cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
+cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
+
+```
 
 ## Flags
 
@@ -72,7 +148,7 @@ users:
       * The changefeed is initialized on the source database:
 
       ```sql
-      CREATE CHANGEFEED FOR TABLE users INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
+      CREATE CHANGEFEED FOR TABLE users INTO 'experimental-http://[cdc-sink-ip:26258]/cdc.sql' WITH updated,resolved
       ```
 
     * Two table changefeed.
@@ -134,3 +210,6 @@ primary index.  There are some other changes than can be made on the destination
 * Different and new secondary indexes are allowed.
 * Different zone configs are allowed.
 * Adding new computed columns, that cannot reject any row, should work.
+
+## Troubleshootings
+
