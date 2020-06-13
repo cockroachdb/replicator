@@ -15,7 +15,7 @@ We cannot provide support for it at this time but may in the future.
 - CDC sink accepts the changes via the HTTP end point
 - CDC sink applies the changes to the target CRDB
 
-```
+```text
 +---------------------+                          
 |     source CRDB     |                           
 |                     |                 
@@ -63,7 +63,7 @@ below
 
 ### A short exmaple with YCSB workload
 
-```
+```bash
 # install the cdc-sink
 go get github.com/cockroachdb/cdc-sink
 
@@ -105,7 +105,6 @@ cockroach workload run ycsb postgresql://root@localhost:30000/ycsb?sslmode=disab
 # source updates are applied to the target
 cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
 cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
-
 ```
 
 ## Flags
