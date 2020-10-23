@@ -161,7 +161,7 @@ func cleanValue(value interface{}) (interface{}, error) {
 		// collated strings
 		return value, nil
 	case json.Number:
-		// decimal, float, int, serial
+		// decimal, float, int, serial, geography, geometry
 		return value, nil
 	case []interface{}:
 		// array

@@ -578,6 +578,8 @@ func TestTypes(t *testing.T) {
 		{`decimal_null`, `DECIMAL`, ``, false},
 		{`float`, `FLOAT`, `1.2345`, true},
 		{`float_null`, `FLOAT`, ``, false},
+		{`geography`, `GEOGRAPHY`, `0101000020E6100000000000000000F03F0000000000000040`, false},
+		{`geometry`, `GEOMETRY`, `010100000075029A081B9A5DC0F085C954C1F84040`, false},
 		{`inet`, `INET`, `192.168.0.1`, true},
 		{`inet_null`, `INET`, ``, false},
 		{`int`, `INT`, `12345`, true},
@@ -933,7 +935,7 @@ func TestMultipleFeeds(t *testing.T) {
 		tablesPerFeed	int
 		populateCount	int
 	}{
-		{1, 1, 10000},
+		{1, 1, 1000},
 		{1, 2, 10},
 		{1, 3, 10},
 		{2, 1, 10},
