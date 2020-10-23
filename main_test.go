@@ -83,9 +83,9 @@ func getRowCount(t *testing.T, db *sql.DB, fullTableName string) int {
 }
 
 type tableInfo struct {
-	db     *sql.DB
-	dbName string
-	name   string
+	db	*sql.DB
+	dbName	string
+	name	string
 }
 
 func (ti tableInfo) getFullName() string {
@@ -142,15 +142,15 @@ outer:
 
 	t.Logf("Testing Table: %s.%s", dbName, tableName)
 	return tableInfo{
-		db:     db,
-		dbName: dbName,
-		name:   tableName,
+		db:	db,
+		dbName:	dbName,
+		name:	tableName,
 	}
 }
 
 type tableInfoSimple struct {
 	tableInfo
-	rowCount int
+	rowCount	int
 }
 
 const tableSimpleSchema = `
@@ -210,8 +210,8 @@ func (tis *tableInfoSimple) maxB(t *testing.T) int {
 }
 
 type jobInfo struct {
-	db *sql.DB
-	id int
+	db	*sql.DB
+	id	int
 }
 
 func (ji *jobInfo) cancelJob(t *testing.T) {
@@ -243,8 +243,8 @@ func createChangeFeed(
 		t.Fatal(err)
 	}
 	return jobInfo{
-		db: db,
-		id: jobID,
+		db:	db,
+		id:	jobID,
 	}
 }
 
@@ -294,10 +294,10 @@ func TestDB(t *testing.T) {
 func createConfig(source tableInfo, destination tableInfo, endpoint string) Config {
 	return Config{
 		ConfigEntry{
-			Endpoint:            endpoint,
-			SourceTable:         source.name,
-			DestinationDatabase: destination.dbName,
-			DestinationTable:    destination.name,
+			Endpoint:		endpoint,
+			SourceTable:		source.name,
+			DestinationDatabase:	destination.dbName,
+			DestinationTable:	destination.name,
 		},
 	}
 }
@@ -554,10 +554,10 @@ func TestTypes(t *testing.T) {
 	t.Log(server.URL)
 
 	testcases := []struct {
-		name        string
-		columnType  string
-		columnValue string
-		indexable   bool
+		name		string
+		columnType	string
+		columnValue	string
+		indexable	bool
 	}{
 		{`string_array`, `STRING[]`, `{"sky","road","car"}`, false},
 		{`string_array_null`, `STRING[]`, ``, false},
@@ -578,6 +578,8 @@ func TestTypes(t *testing.T) {
 		{`decimal_null`, `DECIMAL`, ``, false},
 		{`float`, `FLOAT`, `1.2345`, true},
 		{`float_null`, `FLOAT`, ``, false},
+		{`geography`, `GEOGRAPHY`, `0101000020E6100000000000000000F03F0000000000000040`, false},
+		{`geometry`, `GEOMETRY`, `010100000075029A081B9A5DC0F085C954C1F84040`, false},
 		{`inet`, `INET`, `192.168.0.1`, true},
 		{`inet_null`, `INET`, ``, false},
 		{`int`, `INT`, `12345`, true},
@@ -696,14 +698,14 @@ func TestTypes(t *testing.T) {
 	for _, test := range testcases {
 		t.Run(test.name, func(t *testing.T) {
 			tableIn := tableInfo{
-				db:     db,
-				dbName: dbName,
-				name:   fmt.Sprintf("in_%s", test.name),
+				db:	db,
+				dbName:	dbName,
+				name:	fmt.Sprintf("in_%s", test.name),
 			}
 			tableOut := tableInfo{
-				db:     db,
-				dbName: dbName,
-				name:   fmt.Sprintf("out_%s", test.name),
+				db:	db,
+				dbName:	dbName,
+				name:	fmt.Sprintf("out_%s", test.name),
 			}
 
 			// Drop both tables if they already exist.
@@ -743,10 +745,10 @@ func TestTypes(t *testing.T) {
 			// There is no way to remove a sink at this time, and that should be ok
 			// for these tests.
 			if err := sinks.AddSink(db, ConfigEntry{
-				Endpoint:            endpointTest,
-				DestinationDatabase: dbName,
-				DestinationTable:    tableOut.name,
-				SourceTable:         tableIn.name,
+				Endpoint:		endpointTest,
+				DestinationDatabase:	dbName,
+				DestinationTable:	tableOut.name,
+				SourceTable:		tableIn.name,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -811,94 +813,94 @@ func TestTypes(t *testing.T) {
 
 func TestConfig(t *testing.T) {
 	testCases := []struct {
-		name           string
-		testJSON       string
-		expectedPass   bool
-		expectedConfig Config
+		name		string
+		testJSON	string
+		expectedPass	bool
+		expectedConfig	Config
 	}{
 		{
-			name:         "empty",
-			testJSON:     "",
-			expectedPass: false,
+			name:		"empty",
+			testJSON:	"",
+			expectedPass:	false,
 		},
 		{
-			name:         "empty2",
-			testJSON:     "[]",
-			expectedPass: false,
+			name:		"empty2",
+			testJSON:	"[]",
+			expectedPass:	false,
 		},
 		{
-			name:         "empty3",
-			testJSON:     "[{}]",
-			expectedPass: false,
+			name:		"empty3",
+			testJSON:	"[{}]",
+			expectedPass:	false,
 		},
 		{
-			name:         "missing endpoint",
-			testJSON:     `[{"source_table":"s_tbl", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
-			expectedPass: false,
+			name:		"missing endpoint",
+			testJSON:	`[{"source_table":"s_tbl", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "missing source table",
-			testJSON:     `[{"endpoint":"test.sql", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
-			expectedPass: false,
+			name:		"missing source table",
+			testJSON:	`[{"endpoint":"test.sql", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "missing destination database",
-			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_table":"dt_tbl"}]`,
-			expectedPass: false,
+			name:		"missing destination database",
+			testJSON:	`[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_table":"dt_tbl"}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "missing destination table",
-			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db"}]`,
-			expectedPass: false,
+			name:		"missing destination table",
+			testJSON:	`[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db"}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "empty endpoint",
-			testJSON:     `[{"endpoint":"", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
-			expectedPass: false,
+			name:		"empty endpoint",
+			testJSON:	`[{"endpoint":"", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "empty source table",
-			testJSON:     `[{"endpoint":"test.sql", "source_table":"", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
-			expectedPass: false,
+			name:		"empty source table",
+			testJSON:	`[{"endpoint":"test.sql", "source_table":"", "destination_database":"d_db", "destination_table":"dt_tbl"}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "empty destination database",
-			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"", "destination_table":"dt_tbl"}]`,
-			expectedPass: false,
+			name:		"empty destination database",
+			testJSON:	`[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"", "destination_table":"dt_tbl"}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "empty destination table",
-			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":""}]`,
-			expectedPass: false,
+			name:		"empty destination table",
+			testJSON:	`[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":""}]`,
+			expectedPass:	false,
 		},
 		{
-			name:         "single",
-			testJSON:     `[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":"d_tbl"}]`,
-			expectedPass: true,
+			name:		"single",
+			testJSON:	`[{"endpoint":"test.sql", "source_table":"s_tbl", "destination_database":"d_db", "destination_table":"d_tbl"}]`,
+			expectedPass:	true,
 			expectedConfig: Config{
 				ConfigEntry{Endpoint: "test.sql", SourceTable: "s_tbl", DestinationDatabase: "d_db", DestinationTable: "d_tbl"},
 			},
 		},
 		{
-			name: "double",
+			name:	"double",
 			testJSON: `[
 	{"endpoint":"test.sql", "source_table":"s_tbl1", "destination_database":"d_db", "destination_table":"d_tbl1"},
 	{"endpoint":"test.sql", "source_table":"s_tbl2", "destination_database":"d_db", "destination_table":"d_tbl2"}
 ]`,
-			expectedPass: true,
+			expectedPass:	true,
 			expectedConfig: Config{
 				ConfigEntry{Endpoint: "test.sql", SourceTable: "s_tbl1", DestinationDatabase: "d_db", DestinationTable: "d_tbl1"},
 				ConfigEntry{Endpoint: "test.sql", SourceTable: "s_tbl2", DestinationDatabase: "d_db", DestinationTable: "d_tbl2"},
 			},
 		},
 		{
-			name: "triple",
+			name:	"triple",
 			testJSON: `[
 	{"endpoint":"test1.sql", "source_table":"s_tbl1", "destination_database":"d_db1", "destination_table":"d_tbl1"},
 	{"endpoint":"test1.sql", "source_table":"s_tbl2", "destination_database":"d_db1", "destination_table":"d_tbl2"},
 	{"endpoint":"test2.sql", "source_table":"s_tbl3", "destination_database":"d_db2", "destination_table":"d_tbl3"}
 ]`,
-			expectedPass: true,
+			expectedPass:	true,
 			expectedConfig: Config{
 				ConfigEntry{Endpoint: "test1.sql", SourceTable: "s_tbl1", DestinationDatabase: "d_db1", DestinationTable: "d_tbl1"},
 				ConfigEntry{Endpoint: "test1.sql", SourceTable: "s_tbl2", DestinationDatabase: "d_db1", DestinationTable: "d_tbl2"},
@@ -929,11 +931,11 @@ func TestMultipleFeeds(t *testing.T) {
 	defer dbClose()
 
 	testcases := []struct {
-		feedCount     int
-		tablesPerFeed int
-		populateCount int
+		feedCount	int
+		tablesPerFeed	int
+		populateCount	int
 	}{
-		{1, 1, 10000},
+		{1, 1, 1000},
 		{1, 2, 10},
 		{1, 3, 10},
 		{2, 1, 10},
@@ -990,10 +992,10 @@ func TestMultipleFeeds(t *testing.T) {
 			for i := 0; i < testcase.feedCount; i++ {
 				for j := 0; j < testcase.tablesPerFeed; j++ {
 					if err := sinks.AddSink(db, ConfigEntry{
-						Endpoint:            nameEndpoint(i),
-						DestinationDatabase: destinationTablesByFeed[i][j].dbName,
-						DestinationTable:    destinationTablesByFeed[i][j].name,
-						SourceTable:         sourceTablesByFeed[i][j].name,
+						Endpoint:		nameEndpoint(i),
+						DestinationDatabase:	destinationTablesByFeed[i][j].dbName,
+						DestinationTable:	destinationTablesByFeed[i][j].name,
+						SourceTable:		sourceTablesByFeed[i][j].name,
 					}); err != nil {
 						t.Fatal(err)
 					}

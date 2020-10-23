@@ -25,11 +25,11 @@ import (
 
 // Sink holds all the info needed for a specific table.
 type Sink struct {
-	originalTableName   string
-	resultTableFullName string
-	sinkTableFullName   string
-	primaryKeyColumns   []string
-	endpoint            string
+	originalTableName	string
+	resultTableFullName	string
+	sinkTableFullName	string
+	primaryKeyColumns	[]string
+	endpoint		string
 }
 
 // CreateSink creates all the required tables and returns a new Sink.
@@ -57,11 +57,11 @@ func CreateSink(
 	}
 
 	sink := &Sink{
-		originalTableName:   originalTable,
-		resultTableFullName: resultTableFullName,
-		sinkTableFullName:   sinkTableFullName,
-		primaryKeyColumns:   columns,
-		endpoint:            endpoint,
+		originalTableName:	originalTable,
+		resultTableFullName:	resultTableFullName,
+		sinkTableFullName:	sinkTableFullName,
+		primaryKeyColumns:	columns,
+		endpoint:		endpoint,
 	}
 
 	return sink, nil
@@ -161,7 +161,7 @@ func cleanValue(value interface{}) (interface{}, error) {
 		// collated strings
 		return value, nil
 	case json.Number:
-		// decimal, float, int, serial
+		// decimal, float, int, serial, geography, geometry
 		return value, nil
 	case []interface{}:
 		// array
