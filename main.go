@@ -11,14 +11,20 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 var connectionString = flag.String(
@@ -77,7 +83,7 @@ Don't forget to escape the json quotes:
 ./cdc-sink --config="[{\"endpoint\":\"test.sql\", \"source_table\":\"in_test1\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test1\"},{\"endpoint\":\"test.sql\", \"source_table\":\"in_test2\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test2\"}]"`,
 )
 
-func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
+func createHandler(db *pgxpool.Pool, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Is it an ndjson url?
 		ndjson, ndjsonErr := parseNdjsonURL(r.RequestURI)
@@ -100,7 +106,7 @@ func createHandler(db *sql.DB, sinks *Sinks) func(http.ResponseWriter, *http.Req
 		// Is it a resolved url?
 		resolved, resolvedErr := parseResolvedURL(r.RequestURI)
 		if resolvedErr == nil {
-			sinks.HandleResolvedRequest(db, resolved, w, r)
+			sinks.HandleResolvedRequest(r.Context(), db, resolved, w, r)
 			return
 		}
 
@@ -159,6 +165,8 @@ func parseConfig(rawConfig string) (Config, error) {
 }
 
 func main() {
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+
 	// First, parse the config.
 	flag.Parse()
 
@@ -168,28 +176,43 @@ func main() {
 		log.Fatal(err)
 	}
 
-	db, err := sql.Open("postgres", *connectionString)
+	db, err := pgxpool.Connect(ctx, *connectionString)
 	if err != nil {
-		log.Fatalf("error connecting to the database: %s", err.Error())
+		log.Fatalf("could not parse config string: %v", err)
 	}
 	defer db.Close()
 
 	if *dropDB {
-		if err := DropSinkDB(db); err != nil {
-			log.Fatalf("Could not drop the sinkDB:%s - %s", *sinkDB, err.Error())
+		if err := DropSinkDB(ctx, db); err != nil {
+			log.Fatalf("Could not drop the sinkDB:%s - %v", *sinkDB, err)
 		}
 	}
 
-	if err := CreateSinkDB(db); err != nil {
-		log.Fatalf("Could not create the sinkDB:%s - %s", *sinkDB, err.Error())
+	if err := CreateSinkDB(ctx, db); err != nil {
+		log.Fatalf("Could not create the sinkDB:%s - %v", *sinkDB, err)
 	}
 
-	sinks, err := CreateSinks(db, config)
+	sinks, err := CreateSinks(ctx, db, config)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	handler := createHandler(db, sinks)
-	http.HandleFunc("/", handler)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), nil))
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	if err != nil {
+		log.Fatalf("could not open listener: %v", err)
+	}
+	log.Printf("listening on %s", l.Addr())
+
+	handler := http.Handler(http.HandlerFunc(createHandler(db, sinks)))
+	handler = h2c.NewHandler(handler, &http2.Server{})
+
+	// TODO(bob): Consider configuring timeouts
+	svr := &http.Server{Handler: handler}
+	go svr.Serve(l)
+	<-ctx.Done()
+	log.Printf("waiting for connections to drain")
+	cancel()
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	_ = svr.Shutdown(ctx)
+	cancel()
 }

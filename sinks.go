@@ -13,15 +13,13 @@ package main
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 
-	"github.com/cockroachdb/cockroach-go/crdb"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 // Sinks holds a map of all known sinks.
@@ -37,13 +35,13 @@ type Sinks struct {
 
 // CreateSinks creates a new table sink and populates it based on the pass in
 // config.
-func CreateSinks(db *sql.DB, config Config) (*Sinks, error) {
+func CreateSinks(ctx context.Context, db *pgxpool.Pool, config Config) (*Sinks, error) {
 	sinks := &Sinks{
 		sinksByTableByEndpoint: make(map[string]map[string]*Sink),
 	}
 
 	for _, entry := range config {
-		if err := sinks.AddSink(db, entry); err != nil {
+		if err := sinks.AddSink(ctx, db, entry); err != nil {
 			return nil, err
 		}
 	}
@@ -52,7 +50,7 @@ func CreateSinks(db *sql.DB, config Config) (*Sinks, error) {
 }
 
 // AddSink creates and adds a new sink to the sinks map.
-func (s *Sinks) AddSink(db *sql.DB, entry ConfigEntry) error {
+func (s *Sinks) AddSink(ctx context.Context, db *pgxpool.Pool, entry ConfigEntry) error {
 	s.Lock()
 	defer s.Unlock()
 
@@ -74,7 +72,7 @@ func (s *Sinks) AddSink(db *sql.DB, entry ConfigEntry) error {
 		return fmt.Errorf("Duplicate table configuration entry found: %s", sourceTable)
 	}
 
-	sink, err := CreateSink(db, sourceTable, destinationDB, destinationTable, endpoint)
+	sink, err := CreateSink(ctx, db, sourceTable, destinationDB, destinationTable, endpoint)
 	if err != nil {
 		return err
 	}
@@ -110,7 +108,7 @@ func (s *Sinks) GetAllSinksByEndpoint(endpoint string) []*Sink {
 
 // HandleResolvedRequest parses and applies all the resolved upserts.
 func (s *Sinks) HandleResolvedRequest(
-	db *sql.DB, rURL resolvedURL, w http.ResponseWriter, r *http.Request,
+	ctx context.Context, db *pgxpool.Pool, rURL resolvedURL, w http.ResponseWriter, r *http.Request,
 ) {
 	scanner := bufio.NewScanner(r.Body)
 	defer r.Body.Close()
@@ -123,9 +121,15 @@ func (s *Sinks) HandleResolvedRequest(
 		}
 
 		// Start the transation
-		if err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+		if err := Retry(ctx, func(ctx context.Context) error {
+			tx, err := db.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(ctx)
+
 			// Get the previous resolved
-			prev, err := getPreviousResolved(tx, rURL.endpoint)
+			prev, err := getPreviousResolved(ctx, tx, rURL.endpoint)
 			if err != nil {
 				return err
 			}
@@ -134,13 +138,16 @@ func (s *Sinks) HandleResolvedRequest(
 			// Find all rows to update and upsert them.
 			allSinks := s.GetAllSinksByEndpoint(rURL.endpoint)
 			for _, sink := range allSinks {
-				if err := sink.UpdateRows(tx, prev, next); err != nil {
+				if err := sink.UpdateRows(ctx, tx, prev, next); err != nil {
 					return err
 				}
 			}
 
 			// Write the updated resolved.
-			return next.writeUpdated(tx)
+			if err := next.writeUpdated(ctx, tx); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
 		}); err != nil {
 			log.Print(err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)

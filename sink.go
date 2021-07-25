@@ -12,7 +12,7 @@ package main
 
 import (
 	"bufio"
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,7 +20,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 // Sink holds all the info needed for a specific table.
@@ -34,11 +35,12 @@ type Sink struct {
 
 // CreateSink creates all the required tables and returns a new Sink.
 func CreateSink(
-	db *sql.DB, originalTable string, resultDB string, resultTable string, endpoint string,
+	ctx context.Context, db *pgxpool.Pool,
+	originalTable string, resultDB string, resultTable string, endpoint string,
 ) (*Sink, error) {
 	// Check to make sure the table exists.
 	resultTableFullName := fmt.Sprintf("%s.%s", resultDB, resultTable)
-	exists, err := TableExists(db, resultDB, resultTable)
+	exists, err := TableExists(ctx, db, resultDB, resultTable)
 	if err != nil {
 		return nil, err
 	}
@@ -47,11 +49,11 @@ func CreateSink(
 	}
 
 	sinkTableFullName := SinkTableFullName(resultDB, resultTable)
-	if err := CreateSinkTable(db, sinkTableFullName); err != nil {
+	if err := CreateSinkTable(ctx, db, sinkTableFullName); err != nil {
 		return nil, err
 	}
 
-	columns, err := GetPrimaryKeyColumns(db, resultTableFullName)
+	columns, err := GetPrimaryKeyColumns(ctx, db, resultTableFullName)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +72,7 @@ func CreateSink(
 const chunkSize = 1000
 
 // HandleRequest is a handler used for this specific sink.
-func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request) {
+func (s *Sink) HandleRequest(db *pgxpool.Pool, w http.ResponseWriter, r *http.Request) {
 	scanner := bufio.NewScanner(r.Body)
 	defer r.Body.Close()
 	var lines []Line
@@ -83,7 +85,7 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 		}
 		lines = append(lines, line)
 		if len(lines) >= chunkSize {
-			if err := WriteToSinkTable(db, s.sinkTableFullName, lines); err != nil {
+			if err := WriteToSinkTable(r.Context(), db, s.sinkTableFullName, lines); err != nil {
 				log.Print(err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -92,7 +94,7 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 			lines = []Line{}
 		}
 	}
-	if err := WriteToSinkTable(db, s.sinkTableFullName, lines); err != nil {
+	if err := WriteToSinkTable(r.Context(), db, s.sinkTableFullName, lines); err != nil {
 		log.Print(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -101,7 +103,7 @@ func (s *Sink) HandleRequest(db *sql.DB, w http.ResponseWriter, r *http.Request)
 }
 
 // deleteRows preforms all the deletes specified in lines.
-func (s *Sink) deleteRows(tx *sql.Tx, lines []Line) error {
+func (s *Sink) deleteRows(ctx context.Context, tx pgxtype.Querier, lines []Line) error {
 	if len(lines) == 0 {
 		return nil
 	}
@@ -142,47 +144,15 @@ func (s *Sink) deleteRows(tx *sql.Tx, lines []Line) error {
 		fmt.Fprintf(&statement, ")")
 
 		// Upsert the line
-		if _, err := tx.Exec(statement.String(), keys...); err != nil {
+		if _, err := tx.Exec(ctx, statement.String(), keys...); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// cleanValue will check the type of the value being upserted to ensure it
-// can be handled by pq.
-func cleanValue(value interface{}) (interface{}, error) {
-	switch t := value.(type) {
-	case bool:
-		// bool
-		return value, nil
-	case string:
-		// bit, date, inet, interval, string, time, timestamp, timestamptz, uuid,
-		// collated strings
-		return value, nil
-	case json.Number:
-		// decimal, float, int, serial, geography, geometry
-		return value, nil
-	case []interface{}:
-		// array
-		// These must be converted using the specialized pq function.
-		return pq.Array(value.([]interface{})), nil
-	case map[string]interface{}:
-		// jsonb
-		// This must be marshalled or pq won't be able to insert it.
-		marshalled, err := json.Marshal(value)
-		return marshalled, err
-	case nil:
-		// null values, regardless of sql type
-		return nil, nil
-	default:
-		log.Printf("Type: %T, value: %s", t, value)
-		return nil, fmt.Errorf("unsupported type %T", t)
-	}
-}
-
 // upsertRows performs all upserts specified in lines.
-func (s *Sink) upsertRows(tx *sql.Tx, lines []Line) error {
+func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line) error {
 	if len(lines) == 0 {
 		return nil
 	}
@@ -233,11 +203,7 @@ func (s *Sink) upsertRows(tx *sql.Tx, lines []Line) error {
 				fmt.Fprintf(&statement, ",(")
 			}
 			for j, name := range columnNames {
-				insertableValue, err := cleanValue(line.After[name])
-				if err != nil {
-					return err
-				}
-				values = append(values, insertableValue)
+				values = append(values, line.After[name])
 				if j == 0 {
 					fmt.Fprintf(&statement, "$%d", len(values))
 				} else {
@@ -248,7 +214,7 @@ func (s *Sink) upsertRows(tx *sql.Tx, lines []Line) error {
 		}
 
 		// Upsert the line
-		if _, err := tx.Exec(statement.String(), values...); err != nil {
+		if _, err := tx.Exec(ctx, statement.String(), values...); err != nil {
 			return err
 		}
 	}
@@ -256,9 +222,9 @@ func (s *Sink) upsertRows(tx *sql.Tx, lines []Line) error {
 }
 
 // UpdateRows updates all changed rows.
-func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) error {
+func (s *Sink) UpdateRows(ctx context.Context, tx pgxtype.Querier, prev ResolvedLine, next ResolvedLine) error {
 	// First, gather all the rows to update.
-	lines, err := FindAllRowsToUpdate(tx, s.sinkTableFullName, prev, next)
+	lines, err := FindAllRowsToUpdate(ctx, tx, s.sinkTableFullName, prev, next)
 	if err != nil {
 		return err
 	}
@@ -319,15 +285,15 @@ func (s *Sink) UpdateRows(tx *sql.Tx, prev ResolvedLine, next ResolvedLine) erro
 	}
 
 	// Delete all rows
-	if err := s.deleteRows(tx, deletes); err != nil {
+	if err := s.deleteRows(ctx, tx, deletes); err != nil {
 		return err
 	}
 
 	// Upsert all rows
-	if err := s.upsertRows(tx, upserts); err != nil {
+	if err := s.upsertRows(ctx, tx, upserts); err != nil {
 		return err
 	}
 
 	// Delete the rows in the sink table.
-	return DeleteSinkTableLines(tx, s.sinkTableFullName, prev, next)
+	return DeleteSinkTableLines(ctx, tx, s.sinkTableFullName, prev, next)
 }
