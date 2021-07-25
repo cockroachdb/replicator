@@ -11,11 +11,13 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 const resolvedTableSchema = `
@@ -38,8 +40,8 @@ func resolvedFullTableName() string {
 }
 
 // CreateResolvedTable creates a release table if none exists.
-func CreateResolvedTable(db *sql.DB) error {
-	return Execute(db, fmt.Sprintf(resolvedTableSchema, resolvedFullTableName()))
+func CreateResolvedTable(ctx context.Context, db *pgxpool.Pool) error {
+	return Execute(ctx, db, fmt.Sprintf(resolvedTableSchema, resolvedFullTableName()))
 }
 
 // ResolvedLine is used to parse a json line in the request body of a resolved
@@ -75,14 +77,14 @@ func parseResolvedLine(rawBytes []byte, endpoint string) (ResolvedLine, error) {
 
 // getPreviousResolvedTimestamp returns the last recorded resolved for a
 // specific endpoint.
-func getPreviousResolved(tx *sql.Tx, endpoint string) (ResolvedLine, error) {
+func getPreviousResolved(ctx context.Context, tx pgxtype.Querier, endpoint string) (ResolvedLine, error) {
 	// Needs retry.
 	var resolvedLine ResolvedLine
-	err := tx.QueryRow(
+	err := tx.QueryRow(ctx,
 		fmt.Sprintf(resolvedTableQuery, resolvedFullTableName()), endpoint,
 	).Scan(&(resolvedLine.endpoint), &(resolvedLine.nanos), &(resolvedLine.logical))
 	switch err {
-	case sql.ErrNoRows:
+	case pgx.ErrNoRows:
 		// No line exists yet, go back to the start of time.
 		return ResolvedLine{endpoint: endpoint}, nil
 	case nil:
@@ -94,9 +96,9 @@ func getPreviousResolved(tx *sql.Tx, endpoint string) (ResolvedLine, error) {
 }
 
 // Writes the updated timestamp to the resolved table.
-func (rl ResolvedLine) writeUpdated(tx *sql.Tx) error {
+func (rl ResolvedLine) writeUpdated(ctx context.Context, tx pgxtype.Querier) error {
 	// Needs retry.
-	_, err := tx.Exec(fmt.Sprintf(resolvedTableWrite, resolvedFullTableName()),
+	_, err := tx.Exec(ctx, fmt.Sprintf(resolvedTableWrite, resolvedFullTableName()),
 		rl.endpoint, rl.nanos, rl.logical,
 	)
 	return err

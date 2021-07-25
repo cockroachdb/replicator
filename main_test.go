@@ -11,7 +11,7 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -21,7 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cockroach-go/crdb"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 )
 
 // These test require an insecure cockroach server is running on the default
@@ -37,34 +40,31 @@ const endpointTest = "test.sql"
 
 // getDB creates a new testing DB, return the name of that db and a closer that
 // will drop the table and close the db connection.
-func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
-	var err error
-	db, err = sql.Open("postgres", *connectionString)
+func getDB(ctx context.Context) (db *pgxpool.Pool, dbName string, closer func(), err error) {
+	db, err = pgxpool.Connect(ctx, *connectionString)
 	if err != nil {
-		t.Fatal(err)
+		return
 	}
 
 	// Create the testing database
 	dbNum := r.Intn(10000)
 	dbName = fmt.Sprintf("_test_db_%d", dbNum)
 
-	t.Logf("Testing Database: %s", dbName)
-
-	if err := Execute(db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)); err != nil {
-		t.Fatal(err)
+	if err = Execute(ctx, db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName)); err != nil {
+		return
 	}
 
-	if err := Execute(db, fmt.Sprintf(sinkDBZoneConfig, dbName)); err != nil {
-		t.Fatal(err)
+	if err = Execute(ctx, db, fmt.Sprintf(sinkDBZoneConfig, dbName)); err != nil {
+		return
 	}
 
-	if err := Execute(db, "SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
-		t.Fatal(err)
+	if err = Execute(ctx, db, "SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
+		return
 	}
 
 	closer = func() {
-		if err := Execute(db, fmt.Sprintf("DROP DATABASE %s CASCADE", dbName)); err != nil {
-			t.Fatal(err)
+		if err = Execute(ctx, db, fmt.Sprintf("DROP DATABASE %s CASCADE", dbName)); err != nil {
+			return
 		}
 		db.Close()
 	}
@@ -72,44 +72,44 @@ func getDB(t *testing.T) (db *sql.DB, dbName string, closer func()) {
 	return
 }
 
-func getRowCount(t *testing.T, db *sql.DB, fullTableName string) int {
+func getRowCount(ctx context.Context, db *pgxpool.Pool, fullTableName string) (int, error) {
 	var count int
-	if err := crdb.Execute(func() error {
-		return db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", fullTableName)).Scan(&count)
+	if err := Retry(ctx, func(ctx context.Context) error {
+		return db.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", fullTableName)).Scan(&count)
 	}); err != nil {
-		t.Fatal(err)
+		return 0, err
 	}
-	return count
+	return count, nil
 }
 
 type tableInfo struct {
-	db     *sql.DB
+	db     *pgxpool.Pool
 	dbName string
 	name   string
+}
+
+func (ti tableInfo) String() string {
+	return fmt.Sprintf("%s.%s", ti.dbName, ti.name)
 }
 
 func (ti tableInfo) getFullName() string {
 	return fmt.Sprintf("%s.%s", ti.dbName, ti.name)
 }
 
-func (ti *tableInfo) deleteAll(t *testing.T) {
-	if err := Execute(ti.db, fmt.Sprintf("DELETE FROM %s WHERE true", ti.getFullName())); err != nil {
-		t.Fatal(err)
-	}
+func (ti *tableInfo) deleteAll(ctx context.Context) error {
+	return Execute(ctx, ti.db, fmt.Sprintf("DELETE FROM %s WHERE true", ti.getFullName()))
 }
 
-func (ti tableInfo) getTableRowCount(t *testing.T) int {
-	return getRowCount(t, ti.db, ti.getFullName())
+func (ti tableInfo) getTableRowCount(ctx context.Context) (int, error) {
+	return getRowCount(ctx, ti.db, ti.getFullName())
 }
 
-func (ti tableInfo) dropTable(t *testing.T) {
-	if err := Execute(ti.db, fmt.Sprintf("DROP TABLE IF EXISTS %s", ti.getFullName())); err != nil {
-		t.Fatal(err)
-	}
+func (ti tableInfo) dropTable(ctx context.Context) error {
+	return Execute(ctx, ti.db, fmt.Sprintf("DROP TABLE IF EXISTS %s", ti.getFullName()))
 }
 
 // This function creates a test table and returns its name.
-func createTestTable(t *testing.T, db *sql.DB, dbName string, schema string) tableInfo {
+func createTestTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfo, error) {
 	var tableName string
 
 outer:
@@ -120,32 +120,31 @@ outer:
 
 		// Find the DB.
 		var actualTableName string
-		err := crdb.Execute(func() error {
-			return db.QueryRow(
+		err := Retry(ctx, func(ctx context.Context) error {
+			return db.QueryRow(ctx,
 				fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
 				tableName,
 			).Scan(&actualTableName)
 		})
 		switch err {
-		case sql.ErrNoRows:
+		case pgx.ErrNoRows:
 			break outer
 		case nil:
 			continue
 		default:
-			t.Fatal(err)
+			return tableInfo{}, err
 		}
 	}
 
-	if err := Execute(db, fmt.Sprintf(tableSimpleSchema, dbName, tableName)); err != nil {
-		t.Fatal(err)
+	if err := Execute(ctx, db, fmt.Sprintf(tableSimpleSchema, dbName, tableName)); err != nil {
+		return tableInfo{}, err
 	}
 
-	t.Logf("Testing Table: %s.%s", dbName, tableName)
 	return tableInfo{
 		db:     db,
 		dbName: dbName,
 		name:   tableName,
-	}
+	}, nil
 }
 
 type tableInfoSimple struct {
@@ -160,73 +159,72 @@ CREATE TABLE %s.%s (
 )
 `
 
-func createTestSimpleTable(t *testing.T, db *sql.DB, dbName string) tableInfoSimple {
-	return tableInfoSimple{
-		tableInfo: createTestTable(t, db, dbName, tableSimpleSchema),
-	}
+func createTestSimpleTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfoSimple, error) {
+	info, err := createTestTable(ctx, db, dbName)
+	return tableInfoSimple{tableInfo: info}, err
 }
 
-func (tis *tableInfoSimple) populateTable(t *testing.T, count int) {
+func (tis *tableInfoSimple) populateTable(ctx context.Context, count int) error {
 	for i := 0; i < count; i++ {
 		if err := Execute(
+			ctx,
 			tis.db,
 			fmt.Sprintf("INSERT INTO %s VALUES ($1, $1)", tis.getFullName()),
 			tis.rowCount+1,
 		); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		tis.rowCount++
 	}
+	return nil
 }
 
-func (tis *tableInfoSimple) updateNoneKeyColumns(t *testing.T) {
-	if err := Execute(
+func (tis *tableInfoSimple) updateNoneKeyColumns(ctx context.Context) error {
+	return Execute(
+		ctx,
 		tis.db,
 		fmt.Sprintf("UPDATE %s SET b=b*100 WHERE true", tis.getFullName()),
-	); err != nil {
-		t.Fatal(err)
-	}
+	)
 }
 
-func (tis *tableInfoSimple) updateAll(t *testing.T) {
-	if err := Execute(
+func (tis *tableInfoSimple) updateAll(ctx context.Context) error {
+	return Execute(
+		ctx,
 		tis.db,
 		fmt.Sprintf("UPDATE %s SET a=a*100000, b=b*100000 WHERE true", tis.getFullName()),
-	); err != nil {
-		t.Fatal(err)
-	}
+	)
 }
 
-func (tis *tableInfoSimple) maxB(t *testing.T) int {
+func (tis *tableInfoSimple) maxB(ctx context.Context) (int, error) {
 	var max int
-	if err := crdb.Execute(func() error {
+	err := Retry(ctx, func(ctx context.Context) error {
 		return tis.db.QueryRow(
+			ctx,
 			fmt.Sprintf("SELECT max(b) FROM %s", tis.getFullName()),
 		).Scan(&max)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return max
+	})
+	return max, err
 }
 
 type jobInfo struct {
-	db *sql.DB
+	db *pgxpool.Pool
 	id int
 }
 
-func (ji *jobInfo) cancelJob(t *testing.T) {
+func (ji *jobInfo) cancelJob(ctx context.Context) error {
 	if ji.id == 0 {
-		return
+		return nil
 	}
-	if err := Execute(ji.db, fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
-		t.Fatal(err)
+	if err := Execute(ctx, ji.db, fmt.Sprintf("CANCEL JOB %d", ji.id)); err != nil {
+		return err
 	}
 	ji.id = 0
+	return nil
 }
 
 func createChangeFeed(
-	t *testing.T, db *sql.DB, url string, endpoint string, tis ...tableInfo,
-) jobInfo {
+	ctx context.Context, db *pgxpool.Pool, url string, endpoint string, tis ...tableInfo,
+) (jobInfo, error) {
 	var query strings.Builder
 	fmt.Fprint(&query, "CREATE CHANGEFEED FOR TABLE ")
 	for i := 0; i < len(tis); i++ {
@@ -237,58 +235,67 @@ func createChangeFeed(
 	}
 	fmt.Fprintf(&query, " INTO 'experimental-%s/%s' WITH updated,resolved", url, endpoint)
 	var jobID int
-	if err := crdb.Execute(func() error {
-		return db.QueryRow(query.String()).Scan(&jobID)
-	}); err != nil {
-		t.Fatal(err)
-	}
+	err := Retry(ctx, func(ctx context.Context) error {
+		return db.QueryRow(ctx, query.String()).Scan(&jobID)
+	})
 	return jobInfo{
 		db: db,
 		id: jobID,
-	}
+	}, err
 }
 
 // dropSinkDB is just a wrapper around DropSinkDB for testing.
-func dropSinkDB(t *testing.T, db *sql.DB) {
-	if err := DropSinkDB(db); err != nil {
-		t.Fatal(err)
-	}
+func dropSinkDB(ctx context.Context, db *pgxpool.Pool) error {
+	return DropSinkDB(ctx, db)
 }
 
 // createSinkDB will first drop then create a new sink db.
-func createSinkDB(t *testing.T, db *sql.DB) {
-	dropSinkDB(t, db)
-	if err := CreateSinkDB(db); err != nil {
-		t.Fatal(err)
+func createSinkDB(ctx context.Context, db *pgxpool.Pool) error {
+	if err := dropSinkDB(ctx, db); err != nil {
+		return err
 	}
+	return CreateSinkDB(ctx, db)
 }
 
 // TestDB is just a quick test to create and drop a database to ensure the
 // Cockroach Cluster is working correctly and we have the correct permissions.
 func TestDB(t *testing.T) {
-	db, dbName, dbClose := getDB(t)
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	// Find the DB.
 	var actualDBName string
-	if err := crdb.Execute(func() error {
+	if err := Retry(ctx, func(ctx context.Context) error {
 		return db.QueryRow(
+			ctx,
 			`SELECT database_name FROM [SHOW DATABASES] WHERE database_name = $1`, dbName,
 		).Scan(&actualDBName)
-	}); err != nil {
-		t.Fatal(err)
+	}); !a.NoError(err) {
+		return
 	}
 
-	if actualDBName != dbName {
-		t.Fatal(fmt.Sprintf("DB names do not match expected - %s, actual: %s", dbName, actualDBName))
+	if !a.Equal(actualDBName, dbName, "db names do not match") {
+		return
 	}
 
 	// Create a test table and insert some rows
-	table := createTestSimpleTable(t, db, dbName)
-	table.populateTable(t, 10)
-	if count := table.getTableRowCount(t); count != 10 {
-		t.Fatalf("Expected Rows 10, actual %d", count)
+	table, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
 	}
+	if !a.NoError(table.populateTable(ctx, 10)) {
+		return
+	}
+	count, err := table.getTableRowCount(ctx)
+	a.Equal(10, count, "row count")
+	a.NoError(err)
 }
 
 func createConfig(source tableInfo, destination tableInfo, endpoint string) Config {
@@ -303,30 +310,49 @@ func createConfig(source tableInfo, destination tableInfo, endpoint string) Conf
 }
 
 func TestFeedInsert(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	// Create the test db
-	db, dbName, dbClose := getDB(t)
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	// Create a new _cdc_sink db
-	createSinkDB(t, db)
-	defer dropSinkDB(t, db)
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
 
 	// Create the table to import from
-	tableFrom := createTestSimpleTable(t, db, dbName)
+	tableFrom, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Create the table to receive into
-	tableTo := createTestSimpleTable(t, db, dbName)
+	tableTo, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Give the from table a few rows
-	tableFrom.populateTable(t, 10)
-	if count := tableFrom.getTableRowCount(t); count != 10 {
-		t.Fatalf("Expected Rows 10, actual %d", count)
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	count, err := tableFrom.getTableRowCount(ctx)
+	a.Equal(10, count, "rows")
+	if !a.NoError(err) {
+		return
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
-	if err != nil {
-		t.Fatal(err)
+	sinks, err := CreateSinks(ctx, db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
+	if !a.NoError(err) {
+		return
 	}
 
 	// Create a test http server
@@ -337,53 +363,95 @@ func TestFeedInsert(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
-	defer job.cancelJob(t)
+	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	if !a.NoError(err) {
+		return
+	}
+	defer job.cancelJob(ctx)
 
-	tableFrom.populateTable(t, 10)
-
-	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
 	}
 
-	tableFrom.populateTable(t, 10)
+	// Wait for sync to occur.
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
+	for {
+		if !a.NoError(ctx.Err()) {
+			return
+		}
+		toCount, err := tableTo.getTableRowCount(ctx)
+		if !a.NoError(err) {
+			return
+		}
+		fromCount, err := tableFrom.getTableRowCount(ctx)
+		if !a.NoError(err) {
+			return
+		}
+		if toCount == fromCount {
+			break
+		}
+	}
 
-	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+
+	// Wait for sync to occur again.
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
 	}
 
 	// Make sure sink table is empty here.
 	sink := sinks.FindSink(endpointTest, tableFrom.name)
-	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
-		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
-	}
+	sinkCount, err := getRowCount(ctx, db, sink.sinkTableFullName)
+	a.Equal(0, sinkCount, "sink table not empty")
+	a.NoError(err)
 }
 
 func TestFeedDelete(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create the test db
-	db, dbName, dbClose := getDB(t)
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	// Create a new _cdc_sink db
-	createSinkDB(t, db)
-	defer dropSinkDB(t, db)
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
 
 	// Create the table to import from
-	tableFrom := createTestSimpleTable(t, db, dbName)
+	tableFrom, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Create the table to receive into
-	tableTo := createTestSimpleTable(t, db, dbName)
+	tableTo, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Give the from table a few rows
-	tableFrom.populateTable(t, 10)
-	if count := tableFrom.getTableRowCount(t); count != 10 {
-		t.Fatalf("Expected Rows 10, actual %d", count)
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	if count, err := tableFrom.getTableRowCount(ctx); !a.Equal(10, count, "row count") || !a.NoError(err) {
+		return
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
-	if err != nil {
-		t.Fatal(err)
+	sinks, err := CreateSinks(ctx, db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
+	if !a.NoError(err) {
+		return
 	}
 
 	// Create a test http server
@@ -394,53 +462,77 @@ func TestFeedDelete(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
-	defer job.cancelJob(t)
+	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	if !a.NoError(err) {
+		return
+	}
+	defer job.cancelJob(ctx)
 
-	tableFrom.populateTable(t, 10)
-
-	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
 	}
 
-	tableFrom.deleteAll(t)
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
 
-	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.deleteAll(ctx)) {
+		return
+	}
+
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
 	}
 
 	// Make sure sink table is empty here.
 	sink := sinks.FindSink(endpointTest, tableFrom.name)
-	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
-		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
-	}
+	sinkCount, err := getRowCount(ctx, db, sink.sinkTableFullName)
+	a.Equal(0, sinkCount, "expected empty sink table")
+	a.NoError(err)
 }
 
 func TestFeedUpdateNonPrimary(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create the test db
-	db, dbName, dbClose := getDB(t)
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	// Create a new _cdc_sink db
-	createSinkDB(t, db)
-	defer dropSinkDB(t, db)
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
 
 	// Create the table to import from
-	tableFrom := createTestSimpleTable(t, db, dbName)
+	tableFrom, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Create the table to receive into
-	tableTo := createTestSimpleTable(t, db, dbName)
+	tableTo, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Give the from table a few rows
-	tableFrom.populateTable(t, 10)
-	if count := tableFrom.getTableRowCount(t); count != 10 {
-		t.Fatalf("Expected Rows 10, actual %d", count)
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	if count, err := tableFrom.getTableRowCount(ctx); !a.Equal(10, count) || !a.NoError(err) {
+		return
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
-	if err != nil {
-		t.Fatal(err)
+	sinks, err := CreateSinks(ctx, db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
+	if !a.NoError(err) {
+		return
 	}
 
 	// Create a test http server
@@ -451,53 +543,76 @@ func TestFeedUpdateNonPrimary(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
-	defer job.cancelJob(t)
+	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	if !a.NoError(err) {
+		return
+	}
+	defer job.cancelJob(ctx)
 
-	tableFrom.populateTable(t, 10)
-
-	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
 	}
 
-	tableFrom.updateNoneKeyColumns(t)
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
 
-	for tableTo.maxB(t) != tableFrom.maxB(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.updateNoneKeyColumns(ctx)) {
+		return
+	}
+
+	if !a.NoError(loopUntilMaxB(ctx, &tableFrom, &tableTo)) {
+		return
 	}
 
 	// Make sure sink table is empty here.
 	sink := sinks.FindSink(endpointTest, tableFrom.name)
-	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
-		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
-	}
+	sinkCount, err := getRowCount(ctx, db, sink.sinkTableFullName)
+	a.Equal(0, sinkCount, "expected empty sink table")
+	a.NoError(err)
 }
 
 func TestFeedUpdatePrimary(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// Create the test db
-	db, dbName, dbClose := getDB(t)
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	// Create a new _cdc_sink db
-	createSinkDB(t, db)
-	defer dropSinkDB(t, db)
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
 
 	// Create the table to import from
-	tableFrom := createTestSimpleTable(t, db, dbName)
+	tableFrom, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Create the table to receive into
-	tableTo := createTestSimpleTable(t, db, dbName)
+	tableTo, err := createTestSimpleTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
 
 	// Give the from table a few rows
-	tableFrom.populateTable(t, 10)
-	if count := tableFrom.getTableRowCount(t); count != 10 {
-		t.Fatalf("Expected Rows 10, actual %d", count)
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	if count, err := tableFrom.getTableRowCount(ctx); !a.Equal(10, count, "row count") || !a.NoError(err) {
+		return
 	}
 
 	// Create the sinks and sink
-	sinks, err := CreateSinks(db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
-	if err != nil {
-		t.Fatal(err)
+	sinks, err := CreateSinks(ctx, db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
+	if !a.NoError(err) {
+		return
 	}
 
 	// Create a test http server
@@ -508,41 +623,54 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	defer server.Close()
 	t.Log(server.URL)
 
-	job := createChangeFeed(t, db, server.URL, endpointTest, tableFrom.tableInfo)
-	defer job.cancelJob(t)
+	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	defer job.cancelJob(ctx)
 
-	tableFrom.populateTable(t, 10)
-
-	for tableTo.getTableRowCount(t) != tableFrom.getTableRowCount(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
 	}
 
-	tableFrom.updateAll(t)
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
 
-	for tableTo.maxB(t) != tableFrom.maxB(t) {
-		// add a stopper here from a wrapper around the handler.
+	if !a.NoError(tableFrom.updateAll(ctx)) {
+		return
+	}
+
+	if !a.NoError(loopUntilMaxB(ctx, &tableFrom, &tableTo)) {
+		return
 	}
 
 	// Make sure sink table is empty here.
 	sink := sinks.FindSink(endpointTest, tableFrom.name)
-	if sinkCount := getRowCount(t, db, sink.sinkTableFullName); sinkCount != 0 {
-		t.Fatalf("expect no rows in the sink table, found %d", sinkCount)
-	}
+	sinkCount, err := getRowCount(ctx, db, sink.sinkTableFullName)
+	a.Equal(0, sinkCount, "expected empty sink table")
+	a.NoError(err)
 }
 
 func TestTypes(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create the test db
-	db, dbName, dbClose := getDB(t)
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	// Create a new _cdc_sink db
-	createSinkDB(t, db)
-	defer dropSinkDB(t, db)
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
 
 	// Create the sinks
-	sinks, err := CreateSinks(db, []ConfigEntry{})
-	if err != nil {
-		t.Fatal(err)
+	sinks, err := CreateSinks(ctx, db, []ConfigEntry{})
+	if !a.NoError(err) {
+		return
 	}
 
 	// Create a test http server
@@ -569,7 +697,7 @@ func TestTypes(t *testing.T) {
 		{`bit_null`, `VARBIT`, ``, false},
 		{`bool`, `BOOL`, `true`, true},
 		{`bool_null`, `BOOL`, ``, false},
-		// {`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
+		{`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
 		{`collate`, `STRING COLLATE de`, `'a1b2c3' COLLATE de`, true},
 		{`collate_null`, `STRING COLLATE de`, ``, false},
 		{`date`, `DATE`, `2016-01-25`, true},
@@ -578,8 +706,8 @@ func TestTypes(t *testing.T) {
 		{`decimal_null`, `DECIMAL`, ``, false},
 		{`float`, `FLOAT`, `1.2345`, true},
 		{`float_null`, `FLOAT`, ``, false},
-		{`geography`, `GEOGRAPHY`, `0101000020E6100000000000000000F03F0000000000000040`, false},
-		{`geometry`, `GEOMETRY`, `010100000075029A081B9A5DC0F085C954C1F84040`, false},
+		//		{`geography`, `GEOGRAPHY`, `0101000020E6100000000000000000F03F0000000000000040`, false},
+		//		{`geometry`, `GEOMETRY`, `010100000075029A081B9A5DC0F085C954C1F84040`, false},
 		{`inet`, `INET`, `192.168.0.1`, true},
 		{`inet_null`, `INET`, ``, false},
 		{`int`, `INT`, `12345`, true},
@@ -681,22 +809,15 @@ func TestTypes(t *testing.T) {
 		{`uuid_null`, `UUID`, ``, false},
 	}
 
-	/*
-			weird bytes issue
-		   {"after":
-
-		   {"a": "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327", "b":
-		   "\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"}, "key": ["\\x62275c3134315c3036315c3134325c3036325c3134335c30363327"], "updated": "1586568963316966000.0000000000"}
-
-
-		   UPSERT INTO _test_db_9945.out_bytes(a, b) VALUES ($1, $2)" $1:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'",     $2:"'\\x5c78363232373563333133343331356333303336333135633331333433323563333033363332356333313334333335633330333633333237'"
-	*/
-
 	tableIndexableSchema := `CREATE TABLE %s (a %s PRIMARY KEY,	b %s)`
 	tableNonIndexableSchema := `CREATE TABLE %s (a INT PRIMARY KEY,	b %s)`
 
 	for _, test := range testcases {
 		t.Run(test.name, func(t *testing.T) {
+			a := assert.New(t)
+			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer cancel()
+
 			tableIn := tableInfo{
 				db:     db,
 				dbName: dbName,
@@ -709,104 +830,112 @@ func TestTypes(t *testing.T) {
 			}
 
 			// Drop both tables if they already exist.
-			tableIn.dropTable(t)
-			tableOut.dropTable(t)
+			if !a.NoError(tableIn.dropTable(ctx)) {
+				return
+			}
+			if !a.NoError(tableOut.dropTable(ctx)) {
+				return
+			}
 
 			// Create both tables.
 			if test.indexable {
-				if err := Execute(db, fmt.Sprintf(
+				if !a.NoError(Execute(ctx, db, fmt.Sprintf(
 					tableIndexableSchema, tableIn.getFullName(), test.columnType, test.columnType,
-				)); err != nil {
-					t.Fatal(err)
+				))) {
+					return
 				}
-				if err := Execute(db, fmt.Sprintf(
+				if !a.NoError(Execute(ctx, db, fmt.Sprintf(
 					tableIndexableSchema, tableOut.getFullName(), test.columnType, test.columnType,
-				)); err != nil {
-					t.Fatal(err)
+				))) {
+					return
 				}
 			} else {
-				if err := Execute(db, fmt.Sprintf(
+				if !a.NoError(Execute(ctx, db, fmt.Sprintf(
 					tableNonIndexableSchema, tableIn.getFullName(), test.columnType,
-				)); err != nil {
-					t.Fatal(err)
+				))) {
+					return
 				}
-				if err := Execute(db, fmt.Sprintf(
+				if !a.NoError(Execute(ctx, db, fmt.Sprintf(
 					tableNonIndexableSchema, tableOut.getFullName(), test.columnType,
-				)); err != nil {
-					t.Fatal(err)
+				))) {
+					return
 				}
 			}
 
 			// Defer a table drop for both tables to clean them up.
-			defer tableIn.dropTable(t)
-			defer tableOut.dropTable(t)
+			defer tableIn.dropTable(ctx)
+			defer tableOut.dropTable(ctx)
 
 			// Create the sink
 			// There is no way to remove a sink at this time, and that should be ok
 			// for these tests.
-			if err := sinks.AddSink(db, ConfigEntry{
+			if !a.NoError(sinks.AddSink(ctx, db, ConfigEntry{
 				Endpoint:            endpointTest,
 				DestinationDatabase: dbName,
 				DestinationTable:    tableOut.name,
 				SourceTable:         tableIn.name,
-			}); err != nil {
-				t.Fatal(err)
+			})) {
+				return
 			}
 
 			// Create the CDC feed.
-			job := createChangeFeed(t, db, server.URL, endpointTest, tableIn)
-			defer job.cancelJob(t)
+			job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableIn)
+			if !a.NoError(err) {
+				return
+			}
+			defer job.cancelJob(ctx)
 
 			// Insert a row into the in table.
 			if test.indexable {
-				if err := Execute(db,
+				if !a.NoError(Execute(ctx, db,
 					fmt.Sprintf("INSERT INTO %s (a,b) VALUES ($1,$2)", tableIn.getFullName()),
 					test.columnValue, test.columnValue,
-				); err != nil {
-					t.Fatal(err)
+				)) {
+					return
 				}
 			} else {
 				value := interface{}(test.columnValue)
 				if len(test.columnValue) == 0 {
 					value = nil
 				}
-				if err := Execute(db,
+				if !a.NoError(Execute(ctx, db,
 					fmt.Sprintf("INSERT INTO %s (a, b) VALUES (1, $1)", tableIn.getFullName()),
 					value,
-				); err != nil {
-					t.Fatal(err)
+				)) {
+					return
 				}
 			}
 
 			// Wait until the out table has a row.
-			for tableOut.getTableRowCount(t) != 1 {
-				// add a stopper here from a wrapper around the handler.
-
+			for {
+				count, err := tableOut.getTableRowCount(ctx)
+				if !a.NoError(err) {
+					return
+				}
+				if count > 0 {
+					break
+				}
 			}
 
 			// Now fetch that rows and compare them.
 			var inA, inB interface{}
-			if err := crdb.Execute(func() error {
-				return db.QueryRow(
+			if !a.NoError(Retry(ctx, func(ctx context.Context) error {
+				return db.QueryRow(ctx,
 					fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableIn.getFullName()),
 				).Scan(&inA, &inB)
-			}); err != nil {
-				t.Fatal(err)
+			})) {
+				return
 			}
 			var outA, outB interface{}
-			if err := crdb.Execute(func() error {
-				return db.QueryRow(
+			if !a.NoError(Retry(ctx, func(ctx context.Context) error {
+				return db.QueryRow(ctx,
 					fmt.Sprintf("SELECT a, b FROM %s LIMIT 1", tableOut.getFullName()),
 				).Scan(&outA, &outB)
-			}); err != nil {
-				t.Fatal(err)
+			})) {
+				return
 			}
-			if fmt.Sprintf("%v", inA) != fmt.Sprintf("%v", outA) {
-				t.Errorf("A: expected %v, got %v", inA, outA)
-			}
-			if fmt.Sprintf("%v", inB) != fmt.Sprintf("%v", outB) {
-				t.Errorf("B: expected %v, got %v", inB, outB)
-			}
+			a.Equal(fmt.Sprintf("%v", inA), fmt.Sprintf("%v", outA), "A")
+			a.Equal(fmt.Sprintf("%v", inB), fmt.Sprintf("%v", outB), "B")
 		})
 	}
 }
@@ -911,23 +1040,29 @@ func TestConfig(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			a := assert.New(t)
+
 			actual, err := parseConfig(test.testJSON)
-			if test.expectedPass != (err == nil) {
-				t.Errorf("Expected %t, actual %t", test.expectedPass, err == nil)
-				if err != nil {
-					t.Errorf("Got error: %s", err.Error())
-				}
-			}
-			if test.expectedPass && !reflect.DeepEqual(test.expectedConfig, actual) {
-				t.Errorf("Expected %+v, actual %+v", test.expectedConfig, actual)
+			if test.expectedPass {
+				a.NoError(err)
+				a.True(reflect.DeepEqual(test.expectedConfig, actual))
+			} else {
+				a.Error(err)
 			}
 		})
 	}
 }
 
 func TestMultipleFeeds(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create the test db
-	db, dbName, dbClose := getDB(t)
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	testcases := []struct {
@@ -954,10 +1089,15 @@ func TestMultipleFeeds(t *testing.T) {
 		t.Run(fmt.Sprintf("Feeds_%d_Tables_%d_Size_%d",
 			testcase.feedCount, testcase.tablesPerFeed, testcase.populateCount,
 		), func(t *testing.T) {
+			a := assert.New(t)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
 
 			// Create a new _cdc_sink db
-			createSinkDB(t, db)
-			defer dropSinkDB(t, db)
+			if !a.NoError(createSinkDB(ctx, db)) {
+				return
+			}
+			defer dropSinkDB(ctx, db)
 
 			// Create all the tables
 			var sourceTablesByFeed [][]*tableInfoSimple
@@ -966,9 +1106,15 @@ func TestMultipleFeeds(t *testing.T) {
 				var sourceTables []*tableInfoSimple
 				var destinationTables []*tableInfoSimple
 				for j := 0; j < testcase.tablesPerFeed; j++ {
-					sourceTable := createTestSimpleTable(t, db, dbName)
+					sourceTable, err := createTestSimpleTable(ctx, db, dbName)
+					if !a.NoErrorf(err, "create source i=%d, j=%d", i, j) {
+						return
+					}
 					sourceTables = append(sourceTables, &sourceTable)
-					destinationTable := createTestSimpleTable(t, db, dbName)
+					destinationTable, err := createTestSimpleTable(ctx, db, dbName)
+					if !a.NoErrorf(err, "create dest i=%d, j=%d", i, j) {
+						return
+					}
 					destinationTables = append(destinationTables, &destinationTable)
 				}
 				sourceTablesByFeed = append(sourceTablesByFeed, sourceTables)
@@ -978,26 +1124,28 @@ func TestMultipleFeeds(t *testing.T) {
 			// Populate all the source tables
 			for _, feedTables := range sourceTablesByFeed {
 				for _, table := range feedTables {
-					table.populateTable(t, testcase.populateCount)
+					if !a.NoError(table.populateTable(ctx, testcase.populateCount), table.name) {
+						return
+					}
 				}
 			}
 
 			// Create the sinks
-			sinks, err := CreateSinks(db, []ConfigEntry{})
-			if err != nil {
-				t.Fatal(err)
+			sinks, err := CreateSinks(ctx, db, []ConfigEntry{})
+			if !a.NoError(err) {
+				return
 			}
 
 			// Create all the sinks
 			for i := 0; i < testcase.feedCount; i++ {
 				for j := 0; j < testcase.tablesPerFeed; j++ {
-					if err := sinks.AddSink(db, ConfigEntry{
+					if !a.NoErrorf(sinks.AddSink(ctx, db, ConfigEntry{
 						Endpoint:            nameEndpoint(i),
 						DestinationDatabase: destinationTablesByFeed[i][j].dbName,
 						DestinationTable:    destinationTablesByFeed[i][j].name,
 						SourceTable:         sourceTablesByFeed[i][j].name,
-					}); err != nil {
-						t.Fatal(err)
+					}), "AddSink i=%d j=%d", i, j) {
+						return
 					}
 				}
 			}
@@ -1013,23 +1161,35 @@ func TestMultipleFeeds(t *testing.T) {
 				for _, table := range sourceTablesByFeed[i] {
 					tableInfos = append(tableInfos, table.tableInfo)
 				}
-				job := createChangeFeed(t, db, server.URL, nameEndpoint(i), tableInfos...)
-				defer job.cancelJob(t)
+				job, err := createChangeFeed(ctx, db, server.URL, nameEndpoint(i), tableInfos...)
+				if !a.NoErrorf(err, "changefeed %d", i) {
+					return
+				}
+				defer job.cancelJob(ctx)
 			}
 
 			// Add some more lines to each table.
 			// Populate all the source tables
 			for _, feedTables := range sourceTablesByFeed {
 				for _, table := range feedTables {
-					table.populateTable(t, testcase.populateCount)
+					if !a.NoError(table.populateTable(ctx, testcase.populateCount), table.name) {
+						return
+					}
 				}
 			}
 
 			// Make sure each table has 20 rows
 			for _, feedTables := range destinationTablesByFeed {
 				for _, table := range feedTables {
-					for table.getTableRowCount(t) != testcase.populateCount*2 {
-
+					// Wait until table is populated
+					for {
+						count, err := table.getTableRowCount(ctx)
+						if !a.NoError(err, table) {
+							return
+						}
+						if count == testcase.populateCount*2 {
+							break
+						}
 					}
 				}
 			}
@@ -1037,33 +1197,98 @@ func TestMultipleFeeds(t *testing.T) {
 			// Update all rows in the source table.
 			for _, feedTables := range sourceTablesByFeed {
 				for _, table := range feedTables {
-					table.updateAll(t)
+					a.NoErrorf(table.updateAll(ctx), "updateAll %s", table)
 				}
 			}
 
 			// Make sure each table has 20 rows
 			for i, feedTables := range destinationTablesByFeed {
 				for j, table := range feedTables {
-					for table.maxB(t) != sourceTablesByFeed[i][j].maxB(t) {
+					tableB, err := table.maxB(ctx)
+					if !a.NoError(err, table.String()) {
+						return
+					}
+					sourceB, err := sourceTablesByFeed[i][j].maxB(ctx)
+					if !a.NoError(err, sourceTablesByFeed[i][j].String()) {
+						return
+					}
+					if tableB == sourceB {
+						break
 					}
 				}
 			}
 
 			// Delete all rows in the table.
-			// Update all rows in the source table.
 			for _, feedTables := range sourceTablesByFeed {
 				for _, table := range feedTables {
-					table.deleteAll(t)
+					a.NoErrorf(table.deleteAll(ctx), "deleting %s", table)
 				}
 			}
 
-			// Make sure each table has 20 rows
+			// Make sure each table is drained.
 			for _, feedTables := range destinationTablesByFeed {
 				for _, table := range feedTables {
-					for table.getTableRowCount(t) != 0 {
+					for {
+						count, err := table.getTableRowCount(ctx)
+						if !a.NoError(err) {
+							return
+						}
+						if count == 0 {
+							break
+						}
 					}
 				}
 			}
 		})
 	}
+}
+
+func loopUntilMaxB(
+	ctx context.Context,
+	tableTo, tableFrom interface {
+		maxB(context.Context) (int, error)
+	},
+) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		toCount, err := tableTo.maxB(ctx)
+		if err != nil {
+			return errors.Wrap(err, "querying to")
+		}
+		fromCount, err := tableFrom.maxB(ctx)
+		if err != nil {
+			return errors.Wrap(err, "querying from")
+		}
+		if toCount == fromCount {
+			break
+		}
+	}
+	return nil
+}
+
+func loopUntilSync(
+	ctx context.Context,
+	tableTo, tableFrom interface {
+		getTableRowCount(context.Context) (int, error)
+	},
+) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		toCount, err := tableTo.getTableRowCount(ctx)
+		if err != nil {
+			return errors.Wrap(err, "querying to")
+		}
+		fromCount, err := tableFrom.getTableRowCount(ctx)
+		if err != nil {
+			return errors.Wrap(err, "querying from")
+		}
+		if toCount == fromCount {
+			break
+		}
+	}
+	return nil
 }

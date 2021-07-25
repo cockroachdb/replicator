@@ -11,17 +11,26 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // These test require an insecure cockroach server is running on the default
 // port with the default root user with no password.
 
 func TestGetPrimaryKeyColumns(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create the test db
-	db, dbName, dbClose := getDB(t)
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	testcases := []struct {
@@ -52,20 +61,20 @@ func TestGetPrimaryKeyColumns(t *testing.T) {
 
 	for i, test := range testcases {
 		t.Run(fmt.Sprintf("%d:%s", i, test.tableSchema), func(t *testing.T) {
+			a := assert.New(t)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
 			tableFullName := fmt.Sprintf("%s.test_%d", dbName, i)
-			if err := Execute(
-				db,
-				fmt.Sprintf(`CREATE TABLE %s ( %s )`, tableFullName, test.tableSchema),
-			); err != nil {
-				t.Fatal(err)
+			if !a.NoError(Execute(ctx, db,
+				fmt.Sprintf(`CREATE TABLE %s ( %s )`, tableFullName, test.tableSchema))) {
+				return
 			}
-			columns, err := GetPrimaryKeyColumns(db, tableFullName)
-			if err != nil {
-				t.Fatal(err)
+			columns, err := GetPrimaryKeyColumns(ctx, db, tableFullName)
+			if !a.NoError(err) {
+				return
 			}
-			if !reflect.DeepEqual(test.primaryKeys, columns) {
-				t.Errorf("expected %v, got %v", test.primaryKeys, columns)
-			}
+			a.Equal(test.primaryKeys, columns)
 		})
 	}
 }

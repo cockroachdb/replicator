@@ -12,13 +12,15 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 const sinkTableSchema = `
@@ -30,7 +32,6 @@ CREATE TABLE IF NOT EXISTS %s (
 	PRIMARY KEY (nanos, logical, key)
 )
 `
-const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES `
 
 // Timestamps are less than and up to the resolved ones.
 // For this $1 and $2 are previous resolved, $3 and $4 are the current
@@ -159,44 +160,30 @@ func parseLine(rawBytes []byte) (Line, error) {
 }
 
 // CreateSinkTable creates if it does not exist, the a table used for sinking.
-func CreateSinkTable(db *sql.DB, sinkTableFullName string) error {
-	return Execute(db, fmt.Sprintf(sinkTableSchema, sinkTableFullName))
+func CreateSinkTable(ctx context.Context, db *pgxpool.Pool, sinkTableFullName string) error {
+	return Execute(ctx, db, fmt.Sprintf(sinkTableSchema, sinkTableFullName))
 }
 
-// WriteToSinkTable upserts all lines to the sink table. Never submit more than
-// 10,000 lines to this function at a time.
-func WriteToSinkTable(db *sql.DB, sinkTableFullName string, lines []Line) error {
+// WriteToSinkTable upserts all lines to the sink table via the COPY protocol.
+func WriteToSinkTable(ctx context.Context, db *pgxpool.Pool, sinkTableFullName string, lines []Line) error {
 	if len(lines) == 0 {
 		return nil
 	}
-	var statement strings.Builder
-	if _, err := fmt.Fprintf(&statement, sinkTableWrite, sinkTableFullName); err != nil {
-		return err
-	}
-	var values []interface{}
-	for i, line := range lines {
-		values = append(values, line.getSinkTableValues()...)
-		if i == 0 {
-			if _, err := fmt.Fprint(&statement, "($1,$2,$3,$4)"); err != nil {
-				return err
-			}
-		} else {
-			j := i * 4
-			if _, err := fmt.Fprintf(&statement, ",($%d,$%d,$%d,$%d)", j+1, j+2, j+3, j+4); err != nil {
-				return err
-			}
-		}
-	}
-
-	return Execute(db, statement.String(), values...)
+	parts := strings.Split(strings.ToLower(sinkTableFullName), ".")
+	_, err := db.CopyFrom(ctx, parts,
+		[]string{"nanos", "logical", "key", "after"},
+		pgx.CopyFromSlice(len(lines), func(i int) ([]interface{}, error) {
+			return lines[i].getSinkTableValues(), nil
+		}))
+	return err
 }
 
 // FindAllRowsToUpdate returns all the rows that need to be updated from the
 // sink table.
 func FindAllRowsToUpdate(
-	tx *sql.Tx, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
+	ctx context.Context, tx pgxtype.Querier, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
 ) ([]Line, error) {
-	rows, err := tx.Query(fmt.Sprintf(sinkTableQueryRows, sinkTableFullName),
+	rows, err := tx.Query(ctx, fmt.Sprintf(sinkTableQueryRows, sinkTableFullName),
 		prev.nanos, prev.logical, next.nanos, next.logical,
 	)
 	if err != nil {
@@ -215,9 +202,10 @@ func FindAllRowsToUpdate(
 // DeleteSinkTableLines removes all line from the sinktable that have been processed
 // based on the prev and next resolved line.
 func DeleteSinkTableLines(
-	tx *sql.Tx, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
+	ctx context.Context, tx pgxtype.Querier, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
 ) error {
-	_, err := tx.Exec(fmt.Sprintf(sinkTableDeleteRows, sinkTableFullName),
+	_, err := tx.Exec(ctx,
+		fmt.Sprintf(sinkTableDeleteRows, sinkTableFullName),
 		prev.nanos, prev.logical, next.nanos, next.logical,
 	)
 	return err

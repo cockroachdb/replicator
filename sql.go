@@ -11,45 +11,45 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 
-	"github.com/cockroachdb/cockroach-go/crdb"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 const sinkDBZoneConfig = `ALTER DATABASE %s CONFIGURE ZONE USING gc.ttlseconds = 600;`
 
 // CreateSinkDB creates a new sink db if one does not exist yet and also adds
 // the resolved table.
-func CreateSinkDB(db *sql.DB) error {
-	if err := Execute(db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", *sinkDB)); err != nil {
+func CreateSinkDB(ctx context.Context, db *pgxpool.Pool) error {
+	if err := Execute(ctx, db, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", *sinkDB)); err != nil {
 		return err
 	}
 	if *sinkDBZone {
-		if err := Execute(db, fmt.Sprintf(sinkDBZoneConfig, *sinkDB)); err != nil {
+		if err := Execute(ctx, db, fmt.Sprintf(sinkDBZoneConfig, *sinkDB)); err != nil {
 			return err
 		}
 	}
-	return CreateResolvedTable(db)
+	return CreateResolvedTable(ctx, db)
 }
 
 // DropSinkDB drops the sinkDB and all data in it.
-func DropSinkDB(db *sql.DB) error {
-	return Execute(db, fmt.Sprintf(`DROP DATABASE IF EXISTS %s CASCADE`, *sinkDB))
+func DropSinkDB(ctx context.Context, db *pgxpool.Pool) error {
+	return Execute(ctx, db, fmt.Sprintf(`DROP DATABASE IF EXISTS %s CASCADE`, *sinkDB))
 }
 
 const sqlTableExistsQuery = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = '%s'`
 
 // TableExists checks for the existence of a table.
-func TableExists(db *sql.DB, dbName string, tableName string) (bool, error) {
+func TableExists(ctx context.Context, db *pgxpool.Pool, dbName string, tableName string) (bool, error) {
 	findTableSQL := fmt.Sprintf(sqlTableExistsQuery, dbName, tableName)
 	var tableFound string
-	err := crdb.Execute(func() error {
-		return db.QueryRow(findTableSQL).Scan(&tableFound)
+	err := Retry(ctx, func(ctx context.Context) error {
+		return db.QueryRow(ctx, findTableSQL).Scan(&tableFound)
 	})
 	switch err {
-	case sql.ErrNoRows:
+	case pgx.ErrNoRows:
 		return false, nil
 	case nil:
 		return true, nil
@@ -64,13 +64,13 @@ SELECT column_name FROM [SHOW INDEX FROM %s] WHERE index_name = 'primary' ORDER 
 
 // GetPrimaryKeyColumns returns the column names for the primary key index for
 // a table, in order.
-func GetPrimaryKeyColumns(db *sql.DB, tableFullName string) ([]string, error) {
+func GetPrimaryKeyColumns(ctx context.Context, db *pgxpool.Pool, tableFullName string) ([]string, error) {
 	// Needs retry.
 	findKeyColumns := fmt.Sprintf(sqlGetPrimaryKeyColumnsQuery, tableFullName)
 	var columns []string
-	if err := crdb.Execute(func() error {
+	if err := Retry(ctx, func(ctx context.Context) error {
 		var columnsInternal []string
-		rows, err := db.Query(findKeyColumns)
+		rows, err := db.Query(ctx, findKeyColumns)
 		if err != nil {
 			return err
 		}
@@ -91,11 +91,11 @@ func GetPrimaryKeyColumns(db *sql.DB, tableFullName string) ([]string, error) {
 	return columns, nil
 }
 
-// Execute is just a wrapper around crdb.Execute that can be used for sql
+// Execute is just a wrapper around Retry that can be used for sql
 // queries that don't have any return values.
-func Execute(db *sql.DB, query string, args ...interface{}) error {
-	return crdb.Execute(func() error {
-		_, err := db.Exec(query, args...)
+func Execute(ctx context.Context, db *pgxpool.Pool, query string, args ...interface{}) error {
+	return Retry(ctx, func(ctx context.Context) error {
+		_, err := db.Exec(ctx, query, args...)
 		return err
 	})
 }

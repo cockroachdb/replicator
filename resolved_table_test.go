@@ -12,27 +12,27 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"testing"
 
-	"github.com/cockroachdb/cockroach-go/crdb"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/stretchr/testify/assert"
 )
 
 // These test require an insecure cockroach server is running on the default
 // port with the default root user with no password.
 
-func (rl ResolvedLine) writeUpdatedDB(db *sql.DB) error {
-	return crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
-		return rl.writeUpdated(tx)
+func (rl ResolvedLine) writeUpdatedDB(ctx context.Context, db *pgxpool.Pool) error {
+	return Retry(ctx, func(ctx context.Context) error {
+		return rl.writeUpdated(ctx, db)
 	})
 }
 
-func getPreviousResolvedDB(db *sql.DB, endpoint string) (ResolvedLine, error) {
+func getPreviousResolvedDB(ctx context.Context, db *pgxpool.Pool, endpoint string) (ResolvedLine, error) {
 	var resolvedLine ResolvedLine
-	if err := crdb.ExecuteTx(context.Background(), db, nil, func(tx *sql.Tx) error {
+	if err := Retry(ctx, func(ctx context.Context) error {
 		var err error
-		resolvedLine, err = getPreviousResolved(tx, endpoint)
+		resolvedLine, err = getPreviousResolved(ctx, db, endpoint)
 		return err
 	}); err != nil {
 		return ResolvedLine{}, err
@@ -68,62 +68,60 @@ func TestParseResolvedLine(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("%d - %s", i, test.testcase), func(t *testing.T) {
+			a := assert.New(t)
 			actual, actualErr := parseResolvedLine([]byte(test.testcase), "endpoint.sql")
-			if test.expectedPass == (actualErr != nil) {
-				t.Errorf("Expected %v, got %s", test.expectedPass, actualErr)
+			if test.expectedPass && !a.NoError(actualErr) {
+				return
 			}
 			if !test.expectedPass {
 				return
 			}
-			if test.expectedNanos != actual.nanos {
-				t.Errorf("Expected %d nanos, got %d nanos", test.expectedNanos, actual.nanos)
-			}
-			if test.expectedLogical != actual.logical {
-				t.Errorf("Expected %d logical, got %d logical", test.expectedLogical, actual.logical)
-			}
-			if test.expectedEndpoint != actual.endpoint {
-				t.Errorf("Expected %s endpoint, got %s endpoint", test.expectedEndpoint, actual.endpoint)
-			}
+			a.Equal(test.expectedNanos, actual.nanos, "nanos")
+			a.Equal(test.expectedLogical, actual.logical, "logical")
+			a.Equal(test.expectedEndpoint, actual.endpoint, "endpoint")
 		})
 	}
 }
 
 func TestResolvedTable(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create the test db
-	db, _, dbClose := getDB(t)
+	db, _, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
 	defer dbClose()
 
 	// Create a new _cdc_sink db
-	createSinkDB(t, db)
-	defer dropSinkDB(t, db)
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
 
-	if err := CreateResolvedTable(db); err != nil {
-		t.Fatal(err)
+	if !a.NoError(CreateResolvedTable(ctx, db)) {
+		return
 	}
 
-	checkResolved := func(e ResolvedLine, a ResolvedLine) {
-		if e.endpoint != a.endpoint {
-			t.Errorf("Expected endpoint: %s, actual: %s", e.endpoint, a.endpoint)
-		}
-		if e.nanos != a.nanos {
-			t.Errorf("Expected nanos: %d, actual: %d", e.nanos, a.nanos)
-		}
-		if e.logical != a.logical {
-			t.Errorf("Expected logical: %d, logical: %d", e.logical, a.logical)
-		}
+	checkResolved := func(y ResolvedLine, z ResolvedLine) bool {
+		return a.Equal(y.endpoint, z.endpoint, "endpoint") &&
+			a.Equal(y.nanos, z.nanos, "nanos") &&
+			a.Equal(y.logical, z.logical, "logical")
 	}
 
 	// Make sure there are no rows in the table yet.
-	if rowCount := getRowCount(t, db, resolvedFullTableName()); rowCount != 0 {
-		t.Fatalf("Expected 0 rows, got %d", rowCount)
+	if rowCount, err := getRowCount(ctx, db, resolvedFullTableName()); !a.NoError(err) ||
+		!a.Equal(0, rowCount) {
+		return
 	}
 
 	// Find no previous value for endpoint "one".
-	one, err := getPreviousResolvedDB(db, "one")
-	if err != nil {
-		t.Fatal(err)
+	if one, err := getPreviousResolvedDB(ctx, db, "one"); !a.NoError(err) ||
+		!checkResolved(ResolvedLine{endpoint: "one"}, one) {
+		return
 	}
-	checkResolved(ResolvedLine{endpoint: "one"}, one)
 
 	// Push 10 updates rows to the resolved table and check each one.
 	for i := 0; i < 10; i++ {
@@ -132,22 +130,20 @@ func TestResolvedTable(t *testing.T) {
 			nanos:    int64(i),
 			logical:  i,
 		}
-		if err := newOne.writeUpdatedDB(db); err != nil {
-			t.Fatal(err)
+		if err := newOne.writeUpdatedDB(ctx, db); !a.NoError(err) {
+			return
 		}
-		previousOne, err := getPreviousResolvedDB(db, "one")
-		if err != nil {
-			t.Fatal(err)
+		if previousOne, err := getPreviousResolvedDB(ctx, db, "one"); !a.NoError(err) ||
+			!checkResolved(newOne, previousOne) {
+			return
 		}
-		checkResolved(newOne, previousOne)
 	}
 
 	// Now do the same for a second endpoint.
-	two, err := getPreviousResolvedDB(db, "two")
-	if err != nil {
-		t.Fatal(err)
+	if two, err := getPreviousResolvedDB(ctx, db, "two"); !a.NoError(err) ||
+		!checkResolved(ResolvedLine{endpoint: "two"}, two) {
+		return
 	}
-	checkResolved(ResolvedLine{endpoint: "two"}, two)
 
 	// Push 10 updates rows to the resolved table and check each one.
 	for i := 0; i < 10; i++ {
@@ -156,14 +152,13 @@ func TestResolvedTable(t *testing.T) {
 			nanos:    int64(i),
 			logical:  i,
 		}
-		if err := newOne.writeUpdatedDB(db); err != nil {
-			t.Fatal(err)
+		if err := newOne.writeUpdatedDB(ctx, db); !a.NoError(err) {
+			return
 		}
-		previousOne, err := getPreviousResolvedDB(db, "two")
-		if err != nil {
-			t.Fatal(err)
+		if previousOne, err := getPreviousResolvedDB(ctx, db, "two"); !a.NoError(err) ||
+			!checkResolved(newOne, previousOne) {
+			return
 		}
-		checkResolved(newOne, previousOne)
 	}
 
 	// Now intersperse the updates.
@@ -178,19 +173,18 @@ func TestResolvedTable(t *testing.T) {
 			newResolved.endpoint = "two"
 		}
 
-		if err := newResolved.writeUpdatedDB(db); err != nil {
-			t.Fatal(err)
+		if err := newResolved.writeUpdatedDB(ctx, db); !a.NoError(err) {
+			return
 		}
-		previousResolved, err := getPreviousResolvedDB(db, newResolved.endpoint)
-		if err != nil {
-			t.Fatal(err)
+		previousResolved, err := getPreviousResolvedDB(ctx, db, newResolved.endpoint)
+		if !a.NoError(err) || !checkResolved(newResolved, previousResolved) {
+			return
 		}
-		checkResolved(newResolved, previousResolved)
 	}
 
 	// Finally, check to make sure that there are only 2 lines in the resolved
 	// table.
-	if rowCount := getRowCount(t, db, resolvedFullTableName()); rowCount != 2 {
-		t.Fatalf("Expected 2 rows, got %d", rowCount)
-	}
+	rowCount, err := getRowCount(ctx, db, resolvedFullTableName())
+	a.Equal(2, rowCount, "rowCount")
+	a.NoError(err)
 }
