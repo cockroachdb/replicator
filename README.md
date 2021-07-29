@@ -1,13 +1,14 @@
 # cdc-sink
 
-This tool lets one CockroachDB cluster take CDC feeds from one or more
+This tool lets one CockroachDB cluster injest CDC feeds from one or more 
 CockroachDB clusters.
 
-For more information on CDC, please see: <https://www.cockroachlabs.com/docs/dev/change-data-capture.html>
+For more information on CDC, please see: <https://www.cockroachlabs.com/docs/stable/stream-data-out-of-cockroachdb-using-changefeeds.html>
 
 ***This is just a prototype and is not officially supported by Cockroach Labs.***
 
 We cannot provide support for it at this time but may in the future.
+Use of this tool is entirely at your own risk and Cockroach Labs makes no guarantees or warranties about its operation.
 
 ## Overview
 
