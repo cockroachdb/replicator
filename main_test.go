@@ -108,8 +108,10 @@ func (ti tableInfo) dropTable(ctx context.Context) error {
 	return Execute(ctx, ti.db, fmt.Sprintf("DROP TABLE IF EXISTS %s", ti.getFullName()))
 }
 
-// This function creates a test table and returns its name.
-func createTestTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfo, error) {
+// This function creates a test table and returns a unique name.
+// The schemaSpec parameter must have exactly two %s substitution
+// parameters for the database name and table name.
+func createTestTable(ctx context.Context, db *pgxpool.Pool, dbName, schemaSpec string) (tableInfo, error) {
 	var tableName string
 
 outer:
@@ -136,7 +138,7 @@ outer:
 		}
 	}
 
-	if err := Execute(ctx, db, fmt.Sprintf(tableSimpleSchema, dbName, tableName)); err != nil {
+	if err := Execute(ctx, db, fmt.Sprintf(schemaSpec, dbName, tableName)); err != nil {
 		return tableInfo{}, err
 	}
 
@@ -160,7 +162,7 @@ CREATE TABLE %s.%s (
 `
 
 func createTestSimpleTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfoSimple, error) {
-	info, err := createTestTable(ctx, db, dbName)
+	info, err := createTestTable(ctx, db, dbName, tableSimpleSchema)
 	return tableInfoSimple{tableInfo: info}, err
 }
 
@@ -204,6 +206,41 @@ func (tis *tableInfoSimple) maxB(ctx context.Context) (int, error) {
 		).Scan(&max)
 	})
 	return max, err
+}
+
+// tableInfoComposite is a table with a composite primary key.
+type tableInfoComposite struct {
+	tableInfo
+	rowCount int
+}
+
+const tableCompositeSchema = `
+CREATE TABLE %s.%s (
+	a INT,
+	b INT,
+	c INT,
+	PRIMARY KEY (a, b)
+)
+`
+
+func createTestCompositeTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfoSimple, error) {
+	info, err := createTestTable(ctx, db, dbName, tableCompositeSchema)
+	return tableInfoSimple{tableInfo: info}, err
+}
+
+func (tis *tableInfoComposite) populateTable(ctx context.Context, count int) error {
+	for i := 0; i < count; i++ {
+		if err := Execute(
+			ctx,
+			tis.db,
+			fmt.Sprintf("INSERT INTO %s VALUES ($1, $1, $1)", tis.getFullName()),
+			tis.rowCount+1,
+		); err != nil {
+			return err
+		}
+		tis.rowCount++
+	}
+	return nil
 }
 
 type jobInfo struct {
@@ -459,6 +496,85 @@ func TestFeedDelete(t *testing.T) {
 	server := httptest.NewServer(
 		http.HandlerFunc(handler),
 	)
+	defer server.Close()
+	t.Log(server.URL)
+
+	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	if !a.NoError(err) {
+		return
+	}
+	defer job.cancelJob(ctx)
+
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
+
+	if !a.NoError(tableFrom.deleteAll(ctx)) {
+		return
+	}
+
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
+
+	// Make sure sink table is empty here.
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
+	sinkCount, err := getRowCount(ctx, db, sink.sinkTableFullName)
+	a.Equal(0, sinkCount, "expected empty sink table")
+	a.NoError(err)
+}
+
+func TestFeedDeleteCompositeKey(t *testing.T) {
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create the test db
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer dbClose()
+
+	// Create a new _cdc_sink db
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
+
+	// Create the table to import from
+	tableFrom, err := createTestCompositeTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
+
+	// Create the table to receive into
+	tableTo, err := createTestCompositeTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
+
+	// Give the from table a few rows
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	if count, err := tableFrom.getTableRowCount(ctx); !a.Equal(10, count, "row count") || !a.NoError(err) {
+		return
+	}
+
+	// Create the sinks and sink
+	sinks, err := CreateSinks(ctx, db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
+	if !a.NoError(err) {
+		return
+	}
+
+	// Create a test http server
+	handler := createHandler(db, sinks)
+	server := httptest.NewServer(handler)
 	defer server.Close()
 	t.Log(server.URL)
 

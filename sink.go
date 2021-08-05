@@ -135,7 +135,10 @@ func (s *Sink) deleteRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 				fmt.Fprintf(&statement, ",")
 			}
 			fmt.Fprintf(&statement, "(")
-			for _, key := range line.Key {
+			for i, key := range line.Key {
+				if i > 0 {
+					fmt.Fprintf(&statement, ",")
+				}
 				keys = append(keys, key)
 				fmt.Fprintf(&statement, "$%d", len(keys))
 			}
