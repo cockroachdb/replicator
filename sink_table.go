@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/pkg/errors"
 )
 
 const sinkTableSchema = `
@@ -175,7 +176,7 @@ func WriteToSinkTable(ctx context.Context, db *pgxpool.Pool, sinkTableFullName s
 		pgx.CopyFromSlice(len(lines), func(i int) ([]interface{}, error) {
 			return lines[i].getSinkTableValues(), nil
 		}))
-	return err
+	return errors.Wrapf(err, "writing to sink table %s", sinkTableFullName)
 }
 
 // FindAllRowsToUpdate returns all the rows that need to be updated from the
