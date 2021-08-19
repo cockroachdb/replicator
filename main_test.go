@@ -13,6 +13,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -239,6 +241,48 @@ func (tis *tableInfoComposite) populateTable(ctx context.Context, count int) err
 			return err
 		}
 		tis.rowCount++
+	}
+	return nil
+}
+
+type tableInfoClob struct {
+	tableInfo
+	clobSize int // The number of bytes to generate per row.
+	rowCount int // A running total for code generation.
+}
+
+const tableClobSchema = `
+CREATE TABLE %s.%s (
+  a INT NOT NULL PRIMARY KEY,
+  data TEXT
+)
+`
+
+func createTestClobTable(ctx context.Context, db *pgxpool.Pool, dbName string, clobSize int) (tableInfoClob, error) {
+	if clobSize <= 0 {
+		clobSize = 8 * 1024
+	}
+	info, err := createTestTable(ctx, db, dbName, tableClobSchema)
+	return tableInfoClob{tableInfo: info, clobSize: clobSize}, err
+}
+
+func (tic *tableInfoClob) populateTable(ctx context.Context, count int) error {
+	for i := 0; i < count; i++ {
+		c := tic.rowCount + 1
+		data, err := ioutil.ReadAll(clobData(tic.clobSize, c))
+		if err != nil {
+			return err
+		}
+		if err := Execute(
+			ctx,
+			tic.db,
+			fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", tic.getFullName()),
+			c,
+			string(data),
+		); err != nil {
+			return err
+		}
+		tic.rowCount++
 	}
 	return nil
 }
@@ -574,7 +618,7 @@ func TestFeedDeleteCompositeKey(t *testing.T) {
 
 	// Create a test http server
 	handler := createHandler(db, sinks)
-	server := httptest.NewServer(handler)
+	server := httptest.NewServer(http.HandlerFunc(handler))
 	defer server.Close()
 	t.Log(server.URL)
 
@@ -1359,6 +1403,77 @@ func TestMultipleFeeds(t *testing.T) {
 	}
 }
 
+func TestLargeClobs(t *testing.T) {
+	const clobSize = 5 * 1024
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create the test db
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer dbClose()
+
+	// Create a new _cdc_sink db
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
+
+	// Create the table to import from
+	tableFrom, err := createTestClobTable(ctx, db, dbName, clobSize)
+	if !a.NoError(err) {
+		return
+	}
+
+	// Create the table to receive into
+	tableTo, err := createTestClobTable(ctx, db, dbName, clobSize)
+	if !a.NoError(err) {
+		return
+	}
+
+	// Give the from table a few rows
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	if count, err := tableFrom.getTableRowCount(ctx); !a.Equal(10, count, "row count") || !a.NoError(err) {
+		return
+	}
+
+	// Create the sinks and sink
+	sinks, err := CreateSinks(ctx, db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
+	if !a.NoError(err) {
+		return
+	}
+
+	// Create a test http server
+	handler := createHandler(db, sinks)
+	server := httptest.NewServer(
+		http.HandlerFunc(handler),
+	)
+	defer server.Close()
+	t.Log(server.URL)
+
+	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	defer job.cancelJob(ctx)
+
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	t.Log("Waiting for sync")
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
+
+	// Make sure sink table is empty here.
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
+	sinkCount, err := getRowCount(ctx, db, sink.sinkTableFullName)
+	a.Equal(0, sinkCount, "expected empty sink table")
+	a.NoError(err)
+}
+
 func loopUntilMaxB(
 	ctx context.Context,
 	tableTo, tableFrom interface {
@@ -1407,4 +1522,32 @@ func loopUntilSync(
 		}
 	}
 	return nil
+}
+
+// clobData returns a reader that will generate some number of bytes.
+// The nonce value is used to perturb the sequence.
+func clobData(legnth, nonce int) io.Reader {
+	ret := &io.LimitedReader{R: &clobSourceReader{}, N: int64(nonce + legnth)}
+	nonce = nonce % len(clobSourceTest)
+	_, _ = io.CopyN(io.Discard, ret, int64(nonce))
+	return ret
+}
+
+const clobSourceTest = "_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ!"
+
+// clobSourceReader returns an infinitely long sequence of data. Use
+// the clobData function instead.
+type clobSourceReader struct{}
+
+// Read will fill the buffer with data.
+func (c *clobSourceReader) Read(p []byte) (n int, err error) {
+	ret := len(p)
+	for len(p) >= len(clobSourceTest) {
+		copy(p, clobSourceTest)
+		p = p[len(clobSourceTest):]
+	}
+	if rem := len(p); rem > 0 {
+		copy(p, clobSourceTest[:rem])
+	}
+	return ret, nil
 }
