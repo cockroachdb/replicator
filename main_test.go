@@ -157,9 +157,11 @@ type tableInfoSimple struct {
 }
 
 const tableSimpleSchema = `
+SET experimental_enable_hash_sharded_indexes = on;
 CREATE TABLE %s.%s (
 	a INT PRIMARY KEY,
-	b INT
+	b INT,
+	INDEX (b ASC) USING HASH WITH BUCKET_COUNT = 8
 )
 `
 
