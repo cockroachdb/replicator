@@ -287,6 +287,43 @@ func (tic *tableInfoClob) populateTable(ctx context.Context, count int) error {
 	return nil
 }
 
+// tableInfoComputed is used for tables that have magic columns
+type tableInfoComputed struct {
+	tableInfo
+	rowCount int
+}
+
+const tableComputedSchema = `
+SET experimental_enable_hash_sharded_indexes = on;
+CREATE TABLE %s.%s (
+	a INT PRIMARY KEY,
+	b INT,
+	c INT AS (a + b) STORED,
+	d INT AS (a + b) VIRTUAL,
+	INDEX (b ASC) USING HASH WITH BUCKET_COUNT = 8
+)
+`
+
+func createTestComputedTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfoComputed, error) {
+	info, err := createTestTable(ctx, db, dbName, tableComputedSchema)
+	return tableInfoComputed{tableInfo: info}, err
+}
+
+func (ti *tableInfoComputed) populateTable(ctx context.Context, count int) error {
+	for i := 0; i < count; i++ {
+		if err := Execute(
+			ctx,
+			ti.db,
+			fmt.Sprintf("INSERT INTO %s VALUES ($1, $1)", ti.getFullName()),
+			ti.rowCount+1,
+		); err != nil {
+			return err
+		}
+		ti.rowCount++
+	}
+	return nil
+}
+
 type jobInfo struct {
 	db *pgxpool.Pool
 	id int
@@ -1430,6 +1467,79 @@ func TestLargeClobs(t *testing.T) {
 
 	// Create the table to receive into
 	tableTo, err := createTestClobTable(ctx, db, dbName, clobSize)
+	if !a.NoError(err) {
+		return
+	}
+
+	// Give the from table a few rows
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	if count, err := tableFrom.getTableRowCount(ctx); !a.Equal(10, count, "row count") || !a.NoError(err) {
+		return
+	}
+
+	// Create the sinks and sink
+	sinks, err := CreateSinks(ctx, db, createConfig(tableFrom.tableInfo, tableTo.tableInfo, endpointTest))
+	if !a.NoError(err) {
+		return
+	}
+
+	// Create a test http server
+	handler := createHandler(db, sinks)
+	server := httptest.NewServer(
+		http.HandlerFunc(handler),
+	)
+	defer server.Close()
+	t.Log(server.URL)
+
+	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	defer job.cancelJob(ctx)
+
+	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
+		return
+	}
+	t.Log("Waiting for sync")
+	if !a.NoError(loopUntilSync(ctx, tableFrom, tableTo)) {
+		return
+	}
+
+	// Make sure sink table is empty here.
+	sink := sinks.FindSink(endpointTest, tableFrom.name)
+	sinkCount, err := getRowCount(ctx, db, sink.sinkTableFullName)
+	a.Equal(0, sinkCount, "expected empty sink table")
+	a.NoError(err)
+}
+
+// TestComputedColumns ensures that tables which contain computed (or
+// otherwise magic) columns can be syndicated.
+func TestComputedColumns(t *testing.T) {
+	const clobSize = 5 * 1024
+	a := assert.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create the test db
+	db, dbName, dbClose, err := getDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer dbClose()
+
+	// Create a new _cdc_sink db
+	if !a.NoError(createSinkDB(ctx, db)) {
+		return
+	}
+	defer dropSinkDB(ctx, db)
+
+	// Create the table to import from
+	tableFrom, err := createTestComputedTable(ctx, db, dbName)
+	if !a.NoError(err) {
+		return
+	}
+
+	// Create the table to receive into
+	tableTo, err := createTestComputedTable(ctx, db, dbName)
 	if !a.NoError(err) {
 		return
 	}

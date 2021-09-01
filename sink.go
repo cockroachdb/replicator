@@ -31,6 +31,7 @@ type Sink struct {
 	sinkTableFullName   string
 	primaryKeyColumns   []string
 	endpoint            string
+	ignoredColumns      map[string]struct{}
 }
 
 // CreateSink creates all the required tables and returns a new Sink.
@@ -58,12 +59,22 @@ func CreateSink(
 		return nil, err
 	}
 
+	toIgnore, err := GetIgnoredColumns(ctx, db, resultTableFullName)
+	if err != nil {
+		return nil, err
+	}
+	ignoreMap := make(map[string]struct{}, len(toIgnore))
+	for _, col := range toIgnore {
+		ignoreMap[col] = struct{}{}
+	}
+
 	sink := &Sink{
 		originalTableName:   originalTable,
 		resultTableFullName: resultTableFullName,
 		sinkTableFullName:   sinkTableFullName,
 		primaryKeyColumns:   columns,
 		endpoint:            endpoint,
+		ignoredColumns:      ignoreMap,
 	}
 
 	return sink, nil
@@ -167,7 +178,9 @@ func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 	}
 	var columnNames []string
 	for name := range line0.After {
-		columnNames = append(columnNames, name)
+		if _, ignored := s.ignoredColumns[name]; !ignored {
+			columnNames = append(columnNames, name)
+		}
 	}
 	sort.Strings(columnNames)
 

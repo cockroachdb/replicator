@@ -58,6 +58,39 @@ func TableExists(ctx context.Context, db *pgxpool.Pool, dbName string, tableName
 	}
 }
 
+const sqlGetIgnoredColumns = `
+SELECT column_name FROM [SHOW COLUMNS FROM %s] WHERE generation_expression != ''
+`
+
+// GetIgnoredColumns returns the names of columns defined in the table
+// which should not be updated. This is used to filter out columns
+// related to certain database features, such as hash-sharded indexes.
+func GetIgnoredColumns(ctx context.Context, db *pgxpool.Pool, tableFullName string) ([]string, error) {
+	findKeyColumns := fmt.Sprintf(sqlGetIgnoredColumns, tableFullName)
+	var columns []string
+	if err := Retry(ctx, func(ctx context.Context) error {
+		var columnsInternal []string
+		rows, err := db.Query(ctx, findKeyColumns)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var column string
+			if err := rows.Scan(&column); err != nil {
+				return err
+			}
+			columnsInternal = append(columnsInternal, column)
+		}
+		columns = columnsInternal
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return columns, nil
+}
+
 const sqlGetPrimaryKeyColumnsQuery = `
 SELECT column_name FROM [SHOW INDEX FROM %s] WHERE index_name = 'primary' ORDER BY seq_in_index
 `
