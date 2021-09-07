@@ -32,7 +32,12 @@ func findAllRowsToUpdateDB(
 
 	if err := Retry(ctx, func(ctx context.Context) error {
 		var err error
-		lines, err = FindAllRowsToUpdate(ctx, db, sinkTableFullName, prev, next)
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		lines, err = DrainAllRowsToUpdate(ctx, tx, sinkTableFullName, prev, next)
 		return err
 	}); err != nil {
 		return nil, err
