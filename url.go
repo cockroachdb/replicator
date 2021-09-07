@@ -52,89 +52,31 @@ func parseTimestamp(timestamp string, logical string) (time.Time, int, error) {
 	return timestampParsed, logicalParsed, nil
 }
 
-// Example: /test.sql/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-_test_table_4064-1.ndjson
+// See https://www.cockroachlabs.com/docs/stable/create-changefeed.html#general-file-format
+// Example: /test.sql//2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-test_table-1.ndjson
 // Format is: /[endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
-// See https://github.com/cockroachdb/cockroach/blob/master/pkg/ccl/changefeedccl/sink_cloudstorage.go#L139
-var ndjsonRegex = regexp.MustCompile(`^/(?P<endpoint>.*)/(?P<date>\d{4}-\d{2}-\d{2})/(?P<timestamp>\d{33})-(?P<uniquer>(?P<session_id>[0-9a-g]*)-(?P<node_id>\d*)-(?P<sink_id>\d*)-(?P<file_id>\d*))-(?P<topic>.*)-(?P<schema_id>\d*).ndjson$`)
+var (
+	ndjsonRegex       = regexp.MustCompile(`/(?P<endpoint>[^/]*)/(?P<date>\d{4}-\d{2}-\d{2})/(?P<uniquer>.+)-(?P<topic>[^-]+)-(?P<schema_id>[^-]+).ndjson$`)
+	ndjsonEndpointIdx = ndjsonRegex.SubexpIndex("endpoint")
+	ndjsonTopicIdx    = ndjsonRegex.SubexpIndex("topic")
+)
 
 // ndjsonURL contains all the parsed info from an ndjson url.
 type ndjsonURL struct {
-	endpoint         string
-	date             string
-	timestamp        time.Time
-	timestampLogical int
-	uniquer          string
-	fileID           int
-	nodeID           int
-	sinkID           int
-	sessionID        string
-	topic            string
-	schemaID         int
+	endpoint string
+	topic    string
 }
 
 func parseNdjsonURL(url string) (ndjsonURL, error) {
 	match := ndjsonRegex.FindStringSubmatch(url)
-	if len(match) != ndjsonRegex.NumSubexp()+1 {
+	if match == nil {
 		return ndjsonURL{}, fmt.Errorf("can't parse url %s", url)
 	}
 
-	var ndjson ndjsonURL
-	for i, name := range ndjsonRegex.SubexpNames() {
-		switch name {
-		case "date":
-			ndjson.date = strings.ToLower(match[i])
-		case "timestamp":
-			if len(match[i]) != 33 {
-				return ndjsonURL{}, fmt.Errorf(
-					"Expected timestamp to be 33 characters long, got %d: %s",
-					len(match[i]), match[i],
-				)
-			}
-			var err error
-			ndjson.timestamp, ndjson.timestampLogical, err = parseTimestamp(
-				match[i][0:23], match[i][23:33],
-			)
-			if err != nil {
-				return ndjsonURL{}, err
-			}
-		case "uniquer":
-			ndjson.uniquer = strings.ToLower(match[i])
-		case "session_id":
-			ndjson.sessionID = strings.ToLower(match[i])
-		case "node_id":
-			result, err := strconv.Atoi(match[i])
-			if err != nil {
-				return ndjsonURL{}, err
-			}
-			ndjson.nodeID = result
-		case "sink_id":
-			result, err := strconv.Atoi(match[i])
-			if err != nil {
-				return ndjsonURL{}, err
-			}
-			ndjson.sinkID = result
-		case "file_id":
-			result, err := strconv.Atoi(match[i])
-			if err != nil {
-				return ndjsonURL{}, err
-			}
-			ndjson.fileID = result
-		case "topic":
-			ndjson.topic = strings.ToLower(match[i])
-		case "schema_id":
-			result, err := strconv.Atoi(match[i])
-			if err != nil {
-				return ndjsonURL{}, err
-			}
-			ndjson.schemaID = result
-		case "endpoint":
-			ndjson.endpoint = strings.ToLower(match[i])
-		default:
-			// Skip all the rest.
-		}
-	}
-
-	return ndjson, nil
+	return ndjsonURL{
+		endpoint: match[ndjsonEndpointIdx],
+		topic:    match[ndjsonTopicIdx],
+	}, nil
 }
 
 // Example: /test.sql/2020-04-04/202004042351304139680000000000000.RESOLVED
