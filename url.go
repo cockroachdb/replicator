@@ -55,7 +55,7 @@ func parseTimestamp(timestamp string, logical string) (time.Time, int, error) {
 // Example: /test.sql/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-_test_table_4064-1.ndjson
 // Format is: /[endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
 // See https://github.com/cockroachdb/cockroach/blob/master/pkg/ccl/changefeedccl/sink_cloudstorage.go#L139
-var ndjsonRegex = regexp.MustCompile(`^/(?P<endpoint>.*)/(?P<date>\d{4}-\d{2}-\d{2})/(?P<timestamp>\d{33})-(?P<uniquer>(?P<session_id>[0-9a-g]*)-(?P<node_id>\d*)-(?P<sink_id>\d*)-(?P<file_id>\d*))-(?P<topic>.*)-(?P<schema_id>\d*).ndjson$`)
+var ndjsonRegex = regexp.MustCompile(`^/(?P<endpoint>.*)/(?P<date>\d{4}-\d{2}-\d{2})/(?P<timestamp>\d{33})-(?P<uniquer>(?P<session_id>[0-9a-f]*)-(?P<node_id>\d*)-(?P<sink_id>\d*)-(?P<file_id>\d*))-(?P<topic>.*)-(?P<schema_id>[0-9a-f]*).ndjson$`)
 
 // ndjsonURL contains all the parsed info from an ndjson url.
 type ndjsonURL struct {
