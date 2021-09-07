@@ -37,18 +37,12 @@ CREATE TABLE IF NOT EXISTS %s (
 // Timestamps are less than and up to the resolved ones.
 // For this $1 and $2 are previous resolved, $3 and $4 are the current
 // resolved.
-const sinkTableQueryRows = `
-SELECT nanos, logical, key, after
-FROM %s
-WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
-			((nanos = $3 AND logical <= $4) OR (nanos < $3))
-`
-
-const sinkTableDeleteRows = `
+const sinkTableDrainRows = `
 DELETE
 FROM %s
 WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
 			((nanos = $3 AND logical <= $4) OR (nanos < $3))
+RETURNING nanos, logical, key, after
 `
 
 // SinkTableFullName creates the conjoined db/table name to be used by the sink
@@ -179,12 +173,12 @@ func WriteToSinkTable(ctx context.Context, db *pgxpool.Pool, sinkTableFullName s
 	return errors.Wrapf(err, "writing to sink table %s", sinkTableFullName)
 }
 
-// FindAllRowsToUpdate returns all the rows that need to be updated from the
-// sink table.
-func FindAllRowsToUpdate(
+// DrainAllRowsToUpdate deletes and returns the rows that need to be
+// updated from the sink table.
+func DrainAllRowsToUpdate(
 	ctx context.Context, tx pgxtype.Querier, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
 ) ([]Line, error) {
-	rows, err := tx.Query(ctx, fmt.Sprintf(sinkTableQueryRows, sinkTableFullName),
+	rows, err := tx.Query(ctx, fmt.Sprintf(sinkTableDrainRows, sinkTableFullName),
 		prev.nanos, prev.logical, next.nanos, next.logical,
 	)
 	if err != nil {
@@ -198,16 +192,4 @@ func FindAllRowsToUpdate(
 		lines = append(lines, line)
 	}
 	return lines, nil
-}
-
-// DeleteSinkTableLines removes all line from the sinktable that have been processed
-// based on the prev and next resolved line.
-func DeleteSinkTableLines(
-	ctx context.Context, tx pgxtype.Querier, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
-) error {
-	_, err := tx.Exec(ctx,
-		fmt.Sprintf(sinkTableDeleteRows, sinkTableFullName),
-		prev.nanos, prev.logical, next.nanos, next.logical,
-	)
-	return err
 }

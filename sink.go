@@ -227,7 +227,7 @@ func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 // UpdateRows updates all changed rows.
 func (s *Sink) UpdateRows(ctx context.Context, tx pgxtype.Querier, prev ResolvedLine, next ResolvedLine) error {
 	// First, gather all the rows to update.
-	lines, err := FindAllRowsToUpdate(ctx, tx, s.sinkTableFullName, prev, next)
+	lines, err := DrainAllRowsToUpdate(ctx, tx, s.sinkTableFullName, prev, next)
 	if err != nil {
 		return err
 	}
@@ -293,10 +293,5 @@ func (s *Sink) UpdateRows(ctx context.Context, tx pgxtype.Querier, prev Resolved
 	}
 
 	// Upsert all rows
-	if err := s.upsertRows(ctx, tx, upserts); err != nil {
-		return err
-	}
-
-	// Delete the rows in the sink table.
-	return DeleteSinkTableLines(ctx, tx, s.sinkTableFullName, prev, next)
+	return s.upsertRows(ctx, tx, upserts)
 }
