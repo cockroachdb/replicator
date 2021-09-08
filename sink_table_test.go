@@ -205,6 +205,11 @@ func TestWriteToSinkTable(t *testing.T) {
 		return
 	}
 
+	// Re-deliver a message to check at-least-once behavior.
+	if err := WriteToSinkTable(ctx, db, sink.sinkTableFullName, lines[:1]); !a.NoError(err) {
+		return
+	}
+
 	// Check to see if there are indeed 100 rows in the table.
 	if rowCount, err := getRowCount(ctx, db, sink.sinkTableFullName); a.NoError(err) {
 		a.Equal(100, rowCount)
