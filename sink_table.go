@@ -19,9 +19,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/pkg/errors"
 )
 
 const sinkTableSchema = `
@@ -33,6 +31,8 @@ CREATE TABLE IF NOT EXISTS %s (
 	PRIMARY KEY (nanos, logical, key)
 )
 `
+
+const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES `
 
 // Timestamps are less than and up to the resolved ones.
 // For this $1 and $2 are previous resolved, $3 and $4 are the current
@@ -159,18 +159,32 @@ func CreateSinkTable(ctx context.Context, db *pgxpool.Pool, sinkTableFullName st
 	return Execute(ctx, db, fmt.Sprintf(sinkTableSchema, sinkTableFullName))
 }
 
-// WriteToSinkTable upserts all lines to the sink table via the COPY protocol.
+// WriteToSinkTable upserts all lines to the sink table. Never submit more than
+// 10,000 lines to this function at a time.
 func WriteToSinkTable(ctx context.Context, db *pgxpool.Pool, sinkTableFullName string, lines []Line) error {
 	if len(lines) == 0 {
 		return nil
 	}
-	parts := strings.Split(strings.ToLower(sinkTableFullName), ".")
-	_, err := db.CopyFrom(ctx, parts,
-		[]string{"nanos", "logical", "key", "after"},
-		pgx.CopyFromSlice(len(lines), func(i int) ([]interface{}, error) {
-			return lines[i].getSinkTableValues(), nil
-		}))
-	return errors.Wrapf(err, "writing to sink table %s", sinkTableFullName)
+	var statement strings.Builder
+	if _, err := fmt.Fprintf(&statement, sinkTableWrite, sinkTableFullName); err != nil {
+		return err
+	}
+	var values []interface{}
+	for i, line := range lines {
+		values = append(values, line.getSinkTableValues()...)
+		if i == 0 {
+			if _, err := fmt.Fprint(&statement, "($1,$2,$3,$4)"); err != nil {
+				return err
+			}
+		} else {
+			j := i * 4
+			if _, err := fmt.Fprintf(&statement, ",($%d,$%d,$%d,$%d)", j+1, j+2, j+3, j+4); err != nil {
+				return err
+			}
+		}
+	}
+
+	return Execute(ctx, db, statement.String(), values...)
 }
 
 // DrainAllRowsToUpdate deletes and returns the rows that need to be
