@@ -19,6 +19,8 @@ import (
 	"net"
 	"net/http"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -81,6 +83,12 @@ As of right now, only a single endpoint is supported.
 
 Don't forget to escape the json quotes:
 ./cdc-sink --config="[{\"endpoint\":\"test.sql\", \"source_table\":\"in_test1\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test1\"},{\"endpoint\":\"test.sql\", \"source_table\":\"in_test2\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test2\"}]"`,
+)
+
+var (
+	// buildVersion is set by the go linker at build time
+	buildVersion = "<unknown>"
+	printVersion = flag.Bool("version", false, "print version and exit")
 )
 
 func createHandler(db *pgxpool.Pool, sinks *Sinks) func(http.ResponseWriter, *http.Request) {
@@ -169,6 +177,22 @@ func main() {
 
 	// First, parse the config.
 	flag.Parse()
+
+	if *printVersion {
+		fmt.Println("cdc-sink", buildVersion)
+		fmt.Println(runtime.Version(), runtime.GOARCH, runtime.GOOS)
+		fmt.Println()
+		if bi, ok := debug.ReadBuildInfo(); ok {
+			fmt.Println(bi.Main.Path, bi.Main.Version)
+			for _, m := range bi.Deps {
+				for m.Replace != nil {
+					m = m.Replace
+				}
+				fmt.Println(m.Path, m.Version)
+			}
+		}
+		return
+	}
 
 	config, err := parseConfig(*configuration)
 	if err != nil {
