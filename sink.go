@@ -105,6 +105,11 @@ func (s *Sink) HandleRequest(db *pgxpool.Pool, w http.ResponseWriter, r *http.Re
 			lines = []Line{}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		log.Print(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := WriteToSinkTable(r.Context(), db, s.sinkTableFullName, lines); err != nil {
 		log.Print(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
