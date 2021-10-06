@@ -151,6 +151,12 @@ func (s *Sinks) HandleResolvedRequest(
 		}); err != nil {
 			log.Print(err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Print(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 }
