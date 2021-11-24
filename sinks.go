@@ -69,7 +69,7 @@ func (s *Sinks) AddSink(ctx context.Context, db *pgxpool.Pool, entry ConfigEntry
 
 	// Check for a double table
 	if _, exist := sinksByTable[sourceTable]; exist {
-		return fmt.Errorf("Duplicate table configuration entry found: %s", sourceTable)
+		return fmt.Errorf("duplicate table configuration entry found: %s", sourceTable)
 	}
 
 	sink, err := CreateSink(ctx, db, sourceTable, destinationDB, destinationTable, endpoint)
@@ -89,8 +89,7 @@ func (s *Sinks) FindSink(endpoint string, table string) *Sink {
 	if !exist {
 		return nil
 	}
-	result, _ := sinksByTable[table]
-	return result
+	return sinksByTable[table]
 }
 
 // GetAllSinksByEndpoint gets a list of all known sinks.

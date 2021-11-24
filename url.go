@@ -24,10 +24,10 @@ const timestampDateTimeFormat = "20060102150405"
 
 func parseTimestamp(timestamp string, logical string) (time.Time, int, error) {
 	if len(timestamp) != 23 {
-		return time.Time{}, 0, fmt.Errorf("Can't parse timestamp %s", timestamp)
+		return time.Time{}, 0, fmt.Errorf("can't parse timestamp %s", timestamp)
 	}
 	if len(logical) != 10 {
-		return time.Time{}, 0, fmt.Errorf("Can't parse logical timestamp %s", logical)
+		return time.Time{}, 0, fmt.Errorf("can't parse logical timestamp %s", logical)
 	}
 
 	// Parse the date and time.
@@ -105,7 +105,7 @@ func parseResolvedURL(url string) (resolvedURL, error) {
 		case "timestamp":
 			if len(match[i]) != 33 {
 				return resolvedURL{}, fmt.Errorf(
-					"Expected timestamp to be 33 characters long, got %d: %s",
+					"expected timestamp to be 33 characters long, got %d: %s",
 					len(match[i]), match[i],
 				)
 			}

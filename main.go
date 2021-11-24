@@ -126,7 +126,6 @@ func createHandler(db *pgxpool.Pool, sinks *Sinks) func(http.ResponseWriter, *ht
 			),
 			http.StatusInternalServerError,
 		)
-		return
 	}
 }
 
@@ -144,28 +143,28 @@ type ConfigEntry struct {
 func parseConfig(rawConfig string) (Config, error) {
 	var config Config
 	if err := json.Unmarshal([]byte(rawConfig), &config); err != nil {
-		return Config{}, fmt.Errorf("Could not parse config: %s", err.Error())
+		return Config{}, fmt.Errorf("could not parse config: %s", err.Error())
 	}
 
 	if len(config) == 0 {
-		return Config{}, fmt.Errorf("No config lines provided")
+		return Config{}, fmt.Errorf("no config lines provided")
 	}
 
 	for _, entry := range config {
 		if len(entry.Endpoint) == 0 {
-			return Config{}, fmt.Errorf("Each config entry requires and endpoint")
+			return Config{}, fmt.Errorf("each config entry requires and endpoint")
 		}
 
 		if len(entry.SourceTable) == 0 {
-			return Config{}, fmt.Errorf("Each config entry requires a source_table")
+			return Config{}, fmt.Errorf("each config entry requires a source_table")
 		}
 
 		if len(entry.DestinationDatabase) == 0 {
-			return Config{}, fmt.Errorf("Each config entry requires a destination_database")
+			return Config{}, fmt.Errorf("each config entry requires a destination_database")
 		}
 
 		if len(entry.DestinationTable) == 0 {
-			return Config{}, fmt.Errorf("Each config entry requires a destination_table")
+			return Config{}, fmt.Errorf("each config entry requires a destination_table")
 		}
 	}
 

@@ -46,7 +46,7 @@ func CreateSink(
 		return nil, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("Table %s could not be found", resultTableFullName)
+		return nil, fmt.Errorf("table %s could not be found", resultTableFullName)
 	}
 
 	sinkTableFullName := SinkTableFullName(resultDB, resultTable)
@@ -209,7 +209,7 @@ func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 			if i > 0 {
 				fmt.Fprintf(&statement, ",")
 			}
-			fmt.Fprintf(&statement, name)
+			fmt.Fprint(&statement, name)
 		}
 		fmt.Fprint(&statement, ") VALUES ")
 

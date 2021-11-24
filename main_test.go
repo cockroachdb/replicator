@@ -263,9 +263,9 @@ CREATE TABLE %s.%s (
 )
 `
 
-func createTestCompositeTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfoSimple, error) {
+func createTestCompositeTable(ctx context.Context, db *pgxpool.Pool, dbName string) (tableInfoComposite, error) {
 	info, err := createTestTable(ctx, db, dbName, tableCompositeSchema)
-	return tableInfoSimple{tableInfo: info}, err
+	return tableInfoComposite{tableInfo: info}, err
 }
 
 func (tis *tableInfoComposite) populateTable(ctx context.Context, count int) error {
@@ -387,7 +387,7 @@ func createChangeFeed(
 		if i != 0 {
 			fmt.Fprint(&query, ", ")
 		}
-		fmt.Fprintf(&query, tis[i].getFullName())
+		fmt.Fprint(&query, tis[i].getFullName())
 	}
 	fmt.Fprintf(&query, " INTO 'experimental-%s/%s' WITH updated,resolved", url, endpoint)
 	var jobID int
@@ -859,6 +859,9 @@ func TestFeedUpdatePrimary(t *testing.T) {
 	t.Log(server.URL)
 
 	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	if !a.NoError(err) {
+		return
+	}
 	defer job.cancelJob(ctx)
 
 	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
@@ -1532,6 +1535,9 @@ func TestLargeClobs(t *testing.T) {
 	t.Log(server.URL)
 
 	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	if !a.NoError(err) {
+		return
+	}
 	defer job.cancelJob(ctx)
 
 	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
@@ -1555,7 +1561,6 @@ func TestComputedColumns(t *testing.T) {
 	if strings.Contains(dbVersion, "v20.2.") {
 		t.Skip("VIRTUAL columns not supported on v20.2")
 	}
-	const clobSize = 5 * 1024
 	a := assert.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1608,6 +1613,9 @@ func TestComputedColumns(t *testing.T) {
 	t.Log(server.URL)
 
 	job, err := createChangeFeed(ctx, db, server.URL, endpointTest, tableFrom.tableInfo)
+	if !a.NoError(err) {
+		return
+	}
 	defer job.cancelJob(ctx)
 
 	if !a.NoError(tableFrom.populateTable(ctx, 10)) {
