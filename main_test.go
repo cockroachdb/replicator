@@ -23,6 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"log"
+	"os"
+
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
@@ -31,11 +34,57 @@ import (
 
 // These test require an insecure cockroach server is running on the default
 // port with the default root user with no password.
+var (
+	r         *rand.Rand
+	rawDb     *pgxpool.Pool
+	dbVersion string
+)
 
-var r *rand.Rand
-
-func init() {
+// TestMain will open a database connection and set the cluster license
+// if the COCKROACH_DEV_LICENSE environment variable is set.
+func TestMain(m *testing.M) {
 	r = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var err error
+	rawDb, err = pgxpool.Connect(ctx, *connectionString)
+	if err != nil {
+		log.Fatalf("could not open database connection: %v", err)
+	}
+
+	if lic, ok := os.LookupEnv("COCKROACH_DEV_LICENSE"); ok {
+		if _, err := rawDb.Exec(ctx,
+			"SET CLUSTER SETTING cluster.organization = $1",
+			"Cockroach Labs - Production Testing",
+		); err != nil {
+			log.Fatalf("could not set cluster.organization: %v", err)
+		}
+		if _, err := rawDb.Exec(ctx,
+			"SET CLUSTER SETTING enterprise.license = $1", lic,
+		); err != nil {
+			log.Fatalf("could not set enterprise.license: %v", err)
+		}
+	}
+
+	if err := Execute(ctx, rawDb, "SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
+		log.Fatalf("could not enable rangefeeds: %v", err)
+		return
+	}
+
+	if err := Retry(ctx, func(ctx context.Context) error {
+		row := rawDb.QueryRow(ctx, "SELECT version()")
+		if err := row.Scan(&dbVersion); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		log.Fatalf("could not determine cluster version: %v", err)
+	}
+
+	os.Exit(m.Run())
 }
 
 const endpointTest = "test.sql"
@@ -43,11 +92,7 @@ const endpointTest = "test.sql"
 // getDB creates a new testing DB, return the name of that db and a closer that
 // will drop the table and close the db connection.
 func getDB(ctx context.Context) (db *pgxpool.Pool, dbName string, closer func(), err error) {
-	db, err = pgxpool.Connect(ctx, *connectionString)
-	if err != nil {
-		return
-	}
-
+	db = rawDb
 	// Create the testing database
 	dbNum := r.Intn(10000)
 	dbName = fmt.Sprintf("_test_db_%d", dbNum)
@@ -60,15 +105,8 @@ func getDB(ctx context.Context) (db *pgxpool.Pool, dbName string, closer func(),
 		return
 	}
 
-	if err = Execute(ctx, db, "SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
-		return
-	}
-
 	closer = func() {
-		if err = Execute(ctx, db, fmt.Sprintf("DROP DATABASE %s CASCADE", dbName)); err != nil {
-			return
-		}
-		db.Close()
+		_ = Execute(ctx, db, fmt.Sprintf("DROP DATABASE %s CASCADE", dbName))
 	}
 
 	return
@@ -1514,6 +1552,9 @@ func TestLargeClobs(t *testing.T) {
 // TestComputedColumns ensures that tables which contain computed (or
 // otherwise magic) columns can be syndicated.
 func TestComputedColumns(t *testing.T) {
+	if strings.Contains(dbVersion, "v20.2.") {
+		t.Skip("VIRTUAL columns not supported on v20.2")
+	}
 	const clobSize = 5 * 1024
 	a := assert.New(t)
 	ctx, cancel := context.WithCancel(context.Background())

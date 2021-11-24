@@ -92,7 +92,10 @@ func GetIgnoredColumns(ctx context.Context, db *pgxpool.Pool, tableFullName stri
 }
 
 const sqlGetPrimaryKeyColumnsQuery = `
-SELECT column_name FROM [SHOW INDEX FROM %s] WHERE index_name = 'primary' ORDER BY seq_in_index
+SELECT column_name FROM [SHOW INDEX FROM %s]
+WHERE index_name = 'primary'
+      AND NOT storing
+ORDER BY seq_in_index
 `
 
 // GetPrimaryKeyColumns returns the column names for the primary key index for
