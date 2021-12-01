@@ -12,6 +12,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -147,11 +148,19 @@ func (s *Sink) deleteRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 		fmt.Fprintf(&statement, ") IN (")
 		var keys []interface{}
 		for i, line := range chunk {
+			// Parse out the primary key values.
+			key := make([]interface{}, 0, len(s.primaryKeyColumns))
+			dec := json.NewDecoder(bytes.NewReader(line.key))
+			dec.UseNumber()
+			if err := dec.Decode(&key); err != nil {
+				return err
+			}
+
 			if i > 0 {
 				fmt.Fprintf(&statement, ",")
 			}
 			fmt.Fprintf(&statement, "(")
-			for i, key := range line.Key {
+			for i, key := range key {
 				if i > 0 {
 					fmt.Fprintf(&statement, ",")
 				}
@@ -172,17 +181,20 @@ func (s *Sink) deleteRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 
 // upsertRows performs all upserts specified in lines.
 func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line) error {
+	const starterColumns = 16
 	if len(lines) == 0 {
 		return nil
 	}
 
 	// Get all the column names and order them alphabetically.
-	line0 := lines[0]
-	if err := line0.parseAfter(); err != nil {
+	allNames, err := lines[0].extractColumns(make([]string, 0, starterColumns))
+	if err != nil {
 		return err
 	}
-	var columnNames []string
-	for name := range line0.After {
+
+	// https://github.com/golang/go/wiki/SliceTricks#filtering-without-allocating
+	columnNames := allNames[:0]
+	for _, name := range allNames {
 		if _, ignored := s.ignoredColumns[name]; !ignored {
 			columnNames = append(columnNames, name)
 		}
@@ -215,7 +227,8 @@ func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 
 		var values []interface{}
 		for i, line := range chunk {
-			if err := line.parseAfter(); err != nil {
+			data := make(map[string]interface{}, starterColumns)
+			if err := line.parseAfter(data); err != nil {
 				return nil
 			}
 			if i == 0 {
@@ -224,7 +237,7 @@ func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 				fmt.Fprintf(&statement, ",(")
 			}
 			for j, name := range columnNames {
-				values = append(values, line.After[name])
+				values = append(values, data[name])
 				if j == 0 {
 					fmt.Fprintf(&statement, "$%d", len(values))
 				} else {
@@ -269,35 +282,36 @@ func (s *Sink) UpdateRows(ctx context.Context, tx pgxtype.Querier, prev Resolved
 		line := lines[i]
 
 		// Did we updates this line already? If so, don't perform this update.
-		if _, exist := usedKeys[line.key]; exist {
+		if _, exist := usedKeys[string(line.key)]; exist {
 			continue
 		}
-		usedKeys[line.key] = struct{}{}
+		usedKeys[string(line.key)] = struct{}{}
 
 		// Parse the key into columns
 		// Large numbers are not turned into strings, so the UseNumber option for
 		// the decoder is required.
-		dec := json.NewDecoder(strings.NewReader(line.key))
+		key := make([]interface{}, 0, len(s.primaryKeyColumns))
+		dec := json.NewDecoder(bytes.NewReader(line.key))
 		dec.UseNumber()
-		if err := dec.Decode(&(line.Key)); err != nil {
+		if err := dec.Decode(&key); err != nil {
 			return err
 		}
 
 		// Is this needed?  What if we have 2 primary key columns but the 2nd one
 		// nullable or has a default?  Does CDC send it?
-		if len(line.Key) != len(s.primaryKeyColumns) {
+		if len(key) != len(s.primaryKeyColumns) {
 			return fmt.Errorf(
 				"table %s has %d primary key columns %v, but only got %d keys %v",
 				s.resultTableFullName,
 				len(s.primaryKeyColumns),
 				s.primaryKeyColumns,
-				len(line.Key),
-				line.Key,
+				len(key),
+				key,
 			)
 		}
 
 		// Is this a delete?
-		if line.after == "null" {
+		if string(line.after) == "null" {
 			deletes = append(deletes, line)
 		} else {
 			// This must be an upsert statement.

@@ -51,36 +51,42 @@ func SinkTableFullName(resultDB string, resultTable string) string {
 	return fmt.Sprintf("%s.%s_%s", *sinkDB, resultDB, resultTable)
 }
 
-// Line is used to parse a json line in the request body.
-//{"after": {"a": 1, "b": 1}, "key": [1], "updated": "1585949214695218000.0000000000"}
+// Line stores pending mutations.
 type Line struct {
-	// These are used for parsing the ndjson line.
-	After   map[string]interface{} `json:"after"`
-	Key     []interface{}          `json:"key"`
-	Updated string                 `json:"updated"`
-
-	// These are used for storing back to the sink table.
-	nanos   int64
-	logical int
-	after   string
-	key     string
+	after   json.RawMessage // The mutations to apply: {"a": 1, "b": 1}
+	key     json.RawMessage // Primary key values: [1, 2]
+	nanos   int64           // HLC time base
+	logical int             // HLC logical counter
 }
 
-// parseAFter parses the after column (retrieved from the sink table back into
-// After so it can be used for upserting.
-func (line *Line) parseAfter() error {
+// extractColumns parses the keys from the "after" payload block and
+// appends them to the given slice.
+func (line *Line) extractColumns(into []string) ([]string, error) {
+	m := make(map[string]json.RawMessage)
+	dec := json.NewDecoder(bytes.NewReader(line.after))
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	for k := range m {
+		into = append(into, k)
+	}
+	return into, nil
+}
+
+// parseAfter reifies the mutations to be applied.
+func (line *Line) parseAfter(into map[string]interface{}) error {
 	// Parse the after columns
 	// Large numbers are not turned into strings, so the UseNumber option for
 	// the decoder is required.
-	dec := json.NewDecoder(strings.NewReader(line.after))
+	dec := json.NewDecoder(bytes.NewReader(line.after))
 	dec.UseNumber()
-	return dec.Decode(&(line.After))
+	return dec.Decode(&into)
 }
 
 // getSinkTableValues is just the statements ordered as expected for the sink
 // table insert statement.
 func (line Line) getSinkTableValues() []interface{} {
-	return []interface{}{line.nanos, line.logical, line.key, line.after}
+	return []interface{}{line.nanos, line.logical, string(line.key), string(line.after)}
 }
 
 // parseSplitTimestamp splits a timestmap of tte format NNNN.LLL into an int64
@@ -104,54 +110,38 @@ func parseSplitTimestamp(timestamp string) (int64, int, error) {
 	return nanos, logical, nil
 }
 
-// parseLine takes a single line from an ndjson and parses it into json then
-// converts some of the components back to json for storage in the sink table.
-// This parsing back and forth just seemed safer than manually parsing the line
-// json.
+// parseLine takes a single line from an ndjson and extracts enough
+// information to be able to persist it to the staging table.
 func parseLine(rawBytes []byte) (Line, error) {
-	var line Line
+	var payload struct {
+		After   json.RawMessage `json:"after"`
+		Key     json.RawMessage `json:"key"`
+		Updated string          `json:"updated"`
+	}
 
 	// Large numbers are not turned into strings, so the UseNumber option for
 	// the decoder is required.
 	dec := json.NewDecoder(bytes.NewReader(rawBytes))
 	dec.UseNumber()
-	if err := dec.Decode(&line); err != nil {
+	if err := dec.Decode(&payload); err != nil {
 		return Line{}, err
 	}
 
-	// Prase the timestamp into nanos and logical.
-	var err error
-	line.nanos, line.logical, err = parseSplitTimestamp(line.Updated)
+	// Parse the timestamp into nanos and logical.
+	nanos, logical, err := parseSplitTimestamp(payload.Updated)
 	if err != nil {
 		return Line{}, err
 	}
-	if line.nanos == 0 {
+	if nanos == 0 {
 		return Line{}, fmt.Errorf("no nano component to the 'updated' timestamp field")
 	}
 
-	// Convert the after line back to json.
-	afterBytes, err := json.Marshal(line.After)
-	if err != nil {
-		return Line{}, err
-	}
-	if len(afterBytes) == 0 {
-		return Line{}, fmt.Errorf("no value present in 'after' field")
-	}
-	line.after = string(afterBytes)
-
-	// Convert the key line back to json.
-	if len(line.Key) <= 0 {
-		return Line{}, fmt.Errorf("no value present in 'key' field")
-	}
-	keyBytes, err := json.Marshal(line.Key)
-	if err != nil {
-		return Line{}, err
-	}
-	if len(keyBytes) == 0 {
-		return Line{}, fmt.Errorf("no value present in 'key' field")
-	}
-	line.key = string(keyBytes)
-	return line, err
+	return Line{
+		after:   payload.After,
+		key:     payload.Key,
+		logical: logical,
+		nanos:   nanos,
+	}, nil
 }
 
 // CreateSinkTable creates if it does not exist, the a table used for sinking.
