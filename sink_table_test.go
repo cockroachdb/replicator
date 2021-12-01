@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"testing"
@@ -80,8 +81,6 @@ func TestParseSplitTimestamp(t *testing.T) {
 }
 
 func TestParseLine(t *testing.T) {
-	a := assert.New(t)
-
 	tests := []struct {
 		testcase        string
 		expectedPass    bool
@@ -91,7 +90,7 @@ func TestParseLine(t *testing.T) {
 		expectedLogical int
 	}{
 		{
-			`{"after": {"a": 9, "b": 9}, "key": [9], "updated": "1586020760120222000.0000000000"}`,
+			`{"after": {"a":9,"b":9}, "key": [9], "updated": "1586020760120222000.0000000000"}`,
 			true, `{"a":9,"b":9}`, `[9]`, 1586020760120222000, 0,
 		},
 		{
@@ -118,6 +117,7 @@ func TestParseLine(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("%d - %s", i, test.testcase), func(t *testing.T) {
+			a := assert.New(t)
 			actual, actualErr := parseLine([]byte(test.testcase))
 			if test.expectedPass && !a.NoError(actualErr) {
 				return
@@ -127,8 +127,8 @@ func TestParseLine(t *testing.T) {
 			}
 			a.Equal(test.expectedNanos, actual.nanos)
 			a.Equal(test.expectedLogical, actual.logical)
-			a.Equal(test.expectedKey, actual.key)
-			a.Equal(test.expectedAfter, actual.after)
+			a.Equal(json.RawMessage(test.expectedKey), actual.key)
+			a.Equal(json.RawMessage(test.expectedAfter), actual.after)
 		})
 	}
 }
@@ -196,8 +196,8 @@ func TestWriteToSinkTable(t *testing.T) {
 		lines = append(lines, Line{
 			nanos:   int64(i),
 			logical: i,
-			key:     fmt.Sprintf("[%d]", i),
-			after:   fmt.Sprintf(`{"a": %d`, i),
+			key:     json.RawMessage(fmt.Sprintf("[%d]", i)),
+			after:   json.RawMessage(fmt.Sprintf(`{"a": %d`, i)),
 		})
 	}
 
@@ -260,8 +260,8 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 			lines = append(lines, Line{
 				nanos:   int64(i),
 				logical: j,
-				after:   fmt.Sprintf("{a=%d,b=%d}", i, j),
-				key:     fmt.Sprintf("[%d]", i),
+				after:   json.RawMessage(fmt.Sprintf("{a=%d,b=%d}", i, j)),
+				key:     json.RawMessage(fmt.Sprintf("[%d]", i)),
 			})
 		}
 	}
