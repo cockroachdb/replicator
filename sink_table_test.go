@@ -24,12 +24,12 @@ import (
 // These test require an insecure cockroach server is running on the default
 // port with the default root user with no password.
 
-// findAllRowsToUpdateDB is a wrapper around FindAllRowsToUpdate that handles
-// the transaction for testing.
-func findAllRowsToUpdateDB(
-	ctx context.Context, db *pgxpool.Pool, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
-) ([]Line, error) {
-	var lines []Line
+// findMutations is a wrapper around DrainMutations that rolls
+// back the transaction.
+func findMutations(
+	ctx context.Context, db *pgxpool.Pool, sinkTableFullName string, prev, next ResolvedLine,
+) ([]Mutation, error) {
+	var lines []Mutation
 
 	if err := Retry(ctx, func(ctx context.Context) error {
 		var err error
@@ -38,7 +38,7 @@ func findAllRowsToUpdateDB(
 			return err
 		}
 		defer tx.Rollback(ctx)
-		lines, err = DrainAllRowsToUpdate(ctx, tx, sinkTableFullName, prev, next)
+		lines, err = DrainMutations(ctx, tx, sinkTableFullName, prev, next)
 		return err
 	}); err != nil {
 		return nil, err
@@ -194,10 +194,12 @@ func TestWriteToSinkTable(t *testing.T) {
 	var lines []Line
 	for i := 0; i < 100; i++ {
 		lines = append(lines, Line{
+			Mutation: Mutation{
+				after: json.RawMessage(fmt.Sprintf(`{"a": %d`, i)),
+				key:   json.RawMessage(fmt.Sprintf("[%d]", i)),
+			},
 			nanos:   int64(i),
 			logical: i,
-			key:     json.RawMessage(fmt.Sprintf("[%d]", i)),
-			after:   json.RawMessage(fmt.Sprintf(`{"a": %d`, i)),
 		})
 	}
 
@@ -252,16 +254,18 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 		return
 	}
 
-	// Insert 100 rows into the table.
+	// Insert 100 rows into the table with increasing timestamps.
 	sink := sinks.FindSink(endpointTest, tableFrom.name)
 	var lines []Line
-	for i := 0; i < 10; i++ {
-		for j := 0; j < 10; j++ {
+	for id := 0; id < 10; id++ {
+		for ts := 0; ts < 10; ts++ {
 			lines = append(lines, Line{
-				nanos:   int64(i),
-				logical: j,
-				after:   json.RawMessage(fmt.Sprintf("{a=%d,b=%d}", i, j)),
-				key:     json.RawMessage(fmt.Sprintf("[%d]", i)),
+				Mutation: Mutation{
+					after: json.RawMessage(fmt.Sprintf("{id=%d,ts=%d}", id, ts)),
+					key:   json.RawMessage(fmt.Sprintf("[%d]", id)),
+				},
+				nanos:   int64(ts),
+				logical: ts,
 			})
 		}
 	}
@@ -269,39 +273,34 @@ func TestFindAllRowsToUpdate(t *testing.T) {
 		return
 	}
 
-	// Now find those rows from the start.
-	for i := 0; i < 10; i++ {
-		prev := ResolvedLine{
+	// Now find those rows from the start. We'll validate that the
+	// returned mutations to apply are at the latest timestamp.
+	for ts := 0; ts < 10; ts++ {
+		start := ResolvedLine{
 			endpoint: "test",
 			nanos:    0,
 			logical:  0,
 		}
-		next := ResolvedLine{
+		until := ResolvedLine{
 			endpoint: "test",
-			nanos:    int64(i),
-			logical:  i,
+			nanos:    int64(ts),
+			logical:  ts,
 		}
-		lines, err := findAllRowsToUpdateDB(ctx, db, sink.sinkTableFullName, prev, next)
-		if a.NoError(err) {
-			a.Len(lines, i*11)
-		}
-	}
 
-	// And again but from the previous.
-	for i := 1; i < 10; i++ {
-		prev := ResolvedLine{
-			endpoint: "test",
-			nanos:    int64(i - 1),
-			logical:  i - 1,
-		}
-		next := ResolvedLine{
-			endpoint: "test",
-			nanos:    int64(i),
-			logical:  i,
-		}
-		lines, err := findAllRowsToUpdateDB(ctx, db, sink.sinkTableFullName, prev, next)
-		if a.NoError(err) {
-			a.Len(lines, 11)
+		muts, err := findMutations(ctx, db, sink.sinkTableFullName, start, until)
+
+		// We expect to see exactly one mutation for any given id,
+		// regardless of how many entries exist between the relevant
+		// timestamps.
+		if a.NoError(err) && a.Len(muts, 10) {
+			// We'll also expect that the key are sorted as a side
+			// effect of the DISTINCT ON.
+			for id, mut := range muts {
+				a.Equalf(
+					json.RawMessage(fmt.Sprintf("{id=%d,ts=%d}", id, ts)),
+					mut.after,
+					"id = %d, ts = %d", id, ts)
+			}
 		}
 	}
 }
