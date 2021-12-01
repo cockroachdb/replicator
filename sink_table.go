@@ -34,36 +34,23 @@ CREATE TABLE IF NOT EXISTS %s (
 
 const sinkTableWrite = `UPSERT INTO %s (nanos, logical, key, after) VALUES `
 
-// Timestamps are less than and up to the resolved ones.
-// For this $1 and $2 are previous resolved, $3 and $4 are the current
-// resolved.
-const sinkTableDrainRows = `
-DELETE
-FROM %s
-WHERE ((nanos = $1 AND logical > $2) OR (nanos > $1)) AND
-			((nanos = $3 AND logical <= $4) OR (nanos < $3))
-RETURNING nanos, logical, key, after
-`
-
 // SinkTableFullName creates the conjoined db/table name to be used by the sink
 // table.
 func SinkTableFullName(resultDB string, resultTable string) string {
 	return fmt.Sprintf("%s.%s_%s", *sinkDB, resultDB, resultTable)
 }
 
-// Line stores pending mutations.
-type Line struct {
-	after   json.RawMessage // The mutations to apply: {"a": 1, "b": 1}
-	key     json.RawMessage // Primary key values: [1, 2]
-	nanos   int64           // HLC time base
-	logical int             // HLC logical counter
+// A Mutation applies some number of column mutations to a PK row.
+type Mutation struct {
+	after json.RawMessage // The mutations to apply: {"a": 1, "b": 1}
+	key   json.RawMessage // Primary key values: [1, 2]
 }
 
 // extractColumns parses the keys from the "after" payload block and
 // appends them to the given slice.
-func (line *Line) extractColumns(into []string) ([]string, error) {
+func (mut Mutation) extractColumns(into []string) ([]string, error) {
 	m := make(map[string]json.RawMessage)
-	dec := json.NewDecoder(bytes.NewReader(line.after))
+	dec := json.NewDecoder(bytes.NewReader(mut.after))
 	if err := dec.Decode(&m); err != nil {
 		return nil, err
 	}
@@ -74,13 +61,19 @@ func (line *Line) extractColumns(into []string) ([]string, error) {
 }
 
 // parseAfter reifies the mutations to be applied.
-func (line *Line) parseAfter(into map[string]interface{}) error {
-	// Parse the after columns
-	// Large numbers are not turned into strings, so the UseNumber option for
-	// the decoder is required.
-	dec := json.NewDecoder(bytes.NewReader(line.after))
+func (mut Mutation) parseAfter(into map[string]interface{}) error {
+	// Large numbers are not turned into strings, so the UseNumber
+	// option for the decoder is required.
+	dec := json.NewDecoder(bytes.NewReader(mut.after))
 	dec.UseNumber()
 	return dec.Decode(&into)
+}
+
+// Line stores pending mutations.
+type Line struct {
+	Mutation
+	nanos   int64 // HLC time base
+	logical int   // HLC logical counter
 }
 
 // getSinkTableValues is just the statements ordered as expected for the sink
@@ -137,8 +130,10 @@ func parseLine(rawBytes []byte) (Line, error) {
 	}
 
 	return Line{
-		after:   payload.After,
-		key:     payload.Key,
+		Mutation: Mutation{
+			after: payload.After,
+			key:   payload.Key,
+		},
 		logical: logical,
 		nanos:   nanos,
 	}, nil
@@ -177,11 +172,26 @@ func WriteToSinkTable(ctx context.Context, db *pgxpool.Pool, sinkTableFullName s
 	return Execute(ctx, db, statement.String(), values...)
 }
 
-// DrainAllRowsToUpdate deletes and returns the rows that need to be
-// updated from the sink table.
-func DrainAllRowsToUpdate(
-	ctx context.Context, tx pgxtype.Querier, sinkTableFullName string, prev ResolvedLine, next ResolvedLine,
-) ([]Line, error) {
+// DrainMutations deletes all recorded mutations between the
+// previous and next resolved timestamps, and returns only the
+// most-current mutations that need to be applied to the sink table.
+func DrainMutations(
+	ctx context.Context, tx pgxtype.Querier, sinkTableFullName string,
+	prev ResolvedLine, next ResolvedLine,
+) ([]Mutation, error) {
+	// We want to have a lower-bound on the timestamps, to avoid reading
+	// over the tombstones from previous deletions. We're OK with the
+	// lower bound being inclusive, any value there from the previous
+	// drain operation would have been deleted.  At worst, we read over
+	// a trivial number of tombstones.
+	const sinkTableDrainRows = `
+WITH d AS (
+	DELETE FROM %s
+	WHERE (nanos, logical) BETWEEN ($1, $2) AND ($3, $4)
+	RETURNING nanos, logical, key, after)
+SELECT DISTINCT ON (key) key, after FROM d
+ORDER BY key ASC, nanos DESC, logical DESC
+`
 	rows, err := tx.Query(ctx, fmt.Sprintf(sinkTableDrainRows, sinkTableFullName),
 		prev.nanos, prev.logical, next.nanos, next.logical,
 	)
@@ -189,11 +199,13 @@ func DrainAllRowsToUpdate(
 		return nil, err
 	}
 	defer rows.Close()
-	var lines []Line
-	var line Line
+	var mutations []Mutation
 	for rows.Next() {
-		rows.Scan(&(line.nanos), &(line.logical), &(line.key), &(line.after))
-		lines = append(lines, line)
+		var mut Mutation
+		if err := rows.Scan(&(mut.key), &(mut.after)); err != nil {
+			return nil, err
+		}
+		mutations = append(mutations, mut)
 	}
-	return lines, nil
+	return mutations, nil
 }

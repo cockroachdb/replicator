@@ -120,12 +120,12 @@ func (s *Sink) HandleRequest(db *pgxpool.Pool, w http.ResponseWriter, r *http.Re
 }
 
 // deleteRows preforms all the deletes specified in lines.
-func (s *Sink) deleteRows(ctx context.Context, tx pgxtype.Querier, lines []Line) error {
+func (s *Sink) deleteRows(ctx context.Context, tx pgxtype.Querier, lines []Mutation) error {
 	if len(lines) == 0 {
 		return nil
 	}
 
-	var chunks [][]Line
+	var chunks [][]Mutation
 	for i := 0; i < len(lines); i += chunkSize {
 		end := i + chunkSize
 		if end > len(lines) {
@@ -180,7 +180,7 @@ func (s *Sink) deleteRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 }
 
 // upsertRows performs all upserts specified in lines.
-func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line) error {
+func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Mutation) error {
 	const starterColumns = 16
 	if len(lines) == 0 {
 		return nil
@@ -201,7 +201,7 @@ func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 	}
 	sort.Strings(columnNames)
 
-	var chunks [][]Line
+	var chunks [][]Mutation
 	for i := 0; i < len(lines); i += chunkSize {
 		end := i + chunkSize
 		if end > len(lines) {
@@ -258,40 +258,28 @@ func (s *Sink) upsertRows(ctx context.Context, tx pgxtype.Querier, lines []Line)
 // UpdateRows updates all changed rows.
 func (s *Sink) UpdateRows(ctx context.Context, tx pgxtype.Querier, prev ResolvedLine, next ResolvedLine) error {
 	// First, gather all the rows to update.
-	lines, err := DrainAllRowsToUpdate(ctx, tx, s.sinkTableFullName, prev, next)
+	mutations, err := DrainMutations(ctx, tx, s.sinkTableFullName, prev, next)
 	if err != nil {
 		return err
 	}
 
-	if len(lines) == 0 {
+	if len(mutations) == 0 {
 		return nil
 	}
 
-	log.Printf("%s: %s executed %d operations", s.endpoint, s.sinkTableFullName, len(lines))
+	log.Printf("%s: %s executed %d operations", s.endpoint, s.sinkTableFullName, len(mutations))
 
 	// TODO: Batch these by 100 rows?  Not sure what the max should be.
 
-	var upserts []Line
-	var deletes []Line
+	var upserts []Mutation
+	var deletes []Mutation
 
-	// This must happen in reverse order and all keys must be kept track of.
-	// This way, we can ensure that more recent changes overwrite earlier ones
-	// without having to perform multiple upserts/deletes to the db.
-	usedKeys := make(map[string]struct{})
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := lines[i]
-
-		// Did we updates this line already? If so, don't perform this update.
-		if _, exist := usedKeys[string(line.key)]; exist {
-			continue
-		}
-		usedKeys[string(line.key)] = struct{}{}
-
+	for _, mut := range mutations {
 		// Parse the key into columns
 		// Large numbers are not turned into strings, so the UseNumber option for
 		// the decoder is required.
 		key := make([]interface{}, 0, len(s.primaryKeyColumns))
-		dec := json.NewDecoder(bytes.NewReader(line.key))
+		dec := json.NewDecoder(bytes.NewReader(mut.key))
 		dec.UseNumber()
 		if err := dec.Decode(&key); err != nil {
 			return err
@@ -311,12 +299,13 @@ func (s *Sink) UpdateRows(ctx context.Context, tx pgxtype.Querier, prev Resolved
 		}
 
 		// Is this a delete?
-		if string(line.after) == "null" {
-			deletes = append(deletes, line)
+		if string(mut.after) == "null" {
+			deletes = append(deletes, mut)
 		} else {
 			// This must be an upsert statement.
-			upserts = append(upserts, line)
+			upserts = append(upserts, mut)
 		}
+
 	}
 
 	// Delete all rows
