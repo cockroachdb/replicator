@@ -1,41 +1,41 @@
 # cdc-sink
 
-This tool lets one CockroachDB cluster injest CDC feeds from one or more 
-CockroachDB clusters.
+This tool lets one CockroachDB cluster ingest CDC feeds from one or more CockroachDB clusters.
 
-For more information on CDC, please see: <https://www.cockroachlabs.com/docs/stable/stream-data-out-of-cockroachdb-using-changefeeds.html>
+For more information on CDC, please
+see: <https://www.cockroachlabs.com/docs/stable/stream-data-out-of-cockroachdb-using-changefeeds.html>
 
 ***This is just a prototype and is not officially supported by Cockroach Labs.***
 
-We cannot provide support for it at this time but may in the future.
-Use of this tool is entirely at your own risk and Cockroach Labs makes no guarantees or warranties about its operation.
+We cannot provide support for it at this time but may in the future. Use of this tool is entirely at
+your own risk and Cockroach Labs makes no guarantees or warranties about its operation.
 
 ## Overview
 
-- Source CRDB emits changes in realtime via CRDB CDC feature
-- CDC sink accepts the changes via the HTTP end point
-- CDC sink applies the changes to the target CRDB
+- A source CRDB cluster emits changes in near-real time via the enterprise `CHANGEFEED` feature.
+- `cdc-sink` accepts the changes via the HTTP end point.
+- `cdc-sink` applies the changes to the target cluster.
 
 ```text
-+---------------------+                          
-|     source CRDB     |                           
-|                     |                 
-| CDC {source_table}  |  
-+---------------------+
++------------------------+                          
+|     source CRDB        |                           
+|                        |                 
+| CDC {source_table(s)}  |  
++------------------------+
           |
           V
    http://ip:26258 
 +---------------------+
-|       CDC sink      |
-|CDC SINK {end_point} |
+|       cdc-sink      |
+|                     |
 +---------------------+
           |
           V
  postgresql://ip:26257 
-+---------------------+
-|    target CRDB      |
-| {destination_table} |
-+---------------------+
++------------------------+
+|    target CRDB         |
+| {destination_table(s)} |
++------------------------+
 
 ```
 
@@ -43,57 +43,150 @@ Use of this tool is entirely at your own risk and Cockroach Labs makes no guaran
 
 _Note that this is subject to change as this is still under development._
 
-1. In the source cluster, choose the table(s) you would like to stream.
-2. In the destination cluster, re-create those tables and match the schema
-exactly.
-    * Don't create any new constraints on any destination table.
-    * Don't have any foreign key relationships with the destination table.
-    * It's imperative that the columns are named exactly the same in the
-    destination table.
-3. Startup cdc-sink either on
+1. In the source cluster, choose the table(s) that you would like to replicate.
+2. In the destination cluster, re-create those tables within a
+   single [SQL database schema](https://www.cockroachlabs.com/docs/stable/sql-name-resolution#naming-hierarchy)
+   and match the table definitions exactly:
+    * Don't create any new constraints on any destination table(s).
+    * Don't have any foreign key relationships with the destination table(s).
+    * It's imperative that the columns are named exactly the same in the destination table.
+3. Start `cdc-sink` either on
     * all nodes of the destination cluster
     * one or more servers that can reach the destination cluster
-4. startup CDC-SINK on all servers that it's running on using the flags listed
-below
-5. Set the cluster setting of the source cluster to enable range feeds:
-`SET CLUSTER SETTING kv.rangefeed.enabled = true`
-6. Once it starts up, enable a cdc feed from the source cluster
-    * `CREATE CHANGEFEED FOR TABLE [source_table] INTO 'experimental-[cdc-sink-url:port]/test.sql' WITH updated,resolved`
-    * Be sure to always use the options `updated` and `resolved` as these are
-    required for this to work
+4. Set the cluster setting of the source cluster to enable range feeds:
+   `SET CLUSTER SETTING kv.rangefeed.enabled = true`
+5. Once it starts up, enable a cdc feed from the source cluster
+    * `CREATE CHANGEFEED FOR TABLE [source_table] INTO 'http://[cdc-sink-host:port]/target_database/target_schema' WITH updated,resolved`
+    * The `target_database` path element is the name passed to the `CREATE DATABASE` command.
+    * The `target_schema` element is the name of
+      the [user-defined schema](https://www.cockroachlabs.com/docs/stable/create-schema.html) in the
+      target database. By default, every SQL `DATABASE` has a `SCHEMA` whose name is "`public`".
+    * Be sure to always use the options `updated` and `resolved` as these are required for this to
+      work.
+    * The `protect_data_from_gc_on_pause` option is not required, but can be used in situations
+      where a `cdc-sink` instance may be unavailable for periods longer than the source's
+      garbage-collection window (25 hours by default).
 
-### A short exmaple with YCSB workload
+## Theory of operation
+
+* `cdc-sink` receives a stream of partially-ordered row mutations from one of more nodes in the
+  source cluster.
+* The two leading path segments from the URL,
+  `/target_database/target_schema`, are combined with the table name from the mutation payload to
+  determine the target table:
+  `target_database.target_schema.source_table_name`.
+* The incoming mutations are staged on a per-table basis into the target cluster, which is ordered
+  by the `updated` MVCC timestamps.
+* Upon receipt of a `resolved` timestamp, mutations whose timestamps are less that the new, resolved
+  timestamp are dequeued.
+* The dequeued mutations are applied to the target tables, either as
+  `UPSERT` or `DELETE` operations.
+* The `resolved` timestamp is stored for future use.
+
+There should be, at most, one source `CHANGEFEED` per target `SCHEMA`. Multiple instances
+of `cdc-sink` should be used in production scenarios.
+
+The behavior described above, staging and application as two phases, ensures that the target tables
+will be in a transactionally-consistent state with respect to the source database. This is desirable
+in a steady-state configuration, however it imposes limitations on the maximum throughput or
+transaction size that `cdc-sink` is able to achieve. In situations where a large volume or a high
+rate of data must be transferred, e.g.: an initial CDC `CHANGEFEED` backfill, the `cdc-sink` process
+may be started with the `--ignoreResolved` flag in order to apply all mutations to the target table
+without staging them.
+
+`cdc-sink` relies heavily upon the delivery guarantees provided by a CockroachDB `CHANGEFEED`. When
+errors are encountered while staging or applying mutations, `cdc-sink` will return them to the
+incoming changefeed request. Errors will then become visible in the output of `SHOW JOBS` or in the
+administrative UI on the source cluster.
+
+### Table schema
+
+Each staging table has a schema as follows. They are created in a database named `_cdc_sink` by
+default.
+
+```
+CREATE TABLE _targetDB_targetSchema_targetTable (
+  nanos INT NOT NULL,
+logical INT NOT NULL,
+ key STRING NOT NULL,
+  mut JSONB NOT NULL,
+PRIMARY KEY (nanos, logical, key)
+)
+```
+
+There is also a timestamp-tracking table.
+
+```
+CREATE TABLE _timestamps_ (
+  key STRING NOT NULL PRIMARY KEY,
+  nanos INT8 NOT NULL,
+logical INT8 NOT NULL
+)
+```
+
+
+## Flags
+
+```
+Usage of ./cdc-sink:
+  -batchSize int
+    	default size for batched operations (default 1000)
+  -bindAddr string
+    	the network address to bind to (default ":26258")
+  -conn string
+    	cockroach connection string (default "postgresql://root@localhost:26257/defaultdb?sslmode=disable")
+  -ignoreResolved
+    	write data to the target databae immediately, without waiting for resolved timestamps
+  -schemaRefresh duration
+    	how often to scan for schema changes; set to zero to disable (default 1m0s)
+  -tlsCertificate string
+    	a path to a PEM-encoded TLS certificate chain
+  -tlsPrivateKey string
+    	a path to a PEM-encoded TLS private key
+  -tlsSelfSigned
+    	if true, generate a self-signed TLS certificate valid for 'localhost'
+  -version
+    	print version and exit
+```
+
+## Example
 
 ```bash
-# install the cdc-sink
-go get github.com/cockroachdb/cdc-sink
+# install cdc-sink
+go install github.com/cockroachdb/cdc-sink@latest
 
 # source CRDB is single node 
 cockroach start-single-node --listen-addr :30000 --http-addr :30001 --store cockroach-data/30000 --insecure --background
 
-# target CRDB is single node as well -- does not need be
+# target CRDB is single node as well
 cockroach start-single-node --listen-addr :30002 --http-addr :30003 --store cockroach-data/30002 --insecure --background
 
 # source ycsb.usertable is populated with 10 rows
-cockroach workload init ycsb postgresql://root@localhost:30000/ycsb?sslmode=disable --families=false --insert-count=10
+cockroach workload init ycsb 'postgresql://root@localhost:30000/ycsb?sslmode=disable' --families=false --insert-count=10
 
 # target ycsb.usertable is empty
-cockroach workload init ycsb postgresql://root@localhost:30002/ycsb?sslmode=disable --families=false --insert-count=0
+cockroach workload init ycsb 'postgresql://root@localhost:30002/ycsb?sslmode=disable' --families=false --insert-count=0
 
 # source has rows, target is empty
 cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
 cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
 
-# cdc-sink started as a background task
-cdc-sink --port 30004 --conn postgresql://root@localhost:30002/defaultdb?sslmode=disable --config="[{\"endpoint\":\"crdbusertable\", \"source_table\":\"usertable\", \"destination_database\":\"ycsb\", \"destination_table\":\"usertable\"}]" &
+# create staging database for cdc-sink
+cockroach sql --port 30002 --insecure -e "CREATE DATABASE _cdc_sink"
+# cdc-sink started as a background task. Remove the tls flag for CocrkoachDB <= v21.1
+cdc-sink --bindAddr :30004 --tlsSelfSigned --conn 'postgresql://root@localhost:30002/?sslmode=disable' &
 
-# start the CDC that will send across the initial datashapshot 
+# start the CDC that will send across the initial data snapshot
+# Versions of CRDB before v21.2 should use the experimental-http:// URL scheme 
 cockroach sql --insecure --port 30000 <<EOF
 -- add enterprise license
 -- SET CLUSTER SETTING cluster.organization = 'Acme Company';
 -- SET CLUSTER SETTING enterprise.license = 'xxxxxxxxxxxx';
 SET CLUSTER SETTING kv.rangefeed.enabled = true;
-CREATE CHANGEFEED FOR TABLE YCSB.USERTABLE INTO 'experimental-http://127.0.0.1:30004/crdbusertable' WITH updated,resolved='10s';
+CREATE CHANGEFEED FOR TABLE YCSB.USERTABLE
+  INTO 'webhook-https://127.0.0.1:30004/ycsb/public?insecure_tls_skip_verify=true'
+  WITH updated, resolved='10s', 
+       webhook_sink_config='{"Flush":{"Messages":1000,"Frequency":"1s"}}';
 EOF
 
 # source has rows, target is the same as the source
@@ -101,115 +194,40 @@ cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
 cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
 
 # start YCSB workload and the incremental updates happens automagically
-cockroach workload run ycsb postgresql://root@localhost:30000/ycsb?sslmode=disable --families=false --insert-count=100 --max-rate=1 --concurrency=1 &
+cockroach workload run ycsb 'postgresql://root@localhost:30000/ycsb?sslmode=disable' --families=false --insert-count=100 --concurrency=1 &
 
 # source updates are applied to the target
 cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
 cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
 ```
 
-## Flags
-
-* **conn**
-  * the connection string to the destination database,
-  * *default:* postgresql://root@localhost:26257/defaultdb?sslmode=disable
-* **port**
-  * the port that cdc-sink will listen on
-  * *default:* 26258
-* **sinkDB**
-  * the database to hold all temp sink data in the destination cluster
-  * probably best not to change this from the default
-  * *default:* _CDC_SINK
-* **config**
-  * This flag must be set. It requires a single line for each table passed in.
-  * The format is the following:
-
-  ```json
-  [
-    {"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
-    {"endpoint":"", "source_table":"", "destination_database":"", "destination_table":""},
-  ]
-  ```
-
-  * Each table being updated requires a single line. Note that source database is
-not required.
-  * Each changefeed requires the same endpoint and you can have more than one table
-in a single changefeed.
-  * Note that as of right now, only a single endpoint is supported.
-  * Here are two examples:
-    * Single table changefeed.
-      * Source table and destination table are both called
-users:
-
-      ```json
-      [{"endpoint":"cdc.sql", "source_table":"users", "destination_database":"defaultdb", "destination_table":"users"}]
-      ```
-
-      * The changefeed is initialized on the source database:
-
-      ```sql
-      CREATE CHANGEFEED FOR TABLE users INTO 'experimental-http://[cdc-sink-ip:26258]/cdc.sql' WITH updated,resolved
-      ```
-
-    * Two table changefeed.
-      * Two tables this time, users and customers to two different databases:
-
-      ```json
-      [
-       {"endpoint":"cdc.sql", "source_table":"users", "destination_database":"global", "destination_table":"users"},
-       {"endpoint":"cdc.sql", "source_table":"customers", "destination_database":"success", "destination_table":"customers"},
-      ]
-      ```
-
-      * The changefeed is initialized on the source database:
-
-      ```sql
-      CREATE CHANGEFEED FOR TABLE users,customers INTO 'experimental-[cdc-sink-url:port]/cdc.sql' WITH updated,resolved
-      ```
-
-  * And don't forget to escape the quotation marks in the prompt:
-
-    ```bash
-    ./cdc-sink --config="[{\"endpoint\":\"test.sql\", \"source_table\":\"in_test1\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test1\"},{\"endpoint\":\"test.sql\", \"source_table\":\"in_test2\", \"destination_database\":\"defaultdb\", \"destination_table\":\"out_test2\"}]"
-    ```
-
-## Limitations (for now)
-
-* data-types that don't work.
-  * bytes
-* https is not yet supported, only http
-
 ## Limitations
 
-*Note that while these limitation exists, there is no warning or error that is
-thrown when they are violated.  It may result in missing data or the stream my
-stop.*
+*Note that while limitation exists, there is no warning or error that is thrown when they are
+violated. It may result in missing data or the stream my stop.*
 
 * all the limitations from CDC hold true.
-  * See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
+    * See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
 * schema changes do not work,
-  * in order to perform a schema change
-    1. stop the change feed
-    2. stop cdc_sink
-    3. make the schema changes to both tables
-    4. start cdc_sink
-    5. restart the change feed
+    * in order to perform a schema change
+        1. stop the change feed
+        2. stop cdc-sink
+        3. make the schema changes to both tables
+        4. start cdc-sink
+        5. restart the change feed
 * constraints on the destination table
-  * foreign keys
-    * there is no guarantee that foreign keys between two tables will arrive in the correct order
-    so please only use them on the source table
-  * different table constraints
-    * anything that has a tighter constraint than the original table may break the streaming
+    * foreign keys
+        * there is no guarantee that foreign keys between two tables will arrive in the correct
+          order so please only use them on the source table
+    * different table constraints
+        * anything that has a tighter constraint than the original table may break the streaming
 * the schema of the destination table must match the primary table exactly
 
 ## Expansions
 
 While the schema of the secondary table must match that of the primary table, specifically the
-primary index.  There are some other changes than can be made on the destination side.
+primary index. There are some other changes than can be made on the destination side.
 
 * Different and new secondary indexes are allowed.
 * Different zone configs are allowed.
 * Adding new computed columns, that cannot reject any row, should work.
-
-## Troubleshootings
-
