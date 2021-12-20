@@ -35,6 +35,8 @@ jobs:
       matrix:
         cockroachdb: [ v20.2, v21.1, v21.2 ]
     runs-on: ubuntu-latest
+    env:
+      COVER_OUT: coverage-${{ matrix.coverage }}.out
     steps:
       - uses: actions/checkout@v2
 
@@ -50,8 +52,15 @@ jobs:
       - name: Go Tests
         env:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
-        run: go test -v ./...
+        run: go test -v -race -coverpkg=./internal/... -covermode=atomic -coverprofile=${{ env.COVER_OUT }} ./...
 
       - name: Stop CockroachDB
+        if: ${{ always() }}
         working-directory: .github
         run: docker-compose down
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v2
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ${{ env.COVER_OUT }}
