@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -58,8 +59,8 @@ func TestApply(t *testing.T) {
 	}
 	defer cancel()
 
-	t.Log(app.mu.sql.delete)
-	t.Log(app.mu.sql.upsert)
+	log.Debug(app.mu.sql.delete)
+	log.Debug(app.mu.sql.upsert)
 
 	t.Run("smoke", func(t *testing.T) {
 		a := assert.New(t)
@@ -98,7 +99,6 @@ func TestApply(t *testing.T) {
 				Data: []byte(`{"pk0":1, "pk1":0, "no_good":true}`),
 			},
 		}); a.Error(err) {
-			t.Log(err.Error())
 			a.Contains(err.Error(), "unexpected columns [no_good]")
 		}
 	})
@@ -110,7 +110,6 @@ func TestApply(t *testing.T) {
 				Data: []byte(`{"pk0":1}`),
 			},
 		}); a.Error(err) {
-			t.Log(err.Error())
 			a.Contains(err.Error(), "missing PK column pk1")
 		}
 	})
@@ -122,7 +121,6 @@ func TestApply(t *testing.T) {
 				Key: []byte(`[1]`),
 			},
 		}); a.Error(err) {
-			t.Log(err.Error())
 			a.Contains(err.Error(), "received 1 expect 2")
 		}
 	})
@@ -134,7 +132,6 @@ func TestApply(t *testing.T) {
 				Key: []byte(`[1, 2, 3]`),
 			},
 		}); a.Error(err) {
-			t.Log(err.Error())
 			a.Contains(err.Error(), "received 3 expect 2")
 		}
 	})
@@ -320,8 +317,8 @@ func TestAllDataTypes(t *testing.T) {
 			}
 			defer cancel()
 
-			t.Log(app.mu.sql.delete)
-			t.Log(app.mu.sql.upsert)
+			log.Debug(app.mu.sql.delete)
+			log.Debug(app.mu.sql.upsert)
 
 			var jsonValue string
 			if tc.columnValue == "" {
@@ -332,7 +329,7 @@ func TestAllDataTypes(t *testing.T) {
 					return
 				}
 			}
-			t.Log(jsonValue)
+			log.Debug(jsonValue)
 
 			mut := types.Mutation{
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
@@ -388,8 +385,8 @@ func TestVirtualColumns(t *testing.T) {
 	}
 	defer cancel()
 
-	t.Log(app.mu.sql.delete)
-	t.Log(app.mu.sql.upsert)
+	log.Debug(app.mu.sql.delete)
+	log.Debug(app.mu.sql.upsert)
 
 	t.Run("computed-is-ignored", func(t *testing.T) {
 		a := assert.New(t)

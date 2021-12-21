@@ -13,12 +13,12 @@
 package cdc
 
 import (
-	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v4/pgxpool"
+	log "github.com/sirupsen/logrus"
 )
 
 // This file contains code repackaged from main.go
@@ -47,7 +47,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		log.Printf("ERROR %s:\n%v", r.RequestURI, err)
+		log.WithError(err).WithField("uri", r.RequestURI).Error()
 	}
 
 	immediate := false

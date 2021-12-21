@@ -15,49 +15,81 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/server"
+	joonix "github.com/joonix/log"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
 	// buildVersion is set by the go linker at build time
-	buildVersion = "<unknown>"
-	printVersion = flag.Bool("version", false, "print version and exit")
+	buildVersion   = "<unknown>"
+	logFormat      = flag.String("logFormat", "text", "choose log output format [ fluent, text ]")
+	logDestination = flag.String("logDestination", "", "write logs to a file, instead of stdout")
+	printVersion   = flag.Bool("version", false, "print version and exit")
 )
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
-
-	// First, parse the config.
 	flag.Parse()
 
+	switch *logFormat {
+	case "fluent":
+		log.SetFormatter(joonix.NewFormatter())
+	case "text":
+		log.SetFormatter(&log.TextFormatter{
+			FullTimestamp:   true,
+			PadLevelText:    true,
+			TimestampFormat: time.Stamp,
+		})
+	default:
+		log.Errorf("unknown log format: %q", *logFormat)
+		log.Exit(1)
+	}
+
+	if dest := *logDestination; dest != "" {
+		f, err := os.OpenFile(dest, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.WithError(err).Error("could not open log output file")
+			log.Exit(1)
+		}
+		log.DeferExitHandler(func() { _ = f.Close() })
+		log.SetOutput(f)
+	}
+
 	if *printVersion {
-		fmt.Println("cdc-sink", buildVersion)
-		fmt.Println(runtime.Version(), runtime.GOARCH, runtime.GOOS)
-		fmt.Println()
+		log.WithFields(log.Fields{
+			"build":   buildVersion,
+			"runtime": runtime.Version(),
+			"arch":    runtime.GOARCH,
+			"os":      runtime.GOOS,
+		}).Info("cdc-sink")
+
 		if bi, ok := debug.ReadBuildInfo(); ok {
-			fmt.Println(bi.Main.Path, bi.Main.Version)
 			for _, m := range bi.Deps {
 				for m.Replace != nil {
 					m = m.Replace
 				}
-				fmt.Println(m.Path, m.Version)
+				log.WithFields(log.Fields{
+					"sum":     m.Sum,
+					"version": m.Version,
+				}).Info(m.Path)
 			}
 		}
 		return
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	log.DeferExitHandler(cancel)
+
 	if err := server.Main(ctx); err != nil {
-		log.Printf("server exited: %v", err)
-		os.Exit(1)
+		log.WithError(err).Error("server exited")
+		log.Exit(1)
 	}
-	os.Exit(0)
+	log.Exit(0)
 }

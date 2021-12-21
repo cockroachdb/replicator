@@ -12,6 +12,7 @@
 package ident
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -94,6 +95,11 @@ func (n Ident) IsEmpty() bool {
 	return n.r == ""
 }
 
+// MarshalJSON returns the Ident's raw form.
+func (n Ident) MarshalJSON() ([]byte, error) {
+	return json.Marshal(n.Raw())
+}
+
 // Raw returns the original, raw value.
 func (n Ident) Raw() string {
 	return n.r
@@ -123,6 +129,11 @@ func (s Schema) Contains(table Table) bool {
 // Database returns the schema's enclosing database.
 func (s Schema) Database() Ident { return s.db }
 
+// MarshalJSON returns the Schema as a two-element array.
+func (s Schema) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string{s.Database().Raw(), s.Schema().Raw()})
+}
+
 // Schema returns the schema's name.
 func (s Schema) Schema() Ident { return s.schema }
 
@@ -151,6 +162,11 @@ func NewTable(db, schema, table Ident) Table {
 
 // Database returns the table's enclosing database.
 func (t Table) Database() Ident { return t.db }
+
+// MarshalJSON returns the ident as a three-element array.
+func (t Table) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string{t.Database().Raw(), t.Schema().Raw(), t.Table().Raw()})
+}
 
 // Schema returns the table's enclosing schema.
 func (t Table) Schema() Ident { return t.schema }
