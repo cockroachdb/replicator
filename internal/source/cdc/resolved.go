@@ -13,11 +13,10 @@ package cdc
 // This file contains code repackaged from url.go.
 
 import (
+	"context"
 	"regexp"
 	"strconv"
 	"time"
-
-	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"

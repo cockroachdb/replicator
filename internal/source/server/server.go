@@ -66,9 +66,7 @@ type server struct {
 
 // newServer performs all of the setup work that's likely to fail before
 // actually serving network requests.
-func newServer(ctx context.Context,
-	bindAddr, connectionString string,
-) (*server, error) {
+func newServer(ctx context.Context, bindAddr, connectionString string) (*server, error) {
 	cfg, err := pgxpool.ParseConfig(connectionString)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not parse %q", connectionString)

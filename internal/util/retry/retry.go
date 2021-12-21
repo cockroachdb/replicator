@@ -61,10 +61,7 @@ var inLoop struct{}
 // If Loop is called in a reentrant fashion, the retry behavior will be
 // suppressed within an inner loop, allowing the retryable error to
 // percolate into the outer loop.
-func Loop(
-	ctx context.Context,
-	fn func(ctx context.Context, sideEffect *Marker) error,
-) error {
+func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) error) error {
 	top := ctx.Value(inLoop) == nil
 	if top {
 		ctx = context.WithValue(ctx, inLoop, inLoop)

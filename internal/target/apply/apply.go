@@ -53,8 +53,7 @@ type apply struct {
 var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
-func newApply(w types.Watcher, target ident.Table,
-) (_ *apply, cancel func(), _ error) {
+func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ error) {
 	ch, cancel, err := w.Watch(target)
 	if err != nil {
 		return nil, cancel, err
@@ -85,9 +84,7 @@ func newApply(w types.Watcher, target ident.Table,
 }
 
 // Apply applies the mutations to the target table.
-func (a *apply) Apply(
-	ctx context.Context, tx types.Batcher, muts []types.Mutation,
-) error {
+func (a *apply) Apply(ctx context.Context, tx types.Batcher, muts []types.Mutation) error {
 	deletes, r := batches.Mutation()
 	defer r()
 	upserts, r := batches.Mutation()
@@ -126,9 +123,7 @@ func (a *apply) Apply(
 	return a.upsertLocked(ctx, tx, upserts)
 }
 
-func (a *apply) deleteLocked(
-	ctx context.Context, db types.Batcher, muts []types.Mutation,
-) error {
+func (a *apply) deleteLocked(ctx context.Context, db types.Batcher, muts []types.Mutation) error {
 	if len(muts) == 0 {
 		return nil
 	}
@@ -170,9 +165,7 @@ func (a *apply) deleteLocked(
 	return nil
 }
 
-func (a *apply) upsertLocked(
-	ctx context.Context, db types.Batcher, muts []types.Mutation,
-) error {
+func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types.Mutation) error {
 	if len(muts) == 0 {
 		return nil
 	}

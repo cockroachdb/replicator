@@ -178,9 +178,7 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 
 const tableTemplate = `SELECT schema_name, table_name FROM [SHOW TABLES FROM %s]`
 
-func (w *watcher) getTables(
-	ctx context.Context, tx pgxtype.Querier,
-) (dbSchema, error) {
+func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (dbSchema, error) {
 	var ret dbSchema
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		rows, err := tx.Query(ctx, w.sql.tables)

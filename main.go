@@ -10,6 +10,8 @@
 
 package main
 
+//go:generate go run github.com/cockroachdb/crlfmt -w .
+
 import (
 	"context"
 	"flag"
