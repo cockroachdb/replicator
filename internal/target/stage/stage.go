@@ -17,7 +17,6 @@ package stage
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -28,6 +27,7 @@ import (
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // stage implements a storage and retrieval mechanism for staging
@@ -150,6 +150,9 @@ func (s *stage) putOne(ctx context.Context, db types.Batcher, mutations []types.
 		}
 	}
 
-	log.Printf("staged %d entries for %s", len(mutations), s.stage)
+	log.WithFields(log.Fields{
+		"target": s.stage,
+		"count":  len(mutations),
+	}).Debug("staged mutations")
 	return nil
 }

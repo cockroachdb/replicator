@@ -20,8 +20,17 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	joonix "github.com/joonix/log"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	f := joonix.NewFormatter()
+	f.PrettyPrint = true
+	log.SetFormatter(f)
+	log.Exit(m.Run())
+}
 
 func TestIntegration(t *testing.T) {
 	if testing.Short() {
@@ -33,6 +42,14 @@ func TestIntegration(t *testing.T) {
 
 func testIntegration(t *testing.T, immediate bool) {
 	a := assert.New(t)
+
+	var stopped <-chan struct{}
+	defer func() {
+		if stopped != nil {
+			<-stopped
+		}
+	}()
+
 	ctx, dbInfo, cancel := sinktest.Context()
 	defer cancel()
 
@@ -58,7 +75,7 @@ func testIntegration(t *testing.T, immediate bool) {
 	defer func() { *GenerateSelfSigned = false }()
 
 	// Pick an ephemeral port.
-	srv, err := newServer(ctx, "127.0.0.1:0", dbInfo.Pool().Config().ConnString())
+	srv, stopped, err := newServer(ctx, "127.0.0.1:0", dbInfo.Pool().Config().ConnString())
 	if !a.NoError(err) {
 		return
 	}
@@ -106,7 +123,7 @@ func testIntegration(t *testing.T, immediate bool) {
 			RawQuery: params.Encode(),
 		}
 	}
-	t.Logf("changefeed URL is %s", feedURL.String())
+	log.Debugf("changefeed URL is %s", feedURL.String())
 	if !a.NoError(source.Exec(ctx,
 		"CREATE CHANGEFEED FOR TABLE %s "+
 			"INTO '"+feedURL.String()+"' "+
@@ -123,7 +140,7 @@ func testIntegration(t *testing.T, immediate bool) {
 		if ct >= 1 {
 			break
 		}
-		t.Log("waiting for backfill")
+		log.Debug("waiting for backfill")
 		time.Sleep(time.Second)
 	}
 
@@ -142,7 +159,7 @@ func testIntegration(t *testing.T, immediate bool) {
 		if ct >= 2 {
 			break
 		}
-		t.Log("waiting for stream")
+		log.Debug("waiting for stream")
 		time.Sleep(time.Second)
 	}
 }

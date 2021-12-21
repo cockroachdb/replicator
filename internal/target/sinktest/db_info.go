@@ -13,13 +13,13 @@ package sinktest
 import (
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // DBInfo encapsulates metadata and a connection to a database.
@@ -39,7 +39,7 @@ func CreateDB(ctx context.Context) (dbName ident.Ident, cancel func(), _ error) 
 
 	cancel = func() {
 		err := retry.Execute(ctx, pool, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", name))
-		log.Printf("dropped database %s %v", name, err)
+		log.WithError(err).WithField("target", name).Debug("dropped database")
 	}
 
 	// Ensure that the base database exists

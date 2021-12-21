@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // apply will upsert mutations and deletions into a target table.
@@ -76,7 +76,7 @@ func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ e
 				return
 			}
 			a.refreshUnlocked(colData)
-			log.Printf("refreshed schema for table %s", a.target)
+			log.WithField("table", a.target).Debug("refreshed schema")
 		}
 	}()
 
@@ -161,7 +161,10 @@ func (a *apply) deleteLocked(ctx context.Context, db types.Batcher, muts []types
 			return errors.Wrap(err, a.mu.sql.delete)
 		}
 	}
-	log.Printf("deleted %d rows from %s", len(muts), a.target)
+	log.WithFields(log.Fields{
+		"count":  len(muts),
+		"target": a.target,
+	}).Debug("deleted rows")
 	return nil
 }
 
@@ -246,7 +249,10 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types
 			return errors.Wrap(err, a.mu.sql.upsert)
 		}
 	}
-	log.Printf("upserted %d mutations into %s", len(muts), a.target)
+	log.WithFields(log.Fields{
+		"count":  len(muts),
+		"target": a.target,
+	}).Debug("upserted rows")
 	return nil
 }
 

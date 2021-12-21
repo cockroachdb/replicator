@@ -16,7 +16,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // RefreshDelay controls how ofter a watcher will refresh its schema. If
@@ -89,7 +89,7 @@ func newWatcher(
 				case <-time.After(w.delay):
 				}
 				if err := w.Refresh(background, tx); err != nil {
-					log.Printf("could not refresh table data: %v", err)
+					log.WithError(err).WithField("target", dbName).Warn("schema refresh failed")
 				}
 			}
 		}()
@@ -103,7 +103,7 @@ func newWatcher(
 func (w *watcher) Refresh(ctx context.Context, tx pgxtype.Querier) error {
 	data, err := w.getTables(ctx, tx)
 	if err != nil {
-		log.Printf("could not refresh table data: %v", err)
+		return err
 	}
 
 	w.mu.Lock()
@@ -166,7 +166,7 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 				case ch <- next:
 					last = next
 				default:
-					log.Fatal("ColData watcher excessively behind")
+					log.WithField("target", table).Warn("ColData watcher excessively behind")
 				}
 			}
 
