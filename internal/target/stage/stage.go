@@ -117,17 +117,13 @@ func (s *stage) Drain(
 const putTemplate = `UPSERT INTO %s (nanos, logical, key, mut) VALUES ($1, $2, $3, $4)`
 
 // Store stores some number of Mutations into the database.
-func (s *stage) Store(
-	ctx context.Context, db types.Batcher, mutations []types.Mutation,
-) error {
+func (s *stage) Store(ctx context.Context, db types.Batcher, mutations []types.Mutation) error {
 	return batches.Batch(len(mutations), func(begin, end int) error {
 		return s.putOne(ctx, db, mutations[begin:end])
 	})
 }
 
-func (s *stage) putOne(
-	ctx context.Context, db types.Batcher, mutations []types.Mutation,
-) error {
+func (s *stage) putOne(ctx context.Context, db types.Batcher, mutations []types.Mutation) error {
 	batch := &pgx.Batch{}
 
 	for _, mut := range mutations {

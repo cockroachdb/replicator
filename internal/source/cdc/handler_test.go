@@ -11,10 +11,9 @@
 package cdc
 
 import (
+	"fmt"
 	"strings"
 	"testing"
-
-	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"

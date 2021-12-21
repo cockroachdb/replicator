@@ -46,9 +46,7 @@ func NewAppliers(watchers types.Watchers) (_ types.Appliers, cancel func()) {
 }
 
 // Get creates or returns a memoized instance of the table's Applier.
-func (f *factory) Get(
-	ctx context.Context, table ident.Table,
-) (types.Applier, error) {
+func (f *factory) Get(ctx context.Context, table ident.Table) (types.Applier, error) {
 	// Try read-locked get.
 	if ret := f.getUnlocked(table); ret != nil {
 		return ret, nil
@@ -58,9 +56,7 @@ func (f *factory) Get(
 }
 
 // getOrCreateUnlocked takes a write-lock.
-func (f *factory) getOrCreateUnlocked(
-	ctx context.Context, table ident.Table,
-) (*apply, error) {
+func (f *factory) getOrCreateUnlocked(ctx context.Context, table ident.Table) (*apply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 

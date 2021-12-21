@@ -13,13 +13,12 @@ package cdc
 // This file contains code repackaged from url.go.
 
 import (
-	"bytes"
-	"encoding/json"
-	"regexp"
-
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"regexp"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"

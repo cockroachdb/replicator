@@ -13,7 +13,6 @@ package sinktest
 import (
 	"context"
 	"fmt"
-
 	"log"
 	"math/rand"
 
