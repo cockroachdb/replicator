@@ -17,7 +17,6 @@ package server
 import (
 	"context"
 	"flag"
-	"log"
 	"net"
 	"net/http"
 	"time"
@@ -31,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -49,14 +49,21 @@ var (
 
 // Main is the entry point to the server.
 func Main(ctx context.Context) error {
-	if !flag.Parsed() {
-		flag.Parse()
-	}
-	s, err := newServer(ctx, *BindAddr, *ConnectionString)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	s, stopped, err := newServer(ctx, *BindAddr, *ConnectionString)
 	if err != nil {
 		return err
 	}
-	return s.serve()
+	// Pause any log.Exit() or log.Fatal() until the server exits.
+	log.DeferExitHandler(func() {
+		cancel()
+		<-stopped
+	})
+	err = s.serve()
+	<-stopped
+	return err
 }
 
 type server struct {
@@ -66,10 +73,12 @@ type server struct {
 
 // newServer performs all of the setup work that's likely to fail before
 // actually serving network requests.
-func newServer(ctx context.Context, bindAddr, connectionString string) (*server, error) {
+func newServer(
+	ctx context.Context, bindAddr, connectionString string,
+) (_ *server, stopped <-chan struct{}, _ error) {
 	cfg, err := pgxpool.ParseConfig(connectionString)
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not parse %q", connectionString)
+		return nil, nil, errors.Wrapf(err, "could not parse %q", connectionString)
 	}
 	// Identify traffic.
 	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
@@ -82,12 +91,12 @@ func newServer(ctx context.Context, bindAddr, connectionString string) (*server,
 	cfg.MinConns = 1
 	pool, err := pgxpool.ConnectConfig(ctx, cfg)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not connect to CockroachDB")
+		return nil, nil, errors.Wrap(err, "could not connect to CockroachDB")
 	}
 
 	swapper, err := timekeeper.NewTimeKeeper(ctx, pool, cdc.Resolved)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	watchers, cancelWatchers := schemawatch.NewWatchers(pool)
@@ -96,7 +105,7 @@ func newServer(ctx context.Context, bindAddr, connectionString string) (*server,
 	mux := &http.ServeMux{}
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
-			log.Printf("health check failed: %v", err)
+			log.WithError(err).Warn("health check failed")
 			http.Error(w, "health check failed", http.StatusInternalServerError)
 			return
 		}
@@ -113,33 +122,36 @@ func newServer(ctx context.Context, bindAddr, connectionString string) (*server,
 
 	l, err := net.Listen("tcp", bindAddr)
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not bind to %q", bindAddr)
+		return nil, nil, errors.Wrapf(err, "could not bind to %q", bindAddr)
 	}
 
-	log.Printf("listening on %s", l.Addr())
+	log.WithField("address", l.Addr()).Info("server listening")
 	srv := &http.Server{
 		Handler: h2c.NewHandler(logWrapper(mux), &http2.Server{}),
 	}
 
 	if srv.TLSConfig, err = loadTLSConfig(); err != nil {
-		return nil, errors.Wrap(err, "could not load TLS configuration")
+		return nil, nil, errors.Wrap(err, "could not load TLS configuration")
 	}
 
+	ch := make(chan struct{})
 	go func() {
+		defer close(ch)
 		<-ctx.Done()
-		log.Println("server shutting down")
+		log.Info("server shutting down")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
-			log.Printf("error during server shutdown: %v", err)
+			log.WithError(err).Error("did not shut down cleanly")
 		}
 		_ = l.Close()
 		cancelAppliers()
 		cancelWatchers()
 		pool.Close()
+		log.Info("server shutdown complete")
 	}()
 
-	return &server{l, srv}, nil
+	return &server{l, srv}, ch, nil
 }
 
 func (s *server) serve() error {

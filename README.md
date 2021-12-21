@@ -134,6 +134,10 @@ Usage of ./cdc-sink:
     	the network address to bind to (default ":26258")
   -conn string
     	cockroach connection string (default "postgresql://root@localhost:26257/?sslmode=disable")
+  -logDestination string
+    	write logs to a file, instead of stdout
+  -logFormat string
+    	choose log output format [ fluent, text ] (default "text")
   -schemaRefresh duration
     	how often to scan for schema changes; set to zero to disable (default 1m0s)
   -tlsCertificate string

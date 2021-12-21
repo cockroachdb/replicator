@@ -11,14 +11,43 @@
 package server
 
 import (
-	"log"
+	"io"
 	"net/http"
 	"time"
+
+	joonix "github.com/joonix/log"
+	log "github.com/sirupsen/logrus"
 )
+
+type readerSpy struct {
+	r     io.ReadCloser
+	count int64
+}
+
+var _ io.ReadCloser = (*readerSpy)(nil)
+
+func (s *readerSpy) Close() error {
+	return s.r.Close()
+}
+
+func (s *readerSpy) Read(dest []byte) (int, error) {
+	n, err := s.r.Read(dest)
+	s.count += int64(n)
+	return n, err
+}
 
 type responseSpy struct {
 	http.ResponseWriter
 	statusCode int
+	count      int64
+}
+
+var _ http.ResponseWriter = (*responseSpy)(nil)
+
+func (s *responseSpy) Write(buf []byte) (int, error) {
+	n, err := s.ResponseWriter.Write(buf)
+	s.count += int64(n)
+	return n, err
 }
 
 func (s *responseSpy) WriteHeader(statusCode int) {
@@ -28,14 +57,39 @@ func (s *responseSpy) WriteHeader(statusCode int) {
 
 func logWrapper(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		spy := &responseSpy{w, 0}
 		start := time.Now()
-		h.ServeHTTP(spy, r)
-		elapsed := time.Since(start)
-		log.Printf("http status %d %s: %s in %s",
-			spy.statusCode,
-			http.StatusText(spy.statusCode),
-			r.URL.Path,
-			elapsed)
+
+		// Wrap interfaces, so we can observe payload sizes.
+		bodySpy := &readerSpy{r: r.Body}
+		r.Body = bodySpy
+		rSpy := &responseSpy{w, 0, 0}
+
+		defer func() {
+			// Per https://github.com/joonix/log#log
+			msg := log.WithField("httpRequest", &joonix.HTTPRequest{
+				Latency:      time.Since(start),
+				Status:       rSpy.statusCode,
+				Request:      r,
+				ResponseSize: rSpy.count,
+				RequestSize:  bodySpy.count,
+			})
+
+			r := recover()
+			if r == nil {
+				// Just log the request data.
+				msg.Info()
+				return
+			}
+			if err, ok := r.(error); ok {
+				msg = msg.WithError(err)
+			}
+
+			// Trigger shutdown, but allow the goroutine to finish
+			// normally. This allows the server's graceful shutdown
+			// behavior to drain quickly.
+			go msg.Fatal("fatal error in request handler")
+		}()
+
+		h.ServeHTTP(rSpy, r)
 	})
 }
