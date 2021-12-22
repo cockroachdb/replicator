@@ -42,7 +42,11 @@ func TestPut(t *testing.T) {
 	prev := hlc.Zero()
 	for i := 0; i <= count; i++ {
 		next := hlc.New(int64(1000*i), i)
-		found, err := s.Put(ctx, dbInfo.Pool(), targetDB.Raw(), next)
+		found, err := s.Put(ctx,
+			dbInfo.Pool(),
+			ident.NewSchema(table.Database(), table.Schema()),
+			next,
+		)
 		if !a.NoError(err) {
 			return
 		}

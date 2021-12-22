@@ -63,7 +63,7 @@ SELECT nanos, logical FROM %[1]s WHERE key=$3`
 // Put updates the value associated with the key, returning the
 // previous value.
 func (s *timekeeper) Put(
-	ctx context.Context, db pgxtype.Querier, key string, value hlc.Time,
+	ctx context.Context, db pgxtype.Querier, schema ident.Schema, value hlc.Time,
 ) (hlc.Time, error) {
 	var nanos int64
 	var logical int
@@ -73,7 +73,7 @@ func (s *timekeeper) Put(
 			s.sql.swap,
 			value.Nanos(),
 			value.Logical(),
-			key).Scan(&nanos, &logical)
+			schema.Raw()).Scan(&nanos, &logical)
 	})
 	// No rows means that we haven't seen this key before.
 	if errors.Is(err, pgx.ErrNoRows) {

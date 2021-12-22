@@ -80,7 +80,7 @@ type TimeKeeper interface {
 	// Put stores a new timestamp for the given key, returning the
 	// previous value. If no previous value was present, hlc.Zero() will
 	// be returned.
-	Put(context.Context, pgxtype.Querier, string, hlc.Time) (hlc.Time, error)
+	Put(context.Context, pgxtype.Querier, ident.Schema, hlc.Time) (hlc.Time, error)
 }
 
 // ColData hold SQL column metadata.
