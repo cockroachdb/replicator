@@ -136,7 +136,7 @@ func (h *Handler) resolved(ctx context.Context, r resolvedURL, immediate bool) e
 			appliers = append(appliers, applier)
 		}
 
-		prev, err := h.Swapper.Put(ctx, tx, r.target, r.timestamp)
+		prev, err := h.TimeKeeper.Put(ctx, tx, r.target, r.timestamp)
 		if err != nil {
 			return err
 		}

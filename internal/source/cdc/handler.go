@@ -31,11 +31,11 @@ const ImmediateParam = "immediate"
 // Handler is an http.Handler for processing webhook requests
 // from a CockroachDB changefeed.
 type Handler struct {
-	Appliers types.Appliers   // Update tables within TargetDb.
-	Pool     *pgxpool.Pool    // Access to the target cluster.
-	Stores   types.Stagers    // Record incoming json blobs.
-	Swapper  types.TimeKeeper // Tracks named timestamps.
-	Watchers types.Watchers   // Schema data.
+	Appliers   types.Appliers   // Update tables within TargetDb.
+	Pool       *pgxpool.Pool    // Access to the target cluster.
+	Stores     types.Stagers    // Record incoming json blobs.
+	TimeKeeper types.TimeKeeper // Tracks named timestamps.
+	Watchers   types.Watchers   // Schema data.
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

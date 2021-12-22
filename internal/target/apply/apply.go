@@ -60,6 +60,7 @@ func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ e
 	}
 
 	a := &apply{cancel: cancel, target: target}
+
 	// Wait for the initial column data to be loaded.
 	select {
 	case colData := <-ch:

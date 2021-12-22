@@ -61,11 +61,11 @@ func testHandler(t *testing.T, immediate bool) {
 	defer cancel()
 
 	h := &Handler{
-		Appliers: appliers,
-		Pool:     dbInfo.Pool(),
-		Stores:   stage.NewStagers(dbInfo.Pool(), ident.StagingDB),
-		Swapper:  swapper,
-		Watchers: watchers,
+		Appliers:   appliers,
+		Pool:       dbInfo.Pool(),
+		Stores:     stage.NewStagers(dbInfo.Pool(), ident.StagingDB),
+		TimeKeeper: swapper,
+		Watchers:   watchers,
 	}
 
 	// Validate the "classic" endpoints where files containing

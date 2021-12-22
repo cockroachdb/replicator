@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/perf"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
@@ -30,6 +31,8 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -94,13 +97,16 @@ func newServer(
 		return nil, nil, errors.Wrap(err, "could not connect to CockroachDB")
 	}
 
-	swapper, err := timekeeper.NewTimeKeeper(ctx, pool, cdc.Resolved)
+	timeKeeper, err := timekeeper.NewTimeKeeper(ctx, pool, cdc.Resolved)
 	if err != nil {
 		return nil, nil, err
 	}
+	timeKeeper = perf.TimeKeeper(timeKeeper)
 
+	stagers := perf.Stagers(stage.NewStagers(pool, ident.StagingDB))
 	watchers, cancelWatchers := schemawatch.NewWatchers(pool)
 	appliers, cancelAppliers := apply.NewAppliers(watchers)
+	appliers = perf.Appliers(appliers)
 
 	mux := &http.ServeMux{}
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -111,14 +117,23 @@ func newServer(
 		}
 		http.Error(w, "OK", http.StatusOK)
 	})
+	mux.Handle("/_/varz", promhttp.InstrumentMetricHandler(
+		prometheus.DefaultRegisterer,
+		promhttp.HandlerFor(
+			prometheus.DefaultGatherer,
+			promhttp.HandlerOpts{
+				EnableOpenMetrics: true,
+				ErrorLog:          log.StandardLogger().WithField("promhttp", "true"),
+			}),
+	))
 	mux.Handle("/_/", http.NotFoundHandler()) // Reserve all under /_/
-	mux.Handle("/", &cdc.Handler{
-		Appliers: appliers,
-		Pool:     pool,
-		Stores:   stage.NewStagers(pool, ident.StagingDB),
-		Swapper:  swapper,
-		Watchers: watchers,
-	})
+	mux.Handle("/", perf.HTTPHandler(&cdc.Handler{
+		Appliers:   appliers,
+		Pool:       pool,
+		Stores:     stagers,
+		TimeKeeper: timeKeeper,
+		Watchers:   watchers,
+	}))
 
 	l, err := net.Listen("tcp", bindAddr)
 	if err != nil {
@@ -127,7 +142,7 @@ func newServer(
 
 	log.WithField("address", l.Addr()).Info("server listening")
 	srv := &http.Server{
-		Handler: h2c.NewHandler(logWrapper(mux), &http2.Server{}),
+		Handler: h2c.NewHandler(mux, &http2.Server{}),
 	}
 
 	if srv.TLSConfig, err = loadTLSConfig(); err != nil {

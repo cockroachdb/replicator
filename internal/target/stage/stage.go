@@ -109,7 +109,15 @@ func (s *stage) Drain(
 		}
 		return nil
 	})
-	return ret, errors.Wrapf(err, "drain %s [%s, %s]", s.stage, prev, next)
+	if err != nil {
+		return nil, errors.Wrapf(err, "drain %s [%s, %s]", s.stage, prev, next)
+	}
+
+	log.WithFields(log.Fields{
+		"target": s.stage,
+		"count":  len(ret),
+	}).Debug("drained mutations")
+	return ret, nil
 }
 
 // Arrays of JSONB aren't implemented
