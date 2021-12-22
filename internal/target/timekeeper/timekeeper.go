@@ -16,18 +16,24 @@ package timekeeper
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // timekeeper implements a simple key/value store for HLC timestamps.
 type timekeeper struct {
+	// A timekeeper is effectively a singleton, so we don't keep any
+	// metrics in the instance.
+
 	sql struct {
 		swap string
 	}
@@ -67,6 +73,7 @@ func (s *timekeeper) Put(
 ) (hlc.Time, error) {
 	var nanos int64
 	var logical int
+	start := time.Now()
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		return db.QueryRow(
 			ctx,
@@ -75,9 +82,24 @@ func (s *timekeeper) Put(
 			value.Logical(),
 			schema.Raw()).Scan(&nanos, &logical)
 	})
+
+	ret := hlc.New(nanos, logical)
 	// No rows means that we haven't seen this key before.
 	if errors.Is(err, pgx.ErrNoRows) {
-		return hlc.Zero(), nil
+		err = nil
+		ret = hlc.Zero()
+	} else if err != nil {
+		tkErrors.Inc()
+		return hlc.Zero(), errors.Wrap(err, s.sql.swap)
 	}
-	return hlc.New(nanos, logical), errors.Wrap(err, s.sql.swap)
+
+	d := time.Since(start)
+	tkDurations.Observe(d.Seconds())
+	labels := metrics.SchemaValues(schema)
+	tkResolved.WithLabelValues(labels...).Set(float64(ret.Nanos()) / 1e9)
+	log.WithFields(log.Fields{
+		"target":   schema,
+		"resolved": ret,
+	}).Debug("put timestamp")
+	return ret, nil
 }

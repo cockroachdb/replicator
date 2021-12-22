@@ -13,6 +13,7 @@ package server
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	joonix "github.com/joonix/log"
@@ -55,19 +56,21 @@ func (s *responseSpy) WriteHeader(statusCode int) {
 	s.ResponseWriter.WriteHeader(statusCode)
 }
 
+// logWrapper wraps the given handler with performance monitoring and
+// logging.
 func logWrapper(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
 		// Wrap interfaces, so we can observe payload sizes.
 		bodySpy := &readerSpy{r: r.Body}
 		r.Body = bodySpy
 		rSpy := &responseSpy{w, 0, 0}
 
+		start := time.Now()
 		defer func() {
+			latency := time.Since(start)
 			// Per https://github.com/joonix/log#log
 			msg := log.WithField("httpRequest", &joonix.HTTPRequest{
-				Latency:      time.Since(start),
+				Latency:      latency,
 				Status:       rSpy.statusCode,
 				Request:      r,
 				ResponseSize: rSpy.count,
@@ -76,17 +79,20 @@ func logWrapper(h http.Handler) http.Handler {
 
 			r := recover()
 			if r == nil {
-				// Just log the request data.
+				// Normal exit. Just log the request data.
+				httpCodes.WithLabelValues(strconv.Itoa(rSpy.statusCode)).Inc()
+				httpLatency.Observe(latency.Seconds())
+				httpPayloadIn.Add(float64(bodySpy.count))
 				msg.Info()
 				return
-			}
-			if err, ok := r.(error); ok {
-				msg = msg.WithError(err)
 			}
 
 			// Trigger shutdown, but allow the goroutine to finish
 			// normally. This allows the server's graceful shutdown
 			// behavior to drain quickly.
+			if err, ok := r.(error); ok {
+				msg = msg.WithError(err)
+			}
 			go msg.Fatal("fatal error in request handler")
 		}()
 

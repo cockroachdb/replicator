@@ -26,8 +26,10 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -35,6 +37,11 @@ import (
 type apply struct {
 	cancel context.CancelFunc
 	target ident.Table
+
+	deletes   prometheus.Counter
+	durations prometheus.Observer
+	errors    prometheus.Counter
+	upserts   prometheus.Counter
 
 	mu struct {
 		sync.RWMutex
@@ -59,7 +66,17 @@ func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ e
 		return nil, cancel, err
 	}
 
-	a := &apply{cancel: cancel, target: target}
+	labelValues := metrics.TableValues(target)
+	a := &apply{
+		cancel: cancel,
+		target: target,
+
+		deletes:   applyDeletes.WithLabelValues(labelValues...),
+		durations: applyDurations.WithLabelValues(labelValues...),
+		errors:    applyErrors.WithLabelValues(labelValues...),
+		upserts:   applyUpserts.WithLabelValues(labelValues...),
+	}
+
 	// Wait for the initial column data to be loaded.
 	select {
 	case colData := <-ch:
@@ -85,10 +102,18 @@ func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ e
 
 // Apply applies the mutations to the target table.
 func (a *apply) Apply(ctx context.Context, tx types.Batcher, muts []types.Mutation) error {
+	start := time.Now()
 	deletes, r := batches.Mutation()
 	defer r()
 	upserts, r := batches.Mutation()
 	defer r()
+
+	countError := func(err error) error {
+		if err != nil {
+			a.errors.Inc()
+		}
+		return err
+	}
 
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -102,7 +127,7 @@ func (a *apply) Apply(ctx context.Context, tx types.Batcher, muts []types.Mutati
 			deletes = append(deletes, muts[i])
 			if len(deletes) == cap(deletes) {
 				if err := a.deleteLocked(ctx, tx, deletes); err != nil {
-					return err
+					return countError(err)
 				}
 				deletes = deletes[:0]
 			}
@@ -110,7 +135,7 @@ func (a *apply) Apply(ctx context.Context, tx types.Batcher, muts []types.Mutati
 			upserts = append(upserts, muts[i])
 			if len(upserts) == cap(upserts) {
 				if err := a.upsertLocked(ctx, tx, upserts); err != nil {
-					return err
+					return countError(err)
 				}
 				upserts = upserts[:0]
 			}
@@ -118,9 +143,13 @@ func (a *apply) Apply(ctx context.Context, tx types.Batcher, muts []types.Mutati
 	}
 
 	if err := a.deleteLocked(ctx, tx, deletes); err != nil {
-		return err
+		return countError(err)
 	}
-	return a.upsertLocked(ctx, tx, upserts)
+	if err := a.upsertLocked(ctx, tx, upserts); err != nil {
+		return countError(err)
+	}
+	a.durations.Observe(time.Since(start).Seconds())
+	return nil
 }
 
 func (a *apply) deleteLocked(ctx context.Context, db types.Batcher, muts []types.Mutation) error {
@@ -161,6 +190,7 @@ func (a *apply) deleteLocked(ctx context.Context, db types.Batcher, muts []types
 			return errors.Wrap(err, a.mu.sql.delete)
 		}
 	}
+	a.deletes.Add(float64(len(muts)))
 	log.WithFields(log.Fields{
 		"count":  len(muts),
 		"target": a.target,
@@ -249,6 +279,7 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types
 			return errors.Wrap(err, a.mu.sql.upsert)
 		}
 	}
+	a.upserts.Add(float64(len(muts)))
 	log.WithFields(log.Fields{
 		"count":  len(muts),
 		"target": a.target,

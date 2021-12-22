@@ -58,7 +58,7 @@ func (f *factory) createUnlocked(ctx context.Context, table ident.Table) (*stage
 		return ret, nil
 	}
 
-	ret, err := newStore(ctx, f.db, f.stagingDB, table)
+	ret, err := newStage(ctx, f.db, f.stagingDB, table)
 	if err == nil {
 		f.mu.instances[table] = ret
 	}
