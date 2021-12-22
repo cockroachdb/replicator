@@ -63,13 +63,17 @@ var inLoop struct{}
 // percolate into the outer loop.
 func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) error) error {
 	top := ctx.Value(inLoop) == nil
-	if top {
-		ctx = context.WithValue(ctx, inLoop, inLoop)
+	if !top {
+		var sideEffect Marker
+		return fn(ctx, &sideEffect)
 	}
-	var sideEffect Marker
+
+	ctx = context.WithValue(ctx, inLoop, inLoop)
+	actionsCount.Inc()
 	for {
+		var sideEffect Marker
 		err := fn(ctx, &sideEffect)
-		if err == nil || sideEffect.Marked() || !top {
+		if err == nil || sideEffect.Marked() {
 			return err
 		}
 
@@ -80,8 +84,10 @@ func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) 
 			case "08003": // Connection Does Not Exist
 			case "08006": // Connection Failure
 			default:
+				abortedCount.WithLabelValues(pgErr.Code).Inc()
 				return err
 			}
+			retryCount.WithLabelValues(pgErr.Code).Inc()
 		} else {
 			return err
 		}
