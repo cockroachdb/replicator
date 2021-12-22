@@ -15,7 +15,6 @@ on:
     tags: [ 'v*' ]
   # PR's will trigger an image build, but the push action is disabled.
   pull_request:
-    branches: [ master ]
 
 jobs:
   docker:
