@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	joonix "github.com/joonix/log"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
@@ -162,4 +163,8 @@ func testIntegration(t *testing.T, immediate bool) {
 		log.Debug("waiting for stream")
 		time.Sleep(time.Second)
 	}
+
+	metrics, err := prometheus.DefaultGatherer.Gather()
+	a.NoError(err)
+	log.WithField("metrics", metrics).Debug()
 }
