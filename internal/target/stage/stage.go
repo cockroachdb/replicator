@@ -18,15 +18,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -35,6 +38,13 @@ import (
 type stage struct {
 	// The staging table that holds the mutations.
 	stage ident.Table
+
+	drainCount    prometheus.Counter
+	drainDuration prometheus.Observer
+	drainError    prometheus.Counter
+	storeCount    prometheus.Counter
+	storeDuration prometheus.Observer
+	storeError    prometheus.Counter
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
@@ -65,7 +75,16 @@ CREATE TABLE IF NOT EXISTS %s (
 		return nil, err
 	}
 
-	s := &stage{stage: table}
+	labels := metrics.TableValues(target)
+	s := &stage{
+		stage:         table,
+		drainCount:    stageDrainCount.WithLabelValues(labels...),
+		drainDuration: stageDrainDurations.WithLabelValues(labels...),
+		drainError:    stageDrainErrors.WithLabelValues(labels...),
+		storeCount:    stageStoreCount.WithLabelValues(labels...),
+		storeDuration: stageStoreDurations.WithLabelValues(labels...),
+		storeError:    stageStoreErrors.WithLabelValues(labels...),
+	}
 
 	s.sql.drain = fmt.Sprintf(drainTemplate, table)
 	s.sql.store = fmt.Sprintf(putTemplate, table)
@@ -86,6 +105,7 @@ func (s *stage) Drain(
 	ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time,
 ) ([]types.Mutation, error) {
 	var ret []types.Mutation
+	start := time.Now()
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		rows, err := tx.Query(ctx, s.sql.drain,
 			prev.Nanos(), prev.Logical(), next.Nanos(), next.Logical(),
@@ -109,7 +129,21 @@ func (s *stage) Drain(
 		}
 		return nil
 	})
-	return ret, errors.Wrapf(err, "drain %s [%s, %s]", s.stage, prev, next)
+
+	if err != nil {
+		s.drainError.Inc()
+		return nil, errors.Wrapf(err, "drain %s [%s, %s]", s.stage, prev, next)
+	}
+
+	d := time.Since(start)
+	s.drainDuration.Observe(d.Seconds())
+	s.drainCount.Add(float64(len(ret)))
+	log.WithFields(log.Fields{
+		"count":    len(ret),
+		"duration": d,
+		"target":   s.stage,
+	}).Debug("drained mutations")
+	return ret, nil
 }
 
 // Arrays of JSONB aren't implemented
@@ -118,9 +152,23 @@ const putTemplate = `UPSERT INTO %s (nanos, logical, key, mut) VALUES ($1, $2, $
 
 // Store stores some number of Mutations into the database.
 func (s *stage) Store(ctx context.Context, db types.Batcher, mutations []types.Mutation) error {
-	return batches.Batch(len(mutations), func(begin, end int) error {
+	start := time.Now()
+	err := batches.Batch(len(mutations), func(begin, end int) error {
 		return s.putOne(ctx, db, mutations[begin:end])
 	})
+	if err != nil {
+		s.storeError.Inc()
+		return err
+	}
+
+	d := time.Since(start)
+	s.storeDuration.Observe(d.Seconds())
+	log.WithFields(log.Fields{
+		"count":    len(mutations),
+		"duration": d,
+		"target":   s.stage,
+	}).Debug("stored mutations")
+	return nil
 }
 
 func (s *stage) putOne(ctx context.Context, db types.Batcher, mutations []types.Mutation) error {
@@ -149,10 +197,5 @@ func (s *stage) putOne(ctx context.Context, db types.Batcher, mutations []types.
 			return errors.Wrap(err, s.sql.store)
 		}
 	}
-
-	log.WithFields(log.Fields{
-		"target": s.stage,
-		"count":  len(mutations),
-	}).Debug("staged mutations")
 	return nil
 }
