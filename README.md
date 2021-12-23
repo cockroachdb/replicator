@@ -202,6 +202,22 @@ cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
 cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
 ```
 
+Here's an example Prometheus configuration to scrape `cdc-sink`:
+
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: cdc-sink
+    metrics_path: /_/varz
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+      - targets: [ '127.0.0.1:30004' ]
+```
+
 ## Limitations
 
 *Note that while limitation exists, there is no warning or error that is thrown when they are

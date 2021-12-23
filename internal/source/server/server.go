@@ -30,6 +30,8 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -111,14 +113,23 @@ func newServer(
 		}
 		http.Error(w, "OK", http.StatusOK)
 	})
+	mux.Handle("/_/varz", promhttp.InstrumentMetricHandler(
+		prometheus.DefaultRegisterer,
+		promhttp.HandlerFor(
+			prometheus.DefaultGatherer,
+			promhttp.HandlerOpts{
+				EnableOpenMetrics: true,
+				ErrorLog:          log.StandardLogger().WithField("promhttp", "true"),
+			}),
+	))
 	mux.Handle("/_/", http.NotFoundHandler()) // Reserve all under /_/
-	mux.Handle("/", &cdc.Handler{
+	mux.Handle("/", logWrapper(&cdc.Handler{
 		Appliers: appliers,
 		Pool:     pool,
 		Stores:   stage.NewStagers(pool, ident.StagingDB),
 		Swapper:  swapper,
 		Watchers: watchers,
-	})
+	}))
 
 	l, err := net.Listen("tcp", bindAddr)
 	if err != nil {
@@ -127,7 +138,7 @@ func newServer(
 
 	log.WithField("address", l.Addr()).Info("server listening")
 	srv := &http.Server{
-		Handler: h2c.NewHandler(logWrapper(mux), &http2.Server{}),
+		Handler: h2c.NewHandler(mux, &http2.Server{}),
 	}
 
 	if srv.TLSConfig, err = loadTLSConfig(); err != nil {
