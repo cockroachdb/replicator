@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"flag"
+	golog "log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/server"
+	"github.com/cockroachdb/cdc-sink/internal/util/logfmt"
 	joonix "github.com/joonix/log"
 	log "github.com/sirupsen/logrus"
 )
@@ -36,17 +38,24 @@ var (
 )
 
 func main() {
+	// Hijack anything that uses the standard go logger, like http.
+	pw := log.WithField("golog", true).Writer()
+	log.DeferExitHandler(func() { _ = pw.Close() })
+	// logrus will provide timestamp info.
+	golog.SetFlags(0)
+	golog.SetOutput(pw)
+
 	flag.Parse()
 
 	switch *logFormat {
 	case "fluent":
-		log.SetFormatter(joonix.NewFormatter())
+		log.SetFormatter(logfmt.Wrap(joonix.NewFormatter()))
 	case "text":
-		log.SetFormatter(&log.TextFormatter{
+		log.SetFormatter(logfmt.Wrap(&log.TextFormatter{
 			FullTimestamp:   true,
 			PadLevelText:    true,
 			TimestampFormat: time.Stamp,
-		})
+		}))
 	default:
 		log.Errorf("unknown log format: %q", *logFormat)
 		log.Exit(1)
