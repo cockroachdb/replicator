@@ -11,6 +11,7 @@
 package ident
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,29 @@ func TestIdent(t *testing.T) {
 	a.Equal(id, New("table"))
 
 	a.Equal(`"foo!bar"`, New("foo!bar").String())
+}
+
+func TestIdentJson(t *testing.T) {
+	tcs := []struct {
+		raw string
+	}{
+		{"foo"},
+		{`"foo"`},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.raw, func(t *testing.T) {
+			a := assert.New(t)
+
+			id := New(tc.raw)
+			data, err := json.Marshal(id)
+			a.NoError(err)
+
+			var id2 Ident
+			a.NoError(json.Unmarshal(data, &id2))
+			a.Equal(id, id2)
+		})
+	}
 }
 
 func TestQualified(t *testing.T) {
@@ -105,4 +129,28 @@ func TestRelative(t *testing.T) {
 			a.Equalf(tc.qual, qual, "%s vs %s", tc.qual, qual)
 		})
 	}
+}
+
+func TestSchemaJson(t *testing.T) {
+	a := assert.New(t)
+
+	id := NewSchema(New("db"), New("schema"))
+	data, err := json.Marshal(id)
+	a.NoError(err)
+
+	var id2 Schema
+	a.NoError(json.Unmarshal(data, &id2))
+	a.Equal(id, id2)
+}
+
+func TestTableJson(t *testing.T) {
+	a := assert.New(t)
+
+	id := NewTable(New("db"), New("schema"), New("table"))
+	data, err := json.Marshal(id)
+	a.NoError(err)
+
+	var id2 Table
+	a.NoError(json.Unmarshal(data, &id2))
+	a.Equal(id, id2)
 }
