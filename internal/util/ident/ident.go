@@ -130,6 +130,9 @@ func NewSchema(db, schema Ident) Schema {
 	return Schema{db, schema}
 }
 
+// AsSchema returns the Schema.
+func (s Schema) AsSchema() Schema { return s }
+
 // Contains returns true if the given table is defined within the
 // user-defined schema.
 func (s Schema) Contains(table Table) bool {
@@ -172,6 +175,15 @@ func (s *Schema) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Schematic is anything that can convert itself to a schema.
+type Schematic interface {
+	// AsSchema returns the value as a Schema.
+	AsSchema() Schema
+}
+
+var _ Schematic = Schema{}
+var _ Schematic = Table{}
+
 // A Table identifier is a three-part ident, consisting of an SQL
 // database, schema, and table ident. This type is an immutable value
 // type, suitable for use as a map key.
@@ -182,6 +194,11 @@ type Table struct {
 // NewTable constructs a Table identifier.
 func NewTable(db, schema, table Ident) Table {
 	return Table{db, schema, table}
+}
+
+// AsSchema returns the schema from the table.
+func (t Table) AsSchema() Schema {
+	return NewSchema(t.Database(), t.Schema())
 }
 
 // Database returns the table's enclosing database.
