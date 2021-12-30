@@ -15,8 +15,10 @@ package cdc
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v4/pgxpool"
 	log "github.com/sirupsen/logrus"
 )
@@ -31,11 +33,12 @@ const ImmediateParam = "immediate"
 // Handler is an http.Handler for processing webhook requests
 // from a CockroachDB changefeed.
 type Handler struct {
-	Appliers types.Appliers   // Update tables within TargetDb.
-	Pool     *pgxpool.Pool    // Access to the target cluster.
-	Stores   types.Stagers    // Record incoming json blobs.
-	Swapper  types.TimeKeeper // Tracks named timestamps.
-	Watchers types.Watchers   // Schema data.
+	Appliers      types.Appliers      // Update tables within TargetDb.
+	Authenticator types.Authenticator // Access checks.
+	Pool          *pgxpool.Pool       // Access to the target cluster.
+	Stores        types.Stagers       // Record incoming json blobs.
+	Swapper       types.TimeKeeper    // Tracks named timestamps.
+	Watchers      types.Watchers      // Schema data.
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +53,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.WithError(err).WithField("uri", r.RequestURI).Error()
 	}
 
+	// checkAccess returns true if the request should continue.
+	checkAccess := func(target ident.Schematic) bool {
+		var token string
+		if raw := r.Header.Get("Authorization"); raw != "" {
+			if strings.HasPrefix(raw, "Bearer ") {
+				token = raw[7:]
+			}
+		} else if token = r.URL.Query().Get("access_token"); token != "" {
+			// Delete the token query parameter to prevent logging later
+			// on. This doesn't take care of issues with L7
+			// loadbalancers, but this param is used by other
+			// OAuth-style implementations and will hopefully be
+			// discarded without logging.
+			values := r.URL.Query()
+			values.Del("access_token")
+			r.URL.RawQuery = values.Encode()
+		}
+		// It's OK if token is empty here, we might be using a trivial
+		// Authenticator.
+		ok, err := h.Authenticator.Check(ctx, target.AsSchema(), token)
+		if err != nil {
+			sendErr(err)
+			return false
+		}
+		if ok {
+			return true
+		}
+		http.Error(w, "missing or invalid access token", http.StatusUnauthorized)
+		return false
+	}
+
 	immediate := false
 	if found := r.URL.Query().Get(ImmediateParam); found != "" {
 		var err error
@@ -61,18 +95,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ndjson, err := parseNdjsonURL(r.URL.Path); err == nil {
-		sendErr(h.ndjson(ctx, ndjson, immediate, r.Body))
+		if checkAccess(ndjson.target) {
+			sendErr(h.ndjson(ctx, ndjson, immediate, r.Body))
+		}
 		return
 	}
 	if resolved, err := parseResolvedURL(r.URL.Path); err == nil {
-		sendErr(h.resolved(ctx, resolved, immediate))
+		if checkAccess(resolved.target) {
+			sendErr(h.resolved(ctx, resolved, immediate))
+		}
 		return
 	}
 	if webhook, err := parseWebhookURL(r.URL.Path); err == nil {
-		if r.Method == "POST" && r.Header.Get("content-type") == "application/json" {
+		if checkAccess(webhook.target) {
 			sendErr(h.webhook(ctx, webhook, immediate, r.Body))
-			return
 		}
+		return
 	}
 
 	http.NotFound(w, r)

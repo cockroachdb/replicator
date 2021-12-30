@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	joonix "github.com/joonix/log"
@@ -100,6 +101,17 @@ func testIntegration(t *testing.T, immediate bool) {
 	a.NoError(err)
 	a.Equal(1, ct)
 
+	// Allow access.
+	method, priv, err := jwt.InsertTestingKey(ctx, dbInfo.Pool(), srv.authenticator, ident.StagingDB)
+	defer cancel()
+	if !a.NoError(err) {
+		return
+	}
+	_, token, err := jwt.Sign(method, priv, []ident.Schema{target.Name().AsSchema()})
+	if !a.NoError(err) {
+		return
+	}
+
 	params := make(url.Values)
 	if immediate {
 		params.Set(cdc.ImmediateParam, "true")
@@ -109,6 +121,7 @@ func testIntegration(t *testing.T, immediate bool) {
 	}
 	// Set up the changefeed.
 	var feedURL url.URL
+	var createStmt string
 	if useWebhook {
 		feedURL = url.URL{
 			Scheme:   "webhook-https",
@@ -116,19 +129,27 @@ func testIntegration(t *testing.T, immediate bool) {
 			Path:     path.Join(target.Name().Database().Raw(), target.Name().Schema().Raw()),
 			RawQuery: params.Encode(),
 		}
+		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
+			"INTO '" + feedURL.String() + "' " +
+			"WITH updated," +
+			"     resolved='1s'," +
+			"     webhook_auth_header='Bearer " + token + "'"
 	} else {
+		// No webhook_auth_header, so bake it into the query string.
+		// See comments in cdc.Handler.ServeHTTP checkAccess.
+		params.Set("access_token", token)
 		feedURL = url.URL{
 			Scheme:   "experimental-http",
 			Host:     srv.listener.Addr().String(),
 			Path:     path.Join(target.Name().Database().Raw(), target.Name().Schema().Raw()),
 			RawQuery: params.Encode(),
 		}
+		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
+			"INTO '" + feedURL.String() + "' " +
+			"WITH updated,resolved='1s'"
 	}
 	log.Debugf("changefeed URL is %s", feedURL.String())
-	if !a.NoError(source.Exec(ctx,
-		"CREATE CHANGEFEED FOR TABLE %s "+
-			"INTO '"+feedURL.String()+"' "+
-			"WITH updated,resolved='1s'")) {
+	if !a.NoError(source.Exec(ctx, createStmt)) {
 		return
 	}
 
