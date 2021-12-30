@@ -23,9 +23,12 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
+	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -45,6 +48,11 @@ var (
 		"postgresql://root@localhost:26257/?sslmode=disable",
 		"cockroach connection string",
 	)
+
+	DisableAuth = flag.Bool(
+		"disableAuthentication",
+		false,
+		"disable authentication of incoming cdc-sink requests; not recommended for production.")
 )
 
 // Main is the entry point to the server.
@@ -67,8 +75,9 @@ func Main(ctx context.Context) error {
 }
 
 type server struct {
-	listener net.Listener
-	srv      *http.Server
+	authenticator types.Authenticator
+	listener      net.Listener
+	srv           *http.Server
 }
 
 // newServer performs all of the setup work that's likely to fail before
@@ -102,6 +111,19 @@ func newServer(
 	watchers, cancelWatchers := schemawatch.NewWatchers(pool)
 	appliers, cancelAppliers := apply.NewAppliers(watchers)
 
+	var authenticator types.Authenticator
+	var cancelAuth func()
+	if *DisableAuth {
+		log.Warn("authentication disabled, any caller may write to the target database")
+		authenticator = trust.New()
+		cancelAuth = func() {}
+	} else {
+		authenticator, cancelAuth, err = jwt.New(ctx, pool, ident.StagingDB)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
 	mux := &http.ServeMux{}
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
@@ -113,11 +135,12 @@ func newServer(
 	})
 	mux.Handle("/_/", http.NotFoundHandler()) // Reserve all under /_/
 	mux.Handle("/", &cdc.Handler{
-		Appliers: appliers,
-		Pool:     pool,
-		Stores:   stage.NewStagers(pool, ident.StagingDB),
-		Swapper:  swapper,
-		Watchers: watchers,
+		Authenticator: authenticator,
+		Appliers:      appliers,
+		Pool:          pool,
+		Stores:        stage.NewStagers(pool, ident.StagingDB),
+		Swapper:       swapper,
+		Watchers:      watchers,
 	})
 
 	l, err := net.Listen("tcp", bindAddr)
@@ -145,13 +168,14 @@ func newServer(
 			log.WithError(err).Error("did not shut down cleanly")
 		}
 		_ = l.Close()
+		cancelAuth()
 		cancelAppliers()
 		cancelWatchers()
 		pool.Close()
 		log.Info("server shutdown complete")
 	}()
 
-	return &server{l, srv}, ch, nil
+	return &server{authenticator, l, srv}, ch, nil
 }
 
 func (s *server) serve() error {

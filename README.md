@@ -127,27 +127,25 @@ logical INT8 NOT NULL
 ## Flags
 
 ```
-Usage of ./cdc-sink:
-  -batchSize int
-    	default size for batched operations (default 1000)
-  -bindAddr string
-    	the network address to bind to (default ":26258")
-  -conn string
-    	cockroach connection string (default "postgresql://root@localhost:26257/?sslmode=disable")
-  -logDestination string
-    	write logs to a file, instead of stdout
-  -logFormat string
-    	choose log output format [ fluent, text ] (default "text")
-  -schemaRefresh duration
-    	how often to scan for schema changes; set to zero to disable (default 1m0s)
-  -tlsCertificate string
-    	a path to a PEM-encoded TLS certificate chain
-  -tlsPrivateKey string
-    	a path to a PEM-encoded TLS private key
-  -tlsSelfSigned
-    	if true, generate a self-signed TLS certificate valid for 'localhost'
-  -version
-    	print version and exit
+Usage:
+  cdc-sink start [flags]
+
+Flags:
+      --batchSize int            default size for batched operations (default 1000)
+      --bindAddr string          the network address to bind to (default ":26258")
+      --conn string              cockroach connection string (default "postgresql://root@localhost:26257/?sslmode=disable")
+      --disableAuthentication    disable authentication of incoming cdc-sink requests; not recommended for production.
+  -h, --help                     help for start
+      --jwtRefresh duration      how often to scan for updated JWT configuration; set to zero to disable (default 1m0s)
+      --schemaRefresh duration   how often to scan for schema changes; set to zero to disable (default 1m0s)
+      --tlsCertificate string    a path to a PEM-encoded TLS certificate chain
+      --tlsPrivateKey string     a path to a PEM-encoded TLS private key
+      --tlsSelfSigned            if true, generate a self-signed TLS certificate valid for 'localhost'
+
+Global Flags:
+      --logDestination string   write logs to a file, instead of stdout
+      --logFormat string        choose log output format [ fluent, text ] (default "text")
+  -v, --verbose count           increase logging verbosity to debug; repeat for trace
 ```
 
 ## Example
@@ -175,7 +173,7 @@ cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
 # create staging database for cdc-sink
 cockroach sql --port 30002 --insecure -e "CREATE DATABASE _cdc_sink"
 # cdc-sink started as a background task. Remove the tls flag for CocrkoachDB <= v21.1
-cdc-sink --bindAddr :30004 --tlsSelfSigned --conn 'postgresql://root@localhost:30002/?sslmode=disable' &
+cdc-sink start --bindAddr :30004 --tlsSelfSigned --disableAuthentication --conn 'postgresql://root@localhost:30002/?sslmode=disable' &
 
 # start the CDC that will send across the initial data snapshot
 # Versions of CRDB before v21.2 should use the experimental-http:// URL scheme 
@@ -200,6 +198,79 @@ cockroach workload run ycsb 'postgresql://root@localhost:30000/ycsb?sslmode=disa
 # source updates are applied to the target
 cockroach sql --port 30000 --insecure -e "select * from ycsb.usertable"
 cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
+```
+
+## Security Considerations
+
+At a high level, `cdc-sink` accepts network connections to apply arbitrary mutations to the target
+cluster. In order to limit the scope of access, [JSON Web Tokens](https://jwt.io) are used to
+authorize incoming connections and limit them to writing to a subset of the SQL databases or
+user-defined schemas in the target cluster.
+
+A minimally-acceptable JWT claim is shown below. This must include the standard `jti` token
+identifier field, and a custom claim for cdc-sink. This custom claim is defined in a globally-unique
+namespace and most JWT-enabled authorization providers support adding custom claims. It contains a
+list of one or more target databases or user-defined schemas. Wildcards are supported.
+
+```json
+{
+  "jti": "a25dac04-9f3e-49c1-a068-ee0a2abbd7df",
+  "https://github.com/cockroachdb/cdc-sink": {
+    "sch": [
+      [
+        "database",
+        "schema"
+      ],
+      [
+        "another_database",
+        "*"
+      ],
+      [
+        "*",
+        "required_schema"
+      ],
+      [
+        "*",
+        "*"
+      ]
+    ]
+  }
+}
+```
+
+The JWT tokens must be signed with RSA or EC keys. HMAC and  `None` signatures are rejected.
+The `_cdc_sink.jwt_public_keys` table should be populated with one or more public keys used to sign
+the tokens. If a specifc token needs to be revoked, its `jti` value can be added to
+the `_cdc_sink.jwt_revoked_ids` table. These tables will be re-read every minute by the `cdc-sink`
+process. A `HUP` signal can be sent to force an early refresh.
+
+The encoded token is provided to the `CREATE CHANGEFEED` using
+the `WITH webhook_auth_header='Bearer <encoded token>'`
+[option](https://www.cockroachlabs.com/docs/stable/create-changefeed.html#options). In order to
+support older versions of CockroachDB, the encoded token may also be specified as a query
+parameter `?access_token=<encoded token>`. Note that query parameters may be logged by
+intermediate loadbalancers, so caution should be taken.
+
+### Token Quickstart
+
+```shell
+# Generate a EC private key using OpenSSL.
+openssl ecparam -out ec.key -genkey -name prime256v1
+
+# Write the public key components to a separate file.
+openssl ec -in ec.key -pubout -out ec.pub
+
+# Generate a token which can write to the ycsb.public schema.
+# The key can be decoded using the debugger at https://jwt.io.
+# Add the contents of out.jwt to the CREATE CHANGEFEED command:
+# WITH webhook_auth_header='Bearer <out.jws>'
+cdc-sink make-jwt -k ec.key -a ycsb.public -o out.jwt
+
+# Upload the public key for cdc-sink to find it.
+cockroach sql -e "INSERT INTO %s.%s (public_key) VALUES ('$(cat ec.pub)')"
+
+# Reload configuration, or wait a minute.
+killall -HUP cdc-sink
 ```
 
 ## Limitations
