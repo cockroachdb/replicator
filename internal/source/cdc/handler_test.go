@@ -12,10 +12,14 @@ package cdc
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/auth/reject"
+	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
@@ -61,11 +65,12 @@ func testHandler(t *testing.T, immediate bool) {
 	defer cancel()
 
 	h := &Handler{
-		Appliers: appliers,
-		Pool:     dbInfo.Pool(),
-		Stores:   stage.NewStagers(dbInfo.Pool(), ident.StagingDB),
-		Swapper:  swapper,
-		Watchers: watchers,
+		Appliers:      appliers,
+		Authenticator: trust.New(),
+		Pool:          dbInfo.Pool(),
+		Stores:        stage.NewStagers(dbInfo.Pool(), ident.StagingDB),
+		Swapper:       swapper,
+		Watchers:      watchers,
 	}
 
 	// Validate the "classic" endpoints where files containing
@@ -208,4 +213,32 @@ func testHandler(t *testing.T, immediate bool) {
 			a.Contains(err.Error(), "backwards")
 		}
 	})
+}
+
+func TestRejectedAuth(t *testing.T) {
+	// Verify that auth checks don't require other services.
+	h := &Handler{
+		Authenticator: reject.New(),
+	}
+
+	tcs := []struct {
+		path string
+		code int
+	}{
+		{"/targetDB/targetSchema/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-test_table-1.ndjson", http.StatusUnauthorized},
+		{"/test/public/2020-04-04/202004042351304139680000000000000.RESOLVED", http.StatusUnauthorized},
+		{"/some/schema", http.StatusUnauthorized}, // webhook
+		{"/", http.StatusNotFound},
+	}
+
+	for idx, tc := range tcs {
+		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
+			a := assert.New(t)
+			req := httptest.NewRequest("POST", tc.path, nil)
+			w := httptest.NewRecorder()
+
+			h.ServeHTTP(w, req)
+			a.Equal(tc.code, w.Code)
+		})
+	}
 }

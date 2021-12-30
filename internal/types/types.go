@@ -36,6 +36,14 @@ type Appliers interface {
 	Get(ctx context.Context, target ident.Table) (Applier, error)
 }
 
+// An Authenticator determines if an operation on some schema should be
+// allowed to proceed.
+type Authenticator interface {
+	// Check returns true if a request containing some bearer token
+	// should be allowed to operate on the given schema.
+	Check(ctx context.Context, schema ident.Schema, token string) (ok bool, _ error)
+}
+
 // A Batcher allows for a batch of statements to be executed in a single
 // round-trip to the database. This is implemented by several pgx types,
 // such as pgxpool.Pool and pgx.Tx.

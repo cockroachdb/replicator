@@ -1,0 +1,276 @@
+// Copyright 2021 The Cockroach Authors.
+//
+// Use of this software is governed by the Business Source License
+// included in the file licenses/BSL.txt.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0, included in the file
+// licenses/APL.txt.
+
+// Package jwt contains support for using JWT tokens to authenticate and
+// authorize incoming connections.
+//
+// We require that incoming tokens have
+// been signed with either RSA or EC keys. The public keys used for
+// validation are stored in the database and are periodically refreshed.
+//
+// Incoming JWT tokens are required to have the well-known "jti" token
+// identifier field set. This is checked against a list of revoked token
+// ids that are also stored in the database.
+//
+// A minimally-acceptable token is shown below:
+//   {
+//      "jti": "a25dac04-9f3e-49c1-a068-ee0a2abbd7df",
+//      "https://github.com/cockroachdb/cdc-sink": {
+//        "sch": [
+//          [ "database", "schema" ],
+//          [ "another_database", "*" ],
+//          [ "*", "required_schema" ],
+//          [ "*", "*" ]
+//        ]
+//      }
+//   }
+//
+// As seen above, we use a globally-unique namespace to provide a list
+// of schemas that the caller is allowed to use. Additional fields may
+// be added to this namespace in the future.
+package jwt
+
+import (
+	"context"
+	"crypto"
+	"crypto/x509"
+	"encoding/pem"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/gofrs/uuid"
+	"github.com/golang-jwt/jwt/v4"
+	"github.com/jackc/pgtype/pgxtype"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+)
+
+var (
+	// PublicKeysTable is the name of the table that contains public
+	// keys used to validate incoming JWT tokens.
+	PublicKeysTable = ident.New("jwt_public_keys")
+	// RefreshDelay controls how ofter a watcher will refresh its schema. If
+	// this value is zero or negative, refresh behavior will be disabled.
+	RefreshDelay = flag.Duration("jwtRefresh", time.Minute,
+		"how often to scan for updated JWT configuration; set to zero to disable")
+	// RevokedIdsTable allows a list of known-bad "jti" token ids to be
+	// rejected.
+	RevokedIdsTable = ident.New("jwt_revoked_ids")
+
+	// Only permit RSA and ECC signatures (i.e. disallow the
+	// perfectly-valid "none" algorithm). See also WithMethods() and
+	// https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/
+	validJWTMethods = []string{
+		jwt.SigningMethodES256.Alg(),
+		jwt.SigningMethodES384.Alg(),
+		jwt.SigningMethodES512.Alg(),
+		jwt.SigningMethodRS256.Alg(),
+		jwt.SigningMethodRS384.Alg(),
+		jwt.SigningMethodRS512.Alg(),
+	}
+	// Used by matches().
+	wildcard = ident.New("*")
+)
+
+type authenticator struct {
+	mu struct {
+		sync.RWMutex
+		publicKeys []crypto.PublicKey
+		revoked    map[string]struct{}
+	}
+
+	sql struct {
+		selectKeys    string
+		selectRevoked string
+	}
+}
+
+var _ types.Authenticator = (*authenticator)(nil)
+
+// New returns a JWT-based Authenticator.
+//
+// The cancel callback is guaranteed to be non-nil.
+func New(
+	ctx context.Context, db pgxtype.Querier, stagingDB ident.Ident,
+) (auth types.Authenticator, cancel func(), err error) {
+	cancel = func() {}
+
+	keyTable := ident.NewTable(stagingDB, ident.Public, PublicKeysTable)
+	revokedTable := ident.NewTable(stagingDB, ident.Public, RevokedIdsTable)
+
+	// Boostrap the schema.
+	if _, err = db.Exec(ctx, fmt.Sprintf(ensureKeysTemplate, keyTable)); err != nil {
+		err = errors.WithStack(err)
+		return
+	}
+	if _, err = db.Exec(ctx, fmt.Sprintf(ensureRevokedTemplate, revokedTable)); err != nil {
+		err = errors.WithStack(err)
+		return
+	}
+
+	impl := &authenticator{}
+	impl.sql.selectKeys = fmt.Sprintf(selectKeysTemplate, keyTable)
+	impl.sql.selectRevoked = fmt.Sprintf(selectRevokedTemplate, revokedTable)
+
+	// Initial data load also sets up fields in the mu struct.
+	if err = impl.refresh(ctx, db); err != nil {
+		return
+	}
+
+	// Start a refresh loop that will also listen for HUP signals.
+	if *RefreshDelay > 0 {
+		var background context.Context
+		background, cancel = context.WithCancel(context.Background())
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGHUP)
+		go func(ctx context.Context) {
+			defer close(ch)
+			defer signal.Stop(ch)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ch:
+					log.Debug("reloading JWT data due to SIGHUP")
+				case <-time.After(*RefreshDelay):
+				}
+				if err := impl.refresh(ctx, db); err != nil {
+					log.WithError(err).Warn("could not refresh JWT data")
+				}
+			}
+		}(background)
+	}
+
+	auth = impl
+	return
+}
+
+// Check implements types.Authenticator.
+func (a *authenticator) Check(
+	_ context.Context, schema ident.Schema, token string,
+) (ok bool, _ error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, key := range a.mu.publicKeys {
+		var claims Claims
+		_, err := jwt.ParseWithClaims(token,
+			&claims,
+			func(unvalidated *jwt.Token) (interface{}, error) {
+				return key, nil
+			},
+			jwt.WithValidMethods(validJWTMethods),
+		)
+		if err != nil {
+			log.WithError(errors.WithStack(err)).Trace("invalid token")
+			continue
+		}
+		if _, revoked := a.mu.revoked[claims.ID]; revoked {
+			log.WithFields(log.Fields{
+				"id":     claims.ID,
+				"schema": schema,
+			}).Debug("saw revoked token")
+			return false, nil
+		}
+		for _, allowed := range claims.Ext.Schemas {
+			if matches(allowed, schema) {
+				log.WithFields(log.Fields{
+					"id":     claims.ID,
+					"schema": schema,
+				}).Debug("successful authentication")
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+const (
+	ensureKeysTemplate = `
+CREATE TABLE IF NOT EXISTS %s (
+	id UUID NOT NULL PRIMARY KEY DEFAULT gen_random_uuid(),
+	public_key STRING NOT NULL,
+	active BOOL NOT NULL DEFAULT true
+)`
+	selectKeysTemplate = `SELECT id, public_key FROM %s WHERE active`
+
+	ensureRevokedTemplate = `
+CREATE TABLE IF NOT EXISTS %s (
+	id STRING NOT NULL PRIMARY KEY
+)`
+	selectRevokedTemplate = `SELECT id FROM %s`
+)
+
+// refresh will load PEM-encoded public keys from the database table
+// as well as a list of revoked JWT token ids.
+func (a *authenticator) refresh(ctx context.Context, tx pgxtype.Querier) error {
+	var nextKeys []crypto.PublicKey
+	nextRevoked := make(map[string]struct{})
+
+	rows, err := tx.Query(ctx, a.sql.selectKeys)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var pemBytes []byte
+		if err := rows.Scan(&id, &pemBytes); err != nil {
+			return errors.WithStack(err)
+		}
+
+		// Decode doesn't return an error, just the rest of the bytes.
+		block, _ := pem.Decode(pemBytes)
+		if block == nil {
+			return errors.Errorf("no PEM data in %s", id)
+		}
+
+		key, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return errors.Wrapf(err, "could not decode public key in %s", id)
+		}
+		nextKeys = append(nextKeys, key)
+	}
+	rows.Close()
+
+	rows, err = tx.Query(ctx, a.sql.selectRevoked)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return errors.WithStack(err)
+		}
+		nextRevoked[id] = struct{}{}
+	}
+	rows.Close()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mu.publicKeys = nextKeys
+	a.mu.revoked = nextRevoked
+	log.Trace("refreshed JWT data")
+	return nil
+}
+
+func matches(allowed, requested ident.Schema) bool {
+	dbMatches := allowed.Database() == requested.Database() || allowed.Database() == wildcard
+	schemaMatches := allowed.Schema() == requested.Schema() || allowed.Schema() == wildcard
+	return dbMatches && schemaMatches
+}
