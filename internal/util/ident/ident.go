@@ -108,6 +108,16 @@ func (n Ident) Raw() string {
 // String returns the ident in a manner suitable for constructing a query.
 func (n Ident) String() string { return n.q }
 
+// UnmarshalJSON converts a raw json string into an Ident.
+func (n *Ident) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*n = New(raw)
+	return nil
+}
+
 // A Schema identifier is a two-part ident, consisting of an SQL
 // database and schema. This type is an immutable value
 // type, suitable for use as a map key.
@@ -148,6 +158,20 @@ func (s Schema) String() string {
 	return fmt.Sprintf("%s.%s", s.Database(), s.Schema())
 }
 
+// UnmarshalJSON parses a two-element array.
+func (s *Schema) UnmarshalJSON(data []byte) error {
+	parts := make([]Ident, 0, 2)
+	if err := json.Unmarshal(data, &parts); err != nil {
+		return err
+	}
+	if len(parts) != 2 {
+		return errors.Errorf("expecting 2 parts, had %d", len(parts))
+	}
+	s.db = parts[0]
+	s.schema = parts[1]
+	return nil
+}
+
 // A Table identifier is a three-part ident, consisting of an SQL
 // database, schema, and table ident. This type is an immutable value
 // type, suitable for use as a map key.
@@ -183,4 +207,19 @@ func (t Table) Raw() string {
 // query.
 func (t Table) String() string {
 	return fmt.Sprintf("%s.%s.%s", t.Database(), t.Schema(), t.Table())
+}
+
+// UnmarshalJSON parses a three-element array.
+func (t *Table) UnmarshalJSON(data []byte) error {
+	parts := make([]Ident, 0, 3)
+	if err := json.Unmarshal(data, &parts); err != nil {
+		return err
+	}
+	if len(parts) != 3 {
+		return errors.Errorf("expecting 3 parts, had %d", len(parts))
+	}
+	t.db = parts[0]
+	t.schema = parts[1]
+	t.table = parts[2]
+	return nil
 }
