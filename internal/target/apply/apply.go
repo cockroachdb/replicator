@@ -17,9 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -80,7 +78,9 @@ func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ e
 	// Wait for the initial column data to be loaded.
 	select {
 	case colData := <-ch:
-		a.refreshUnlocked(colData)
+		if err := a.refreshUnlocked(colData); err != nil {
+			return nil, cancel, err
+		}
 	case <-time.After(10 * time.Second):
 		return nil, cancel, errors.Errorf("column data timeout for %s", target)
 	}
@@ -288,63 +288,21 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types
 }
 
 // refreshUnlocked updates the apply with new column information.
-func (a *apply) refreshUnlocked(colData []types.ColData) {
+func (a *apply) refreshUnlocked(colData []types.ColData) error {
+	tmpls := templatesFor(a.target, colData)
+	del, err := tmpls.delete()
+	if err != nil {
+		return err
+	}
+	upsert, err := tmpls.upsert()
+	if err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	var delete, upsert strings.Builder
-	lastPkColumn := 0
-
-	_, _ = fmt.Fprintf(&delete, "DELETE FROM %s WHERE (", a.target)
-	_, _ = fmt.Fprintf(&upsert, "UPSERT INTO %s (", a.target)
-	for i, col := range colData {
-		if col.Ignored {
-			continue
-		}
-		if col.Primary {
-			if i > 0 {
-				lastPkColumn = i
-				delete.WriteString(", ")
-			}
-			delete.WriteString(col.Name.String())
-		}
-		if i > 0 {
-			upsert.WriteString(", ")
-		}
-		upsert.WriteString(col.Name.String())
-	}
-	delete.WriteString(") = (")
-	upsert.WriteString(") VALUES (")
-	for i, col := range colData {
-		if col.Ignored {
-			continue
-		}
-		if col.Primary {
-			if i > 0 {
-				delete.WriteString(", ")
-			}
-			_, _ = fmt.Fprintf(&delete, "$%d::%s", i+1, col.Type)
-		}
-		if i > 0 {
-			upsert.WriteString(", ")
-		}
-
-		// The GEO types need some additional help to convert them from
-		// the JSON-style representations that we get.
-		switch col.Type {
-		case "GEOGRAPHY":
-			_, _ = fmt.Fprintf(&upsert, "st_geogfromgeojson($%d::jsonb)", i+1)
-		case "GEOMETRY":
-			_, _ = fmt.Fprintf(&upsert, "st_geomfromgeojson($%d::jsonb)", i+1)
-		default:
-			_, _ = fmt.Fprintf(&upsert, "$%d::%s", i+1, col.Type)
-		}
-	}
-	delete.WriteString(")")
-	upsert.WriteString(")")
-
 	a.mu.columns = colData
-	a.mu.pks = colData[:lastPkColumn+1]
-	a.mu.sql.delete = delete.String()
-	a.mu.sql.upsert = upsert.String()
+	a.mu.pks = tmpls.PK
+	a.mu.sql.delete = del
+	a.mu.sql.upsert = upsert
+	return nil
 }

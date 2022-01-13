@@ -1,0 +1,12 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+DELETE FROM {{ .TableName }} WHERE (
+{{- range $index, $col :=  .PK -}}
+    {{- if $index -}},{{- end -}}
+    {{- $col.Name -}}
+{{- end -}}
+) = (
+{{- range $index, $col := .PK -}}
+    {{- if $index -}},{{- end -}}
+    ${{- oneBased $index -}}
+{{- end -}}
+)
