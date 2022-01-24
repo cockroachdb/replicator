@@ -1,0 +1,28 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+{{- /*
+UPSERT INTO "database"."schema"."table"
+ ("pk0","pk1","val0","val1","geom","geog")
+ VALUES (
+$1::STRING,
+st_geomfromgeojson($2::JSONB),
+st_geogfromgeojson($3::JSONB))
+*/ -}}
+UPSERT INTO {{ .TableName }} (
+{{- range $index, $col := .Columns -}}
+    {{- if $index -}},{{- end -}}
+    {{- $col.Name -}}
+{{- end -}}
+) VALUES (
+{{- range $index, $col := .Columns -}}
+    {{- if $index -}},{{- end -}}
+
+    {{- if eq $col.Type "GEOGRAPHY" -}}
+        st_geogfromgeojson(${{ oneBased $index }}::JSONB)
+    {{- else if eq $col.Type "GEOMETRY" -}}
+        st_geomfromgeojson(${{ oneBased $index }}::JSONB)
+    {{- else -}}
+        ${{ oneBased $index }}::{{ $col.Type }}
+    {{- end -}}
+{{- end -}}
+)
+{{- /* Trim whitespace */ -}}
