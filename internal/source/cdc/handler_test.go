@@ -83,41 +83,41 @@ func testHandler(t *testing.T, immediate bool) {
 		a := assert.New(t)
 
 		// Stage two lines of data.
-		a.NoError(h.ndjson(ctx,
-			ndjsonURL{
-				target: tableInfo.Name(),
-			},
-			immediate,
-			strings.NewReader(`
+		a.NoError(h.ndjson(ctx, &request{
+			immediate: immediate,
+			target:    tableInfo.Name(),
+			body: strings.NewReader(`
 { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "updated" : "1.0" }
 { "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "updated" : "1.0" }
-`)))
+`),
+		}))
 
 		// Flush them and verify that the target rows were materialized.
-		a.NoError(h.resolved(ctx, resolvedURL{
+		a.NoError(h.resolved(ctx, &request{
+			immediate: immediate,
 			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
 			timestamp: hlc.New(2, 0),
-		}, immediate))
+		}))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
 		a.Equal(2, ct)
 
 		// Now, delete the data.
-		a.NoError(h.ndjson(ctx,
-			ndjsonURL{
-				target: tableInfo.Name(),
-			},
-			immediate,
-			strings.NewReader(`
+		a.NoError(h.ndjson(ctx, &request{
+			target:    tableInfo.Name(),
+			immediate: immediate,
+			body: strings.NewReader(`
 { "after" : null, "key" : [ 42 ], "updated" : "3.0" }
 { "key" : [ 99 ], "updated" : "3.0" }
-`)))
+`),
+		}))
 
-		a.NoError(h.resolved(ctx, resolvedURL{
+		a.NoError(h.resolved(ctx, &request{
+			immediate: immediate,
 			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
 			timestamp: hlc.New(5, 0),
-		}, immediate))
+		}))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -131,40 +131,44 @@ func testHandler(t *testing.T, immediate bool) {
 		schema := ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema())
 
 		// Insert data and verify flushing.
-		a.NoError(h.webhook(ctx,
-			webhookURL{schema},
-			immediate,
-			strings.NewReader(fmt.Sprintf(`
+		a.NoError(h.webhook(ctx, &request{
+			immediate: immediate,
+			target:    schema,
+			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "topic" : %[1]s, "updated" : "10.0" },
   { "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "topic" : %[1]s, "updated" : "10.0" }
 ] }
-`, tableInfo.Name().Table()))))
+`, tableInfo.Name().Table())),
+		}))
 
-		a.NoError(h.webhook(ctx,
-			webhookURL{schema},
-			immediate,
-			strings.NewReader(`{ "resolved" : "20.0" }`)))
+		a.NoError(h.webhook(ctx, &request{
+			immediate: immediate,
+			target:    schema,
+			body:      strings.NewReader(`{ "resolved" : "20.0" }`),
+		}))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
 		a.Equal(2, ct)
 
 		// Now, delete the data.
-		a.NoError(h.webhook(ctx,
-			webhookURL{schema},
-			immediate,
-			strings.NewReader(fmt.Sprintf(`
+		a.NoError(h.webhook(ctx, &request{
+			immediate: immediate,
+			target:    schema,
+			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "key" : [ 42 ], "topic" : %[1]s, "updated" : "30.0" },
   { "after" : null, "key" : [ 99 ], "topic" : %[1]s, "updated" : "30.0" }
 ] }
-`, tableInfo.Name().Table()))))
+`, tableInfo.Name().Table())),
+		}))
 
-		a.NoError(h.webhook(ctx,
-			webhookURL{schema},
-			immediate,
-			strings.NewReader(`{ "resolved" : "40.0" }`)))
+		a.NoError(h.webhook(ctx, &request{
+			immediate: immediate,
+			target:    schema,
+			body:      strings.NewReader(`{ "resolved" : "40.0" }`),
+		}))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -174,23 +178,21 @@ func testHandler(t *testing.T, immediate bool) {
 	// Verify that an empty post doesn't crash.
 	t.Run("empty-ndjson", func(t *testing.T) {
 		a := assert.New(t)
-		a.NoError(h.ndjson(ctx,
-			ndjsonURL{
-				target: tableInfo.Name(),
-			},
-			immediate,
-			strings.NewReader("")))
+		a.NoError(h.ndjson(ctx, &request{
+			immediate: immediate,
+			target:    tableInfo.Name(),
+			body:      strings.NewReader(""),
+		}))
 	})
 
 	// Verify that an empty webhook post doesn't crash.
 	t.Run("empty-webhook", func(t *testing.T) {
 		a := assert.New(t)
-		a.NoError(h.webhook(ctx,
-			webhookURL{
-				target: ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
-			},
-			immediate,
-			strings.NewReader("")))
+		a.NoError(h.webhook(ctx, &request{
+			immediate: immediate,
+			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
+			body:      strings.NewReader(""),
+		}))
 	})
 
 	// Advance the resolved timestamp for the table to well into the
@@ -198,14 +200,16 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Run("resolved-goes-backwards", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(h.resolved(ctx, resolvedURL{
+		a.NoError(h.resolved(ctx, &request{
+			immediate: immediate,
 			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
 			timestamp: hlc.New(50000, 0),
-		}, immediate))
-		err := h.resolved(ctx, resolvedURL{
+		}))
+		err := h.resolved(ctx, &request{
+			immediate: immediate,
 			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
 			timestamp: hlc.New(25, 0),
-		}, immediate)
+		})
 		if immediate {
 			// Resolved timestamp tracking is disable in immediate mode.
 			a.NoError(err)
