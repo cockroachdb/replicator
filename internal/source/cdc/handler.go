@@ -13,13 +13,17 @@
 package cdc
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -41,6 +45,15 @@ type Handler struct {
 	Watchers      types.Watchers      // Schema data.
 }
 
+// A request is configured by the various parseURL methods in Handler.
+type request struct {
+	body      io.Reader
+	immediate bool
+	leaf      func(ctx context.Context, req *request) error
+	target    ident.Schematic
+	timestamp hlc.Time
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -52,6 +65,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		log.WithError(err).WithField("uri", r.RequestURI).Error()
 	}
+
+	defer func() {
+		if thrown := recover(); thrown != nil {
+			err, ok := thrown.(error)
+			if !ok {
+				err = errors.Errorf("unexpected error: %v", thrown)
+			}
+			sendErr(err)
+		}
+	}()
 
 	// checkAccess returns true if the request should continue.
 	checkAccess := func(target ident.Schematic) bool {
@@ -84,34 +107,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return false
 	}
 
-	immediate := false
+	req := &request{}
+	switch {
+	case h.parseWebhookURL(r.URL, req) == nil:
+	case h.parseNdjsonURL(r.URL, req) == nil:
+	case h.parseResolvedURL(r.URL, req) == nil:
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
+	if !checkAccess(req.target) {
+		return
+	}
+
+	req.body = r.Body
 	if found := r.URL.Query().Get(ImmediateParam); found != "" {
 		var err error
-		immediate, err = strconv.ParseBool(found)
+		req.immediate, err = strconv.ParseBool(found)
 		if err != nil {
 			sendErr(err)
 			return
 		}
 	}
 
-	if ndjson, err := parseNdjsonURL(r.URL.Path); err == nil {
-		if checkAccess(ndjson.target) {
-			sendErr(h.ndjson(ctx, ndjson, immediate, r.Body))
-		}
-		return
-	}
-	if resolved, err := parseResolvedURL(r.URL.Path); err == nil {
-		if checkAccess(resolved.target) {
-			sendErr(h.resolved(ctx, resolved, immediate))
-		}
-		return
-	}
-	if webhook, err := parseWebhookURL(r.URL.Path); err == nil {
-		if checkAccess(webhook.target) {
-			sendErr(h.webhook(ctx, webhook, immediate, r.Body))
-		}
-		return
-	}
-
-	http.NotFound(w, r)
+	sendErr(req.leaf(ctx, req))
 }

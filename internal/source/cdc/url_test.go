@@ -13,8 +13,10 @@ package cdc
 // This file contains code repackaged from url_test.go.
 
 import (
+	"net/url"
 	"testing"
 
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -45,13 +47,17 @@ func TestNdjsonURL(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.u, func(t *testing.T) {
 			a := assert.New(t)
-			p, err := parseNdjsonURL(tc.u)
+			req := &request{}
+			u, err := url.Parse(tc.u)
+			a.NoError(err)
+
+			err = (&Handler{}).parseNdjsonURL(u, req)
 			if tc.expectErr {
 				a.Error(err)
 				return
 			}
 			if a.NoError(err) {
-				a.Equal(tc.expect, p.target.Raw())
+				a.Equal(tc.expect, req.target.(ident.Table).Raw())
 			}
 		})
 	}
@@ -80,13 +86,17 @@ func TestResolvedURL(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.u, func(t *testing.T) {
 			a := assert.New(t)
-			p, err := parseResolvedURL(tc.u)
+			req := &request{}
+			u, err := url.Parse(tc.u)
+			a.NoError(err)
+
+			err = (&Handler{}).parseResolvedURL(u, req)
 			if tc.expectErr {
 				a.Error(err)
 				return
 			}
 			if a.NoError(err) {
-				a.Equal(tc.expect, p.target.Raw())
+				a.Equal(tc.expect, req.target.AsSchema().Raw())
 			}
 		})
 	}

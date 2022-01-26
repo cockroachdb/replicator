@@ -14,6 +14,7 @@ package cdc
 
 import (
 	"context"
+	"net/url"
 	"regexp"
 	"strconv"
 	"time"
@@ -38,32 +39,30 @@ var (
 	resolvedTimestamp = resolvedRegex.SubexpIndex("timestamp")
 )
 
-// resolvedURL contains all the parsed info from an ndjson url.
-type resolvedURL struct {
-	target    ident.Schema
-	timestamp hlc.Time
-}
-
-func parseResolvedURL(url string) (resolvedURL, error) {
-	match := resolvedRegex.FindStringSubmatch(url)
+func (h *Handler) parseResolvedURL(url *url.URL, req *request) error {
+	match := resolvedRegex.FindStringSubmatch(url.Path)
 	if len(match) != resolvedRegex.NumSubexp()+1 {
-		return resolvedURL{}, errors.Errorf("can't parse url %s", url)
+		return errors.Errorf("can't parse url %s", url)
 	}
 
-	resolved := resolvedURL{
-		target: ident.NewSchema(ident.New(match[resolvedDB]), ident.New(match[resolvedSchema])),
-	}
+	target := ident.NewSchema(ident.New(match[resolvedDB]), ident.New(match[resolvedSchema]))
 
 	tsText := match[resolvedTimestamp]
 	if len(tsText) != 33 {
-		return resolvedURL{}, errors.Errorf(
+		return errors.Errorf(
 			"expected timestamp to be 33 characters long, got %d: %s",
 			len(tsText), tsText,
 		)
 	}
-	var err error
-	resolved.timestamp, err = parseResolvedTimestamp(tsText[:23], tsText[23:])
-	return resolved, err
+	timestamp, err := parseResolvedTimestamp(tsText[:23], tsText[23:])
+	if err != nil {
+		return err
+	}
+
+	req.leaf = h.resolved
+	req.target = target
+	req.timestamp = timestamp
+	return nil
 }
 
 // This is the timestamp format:  YYYYMMDDHHMMSSNNNNNNNNNLLLLLLLLLL
@@ -101,10 +100,11 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 }
 
 // resolved acts upon a resolved timestamp message.
-func (h *Handler) resolved(ctx context.Context, r resolvedURL, immediate bool) error {
-	if immediate {
+func (h *Handler) resolved(ctx context.Context, req *request) error {
+	if req.immediate {
 		return nil
 	}
+	target := req.target.(ident.Schema)
 
 	return retry.Retry(ctx, func(ctx context.Context) error {
 		tx, err := h.Pool.Begin(ctx)
@@ -113,11 +113,11 @@ func (h *Handler) resolved(ctx context.Context, r resolvedURL, immediate bool) e
 		}
 		defer tx.Rollback(ctx)
 
-		watcher, err := h.Watchers.Get(ctx, r.target.Database())
+		watcher, err := h.Watchers.Get(ctx, target.Database())
 		if err != nil {
 			return err
 		}
-		targetTables := watcher.Snapshot(r.target)
+		targetTables := watcher.Snapshot(target)
 
 		// Prepare to merge data.
 		stores := make([]types.Stager, 0, len(targetTables))
@@ -136,19 +136,19 @@ func (h *Handler) resolved(ctx context.Context, r resolvedURL, immediate bool) e
 			appliers = append(appliers, applier)
 		}
 
-		prev, err := h.Swapper.Put(ctx, tx, r.target, r.timestamp)
+		prev, err := h.Swapper.Put(ctx, tx, target, req.timestamp)
 		if err != nil {
 			return err
 		}
 
-		if hlc.Compare(r.timestamp, prev) < 0 {
+		if hlc.Compare(req.timestamp, prev) < 0 {
 			return errors.Errorf(
 				"resolved timestamp went backwards: received %s had %s",
-				r.timestamp, prev)
+				req.timestamp, prev)
 		}
 
 		for i := range stores {
-			muts, err := stores[i].Drain(ctx, tx, prev, r.timestamp)
+			muts, err := stores[i].Drain(ctx, tx, prev, req.timestamp)
 			if err != nil {
 				return err
 			}

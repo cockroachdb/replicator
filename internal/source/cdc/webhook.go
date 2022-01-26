@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/url"
 	"regexp"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -29,25 +30,25 @@ var (
 	webhookTargetSchema = webhookRegex.SubexpIndex("targetSchema")
 )
 
-type webhookURL struct {
-	target ident.Schema
-}
-
-func parseWebhookURL(url string) (webhookURL, error) {
-	match := webhookRegex.FindStringSubmatch(url)
+func (h *Handler) parseWebhookURL(url *url.URL, req *request) error {
+	match := webhookRegex.FindStringSubmatch(url.Path)
 	if match == nil {
-		return webhookURL{}, errors.Errorf("can't parse url %s", url)
+		return errors.Errorf("can't parse url %s", url)
 	}
 
-	db := ident.New(match[webhookTargetDB])
-	schema := ident.New(match[webhookTargetSchema])
+	schema := ident.NewSchema(
+		ident.New(match[webhookTargetDB]),
+		ident.New(match[webhookTargetSchema]),
+	)
 
-	return webhookURL{ident.NewSchema(db, schema)}, nil
+	req.leaf = h.webhook
+	req.target = schema
+	return nil
 }
 
 // webhook responds to the v21.2 webhook scheme.
 // https://www.cockroachlabs.com/docs/stable/create-changefeed.html#responses
-func (h *Handler) webhook(ctx context.Context, u webhookURL, immediate bool, r io.Reader) error {
+func (h *Handler) webhook(ctx context.Context, req *request) error {
 	var payload struct {
 		Payload []struct {
 			After   json.RawMessage `json:"after"`
@@ -58,7 +59,7 @@ func (h *Handler) webhook(ctx context.Context, u webhookURL, immediate bool, r i
 		Length   int    `json:"length"`
 		Resolved string `json:"resolved"`
 	}
-	dec := json.NewDecoder(r)
+	dec := json.NewDecoder(req.body)
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
 	if err := dec.Decode(&payload); err != nil {
@@ -68,17 +69,15 @@ func (h *Handler) webhook(ctx context.Context, u webhookURL, immediate bool, r i
 		}
 		return errors.Wrap(err, "could not decode payload")
 	}
-
+	target := req.target.(ident.Schema)
 	if payload.Resolved != "" {
 		timestamp, err := hlc.Parse(payload.Resolved)
 		if err != nil {
 			return err
 		}
+		req.timestamp = timestamp
 
-		return h.resolved(ctx, resolvedURL{
-			target:    u.target,
-			timestamp: timestamp,
-		}, immediate)
+		return h.resolved(ctx, req)
 	}
 
 	// Aggregate the mutations by target table. We know that the default
@@ -92,7 +91,7 @@ func (h *Handler) webhook(ctx context.Context, u webhookURL, immediate bool, r i
 		}
 
 		target, _, err := ident.Relative(
-			u.target.Database(), u.target.Schema(), payload.Payload[i].Topic)
+			target.Database(), target.Schema(), payload.Payload[i].Topic)
 		if err != nil {
 			return err
 		}
@@ -115,7 +114,7 @@ func (h *Handler) webhook(ctx context.Context, u webhookURL, immediate bool, r i
 
 		// Stage or apply the per-target mutations.
 		for target, muts := range toProcess {
-			if immediate {
+			if req.immediate {
 				applier, err := h.Appliers.Get(ctx, target)
 				if err != nil {
 					return err

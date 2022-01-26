@@ -17,7 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
+	"net/url"
 	"regexp"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -37,22 +37,22 @@ var (
 	ndjsonTopic        = ndjsonRegex.SubexpIndex("topic")
 )
 
-// ndjsonURL contains all the parsed info from an ndjson url.
-type ndjsonURL struct {
-	target ident.Table
-}
-
-func parseNdjsonURL(url string) (ndjsonURL, error) {
-	match := ndjsonRegex.FindStringSubmatch(url)
+func (h *Handler) parseNdjsonURL(url *url.URL, req *request) error {
+	match := ndjsonRegex.FindStringSubmatch(url.Path)
 	if match == nil {
-		return ndjsonURL{}, errors.Errorf("can't parse url %s", url)
+		return errors.Errorf("can't parse url %s", url)
 	}
 
 	db := ident.New(match[ndjsonTargetDB])
 	schema := ident.New(match[ndjsonTargetSchema])
 	table, _, err := ident.Relative(db, schema, match[ndjsonTopic])
+	if err != nil {
+		return err
+	}
 
-	return ndjsonURL{table}, err
+	req.leaf = h.ndjson
+	req.target = table
+	return nil
 }
 
 // parseMutation takes a single line from an ndjson and extracts enough
@@ -94,15 +94,16 @@ func parseMutation(rawBytes []byte) (types.Mutation, error) {
 // associated Mutations. This assumes that the underlying
 // Stager will store duplicate values in an idempotent manner,
 // should the request fail partway through.
-func (h *Handler) ndjson(ctx context.Context, u ndjsonURL, immediate bool, r io.Reader) error {
+func (h *Handler) ndjson(ctx context.Context, req *request) error {
 	muts, release := batches.Mutation()
 	defer release()
+	target := req.target.(ident.Table)
 
 	// In immediate mode, we want to apply the mutations immediately.
 	// The CDC feed guarantees in-order delivery for individual rows.
 	var flush func() error
-	if immediate {
-		applier, err := h.Appliers.Get(ctx, u.target)
+	if req.immediate {
+		applier, err := h.Appliers.Get(ctx, target)
 		if err != nil {
 			return err
 		}
@@ -112,7 +113,7 @@ func (h *Handler) ndjson(ctx context.Context, u ndjsonURL, immediate bool, r io.
 			return err
 		}
 	} else {
-		store, err := h.Stores.Get(ctx, u.target)
+		store, err := h.Stores.Get(ctx, target)
 		if err != nil {
 			return err
 		}
@@ -123,7 +124,7 @@ func (h *Handler) ndjson(ctx context.Context, u ndjsonURL, immediate bool, r io.
 		}
 	}
 
-	scanner := bufio.NewScanner(r)
+	scanner := bufio.NewScanner(req.body)
 	for scanner.Scan() {
 		buf := scanner.Bytes()
 		if len(buf) == 0 {
