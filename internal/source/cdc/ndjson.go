@@ -103,7 +103,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request) error {
 	// The CDC feed guarantees in-order delivery for individual rows.
 	var flush func() error
 	if req.immediate {
-		applier, err := h.Appliers.Get(ctx, target)
+		applier, err := h.Appliers.Get(ctx, target, req.casColumns, req.deadlines)
 		if err != nil {
 			return err
 		}

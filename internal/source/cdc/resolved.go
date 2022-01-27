@@ -129,7 +129,7 @@ func (h *Handler) resolved(ctx context.Context, req *request) error {
 			}
 			stores = append(stores, store)
 
-			applier, err := h.Appliers.Get(ctx, table)
+			applier, err := h.Appliers.Get(ctx, table, req.casColumns, req.deadlines)
 			if err != nil {
 				return err
 			}

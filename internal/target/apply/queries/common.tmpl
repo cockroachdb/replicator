@@ -1,0 +1,39 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+
+{{- /* names produces a comma-separated list of column names: foo, bar, baz*/ -}}
+{{- define "names" -}}
+    {{- range $idx, $col := . }}
+        {{- if $idx -}},{{- end -}}
+        {{$col.Name}}
+    {{- end -}}
+{{- end -}}
+
+{{- /* params produces a comma-separated list of substitution params: $1, $2, $3, ... */ -}}
+{{- define "params" -}}
+    {{- range $idx, $col := . }}
+        {{- if $idx -}},{{- end -}}
+        ${{- oneBased $idx -}}
+    {{- end -}}
+{{- end -}}
+
+{{- /* exprs produces a comma-separated list of typed substitution params: $1::STRING, $2::INT */ -}}
+{{- define "exprs" -}}
+    {{- range $idx, $col := . -}}
+        {{- if $idx -}},{{- end -}}
+        {{- if eq $col.Type "GEOGRAPHY" -}}
+            st_geogfromgeojson(${{ oneBased $idx }}::JSONB)
+        {{- else if eq $col.Type "GEOMETRY" -}}
+            st_geomfromgeojson(${{ oneBased $idx }}::JSONB)
+        {{- else -}}
+            ${{ oneBased $idx }}::{{ $col.Type }}
+        {{- end -}}
+    {{- end -}}
+{{- end -}}
+
+{{- /* join creates a comma-separated list of its input: a, b, c, ... */ -}}
+{{- define "join" -}}
+    {{- range $idx, $val := . }}
+        {{- if $idx -}},{{- end -}}
+        {{- $val -}}
+    {{- end -}}
+{{- end -}}
