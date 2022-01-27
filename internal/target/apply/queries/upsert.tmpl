@@ -8,21 +8,8 @@ st_geomfromgeojson($2::JSONB),
 st_geogfromgeojson($3::JSONB))
 */ -}}
 UPSERT INTO {{ .TableName }} (
-{{- range $index, $col := .Columns -}}
-    {{- if $index -}},{{- end -}}
-    {{- $col.Name -}}
-{{- end -}}
+{{ template "names" .Columns }}
 ) VALUES (
-{{- range $index, $col := .Columns -}}
-    {{- if $index -}},{{- end -}}
-
-    {{- if eq $col.Type "GEOGRAPHY" -}}
-        st_geogfromgeojson(${{ oneBased $index }}::JSONB)
-    {{- else if eq $col.Type "GEOMETRY" -}}
-        st_geomfromgeojson(${{ oneBased $index }}::JSONB)
-    {{- else -}}
-        ${{ oneBased $index }}::{{ $col.Type }}
-    {{- end -}}
-{{- end -}}
+{{ template "exprs" .Columns }}
 )
 {{- /* Trim whitespace */ -}}

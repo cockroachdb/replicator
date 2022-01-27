@@ -216,6 +216,58 @@ scrape_configs:
       - targets: [ '127.0.0.1:30004' ]
 ```
 
+## Modes
+
+`cdc-sink` supports a number of optional modes for each changefeed.
+
+### Immediate
+
+Immediate mode writes incoming mutations to the target schema as soon as they are received, instead
+of waiting for a resolved timestamp. Transaction boundaries from the source database will not be
+preserved, but overall load on the destination database will be reduced.
+
+Immediate mode is enabled by adding the `?immediate=true` query parameter to the changefeed URL.
+
+### Compare-and-set
+
+A compare-and-set (CAS) mode allows `cdc-sink` to discard some updates, based on version- or
+time-like fields.
+
+**The use of CAS mode intentionally discards mutations and may cause data inconsistencies.**
+
+To opt into CAS mode for a feed, add a `?cas=<column_name>` query parameter to the changefeed. The
+named field should be of a type for which SQL defines a comparison operation. Common uses would be a
+`version INT` or an `updated_at TIMESTAMP` column. A mutation from the source database will be
+applied only if the CAS column is strictly greater than the value in the destination database.
+
+Multiple CAS columns can be specified by repeating the query
+parameter: `?cas=version_major&cas=version_minor&cas=version_patch`. When multiple CAS columns are
+present, they are compared as a tuple. That is, the second column is only compared if the first
+column value is equal between the source and destination clusters.
+
+All tables in the feed must have all named `cas` columns or the changefeed will fail.
+
+Deletes from the source cluster are always applied.
+
+### Deadlines
+
+A deadline mode allows `cdc-sink` to discard some updates, by comparing a time-like field to the
+destination cluster's time. This is useful when a feed's data is advisory only or changefeed
+downtime is expected.
+
+**The use of deadlines intentionally discards mutations and may cause data inconsistencies.**
+
+To opt into deadline mode for a feed, two query parameters must be
+specified: `?dln=<column_name>&dli=<interval>`. The `dln` parameter names a column whose values can
+be coerced to a `TIMESTAMP`. The `dli` parameter specifies some number of seconds, or an interval
+value, such as `1m`.
+
+Multiple deadline columns may be specified by repeating pairs of `dln` and `dli` parameters.
+
+All tables in the feed must have all named `dln` columns.
+
+Deletes from the source cluster are always applied.
+
 ## Security Considerations
 
 At a high level, `cdc-sink` accepts network connections to apply arbitrary mutations to the target

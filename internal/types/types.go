@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -33,7 +34,7 @@ type Applier interface {
 
 // Appliers is a factory for Applier instances.
 type Appliers interface {
-	Get(ctx context.Context, target ident.Table) (Applier, error)
+	Get(ctx context.Context, target ident.Table, casColumns []ident.Ident, deadlines Deadlines) (Applier, error)
 }
 
 // An Authenticator determines if an operation on some schema should be
@@ -51,6 +52,9 @@ type Batcher interface {
 	pgxtype.Querier
 	SendBatch(ctx context.Context, batch *pgx.Batch) pgx.BatchResults
 }
+
+// Deadlines associate a column identifier with a duration.
+type Deadlines map[ident.Ident]time.Duration
 
 // A Mutation describes a row to upsert into the target database.  That
 // is, it is a collection of column values to apply to a row in some
