@@ -1,14 +1,8 @@
 {{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
 {{- /* DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1") = ($1,$2) */ -}}
 DELETE FROM {{ .TableName }} WHERE (
-{{- range $index, $col :=  .PK -}}
-    {{- if $index -}},{{- end -}}
-    {{- $col.Name -}}
-{{- end -}}
-) = (
-{{- range $index, $col := .PK -}}
-    {{- if $index -}},{{- end -}}
-    ${{- oneBased $index -}}
-{{- end -}}
+    {{- template "names" .PK -}}
+)=(
+    {{- template "params" .PK -}}
 )
 {{- /* Trim whitespace */ -}}

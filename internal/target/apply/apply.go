@@ -33,8 +33,10 @@ import (
 
 // apply will upsert mutations and deletions into a target table.
 type apply struct {
-	cancel context.CancelFunc
-	target ident.Table
+	cancel     context.CancelFunc
+	casColumns []ident.Ident
+	deadlines  types.Deadlines
+	target     ident.Table
 
 	deletes   prometheus.Counter
 	durations prometheus.Observer
@@ -58,7 +60,9 @@ type apply struct {
 var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
-func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ error) {
+func newApply(
+	w types.Watcher, target ident.Table, casColumns []ident.Ident, deadlines types.Deadlines,
+) (_ *apply, cancel func(), _ error) {
 	ch, cancel, err := w.Watch(target)
 	if err != nil {
 		return nil, cancel, err
@@ -66,8 +70,10 @@ func newApply(w types.Watcher, target ident.Table) (_ *apply, cancel func(), _ e
 
 	labelValues := metrics.TableValues(target)
 	a := &apply{
-		cancel: cancel,
-		target: target,
+		cancel:     cancel,
+		casColumns: casColumns,
+		deadlines:  deadlines,
+		target:     target,
 
 		deletes:   applyDeletes.WithLabelValues(labelValues...),
 		durations: applyDurations.WithLabelValues(labelValues...),
@@ -274,12 +280,18 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types
 	res := db.SendBatch(ctx, batch)
 	defer res.Close()
 
+	rowsUpserted := int64(0)
 	for i, j := 0, batch.Len(); i < j; i++ {
-		if _, err := res.Exec(); err != nil {
+		tag, err := res.Exec()
+		if err != nil {
 			return errors.Wrap(err, a.mu.sql.upsert)
 		}
+		rowsUpserted += tag.RowsAffected()
 	}
-	a.upserts.Add(float64(len(muts)))
+
+	// Defer metrics update until we're confident that the transaction
+	// will commit.
+	a.upserts.Add(float64(rowsUpserted))
 	log.WithFields(log.Fields{
 		"count":  len(muts),
 		"target": a.target,
@@ -289,7 +301,24 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types
 
 // refreshUnlocked updates the apply with new column information.
 func (a *apply) refreshUnlocked(colData []types.ColData) error {
-	tmpls := newTemplates(a.target, colData)
+	// We want to verify that the cas and deadline columns actually
+	// exist in the incoming column data.
+	allColNames := make(map[ident.Ident]struct{}, len(colData))
+	for _, col := range colData {
+		allColNames[col.Name] = struct{}{}
+	}
+	for _, col := range a.casColumns {
+		if _, found := allColNames[col]; !found {
+			return errors.Errorf("cas column name %s not found in table %s", col, a.target)
+		}
+	}
+	for col := range a.deadlines {
+		if _, found := allColNames[col]; !found {
+			return errors.Errorf("deadline column name %s not found in table %s", col, a.target)
+		}
+	}
+
+	tmpls := newTemplates(a.target, a.casColumns, a.deadlines, colData)
 	del, err := tmpls.delete()
 	if err != nil {
 		return err

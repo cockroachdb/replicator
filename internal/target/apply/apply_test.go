@@ -11,14 +11,19 @@
 package apply
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/gofrs/uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
@@ -53,7 +58,7 @@ func TestApply(t *testing.T) {
 		return
 	}
 
-	app, cancel, err := newApply(watcher, tbl.Name())
+	app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
 	if !a.NoError(err) {
 		return
 	}
@@ -311,7 +316,7 @@ func TestAllDataTypes(t *testing.T) {
 				return
 			}
 
-			app, cancel, err := newApply(watcher, tbl.Name())
+			app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
 			if !a.NoError(err) {
 				return
 			}
@@ -342,6 +347,153 @@ func TestAllDataTypes(t *testing.T) {
 			).Scan(&jsonFound))
 			a.Equal(jsonValue, jsonFound)
 		})
+	}
+}
+
+// This tests compare-and-set behaviors.
+func TestConditionals(t *testing.T) {
+	t.Run("base", func(t *testing.T) { testConditions(t, false, false) })
+	t.Run("cas", func(t *testing.T) { testConditions(t, true, false) })
+	t.Run("deadline", func(t *testing.T) { testConditions(t, false, true) })
+	t.Run("cas+deadline", func(t *testing.T) { testConditions(t, true, true) })
+}
+
+func testConditions(t *testing.T, cas, deadline bool) {
+	a := assert.New(t)
+	ctx, dbInfo, cancel := sinktest.Context()
+	defer cancel()
+
+	dbName, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	// The payload and the table are just a key and version field.
+	type Payload struct {
+		PK  int       `json:"pk"`
+		Ver int       `json:"ver"`
+		TS  time.Time `json:"ts"`
+	}
+
+	tbl, err := sinktest.CreateTable(ctx, dbName,
+		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP)")
+	if !a.NoError(err) {
+		return
+	}
+
+	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
+	defer cancel()
+	watcher, err := watchers.Get(ctx, dbName)
+	if !a.NoError(err) {
+		return
+	}
+
+	t.Run("check_invalid_cas_name", func(t *testing.T) {
+		a := assert.New(t)
+		_, cancel, err := newApply(watcher, tbl.Name(), []ident.Ident{ident.New("bad_column")}, types.Deadlines{})
+		defer cancel()
+		if a.Error(err) {
+			a.Contains(err.Error(), "bad_column")
+		}
+	})
+
+	t.Run("check_invalid_deadline_name", func(t *testing.T) {
+		a := assert.New(t)
+		_, cancel, err := newApply(watcher, tbl.Name(), nil, types.Deadlines{ident.New("bad_column"): 0})
+		defer cancel()
+		if a.Error(err) {
+			a.Contains(err.Error(), "bad_column")
+		}
+	})
+
+	// The PK value is a fixed value.
+	const id = 42
+
+	// Utility function to retrieve the most recently set data.
+	getRow := func() (version int, ts time.Time, err error) {
+		err = dbInfo.Pool().QueryRow(ctx,
+			fmt.Sprintf("SELECT ver, ts FROM %s WHERE pk = $1", tbl.Name()), id,
+		).Scan(&version, &ts)
+		return
+	}
+
+	// Set up the apply instance, per the configuration.
+	var casColumns []ident.Ident
+	if cas {
+		casColumns = []ident.Ident{ident.New("ver")}
+	}
+	deadlines := types.Deadlines{}
+	if deadline {
+		deadlines[ident.New("ts")] = 10 * time.Minute
+	}
+	app, cancel, err := newApply(watcher, tbl.Name(), casColumns, deadlines)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	log.Debug(app.mu.sql.delete)
+	log.Debug(app.mu.sql.upsert)
+
+	now := time.Now().UTC().Round(time.Second)
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+
+	proposals := []struct {
+		version int
+		ts      time.Time
+	}{
+		{0, future}, // Ensure that a zero-version can be inserted.
+		{100, future},
+		{5, future},
+		{200, past},
+		{9, past},
+		{300, future},
+	}
+	var lastTime time.Time
+	lastVersion := -1
+
+	for _, proposed := range proposals {
+		var shouldApply bool
+		switch {
+		case !cas && !deadline:
+			shouldApply = true
+		case cas && deadline:
+			shouldApply = proposed.version > lastVersion && proposed.ts == future
+		case cas:
+			shouldApply = proposed.version > lastVersion
+		case deadline:
+			shouldApply = proposed.ts == future
+		}
+
+		expectedTime := lastTime
+		expectedVersion := lastVersion
+		if shouldApply {
+			expectedTime = proposed.ts
+			expectedVersion = proposed.version
+		}
+
+		p := Payload{PK: id, Ver: proposed.version, TS: proposed.ts}
+		bytes, err := json.Marshal(p)
+		a.NoError(err)
+
+		// Applying a discarded mutation should never result in an error.
+		a.NoError(app.Apply(ctx, dbInfo.Pool(), []types.Mutation{{Data: bytes}}))
+
+		ct, err := tbl.RowCount(ctx)
+		a.Equal(1, ct)
+		a.NoError(err)
+
+		// Test the version that's currently in the database, make sure
+		// that we haven't gone backwards.
+		ver, ts, err := getRow()
+		a.Equal(expectedTime, ts)
+		a.Equal(expectedVersion, ver)
+		a.NoError(err)
+
+		lastTime = expectedTime
+		lastVersion = expectedVersion
 	}
 }
 
@@ -379,7 +531,7 @@ func TestVirtualColumns(t *testing.T) {
 		return
 	}
 
-	app, cancel, err := newApply(watcher, tbl.Name())
+	app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
 	if !a.NoError(err) {
 		return
 	}
@@ -408,6 +560,102 @@ func TestVirtualColumns(t *testing.T) {
 		err = app.Apply(ctx, dbInfo.Pool(), muts)
 		if a.Error(err) {
 			a.Contains(err.Error(), "unexpected columns")
+		}
+	})
+}
+
+type benchConfig struct {
+	name          string
+	cas, deadline bool
+}
+
+func BenchmarkApply(b *testing.B) {
+	tcs := []benchConfig{
+		{name: "base"},
+		{name: "cas", cas: true},
+		{name: "deadline", deadline: true},
+		{name: "cas+deadline", cas: true, deadline: true},
+	}
+
+	for _, tc := range tcs {
+		b.Run(tc.name, func(b *testing.B) {
+			benchConditions(b, tc)
+		})
+	}
+}
+
+func benchConditions(b *testing.B, cfg benchConfig) {
+	a := assert.New(b)
+	ctx, dbInfo, cancel := sinktest.Context()
+	defer cancel()
+
+	dbName, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	tbl, err := sinktest.CreateTable(ctx, dbName,
+		"CREATE TABLE %s (pk UUID PRIMARY KEY, ver INT, ts TIMESTAMP)")
+	if !a.NoError(err) {
+		return
+	}
+
+	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
+	defer cancel()
+	watcher, err := watchers.Get(ctx, dbName)
+	if !a.NoError(err) {
+		return
+	}
+
+	// Set up the apply instance, per the configuration.
+	var casColumns []ident.Ident
+	if cfg.cas {
+		casColumns = []ident.Ident{ident.New("ver")}
+	}
+	deadlines := types.Deadlines{}
+	if cfg.deadline {
+		deadlines[ident.New("ts")] = time.Hour
+	}
+	app, cancel, err := newApply(watcher, tbl.Name(), casColumns, deadlines)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	// The payload and the table are just a key and version field.
+	type Payload struct {
+		PK  uuid.UUID `json:"pk"`
+		Ver int       `json:"ver"`
+		TS  time.Time `json:"ts"`
+	}
+
+	// Initialize a finite number of records. Each worker will increment
+	// the version counter, so the CAS operations will perform an
+	// update.
+	now := time.Now().UTC().Round(time.Second)
+	const rowCount = 10000
+	var data [rowCount]Payload
+	for i := range data {
+		data[i].PK, _ = uuid.NewV4()
+		data[i].TS = now
+	}
+
+	b.ResetTimer()
+	var sharedIndex int64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			idx := atomic.AddInt64(&sharedIndex, 1) % rowCount
+			data[idx].Ver++
+			bytes, err := json.Marshal(data[idx])
+			if !a.NoError(err) {
+				return
+			}
+
+			// Applying a discarded mutation should never result in an error.
+			if !a.NoError(app.Apply(context.Background(), dbInfo.Pool(), []types.Mutation{{Data: bytes}})) {
+				return
+			}
 		}
 	})
 }

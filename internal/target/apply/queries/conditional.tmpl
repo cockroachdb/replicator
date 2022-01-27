@@ -1,0 +1,86 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+{{- /*
+This template implements the conditional update flow (compare-and-set,
+deadlines). For an expanded example, see the templates_test.go file.
+
+The query is structured as a CTE, so we'll update this $dataSource
+variable as different clauses are conditionally introduced.
+*/ -}}
+{{- $dataSource := "data" -}}
+
+{{- /*
+data: the proposed values to insert. We explicitly name the columns to
+aid in joins below.
+
+WITH data( pk0, pk1, val0, val1, ...) AS (VALUES ($1, $2, $3, ...))
+*/ -}}
+WITH data( {{- template "names" .Columns -}} ) AS (
+VALUES ( {{- template "exprs" .Columns -}} ))
+
+
+{{- /*
+deadlined: filters the incoming data by the deadline columns
+
+deadlined AS (SELECT * from data WHERE ts > now() - '1m'::INTERVAL)
+*/ -}}
+{{- if .Deadlines -}}
+, {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
+deadlined AS (SELECT * FROM {{ $dataSource }} WHERE
+{{- $andNeeded := false -}} {{- range $dlc, $dli := .Deadlines -}}
+    {{- if $andNeeded -}} AND {{- end -}}
+    ( {{- $dlc -}} >now()-'{{- $dli -}}'::INTERVAL)
+    {{- $andNeeded = true -}}
+{{- end -}})
+{{- $dataSource = "deadlined" -}}
+{{- end -}}
+
+
+{{- /*
+current: selects the current values of the PK and CAS columns by
+joining the target table to the proposed data by PK
+
+current AS (SELECT pk0, pk1, cas0, cas1 FROM target JOIN data USING (pk0, pk1))
+*/ -}}
+{{- if .Conditions -}}
+, {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
+current AS (
+SELECT {{ template "names" .PK }}, {{ template "join" (qualify .TableName .Conditions) }}
+FROM {{ .TableName }}
+JOIN {{ $dataSource }}
+USING ({{ template "names" .PK }})),
+{{- nl -}}
+
+
+{{- /*
+action: left-joins data to current, by PK, where no current value
+exists or the proposed data has a CAS tuple strictly greater than the
+current data.
+
+action AS (
+  SELECT data.* FROM data
+  LEFT JOIN current
+  USING (pk0, pk1)
+  WHERE current.pk0 IS NULL OR
+  ( data.cas0, data.cas1) > ( current.cas0, current.cas1 )
+*/ -}}
+action AS (
+SELECT {{ $dataSource }}.* FROM {{ $dataSource }}
+LEFT JOIN current
+USING ({{ template "names" .PK }})
+WHERE current.{{ (index .PK 0).Name }}{{/* >= v21.2 lets us say "current IS NULL" */}} IS NULL OR
+( {{- template "join" (qualify $dataSource .Conditions) -}} ) > ( {{- template "join" (qualify "current" .Conditions) -}} ))
+{{- $dataSource = "action" -}}
+{{- end -}}{{- /* .Conditions */ -}}
+
+{{- /*
+The main clause is to then upsert the actionable rows into the
+target table.
+
+UPSERT INTO table (pk0, pk1, ....)
+  SELECT * FROM dataSource
+*/ -}}
+{{- nl -}}
+UPSERT INTO {{ .TableName }} ({{ template "names" .Columns }})
+SELECT * FROM {{ $dataSource }}
+
+{{- /* Trim whitespace */ -}}
