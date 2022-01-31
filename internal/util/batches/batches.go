@@ -19,7 +19,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 )
 
-const defaultSize = 1000
+const defaultSize = 100
 
 var batchSize = flag.Int("batchSize", defaultSize, "default size for batched operations")
 

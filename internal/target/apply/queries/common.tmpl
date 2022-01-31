@@ -8,25 +8,44 @@
     {{- end -}}
 {{- end -}}
 
-{{- /* params produces a comma-separated list of substitution params: $1, $2, $3, ... */ -}}
+{{- /*
+params produces a comma-separated list of substitution params tuples:
+($1, $2, $3), ($4, $5, $6), ...
+*/ -}}
 {{- define "params" -}}
-    {{- range $idx, $col := . }}
-        {{- if $idx -}},{{- end -}}
-        ${{- oneBased $idx -}}
+    {{- range $pairIdx, $pairs := $.Vars -}}
+        {{- if $pairIdx -}},{{- end -}}
+        (
+        {{- $needsComma := false }}
+        {{- range $pair := $pairs -}}
+            {{- if $needsComma -}},{{- else -}}{{- $needsComma = true }}{{- end -}}
+            ${{- $pair.Index -}}
+        {{- end -}}
+        )
     {{- end -}}
 {{- end -}}
 
-{{- /* exprs produces a comma-separated list of typed substitution params: $1::STRING, $2::INT */ -}}
+{{- /*
+exprs is similar to the param templates, save that it adds explicit
+typecasts to each variable produces a comma-separated list of typed
+substitution params: ($1::STRING, $2::INT), (...), (...), ...
+*/ -}}
 {{- define "exprs" -}}
-    {{- range $idx, $col := . -}}
-        {{- if $idx -}},{{- end -}}
-        {{- if eq $col.Type "GEOGRAPHY" -}}
-            st_geogfromgeojson(${{ oneBased $idx }}::JSONB)
-        {{- else if eq $col.Type "GEOMETRY" -}}
-            st_geomfromgeojson(${{ oneBased $idx }}::JSONB)
-        {{- else -}}
-            ${{ oneBased $idx }}::{{ $col.Type }}
+    {{- range $pairIdx, $pairs := $.Vars -}}
+        {{- if $pairIdx -}},{{- nl -}}{{- end -}}
+        (
+        {{- $needsComma := false }}
+        {{- range $pair := $pairs -}}
+            {{- if $needsComma -}},{{- else -}}{{- $needsComma = true }}{{- end -}}
+            {{- if eq $pair.Column.Type "GEOGRAPHY" -}}
+                st_geogfromgeojson(${{ $pair.Index }}::JSONB)
+            {{- else if eq $pair.Column.Type "GEOMETRY" -}}
+                st_geomfromgeojson(${{ $pair.Index }}::JSONB)
+            {{- else -}}
+                ${{ $pair.Index }}::{{ $pair.Column.Type }}
+            {{- end -}}
         {{- end -}}
+        )
     {{- end -}}
 {{- end -}}
 

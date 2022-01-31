@@ -15,7 +15,9 @@ aid in joins below.
 WITH data( pk0, pk1, val0, val1, ...) AS (VALUES ($1, $2, $3, ...))
 */ -}}
 WITH data( {{- template "names" .Columns -}} ) AS (
-VALUES ( {{- template "exprs" .Columns -}} ))
+VALUES{{- nl -}}
+{{- template "exprs" . -}}
+)
 
 
 {{- /*
