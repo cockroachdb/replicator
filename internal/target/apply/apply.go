@@ -25,7 +25,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -45,15 +45,9 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
-		columns []types.ColData
-		pks     []types.ColData
-
-		sql struct {
-			// DELETE FROM t WHERE ("pk0", "pk1") = ($1::INT8, $2::STRING)
-			delete string
-			// UPSERT INTO t ("pk0", "pk1") VALUES ($1::INT8, $2::STRING)
-			upsert string
-		}
+		columns   []types.ColData
+		pks       []types.ColData
+		templates *templates
 	}
 }
 
@@ -107,7 +101,7 @@ func newApply(
 }
 
 // Apply applies the mutations to the target table.
-func (a *apply) Apply(ctx context.Context, tx types.Batcher, muts []types.Mutation) error {
+func (a *apply) Apply(ctx context.Context, tx pgxtype.Querier, muts []types.Mutation) error {
 	start := time.Now()
 	deletes, r := batches.Mutation()
 	defer r()
@@ -158,12 +152,16 @@ func (a *apply) Apply(ctx context.Context, tx types.Batcher, muts []types.Mutati
 	return nil
 }
 
-func (a *apply) deleteLocked(ctx context.Context, db types.Batcher, muts []types.Mutation) error {
+func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []types.Mutation) error {
 	if len(muts) == 0 {
 		return nil
 	}
+	sql, err := a.mu.templates.delete(len(muts))
+	if err != nil {
+		return err
+	}
 
-	batch := &pgx.Batch{}
+	allArgs := make([]interface{}, 0, len(a.mu.pks)*len(muts))
 
 	for i := range muts {
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Key))
@@ -182,34 +180,33 @@ func (a *apply) deleteLocked(ctx context.Context, db types.Batcher, muts []types
 					"key %s@%s",
 				len(args), len(a.mu.pks), string(muts[i].Key), muts[i].Time)
 		}
-
-		batch.Queue(a.mu.sql.delete, args...)
+		allArgs = append(allArgs, args...)
 	}
 
-	res := db.SendBatch(ctx, batch)
-	defer res.Close()
-
-	// Drain the results from each batched execution to check for errors.
-	for i := batch.Len(); i > 0; i-- {
-		_, err := res.Exec()
-		if err != nil {
-			return errors.Wrap(err, a.mu.sql.delete)
-		}
+	tag, err := db.Exec(ctx, sql, allArgs...)
+	if err != nil {
+		return errors.Wrap(err, sql)
 	}
-	a.deletes.Add(float64(len(muts)))
+
+	a.deletes.Add(float64(tag.RowsAffected()))
 	log.WithFields(log.Fields{
-		"count":  len(muts),
-		"target": a.target,
+		"applied":  tag.RowsAffected(),
+		"proposed": len(muts),
+		"target":   a.target,
 	}).Debug("deleted rows")
 	return nil
 }
 
-func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types.Mutation) error {
+func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []types.Mutation) error {
 	if len(muts) == 0 {
 		return nil
 	}
+	sql, err := a.mu.templates.upsert(len(muts))
+	if err != nil {
+		return err
+	}
 
-	batch := &pgx.Batch{}
+	allArgs := make([]interface{}, 0, len(a.mu.columns)*len(muts))
 
 	for i := range muts {
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Data))
@@ -257,7 +254,7 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types
 			}
 			args = append(args, decoded)
 		}
-		batch.Queue(a.mu.sql.upsert, args...)
+		allArgs = append(allArgs, args...)
 
 		// If new columns have been added in the source table, but not
 		// in the destination, we want to error out.
@@ -277,22 +274,16 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Batcher, muts []types
 		}
 	}
 
-	res := db.SendBatch(ctx, batch)
-	defer res.Close()
-
-	rowsUpserted := int64(0)
-	for i, j := 0, batch.Len(); i < j; i++ {
-		tag, err := res.Exec()
-		if err != nil {
-			return errors.Wrap(err, a.mu.sql.upsert)
-		}
-		rowsUpserted += tag.RowsAffected()
+	tag, err := db.Exec(ctx, sql, allArgs...)
+	if err != nil {
+		return errors.Wrap(err, sql)
 	}
 
-	a.upserts.Add(float64(rowsUpserted))
+	a.upserts.Add(float64(tag.RowsAffected()))
 	log.WithFields(log.Fields{
-		"count":  len(muts),
-		"target": a.target,
+		"applied":  tag.RowsAffected(),
+		"proposed": len(muts),
+		"target":   a.target,
 	}).Debug("upserted rows")
 	return nil
 }
@@ -317,19 +308,11 @@ func (a *apply) refreshUnlocked(colData []types.ColData) error {
 	}
 
 	tmpls := newTemplates(a.target, a.casColumns, a.deadlines, colData)
-	del, err := tmpls.delete()
-	if err != nil {
-		return err
-	}
-	upsert, err := tmpls.upsert()
-	if err != nil {
-		return err
-	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.mu.columns = colData
 	a.mu.pks = tmpls.PK
-	a.mu.sql.delete = del
-	a.mu.sql.upsert = upsert
+	a.mu.templates = tmpls
 	return nil
 }

@@ -77,15 +77,17 @@ func TestQueryTemplates(t *testing.T) {
 			name: "base",
 			upsert: `UPSERT INTO "database"."schema"."table" (
 "pk0","pk1","val0","val1","geom","geog"
-) VALUES (
-$1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB)
-)`,
+) VALUES
+($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB)),
+($7::STRING,$8::INT8,$9::STRING,$10::STRING,st_geomfromgeojson($11::JSONB),st_geogfromgeojson($12::JSONB))`,
 		},
 		{
 			name: "cas",
 			cas:  []ident.Ident{ident.New("val1"), ident.New("val0")},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog") AS (
-VALUES ($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB))),
+VALUES
+($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB)),
+($7::STRING,$8::INT8,$9::STRING,$10::STRING,st_geomfromgeojson($11::JSONB),st_geogfromgeojson($12::JSONB))),
 current AS (
 SELECT "pk0","pk1", "table"."val1","table"."val0"
 FROM "database"."schema"."table"
@@ -107,7 +109,9 @@ SELECT * FROM action`,
 				ident.New("val0"): time.Hour,
 			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog") AS (
-VALUES ($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB))),
+VALUES
+($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB)),
+($7::STRING,$8::INT8,$9::STRING,$10::STRING,st_geomfromgeojson($11::JSONB),st_geogfromgeojson($12::JSONB))),
 deadlined AS (SELECT * FROM data WHERE("val0">now()-'1h0m0s'::INTERVAL)AND("val1">now()-'1s'::INTERVAL))
 UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog")
 SELECT * FROM deadlined`,
@@ -120,7 +124,9 @@ SELECT * FROM deadlined`,
 				ident.New("val1"): time.Second,
 			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog") AS (
-VALUES ($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB))),
+VALUES
+($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB)),
+($7::STRING,$8::INT8,$9::STRING,$10::STRING,st_geomfromgeojson($11::JSONB),st_geogfromgeojson($12::JSONB))),
 deadlined AS (SELECT * FROM data WHERE("val0">now()-'1h0m0s'::INTERVAL)AND("val1">now()-'1s'::INTERVAL)),
 current AS (
 SELECT "pk0","pk1", "table"."val1","table"."val0"
@@ -139,18 +145,18 @@ SELECT * FROM action`,
 	}
 
 	// The deletion query should never change based on configuration.
-	const expectedDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")=($1,$2)`
+	const expectedDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")IN(($1,$2),($3,$4))`
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			a := assert.New(t)
 			tmpls := newTemplates(tableID, tc.cas, tc.deadline, cols)
 
-			s, err := tmpls.delete()
+			s, err := tmpls.delete(2)
 			a.NoError(err)
 			a.Equal(expectedDelete, s)
 
-			s, err = tmpls.upsert()
+			s, err = tmpls.upsert(2)
 			a.NoError(err)
 			a.Equal(tc.upsert, s)
 

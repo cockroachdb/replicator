@@ -64,9 +64,6 @@ func TestApply(t *testing.T) {
 	}
 	defer cancel()
 
-	log.Debug(app.mu.sql.delete)
-	log.Debug(app.mu.sql.upsert)
-
 	t.Run("smoke", func(t *testing.T) {
 		a := assert.New(t)
 		count := 3 * batches.Size()
@@ -322,9 +319,6 @@ func TestAllDataTypes(t *testing.T) {
 			}
 			defer cancel()
 
-			log.Debug(app.mu.sql.delete)
-			log.Debug(app.mu.sql.upsert)
-
 			var jsonValue string
 			if tc.columnValue == "" {
 				jsonValue = "null"
@@ -433,9 +427,6 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 	defer cancel()
 
-	log.Debug(app.mu.sql.delete)
-	log.Debug(app.mu.sql.upsert)
-
 	now := time.Now().UTC().Round(time.Second)
 	past := now.Add(-time.Hour)
 	future := now.Add(time.Hour)
@@ -537,9 +528,6 @@ func TestVirtualColumns(t *testing.T) {
 	}
 	defer cancel()
 
-	log.Debug(app.mu.sql.delete)
-	log.Debug(app.mu.sql.upsert)
-
 	t.Run("computed-is-ignored", func(t *testing.T) {
 		a := assert.New(t)
 		p := Payload{A: 1, B: 2, C: 3}
@@ -565,13 +553,18 @@ func TestVirtualColumns(t *testing.T) {
 }
 
 func BenchmarkApply(b *testing.B) {
-	b.Run("base", func(b *testing.B) { benchConditions(b, false, false) })
-	b.Run("cas", func(b *testing.B) { benchConditions(b, true, false) })
-	b.Run("deadline", func(b *testing.B) { benchConditions(b, false, true) })
-	b.Run("cas+deadline", func(b *testing.B) { benchConditions(b, true, true) })
+	sizes := []int{1, 10, 100, 1_000, 10_000}
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("size=%d", size), func(b *testing.B) {
+			b.Run("base", func(b *testing.B) { benchConditions(b, size, false, false) })
+			b.Run("cas", func(b *testing.B) { benchConditions(b, size, true, false) })
+			b.Run("deadline", func(b *testing.B) { benchConditions(b, size, false, true) })
+			b.Run("cas+deadline", func(b *testing.B) { benchConditions(b, size, true, true) })
+		})
+	}
 }
 
-func benchConditions(b *testing.B, cas, deadline bool) {
+func benchConditions(b *testing.B, size int, cas, deadline bool) {
 	a := assert.New(b)
 	ctx, dbInfo, cancel := sinktest.Context()
 	defer cancel()
@@ -617,32 +610,63 @@ func benchConditions(b *testing.B, cas, deadline bool) {
 		TS  time.Time `json:"ts"`
 	}
 
-	// Initialize a finite number of records. Each worker will increment
-	// the version counter, so the CAS operations will perform an
-	// update.
-	now := time.Now().UTC().Round(time.Second)
-	const rowCount = 10000
-	var data [rowCount]Payload
-	for i := range data {
-		data[i].PK, _ = uuid.NewV4()
-		data[i].TS = now
-	}
+	const idCount = 100000
 
-	b.ResetTimer()
-	var sharedIndex int64
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			idx := atomic.AddInt64(&sharedIndex, 1) % rowCount
+	// Start a generator goroutine to create a source of Mutation data.
+	muts := make(chan types.Mutation, idCount)
+	go func() {
+		// Initialize a finite number of records. We'll loop through the
+		// data rows, incrementing the version number so that
+		// conditional operations will always have something to do.
+		now := time.Now().UTC().Round(time.Second)
+		var data [idCount]Payload
+		for i := range data {
+			data[i].PK, _ = uuid.NewV4()
+			data[i].TS = now
+		}
+
+		idx := 0
+		for {
 			data[idx].Ver++
 			bytes, err := json.Marshal(data[idx])
 			if !a.NoError(err) {
 				return
 			}
 
-			// Applying a discarded mutation should never result in an error.
-			if !a.NoError(app.Apply(context.Background(), dbInfo.Pool(), []types.Mutation{{Data: bytes}})) {
+			select {
+			case <-ctx.Done():
 				return
+			case muts <- types.Mutation{Data: bytes}:
+				if idx >= idCount-1 {
+					idx = 0
+				} else {
+					idx++
+				}
 			}
 		}
+	}()
+
+	var loopTotal int64
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		batch := make([]types.Mutation, size)
+		loops := int64(0)
+
+		for pb.Next() {
+			for i := range batch {
+				mut := <-muts
+				batch[i] = mut
+				atomic.AddInt64(&loopTotal, int64(len(mut.Data)))
+			}
+
+			// Applying a discarded mutation should never result in an error.
+			if !a.NoError(app.Apply(context.Background(), dbInfo.Pool(), batch)) {
+				return
+			}
+			loops++
+		}
 	})
+
+	// Use bytes as a throughput measure.
+	b.SetBytes(atomic.LoadInt64(&loopTotal))
 }

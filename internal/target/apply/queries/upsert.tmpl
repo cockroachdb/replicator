@@ -9,7 +9,7 @@ st_geogfromgeojson($3::JSONB))
 */ -}}
 UPSERT INTO {{ .TableName }} (
 {{ template "names" .Columns }}
-) VALUES (
-{{ template "exprs" .Columns }}
-)
+) VALUES
+{{ template "exprs" . }}
+
 {{- /* Trim whitespace */ -}}
