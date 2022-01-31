@@ -2,8 +2,13 @@ name: Tests
 permissions: read-all
 on:
   push:
-    branches: [ master ]
   pull_request:
+  workflow_dispatch: # Allow manual runs to kick off benchmarks
+    inputs:
+      run_bench:
+        description: Run benchmarks
+        required: false
+        type: boolean
 
 env:
   GO_VERSION: 1.17
@@ -60,6 +65,12 @@ jobs:
         env:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
         run: go test -v -race -coverpkg=./internal/... -covermode=atomic -coverprofile=${{ env.COVER_OUT }} ./...
+
+      - name: Manual Benchmarks
+        if: ${{ github.event.inputs.run_bench }}
+        env:
+          COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
+        run: go test -v -benchtime 10s -bench . ./...
 
       - name: Stop CockroachDB
         if: ${{ always() }}

@@ -29,7 +29,7 @@ import (
 // An Applier accepts some number of Mutations and applies them to
 // a target table.
 type Applier interface {
-	Apply(context.Context, Batcher, []Mutation) error
+	Apply(context.Context, pgxtype.Querier, []Mutation) error
 }
 
 // Appliers is a factory for Applier instances.

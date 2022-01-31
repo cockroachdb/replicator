@@ -14,10 +14,13 @@ import (
 	"embed"
 	"fmt"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/golang/groupcache/lru"
 	"github.com/pkg/errors"
 )
 
@@ -30,8 +33,6 @@ var (
 		// since we generally use the whitespace-consuming template
 		// syntax.
 		"nl": func() string { return "\n" },
-
-		"oneBased": func(idx int) int { return idx + 1 },
 
 		// qualify is used with the "join" template to emit a list of
 		// qualified database identifiers. The prefix is prepended to
@@ -63,12 +64,26 @@ var (
 	upsertTemplate      = parsed.Lookup("upsert.tmpl")
 )
 
+// A templateCache stores variations of the delete and upsert commands
+// at varying batch sizes. The map keys are just ints representing the
+// number of rows that the statement should process.
+type templateCache struct {
+	sync.Mutex
+	deletes *lru.Cache
+	upserts *lru.Cache
+}
+
 type templates struct {
 	Columns    []types.ColData // All non-ignored columns.
 	Conditions []types.ColData // The version-like fields for CAS ops.
 	Deadlines  types.Deadlines // Allow too-old data to just be dropped.
 	PK         []types.ColData // All primary-key columns.
 	TableName  ident.Table     // The target table.
+	cache      *templateCache  // Memoize calls to delete() and upsert().
+
+	// The variables below here are updated during evaluation.
+
+	RowCount int // The number of rows to be applied.
 }
 
 // newTemplates constructs a new templates instance, performing some
@@ -88,6 +103,10 @@ func newTemplates(
 		Columns:    append([]types.ColData(nil), colData...),
 		Deadlines:  deadlines,
 		TableName:  target,
+		cache: &templateCache{
+			deletes: lru.New(batches.Size() / 10),
+			upserts: lru.New(batches.Size() / 10),
+		},
 	}
 
 	// Filter out the ignored columns and build the list of PK columns.
@@ -110,19 +129,76 @@ func newTemplates(
 	return ret
 }
 
-func (t *templates) delete() (string, error) {
-	var buf strings.Builder
-	err := deleteTemplate.Execute(&buf, t)
-	return buf.String(), errors.WithStack(err)
+// varPair is returned by Vars, to associate a Column with a
+// substitution-parameter index.
+type varPair struct {
+	Column types.ColData
+	Index  int
 }
 
-func (t *templates) upsert() (string, error) {
+// Vars is a generator function that returns windows of 1-based
+// substitution parameters for the given columns. These are used to
+// generate the multi-VALUES ($1,$2, ...), ($55, $56) clauses.
+func (t *templates) Vars() [][]varPair {
+	ret := make([][]varPair, t.RowCount)
+	for row := range ret {
+		ret[row] = make([]varPair, len(t.Columns))
+		for colIdx, col := range t.Columns {
+			ret[row][colIdx] = varPair{
+				Column: col,
+				Index:  row*len(t.Columns) + colIdx + 1,
+			}
+		}
+	}
+	return ret
+}
+
+func (t *templates) delete(rowCount int) (string, error) {
+	t.cache.Lock()
+	defer t.cache.Unlock()
+	if found, ok := t.cache.deletes.Get(rowCount); ok {
+		applyTemplateHits.WithLabelValues("delete").Inc()
+		return found.(string), nil
+	}
+	applyTemplateMisses.WithLabelValues("delete").Inc()
+
+	// Make a copy that we can tweak.
+	cpy := *t
+	cpy.Columns = t.PK
+	cpy.RowCount = rowCount
+
+	var buf strings.Builder
+	err := deleteTemplate.Execute(&buf, &cpy)
+	ret, err := buf.String(), errors.WithStack(err)
+	if err == nil {
+		t.cache.deletes.Add(rowCount, ret)
+	}
+	return ret, err
+}
+
+func (t *templates) upsert(rowCount int) (string, error) {
+	t.cache.Lock()
+	defer t.cache.Unlock()
+	if found, ok := t.cache.upserts.Get(rowCount); ok {
+		applyTemplateHits.WithLabelValues("upsert").Inc()
+		return found.(string), nil
+	}
+	applyTemplateMisses.WithLabelValues("upsert").Inc()
+
+	// Make a copy that we can tweak.
+	cpy := *t
+	cpy.RowCount = rowCount
+
 	var buf strings.Builder
 	var err error
-	if len(t.Conditions) == 0 && len(t.Deadlines) == 0 {
-		err = upsertTemplate.Execute(&buf, t)
+	if len(cpy.Conditions) == 0 && len(cpy.Deadlines) == 0 {
+		err = upsertTemplate.Execute(&buf, &cpy)
 	} else {
-		err = conditionalTemplate.Execute(&buf, t)
+		err = conditionalTemplate.Execute(&buf, &cpy)
 	}
-	return buf.String(), errors.WithStack(err)
+	ret, err := buf.String(), errors.WithStack(err)
+	if err == nil {
+		t.cache.upserts.Add(rowCount, ret)
+	}
+	return ret, err
 }
