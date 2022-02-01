@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
 )
 
 // An Applier accepts some number of Mutations and applies them to
@@ -43,14 +42,6 @@ type Authenticator interface {
 	// Check returns true if a request containing some bearer token
 	// should be allowed to operate on the given schema.
 	Check(ctx context.Context, schema ident.Schema, token string) (ok bool, _ error)
-}
-
-// A Batcher allows for a batch of statements to be executed in a single
-// round-trip to the database. This is implemented by several pgx types,
-// such as pgxpool.Pool and pgx.Tx.
-type Batcher interface {
-	pgxtype.Querier
-	SendBatch(ctx context.Context, batch *pgx.Batch) pgx.BatchResults
 }
 
 // Deadlines associate a column identifier with a duration.
@@ -79,7 +70,7 @@ type Stager interface {
 	Drain(ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time) ([]Mutation, error)
 
 	// Store implementations should be idempotent.
-	Store(ctx context.Context, db Batcher, muts []Mutation) error
+	Store(ctx context.Context, db pgxtype.Querier, muts []Mutation) error
 }
 
 // Stagers is a factory for Stager instances.

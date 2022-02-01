@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -146,12 +145,14 @@ func (s *stage) Drain(
 	return ret, nil
 }
 
-// Arrays of JSONB aren't implemented
+// The extra cast on $4 is because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468
-const putTemplate = `UPSERT INTO %s (nanos, logical, key, mut) VALUES ($1, $2, $3, $4)`
+const putTemplate = `
+UPSERT INTO %s (nanos, logical, key, mut)
+SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::STRING[])::JSONB`
 
 // Store stores some number of Mutations into the database.
-func (s *stage) Store(ctx context.Context, db types.Batcher, mutations []types.Mutation) error {
+func (s *stage) Store(ctx context.Context, db pgxtype.Querier, mutations []types.Mutation) error {
 	start := time.Now()
 	err := batches.Batch(len(mutations), func(begin, end int) error {
 		return s.putOne(ctx, db, mutations[begin:end])
@@ -172,31 +173,24 @@ func (s *stage) Store(ctx context.Context, db types.Batcher, mutations []types.M
 	return nil
 }
 
-func (s *stage) putOne(ctx context.Context, db types.Batcher, mutations []types.Mutation) error {
-	batch := &pgx.Batch{}
+func (s *stage) putOne(ctx context.Context, db pgxtype.Querier, mutations []types.Mutation) error {
+	nanos := make([]int64, len(mutations))
+	logical := make([]int, len(mutations))
+	keys := make([]string, len(mutations))
+	jsons := make([]string, len(mutations))
 
-	for _, mut := range mutations {
-		var jsonText string
+	for i, mut := range mutations {
+		nanos[i] = mut.Time.Nanos()
+		logical[i] = mut.Time.Logical()
+		keys[i] = string(mut.Key)
+
 		if mut.IsDelete() {
-			jsonText = "null"
+			jsons[i] = "null"
 		} else {
-			jsonText = string(mut.Data)
-		}
-
-		batch.Queue(s.sql.store,
-			mut.Time.Nanos(),
-			mut.Time.Logical(),
-			string(mut.Key),
-			jsonText)
-	}
-
-	res := db.SendBatch(ctx, batch)
-	defer res.Close()
-
-	for i, j := 0, batch.Len(); i < j; i++ {
-		if _, err := res.Exec(); err != nil {
-			return errors.Wrap(err, s.sql.store)
+			jsons[i] = string(mut.Data)
 		}
 	}
-	return nil
+
+	_, err := db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons)
+	return errors.Wrap(err, s.sql.store)
 }
