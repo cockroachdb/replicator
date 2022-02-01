@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/gofrs/uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
@@ -622,48 +621,8 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	}
 	defer cancel()
 
-	// The payload and the table are just a key and version field.
-	type Payload struct {
-		PK  uuid.UUID `json:"pk"`
-		Ver int       `json:"ver"`
-		TS  time.Time `json:"ts"`
-	}
-
-	const idCount = 100000
-
-	// Start a generator goroutine to create a source of Mutation data.
-	muts := make(chan types.Mutation, idCount)
-	go func() {
-		// Initialize a finite number of records. We'll loop through the
-		// data rows, incrementing the version number so that
-		// conditional operations will always have something to do.
-		now := time.Now().UTC().Round(time.Second)
-		var data [idCount]Payload
-		for i := range data {
-			data[i].PK, _ = uuid.NewV4()
-			data[i].TS = now
-		}
-
-		idx := 0
-		for {
-			data[idx].Ver++
-			bytes, err := json.Marshal(data[idx])
-			if !a.NoError(err) {
-				return
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case muts <- types.Mutation{Data: bytes}:
-				if idx >= idCount-1 {
-					idx = 0
-				} else {
-					idx++
-				}
-			}
-		}
-	}()
+	// Create a source of Mutatation data.
+	muts := sinktest.MutationGenerator(ctx, 100000, 0)
 
 	var loopTotal int64
 	b.ResetTimer()
