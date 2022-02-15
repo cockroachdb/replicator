@@ -12,11 +12,13 @@
 package ident
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/pkg/errors"
+	"gopkg.in/yaml.v3"
 )
 
 // Well-known identifiers.
@@ -95,14 +97,39 @@ func (n Ident) IsEmpty() bool {
 	return n.r == ""
 }
 
+// IsZero returns IsEmpty().
+func (n Ident) IsZero() bool {
+	return n.IsEmpty()
+}
+
 // MarshalJSON returns the Ident's raw form.
 func (n Ident) MarshalJSON() ([]byte, error) {
 	return json.Marshal(n.Raw())
 }
 
+// MarshalYAML returns the Ident's raw form.
+func (n Ident) MarshalYAML() (interface{}, error) {
+	return n.Raw(), nil
+}
+
 // Raw returns the original, raw value.
 func (n Ident) Raw() string {
 	return n.r
+}
+
+// Scan implements sql.Scanner to allow an Ident to be retrieved from a
+// string value.
+func (n *Ident) Scan(value interface{}) error {
+	if value == nil {
+		n.q = ""
+		n.r = ""
+		return nil
+	}
+	if s, ok := value.(string); ok {
+		*n = New(s)
+		return nil
+	}
+	return errors.Errorf("cannot scan an Ident from a %T", value)
 }
 
 // String returns the ident in a manner suitable for constructing a query.
@@ -116,6 +143,18 @@ func (n *Ident) UnmarshalJSON(data []byte) error {
 	}
 	*n = New(raw)
 	return nil
+}
+
+// UnmarshalYAML converts a raw yaml string into an Ident.
+func (n *Ident) UnmarshalYAML(node *yaml.Node) error {
+	*n = New(node.Value)
+	return nil
+}
+
+// Value implements driver.Valuer, allowing the Ident to be persisted
+// as its raw-string value.
+func (n Ident) Value() (driver.Value, error) {
+	return n.Raw(), nil
 }
 
 // A Schema identifier is a two-part ident, consisting of an SQL
@@ -147,6 +186,19 @@ func (s Schema) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]string{s.Database().Raw(), s.Schema().Raw()})
 }
 
+// MarshalYAML returns the Schema as a two-element, flow-style array.
+//   [ database, schema ]
+func (s Schema) MarshalYAML() (interface{}, error) {
+	return &yaml.Node{
+		Kind:  yaml.SequenceNode,
+		Style: yaml.FlowStyle,
+		Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Value: s.Database().Raw()},
+			{Kind: yaml.ScalarNode, Value: s.Schema().Raw()},
+		},
+	}, nil
+}
+
 // Schema returns the schema's name.
 func (s Schema) Schema() Ident { return s.schema }
 
@@ -165,6 +217,20 @@ func (s Schema) String() string {
 func (s *Schema) UnmarshalJSON(data []byte) error {
 	parts := make([]Ident, 0, 2)
 	if err := json.Unmarshal(data, &parts); err != nil {
+		return err
+	}
+	if len(parts) != 2 {
+		return errors.Errorf("expecting 2 parts, had %d", len(parts))
+	}
+	s.db = parts[0]
+	s.schema = parts[1]
+	return nil
+}
+
+// UnmarshalYAML parses a two-element array.
+func (s *Schema) UnmarshalYAML(node *yaml.Node) error {
+	parts := make([]Ident, 0, 2)
+	if err := node.Decode(&parts); err != nil {
 		return err
 	}
 	if len(parts) != 2 {
@@ -209,6 +275,20 @@ func (t Table) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]string{t.Database().Raw(), t.Schema().Raw(), t.Table().Raw()})
 }
 
+// MarshalYAML returns the Table as a three-element, flow-style array.
+//   [ database, schema, table ]
+func (t Table) MarshalYAML() (interface{}, error) {
+	return &yaml.Node{
+		Style: yaml.FlowStyle,
+		Kind:  yaml.SequenceNode,
+		Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Value: t.Database().Raw()},
+			{Kind: yaml.ScalarNode, Value: t.Schema().Raw()},
+			{Kind: yaml.ScalarNode, Value: t.Table().Raw()},
+		},
+	}, nil
+}
+
 // Schema returns the table's enclosing schema.
 func (t Table) Schema() Ident { return t.schema }
 
@@ -230,6 +310,21 @@ func (t Table) String() string {
 func (t *Table) UnmarshalJSON(data []byte) error {
 	parts := make([]Ident, 0, 3)
 	if err := json.Unmarshal(data, &parts); err != nil {
+		return err
+	}
+	if len(parts) != 3 {
+		return errors.Errorf("expecting 3 parts, had %d", len(parts))
+	}
+	t.db = parts[0]
+	t.schema = parts[1]
+	t.table = parts[2]
+	return nil
+}
+
+// UnmarshalYAML parses a three-element array.
+func (t *Table) UnmarshalYAML(node *yaml.Node) error {
+	parts := make([]Ident, 0, 3)
+	if err := node.Decode(&parts); err != nil {
 		return err
 	}
 	if len(parts) != 3 {

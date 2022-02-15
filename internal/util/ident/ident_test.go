@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 )
 
 func TestIdent(t *testing.T) {
@@ -32,7 +33,7 @@ func TestIdent(t *testing.T) {
 	a.Equal(`"foo!bar"`, New("foo!bar").String())
 }
 
-func TestIdentJson(t *testing.T) {
+func TestIdentMarshal(t *testing.T) {
 	tcs := []struct {
 		raw string
 	}{
@@ -43,7 +44,7 @@ func TestIdentJson(t *testing.T) {
 	}
 
 	for _, tc := range tcs {
-		t.Run(tc.raw, func(t *testing.T) {
+		t.Run("json "+tc.raw, func(t *testing.T) {
 			a := assert.New(t)
 
 			id := New(tc.raw)
@@ -52,6 +53,17 @@ func TestIdentJson(t *testing.T) {
 
 			var id2 Ident
 			a.NoError(json.Unmarshal(data, &id2))
+			a.Equal(id, id2)
+		})
+		t.Run("yaml "+tc.raw, func(t *testing.T) {
+			a := assert.New(t)
+
+			id := New(tc.raw)
+			data, err := yaml.Marshal(id)
+			a.NoError(err)
+
+			var id2 Ident
+			a.NoError(yaml.Unmarshal(data, &id2))
 			a.Equal(id, id2)
 		})
 	}
@@ -145,6 +157,19 @@ func TestSchemaJson(t *testing.T) {
 	a.Equal(id, id2)
 }
 
+func TestSchemaYAML(t *testing.T) {
+	a := assert.New(t)
+
+	id := NewSchema(New("db"), New("schema"))
+	data, err := yaml.Marshal(id)
+	a.NoError(err)
+	a.Equal("[db, schema]\n", string(data))
+
+	var id2 Schema
+	a.NoError(yaml.Unmarshal(data, &id2))
+	a.Equal(id, id2)
+}
+
 func TestTableJson(t *testing.T) {
 	a := assert.New(t)
 
@@ -154,5 +179,18 @@ func TestTableJson(t *testing.T) {
 
 	var id2 Table
 	a.NoError(json.Unmarshal(data, &id2))
+	a.Equal(id, id2)
+}
+
+func TestTableYAML(t *testing.T) {
+	a := assert.New(t)
+
+	id := NewTable(New("db"), New("schema"), New("table"))
+	data, err := yaml.Marshal(id)
+	a.NoError(err)
+	a.Equal("[db, schema, table]\n", string(data))
+
+	var id2 Table
+	a.NoError(yaml.Unmarshal(data, &id2))
 	a.Equal(id, id2)
 }
