@@ -25,6 +25,24 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Determine paths to cache
+        id: cache
+        run: |
+          echo "::set-output name=go-build::$(go env GOCACHE)"
+          echo "::set-output name=go-mod::$(go env GOMODCACHE)"
+
+      - name: Go Build Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.cache.outputs.go-build }}
+          key: ${{ runner.os }}-quality-build-${{ hashFiles('**/go.sum') }}
+
+      - name: Go Mod Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.cache.outputs.go-mod }}
+          key: ${{ runner.os }}-quality-mod-${{ hashFiles('**/go.sum') }}
+
       - name: crlfmt returns no deltas
         if: ${{ always() }}
         run: |
@@ -41,11 +59,12 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck -checks all ./...
 
   integration:
-    name: Integration Tests ${{ matrix.cockroachdb }}
+    name: Integration Tests crdb-${{ matrix.cockroachdb }} pg-${{ matrix.postgresql }}
     strategy:
       fail-fast: false
       matrix:
         cockroachdb: [ v20.2, v21.1, v21.2 ]
+        postgresql: [ v13, v14 ]
     runs-on: ubuntu-latest
     env:
       COVER_OUT: coverage-${{ matrix.coverage }}.out
@@ -57,9 +76,31 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Determine paths to cache
+        id: cache
+        run: |
+          echo "::set-output name=go-build::$(go env GOCACHE)"
+          echo "::set-output name=go-mod::$(go env GOMODCACHE)"
+
+      - name: Go Build Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.cache.outputs.go-build }}
+          key: ${{ runner.os }}-integration-build-${{ hashFiles('**/go.sum') }}
+
+      - name: Go Mod Cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.cache.outputs.go-mod }}
+          key: ${{ runner.os }}-integration-mod-${{ hashFiles('**/go.sum') }}
+
       - name: Start CockroachDB
         working-directory: .github
         run: docker-compose up -d cockroachdb-${{ matrix.cockroachdb }}
+
+      - name: Start PostgreSQL
+        working-directory: .github
+        run: docker-compose up -d postgresql-${{ matrix.postgresql }}
 
       - name: Go Tests
         env:
@@ -72,7 +113,7 @@ jobs:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
         run: go test -v -benchtime 10s -bench . ./...
 
-      - name: Stop CockroachDB
+      - name: Stop databases
         if: ${{ always() }}
         working-directory: .github
         run: docker-compose down
