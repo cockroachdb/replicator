@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mkjwt"
+	"github.com/cockroachdb/cdc-sink/internal/cmd/pglogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/start"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/version"
 	joonix "github.com/joonix/log"
@@ -86,6 +87,7 @@ func main() {
 
 	root.AddCommand(
 		mkjwt.Command(),
+		pglogical.Command(),
 		start.Command(),
 		version.Command(),
 	)

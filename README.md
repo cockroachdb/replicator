@@ -124,14 +124,14 @@ logical INT8 NOT NULL
 )
 ```
 
-## Flags
+## Changefeed replication
 
 ```
 Usage:
   cdc-sink start [flags]
 
 Flags:
-      --batchSize int            default size for batched operations (default 1000)
+      --batchSize int            default size for batched operations (default 100)
       --bindAddr string          the network address to bind to (default ":26258")
       --conn string              cockroach connection string (default "postgresql://root@localhost:26257/?sslmode=disable")
       --disableAuthentication    disable authentication of incoming cdc-sink requests; not recommended for production.
@@ -148,7 +148,7 @@ Global Flags:
   -v, --verbose count           increase logging verbosity to debug; repeat for trace
 ```
 
-## Example
+### Example
 
 ```bash
 # install cdc-sink
@@ -216,12 +216,12 @@ scrape_configs:
       - targets: [ '127.0.0.1:30004' ]
 ```
 
-## Modes
+### Modes
 
 `cdc-sink` supports a number of optional modes for each changefeed. All of these modes can be
 combined in a single changefeed.
 
-### Immediate
+#### Immediate
 
 Immediate mode writes incoming mutations to the target schema as soon as they are received, instead
 of waiting for a resolved timestamp. Transaction boundaries from the source database will not be
@@ -229,7 +229,7 @@ preserved, but overall load on the destination database will be reduced.
 
 Immediate mode is enabled by adding the `?immediate=true` query parameter to the changefeed URL.
 
-### Compare-and-set
+#### Compare-and-set
 
 A compare-and-set (CAS) mode allows `cdc-sink` to discard some updates, based on version- or
 time-like fields.
@@ -265,7 +265,7 @@ All tables in the feed must have all named `cas` columns or the changefeed will 
 
 Deletes from the source cluster are always applied.
 
-### Deadlines
+#### Deadlines
 
 A deadline mode allows `cdc-sink` to discard some updates, by comparing a time-like field to the
 destination cluster's time. This is useful when a feed's data is advisory only or changefeed
@@ -286,6 +286,66 @@ Multiple deadline columns may be specified by repeating pairs of `dln` and `dli`
 All tables in the feed must have all named `dln` columns.
 
 Deletes from the source cluster are always applied.
+
+## PostgreSQL logical replication
+
+An alternate application of `cdc-sink` is to connect to a PostgreSQL-compatible database instance to
+consume a logical replication feed. This is primarily intended for migration use-cases, in which it
+is desirable to have a minimum- or zero-downtime migration from PostgreSQL to CockroachDB.
+
+```
+Usage:
+  cdc-sink pglogical [flags]
+
+Flags:
+  -h, --help                     help for pglogical
+      --immediate                apply data without waiting for transaction boundaries
+      --metricsAddr string       a host:port to serve metrics from at /_/varz
+      --publicationName string   the publication within the source database to replicate
+      --slotName string          the replication slot in the source database (default "cdc_sink")
+      --sourceConn string        the source database's connection string
+      --targetConn string        the target cluster's connection string
+      --targetDB string          the SQL database in the target cluster to update
+
+Global Flags:
+      --logDestination string   write logs to a file, instead of stdout
+      --logFormat string        choose log output format [ fluent, text ] (default "text")
+  -v, --verbose count           increase logging verbosity to debug; repeat for trace
+```
+
+The theory of operation is similar to the standard use case, the only difference is that `cdc-sink`
+connects to the source database to receive a replication feed, rather than act as the target for a
+webhook.
+
+### Setup
+
+* A review of
+  PostgreSQL [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
+  will be useful to establish the limitations of logical replication.
+* Run `CREATE PUBLICATION my_pub FOR ALL TABLES;` in the source database. The name `my_pub` can be
+  changed as desired and must be provided to the `--publicationName` flag. Specifying only a subset
+  of tables in the source database is possible.
+* Run `SELECT pg_create_logical_replication_slot('cdc_sink', 'pgoutput');` in the source database.
+  The value `cdc_sink` may be changed and should be passed to the `--slotName` flag.
+* Run `SELECT pg_export_snapshot();` to create a consistent point for bulk data export. The value
+  returned from this function can be passed
+  to [`pg_dump --snapshot <snapshot_id>`](https://www.postgresql.org/docs/current/app-pgdump.html)
+  that is subsequently
+  [IMPORTed into CockroachDB](https://www.cockroachlabs.com/docs/stable/migrate-from-postgres.html)
+  or used with
+  [`SET TRANSACTION SNAPSHOT 'snapshot_id'`](https://www.postgresql.org/docs/current/sql-set-transaction.html)
+  if migrating data using a SQL client.
+* Run `cdc-sink pglogical` with at least the `--publicationName`, `--sourceConn`, `--targetConn`,
+  and `--targetDB` flags after the bulk data migration has been completed. This will catch up with
+  all database mutations that have occurred since the replication slot was created.
+
+If you pass `--metricsAddr 127.0.0.1:13013`, a Prometheus-compatible HTTP endpoint will be available
+at `/_/varz`. A trivial health-check endpoint is also available at `/_/healthz`.
+
+To clean up from the above:
+
+* `SELECT pg_drop_replication_slot('cdc_sink');`
+* `DROP PUBLICATION my_pub;`
 
 ## Security Considerations
 
