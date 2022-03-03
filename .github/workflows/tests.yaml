@@ -64,7 +64,7 @@ jobs:
       fail-fast: false
       matrix:
         cockroachdb: [ v20.2, v21.1, v21.2 ]
-        postgresql: [ v13, v14 ]
+        postgresql: [ v11, v12, v13, v14 ]
     runs-on: ubuntu-latest
     env:
       COVER_OUT: coverage-${{ matrix.coverage }}.out

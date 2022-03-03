@@ -16,6 +16,26 @@ services:
     image: cockroachdb/cockroach:latest-v21.2
     network_mode: host
     command: start-single-node --insecure
+  postgresql-v11:
+    image: postgres:11
+    environment:
+      POSTGRES_PASSWORD: SoupOrSecret
+    ports:
+      - "5432:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+  postgresql-v12:
+    image: postgres:12
+    environment:
+      POSTGRES_PASSWORD: SoupOrSecret
+    ports:
+      - "5432:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
   postgresql-v13:
     image: postgres:13
     environment:
