@@ -15,6 +15,7 @@ package pglogical
 import (
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/pglogical"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -54,6 +55,8 @@ func Command() *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVar(&cfg.Immediate, "immediate", false, "apply data without waiting for transaction boundaries")
 	f.StringVar(&metricsAddr, "metricsAddr", "", "a host:port to serve metrics from at /_/varz")
+	f.DurationVar(&cfg.RetryDelay, "retryDelay", 10*time.Second,
+		"the amount of time to sleep between replication retries")
 	f.StringVar(&cfg.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
 	f.StringVar(&cfg.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&cfg.TargetConn, "targetConn", "", "the target cluster's connection string")

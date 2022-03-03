@@ -10,7 +10,13 @@
 
 package pglogical
 
-import "github.com/cockroachdb/cdc-sink/internal/util/ident"
+import (
+	"time"
+
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+)
+
+const defaultRetryDelay = 10 * time.Second
 
 // Config contains the configuration necessary for creating a
 // replication connection. All field, other than TestControls, are
@@ -25,6 +31,9 @@ type Config struct {
 	Slot string
 	// Connection string for the source db.
 	SourceConn string
+	// The amount of time to sleep between replication-loop retries.
+	// If zero, a default value will be used.
+	RetryDelay time.Duration
 	// Connection string for the target cluster.
 	TargetConn string
 	// The SQL database in the target cluster to write into.

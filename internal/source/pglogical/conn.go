@@ -59,6 +59,9 @@ type Conn struct {
 	publicationName string
 	// Map source ids to target tables.
 	relations map[uint32]ident.Table
+	// The amount of time to sleep between retries of the replication
+	// loop.
+	retryDelay time.Duration
 	// Stage mutations in the backing store.
 	stagers types.Stagers
 	// The name of the slot within the publication.
@@ -189,6 +192,7 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 		pending:         make(map[ident.Table][]types.Mutation),
 		publicationName: config.Publication,
 		relations:       make(map[uint32]ident.Table),
+		retryDelay:      config.RetryDelay,
 		slotName:        config.Slot,
 		sourceConfig:    sourceConfig,
 		stagers:         stagers,
@@ -196,6 +200,9 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 		targetPool:      targetPool,
 		testControls:    config.TestControls,
 		timeKeeper:      timeKeeper,
+	}
+	if ret.retryDelay == 0 {
+		ret.retryDelay = defaultRetryDelay
 	}
 
 	stopper := make(chan struct{})
@@ -247,7 +254,11 @@ func (c *Conn) run(ctx context.Context) error {
 		})
 
 		if err := group.Wait(); err != nil {
-			log.WithError(err).Error("error in replication loop; restarting")
+			log.WithError(err).Errorf("error in replication loop; retrying in %s", c.retryDelay)
+			select {
+			case <-ctx.Done():
+			case <-time.After(c.retryDelay):
+			}
 		}
 	}
 	log.Info("shut down replication loop")

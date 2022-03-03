@@ -93,6 +93,7 @@ func testPGLogical(t *testing.T, immediate bool) {
 	_, stopped, err := NewConn(connCtx, &Config{
 		Immediate:   immediate,
 		Publication: dbName.Raw(),
+		RetryDelay:  time.Nanosecond,
 		Slot:        dbName.Raw(),
 		SourceConn:  *pgConnString + dbName.Raw(),
 		TargetConn:  crdbPool.Config().ConnString(),
@@ -200,6 +201,7 @@ func TestChaos(t *testing.T) {
 		Publication: dbName.Raw(),
 		Slot:        dbName.Raw(),
 		SourceConn:  *pgConnString + dbName.Raw(),
+		RetryDelay:  time.Nanosecond,
 		TargetConn:  crdbPool.Config().ConnString(),
 		TargetDB:    dbName,
 		TestControls: &TestControls{
@@ -370,6 +372,7 @@ func TestDataTypes(t *testing.T) {
 	defer cancelConn()
 	_, stopped, err := NewConn(connCtx, &Config{
 		Publication: dbName.Raw(),
+		RetryDelay:  time.Nanosecond,
 		Slot:        dbName.Raw(),
 		SourceConn:  *pgConnString + dbName.Raw(),
 		TargetConn:  crdbPool.Config().ConnString(),
