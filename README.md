@@ -335,6 +335,8 @@ webhook.
   or used with
   [`SET TRANSACTION SNAPSHOT 'snapshot_id'`](https://www.postgresql.org/docs/current/sql-set-transaction.html)
   if migrating data using a SQL client.
+* Complete the bulk data migration before continuing.
+* Run `CREATE DATABASE IF NOT EXISTS _cdc_sink;` in the target cluster to create a staging arena.
 * Run `cdc-sink pglogical` with at least the `--publicationName`, `--sourceConn`, `--targetConn`,
   and `--targetDB` flags after the bulk data migration has been completed. This will catch up with
   all database mutations that have occurred since the replication slot was created.
