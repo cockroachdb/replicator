@@ -302,6 +302,7 @@ Flags:
       --immediate                apply data without waiting for transaction boundaries
       --metricsAddr string       a host:port to serve metrics from at /_/varz
       --publicationName string   the publication within the source database to replicate
+      --retryDelay duration      the amount of time to sleep between replication retries (default 10s)
       --slotName string          the replication slot in the source database (default "cdc_sink")
       --sourceConn string        the source database's connection string
       --targetConn string        the target cluster's connection string
