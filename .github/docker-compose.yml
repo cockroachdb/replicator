@@ -21,7 +21,11 @@ services:
     network_mode: host
     command: start-single-node --insecure
   mysql-v8:
+<<<<<<< HEAD
     image: mysql:8-debian
+=======
+    image: mysql:8.0
+>>>>>>> 0f60576 (wip: MySQL logical replication support)
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
