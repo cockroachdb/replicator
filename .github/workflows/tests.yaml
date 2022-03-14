@@ -43,6 +43,10 @@ jobs:
           path: ${{ steps.cache.outputs.go-mod }}
           key: ${{ runner.os }}-quality-mod-${{ hashFiles('**/go.sum') }}
 
+      # This action should, in general, be a no-op, given the cache above.
+      - name: Download all deps
+        run: go mod download
+
       - name: crlfmt returns no deltas
         if: ${{ always() }}
         run: |
@@ -93,6 +97,10 @@ jobs:
         with:
           path: ${{ steps.cache.outputs.go-mod }}
           key: ${{ runner.os }}-integration-mod-${{ hashFiles('**/go.sum') }}
+
+      # This action should, in general, be a no-op, given the cache above.
+      - name: Download all deps
+        run: go mod download
 
       - name: Start CockroachDB
         working-directory: .github
