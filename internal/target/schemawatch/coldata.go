@@ -34,11 +34,30 @@ func colSliceEqual(a, b []types.ColData) bool {
 
 // Retrieve the primary key columns in their index-order, then append
 // any remaining non-generated columns.
+//
+// Parts of the CTE:
+// * pk_name: finds the name of the primary key constraint for the table
+// or returns the CRDB-default "primary" value in cases where no
+// explicit PK.
+// * pks: extracts the names of the PK columns and their relative
+// positions. We exclude any "storing" columns to account for rowid
+// value.
+// * cols: extracts all columns, ignoring those with generation
+// expressions (e.g. hash-sharded index clustering column).
+// * ordered: adds a synthetic seq_in_index to the non-PK columns.
+// * SELECT: aggregates the above, sorting the PK columns in-order
+// before the non-PK columns.
 const sqlColumnsQuery = `
 WITH
+pk_name AS (
+	SELECT constraint_name FROM [SHOW CONSTRAINTS FROM %[1]s]
+	WHERE constraint_type = 'PRIMARY KEY'
+	UNION ALL SELECT 'primary'
+	LIMIT 1),
 pks AS (
 	SELECT column_name, seq_in_index FROM [SHOW INDEX FROM %[1]s]
-	WHERE index_name = 'primary' AND NOT storing),
+	JOIN pk_name ON (index_name = constraint_name)
+	WHERE NOT storing),
 cols AS (
 	SELECT column_name, data_type, generation_expression != '' AS ignored
 	FROM [SHOW COLUMNS FROM %[1]s]),
