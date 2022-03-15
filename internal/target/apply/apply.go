@@ -174,11 +174,13 @@ func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 
 		if len(args) != len(a.mu.pks) {
 			return errors.Errorf(
-				"schema drift detected: "+
-					"inconsistent number of key colums: "+
+				"schema drift detected in %s: "+
+					"inconsistent number of key columns: "+
 					"received %d expect %d: "+
 					"key %s@%s",
-				len(args), len(a.mu.pks), string(muts[i].Key), muts[i].Time)
+				a.target,
+				len(args), len(a.mu.pks),
+				string(muts[i].Key), muts[i].Time)
 		}
 		allArgs = append(allArgs, args...)
 	}
