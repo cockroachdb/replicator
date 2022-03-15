@@ -52,6 +52,11 @@ func TestGetColumns(t *testing.T) {
 			nil,
 		},
 		{
+			"a INT, b INT",
+			[]string{"rowid"},
+			[]string{"a", "b"},
+		},
+		{
 			"a INT, b INT, PRIMARY KEY (a,b)",
 			[]string{"a", "b"},
 			nil,
@@ -83,6 +88,36 @@ func TestGetColumns(t *testing.T) {
 				"PRIMARY KEY (a,b)",
 			primaryKeys: []string{"a", "b"},
 			dataCols:    []string{"ignored_c"},
+		},
+		// Ensure that the PK constraint may have an arbitrary name.
+		{
+			"a INT, b INT, CONSTRAINT foobar_pk PRIMARY KEY (a,b)",
+			[]string{"a", "b"},
+			nil,
+		},
+		// Check non-interference from secondary index.
+		{
+			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c), INDEX (c,a,b)",
+			[]string{"b", "a", "c"},
+			[]string{"q", "r"},
+		},
+		// Check non-interference from unique secondary index.
+		{
+			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c), UNIQUE INDEX (c,a,b)",
+			[]string{"b", "a", "c"},
+			[]string{"q", "r"},
+		},
+		// Check no-PK, but with a secondary index.
+		{
+			"a INT, b INT, q INT, c INT, r INT, INDEX (c,a,b)",
+			[]string{"rowid"},
+			[]string{"a", "b", "c", "q", "r"},
+		},
+		// Check no-PK, but with a unique secondary index.
+		{
+			"a INT, b INT, q INT, c INT, r INT, UNIQUE INDEX (c,a,b)",
+			[]string{"rowid"},
+			[]string{"a", "b", "c", "q", "r"},
 		},
 	}
 
