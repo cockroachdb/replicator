@@ -33,10 +33,11 @@ func TestPut(t *testing.T) {
 	defer cancel()
 
 	table := ident.NewTable(targetDB, ident.Public, ident.New("timestamps"))
-	s, err := NewTimeKeeper(ctx, dbInfo.Pool(), table)
+	s, cancel, err := NewTimeKeeper(ctx, dbInfo.Pool(), table)
 	if !a.NoError(err) {
 		return
 	}
+	defer cancel()
 
 	const count = 10
 	prev := hlc.Zero()
@@ -56,4 +57,38 @@ func TestPut(t *testing.T) {
 
 	a.Equal(int64(1000*count), prev.Nanos())
 	a.Equal(count, prev.Logical())
+}
+
+func BenchmarkTimekeeper(b *testing.B) {
+	a := assert.New(b)
+	ctx, dbInfo, cancel := sinktest.Context()
+	a.NotEmpty(dbInfo.Version())
+	defer cancel()
+
+	targetDB, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	table := ident.NewTable(targetDB, ident.Public, ident.New("timestamps"))
+	tk, cancel, err := NewTimeKeeper(ctx, dbInfo.Pool(), table)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	s := ident.NewSchema(ident.New("db"), ident.Public)
+	var ts int64
+	var logical int
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ts++
+		logical++
+		_, err := tk.Put(ctx, dbInfo.Pool(), s, hlc.New(ts, logical))
+		if !a.NoError(err) {
+			return
+		}
+	}
 }

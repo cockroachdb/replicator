@@ -16,6 +16,7 @@ package timekeeper
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -34,8 +35,15 @@ type timekeeper struct {
 	// A timekeeper is effectively a singleton, so we don't keep any
 	// metrics in the instance.
 
+	pool pgxtype.Querier
+	mu   struct {
+		sync.Mutex
+		cleanups map[ident.Schema]hlc.Time
+	}
+
 	sql struct {
-		swap string
+		append  string
+		cleanup string
 	}
 }
 
@@ -45,26 +53,43 @@ var _ types.TimeKeeper = (*timekeeper)(nil)
 // for storage.
 func NewTimeKeeper(
 	ctx context.Context, tx pgxtype.Querier, target ident.Table,
-) (types.TimeKeeper, error) {
+) (_ types.TimeKeeper, cancel func(), _ error) {
 	if err := retry.Execute(ctx, tx, fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
-key STRING NOT NULL PRIMARY KEY,
+key STRING NOT NULL,
 nanos INT8 NOT NULL,
-logical INT8 NOT NULL
+logical INT8 NOT NULL,
+PRIMARY KEY (key, nanos, logical)
 )
 `, target)); err != nil {
-		return nil, errors.WithStack(err)
+		return nil, func() {}, errors.WithStack(err)
 	}
 
-	ret := &timekeeper{}
-	ret.sql.swap = fmt.Sprintf(swapTemplate, target)
+	ret := &timekeeper{pool: tx}
+	ret.mu.cleanups = make(map[ident.Schema]hlc.Time)
+	ret.sql.append = fmt.Sprintf(appendTemplate, target)
+	ret.sql.cleanup = fmt.Sprintf(cleanupTemplate, target)
 
-	return ret, nil
+	// Start a background process to purge old resolved timestamps.
+	ctx, cancel = context.WithCancel(ctx)
+	go ret.cleanupLoop(ctx)
+
+	return ret, cancel, nil
 }
 
-const swapTemplate = `
+// This query adds a new row at the end of the key's span. Since we
+// include the timestamp data in the table's PK, we don't wind up
+// overloading a single row with MVCC data that must be skipped over.
+const appendTemplate = `
 WITH u AS (UPSERT INTO %[1]s (nanos, logical, key) VALUES ($1, $2, $3) RETURNING 0)
-SELECT nanos, logical FROM %[1]s WHERE key=$3`
+SELECT nanos, logical FROM %[1]s WHERE key=$3 ORDER BY (nanos, logical) DESC LIMIT 1`
+
+// We execute this cleanup query on an occasional basis to retire
+// unneeded rows. Since it has a bounded scan, it won't interfere with
+// appends happening at the end of the key's span.
+const cleanupTemplate = `
+DELETE FROM %[1]s WHERE key=$3 AND (nanos, logical) < ($1, $2)
+`
 
 // Put updates the value associated with the key, returning the
 // previous value.
@@ -77,7 +102,7 @@ func (s *timekeeper) Put(
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		return db.QueryRow(
 			ctx,
-			s.sql.swap,
+			s.sql.append,
 			value.Nanos(),
 			value.Logical(),
 			schema.Raw()).Scan(&nanos, &logical)
@@ -86,8 +111,9 @@ func (s *timekeeper) Put(
 	// No rows means that we haven't seen this key before.
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		tkErrors.Inc()
-		return hlc.Zero(), errors.Wrap(err, s.sql.swap)
+		return hlc.Zero(), errors.Wrap(err, s.sql.append)
 	}
+
 	ret := hlc.New(nanos, logical)
 
 	d := time.Since(start)
@@ -98,5 +124,35 @@ func (s *timekeeper) Put(
 		"target":   schema,
 		"resolved": ret,
 	}).Debug("put timestamp")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.cleanups[schema] = ret
 	return ret, nil
+}
+
+func (s *timekeeper) cleanupLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+
+		s.mu.Lock()
+		old := s.mu.cleanups
+		s.mu.cleanups = make(map[ident.Schema]hlc.Time)
+		s.mu.Unlock()
+
+		for schema, ts := range old {
+			err := retry.Retry(ctx, func(ctx context.Context) error {
+				tag, err := s.pool.Exec(ctx, s.sql.cleanup, ts.Nanos(), ts.Logical(), schema.Raw())
+				log.Tracef("purged %d resolved timestamps from %s", tag.RowsAffected(), schema)
+				return err
+			})
+			if err != nil {
+				log.WithError(err).WithField("schema", schema).Warn("could not purge old resolved timestamps")
+			}
+		}
+	}
 }

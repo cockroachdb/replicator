@@ -175,7 +175,7 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 		return nil, nil, errors.Wrap(err, "could not connect to CockroachDB")
 	}
 
-	timeKeeper, err := timekeeper.NewTimeKeeper(ctx, targetPool, cdc.Resolved)
+	timeKeeper, cancelTimeKeeper, err := timekeeper.NewTimeKeeper(ctx, targetPool, cdc.Resolved)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -210,6 +210,7 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 		_ = ret.run(ctx)
 		cancelAppliers()
 		cancelWatchers()
+		cancelTimeKeeper()
 		targetPool.Close()
 		close(stopper)
 	}()
