@@ -105,7 +105,7 @@ func newServer(
 		return nil, nil, errors.Wrap(err, "could not connect to CockroachDB")
 	}
 
-	swapper, err := timekeeper.NewTimeKeeper(ctx, pool, cdc.Resolved)
+	swapper, cancelTimeKeeper, err := timekeeper.NewTimeKeeper(ctx, pool, cdc.Resolved)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -182,6 +182,7 @@ func newServer(
 		cancelAuth()
 		cancelAppliers()
 		cancelWatchers()
+		cancelTimeKeeper()
 		pool.Close()
 		log.Info("server shutdown complete")
 	}()
