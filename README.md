@@ -137,6 +137,7 @@ Flags:
       --disableAuthentication    disable authentication of incoming cdc-sink requests; not recommended for production.
   -h, --help                     help for start
       --jwtRefresh duration      how often to scan for updated JWT configuration; set to zero to disable (default 1m0s)
+      --resolvedPurge duration   how often to purge unneeded resolved-timestamp entries; set to zero to disable (default 1s)
       --schemaRefresh duration   how often to scan for schema changes; set to zero to disable (default 1m0s)
       --tlsCertificate string    a path to a PEM-encoded TLS certificate chain
       --tlsPrivateKey string     a path to a PEM-encoded TLS private key

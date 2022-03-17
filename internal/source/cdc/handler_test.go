@@ -53,10 +53,11 @@ func testHandler(t *testing.T, immediate bool) {
 		return
 	}
 
-	swapper, err := timekeeper.NewTimeKeeper(ctx, dbInfo.Pool(), Resolved)
+	swapper, cancel, err := timekeeper.NewTimeKeeper(ctx, dbInfo.Pool(), Resolved)
 	if !a.NoError(err) {
 		return
 	}
+	defer cancel()
 
 	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
 	defer cancel()
