@@ -430,17 +430,30 @@ func (c *Conn) onCommit(ctx context.Context, msg *pglogrepl.CommitMessage) error
 			}
 			defer tx.Rollback(ctx)
 
+			// Calculate the windows of mutations to be flushed. This is
+			// tracked on a per-target-schema basis, so we probably only
+			// wind up calling TimeKeeper.Put once.
+			schemaStartTimes := make(map[ident.Schema]hlc.Time, len(c.dirty))
 			for tbl := range c.dirty {
+				schema := tbl.AsSchema()
+				if _, found := schemaStartTimes[schema]; found {
+					continue
+				}
 				prev, err := c.timeKeeper.Put(ctx, tx, tbl.AsSchema(), c.txTime)
 				if err != nil {
 					return err
 				}
+				schemaStartTimes[schema] = prev
+				log.Tracef("committing %s %s -> %s", schema, prev, c.txTime)
+			}
 
+			for tbl := range c.dirty {
 				stage, err := c.stagers.Get(ctx, tbl)
 				if err != nil {
 					return err
 				}
 
+				prev := schemaStartTimes[tbl.AsSchema()]
 				muts, err := stage.Drain(ctx, tx, prev, c.txTime)
 				if err != nil {
 					return err

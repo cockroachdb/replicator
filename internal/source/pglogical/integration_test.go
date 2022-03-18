@@ -63,13 +63,19 @@ func testPGLogical(t *testing.T, immediate bool) {
 	defer cancel()
 
 	// Create the schema in both locations.
-	tgt := ident.NewTable(dbName, ident.Public, ident.New("t"))
-	var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
-	if _, err := pgPool.Exec(ctx, schema); !a.NoError(err) {
-		return
+	tgts := []ident.Table{
+		ident.NewTable(dbName, ident.Public, ident.New("t1")),
+		ident.NewTable(dbName, ident.Public, ident.New("t2")),
 	}
-	if _, err := crdbPool.Exec(ctx, schema); !a.NoError(err) {
-		return
+
+	for _, tgt := range tgts {
+		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
+		if _, err := pgPool.Exec(ctx, schema); !a.NoError(err) {
+			return
+		}
+		if _, err := crdbPool.Exec(ctx, schema); !a.NoError(err) {
+			return
+		}
 	}
 
 	const rowCount = 1024
@@ -80,11 +86,13 @@ func testPGLogical(t *testing.T, immediate bool) {
 		vals[i] = fmt.Sprintf("v=%d", i)
 	}
 
-	if _, err := pgPool.Exec(ctx,
-		fmt.Sprintf("INSERT INTO %s VALUES (unnest($1::int[]), unnest($2::text[]))", tgt),
-		keys, vals,
-	); !a.NoError(err) {
-		return
+	for _, tgt := range tgts {
+		if _, err := pgPool.Exec(ctx,
+			fmt.Sprintf("INSERT INTO %s VALUES (unnest($1::int[]), unnest($2::text[]))", tgt),
+			keys, vals,
+		); !a.NoError(err) {
+			return
+		}
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
@@ -104,54 +112,78 @@ func testPGLogical(t *testing.T, immediate bool) {
 	}
 
 	// Wait for backfill.
-	for {
-		var count int
-		if err := crdbPool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
-			return
+	for _, tgt := range tgts {
+		for {
+			var count int
+			if err := crdbPool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
+				return
+			}
+			log.Trace("backfill count", count)
+			if count == rowCount {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
-		log.Trace("backfill count", count)
-		if count == rowCount {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Let's perform an update.
-	if _, err := pgPool.Exec(ctx, fmt.Sprintf("UPDATE %s SET v = 'updated'", tgt)); !a.NoError(err) {
+	// Let's perform an update in a single transaction.
+	tx, err := pgPool.Begin(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	for _, tgt := range tgts {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("UPDATE %s SET v = 'updated'", tgt)); !a.NoError(err) {
+			return
+		}
+	}
+	if !a.NoError(tx.Commit(ctx)) {
 		return
 	}
 
 	// Wait for the update to propagate.
-	for {
-		var count int
-		if err := crdbPool.QueryRow(ctx,
-			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
-			return
+	for _, tgt := range tgts {
+		for {
+			var count int
+			if err := crdbPool.QueryRow(ctx,
+				fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+				return
+			}
+			log.Trace("update count", count)
+			if count == rowCount {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
-		log.Trace("update count", count)
-		if count == rowCount {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	// Delete some rows.
-	if _, err := pgPool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE k < 50", tgt)); !a.NoError(err) {
+	tx, err = pgPool.Begin(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	for _, tgt := range tgts {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE k < 50", tgt)); !a.NoError(err) {
+			return
+		}
+	}
+	if !a.NoError(tx.Commit(ctx)) {
 		return
 	}
 
-	// Wait for the delete to propagate.
-	for {
-		var count int
-		if err := crdbPool.QueryRow(ctx,
-			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
-			return
+	// Wait for the deletes to propagate.
+	for _, tgt := range tgts {
+		for {
+			var count int
+			if err := crdbPool.QueryRow(ctx,
+				fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+				return
+			}
+			log.Trace("delete count", count)
+			if count == rowCount-50 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
-		log.Trace("delete count", count)
-		if count == rowCount-50 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	cancelConn()
