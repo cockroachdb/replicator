@@ -46,6 +46,7 @@ import (
 type Conn struct {
 	// Apply mutations to the backing store.
 	appliers types.Appliers
+
 	// Columns, as ordered by the source database.
 	columns map[ident.Table][]types.ColData
 	// Tables that need to be drained.
@@ -78,6 +79,8 @@ type Conn struct {
 	timeKeeper types.TimeKeeper
 	// The (eventual) commit time of the transaction being processed.
 	txTime hlc.Time
+	// Schema chnages watchers
+	watchers types.Watchers
 
 	mu struct {
 		sync.Mutex
@@ -200,6 +203,7 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 		targetPool:      targetPool,
 		testControls:    config.TestControls,
 		timeKeeper:      timeKeeper,
+		watchers:        watchers,
 	}
 	if ret.retryDelay == 0 {
 		ret.retryDelay = defaultRetryDelay
@@ -430,6 +434,10 @@ func (c *Conn) onCommit(ctx context.Context, msg *pglogrepl.CommitMessage) error
 			}
 			defer tx.Rollback(ctx)
 
+			watcher, err := c.watchers.Get(ctx, c.targetDB)
+			if err != nil {
+				return err
+			}
 			// Calculate the windows of mutations to be flushed. This is
 			// tracked on a per-target-schema basis, so we probably only
 			// wind up calling TimeKeeper.Put once.
@@ -446,25 +454,47 @@ func (c *Conn) onCommit(ctx context.Context, msg *pglogrepl.CommitMessage) error
 				schemaStartTimes[schema] = prev
 				log.Tracef("committing %s %s -> %s", schema, prev, c.txTime)
 			}
+			deletes := make([][]types.Mutation, 0, len(c.dirty))
+			appliers := make([]types.Applier, 0, len(c.dirty))
+			targetTables := watcher.Snapshot().TablesSortedByFK
+			for _, tbl := range targetTables {
+				if _, ok := c.dirty[tbl]; ok {
+					prev := schemaStartTimes[tbl.AsSchema()]
+					stage, err := c.stagers.Get(ctx, tbl)
+					if err != nil {
+						return err
+					}
+					muts, err := stage.Drain(ctx, tx, prev, c.txTime)
+					if err != nil {
+						return err
+					}
+					dmuts := make([]types.Mutation, 0, len(muts))
+					umuts := make([]types.Mutation, 0, len(muts))
 
-			for tbl := range c.dirty {
-				stage, err := c.stagers.Get(ctx, tbl)
-				if err != nil {
-					return err
+					for _, m := range muts {
+						if m.IsDelete() {
+							dmuts = append(dmuts, m)
+						} else {
+							umuts = append(umuts, m)
+						}
+					}
+
+					app, err := c.appliers.Get(ctx, tbl, nil /* casColumns */, types.Deadlines{})
+					deletes = append(deletes, dmuts)
+					appliers = append(appliers, app)
+					if err != nil {
+						return err
+					}
+					if err := app.Apply(ctx, tx, umuts); err != nil {
+						return err
+					}
 				}
 
-				prev := schemaStartTimes[tbl.AsSchema()]
-				muts, err := stage.Drain(ctx, tx, prev, c.txTime)
-				if err != nil {
-					return err
-				}
-
-				app, err := c.appliers.Get(ctx, tbl, nil /* casColumns */, types.Deadlines{})
-				if err != nil {
-					return err
-				}
-
-				if err := app.Apply(ctx, tx, muts); err != nil {
+			}
+			// Delete must be processed in the opposite order
+			for i := len(deletes) - 1; i >= 0; i-- {
+				dmuts := deletes[i]
+				if err := appliers[i].Apply(ctx, tx, dmuts); err != nil {
 					return err
 				}
 			}
@@ -513,6 +543,7 @@ func (c *Conn) onDataTuple(
 		found = next
 	}
 	found = append(found, mut)
+
 	c.dirty[tbl] = struct{}{}
 	c.pending[tbl] = found
 	if len(found) == cap(found) {

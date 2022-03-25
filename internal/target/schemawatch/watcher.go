@@ -33,7 +33,12 @@ var RefreshDelay = flag.Duration("schemaRefresh", time.Minute,
 	"how often to scan for schema changes; set to zero to disable")
 
 // dbSchema is a simplified representation of a SQL database's schema.
-type dbSchema map[ident.Table][]types.ColData
+type tableInfo struct {
+	columns []types.ColData
+	level   int
+}
+type dbSchema map[ident.Table]tableInfo
+type tablesByLevel []ident.Table
 
 // A watcher maintains an internal cache of a database's schema,
 // allowing callers to receive notifications of schema changes.
@@ -46,7 +51,8 @@ type watcher struct {
 	cond sync.Cond // Condition on mu's RLocker.
 	mu   struct {
 		sync.RWMutex
-		data dbSchema
+		data   dbSchema
+		levels tablesByLevel
 	}
 
 	sql struct {
@@ -70,16 +76,16 @@ func newWatcher(
 		dbName:     dbName,
 	}
 	w.cond.L = w.mu.RLocker()
-	w.sql.tables = fmt.Sprintf(tableTemplate, dbName)
+	w.sql.tables = fmt.Sprintf(tableTemplate, dbName, dbName, dbName)
 
 	// Initial data load to sanity-check and make ready.
-	data, err := w.getTables(ctx, tx)
+	data, levels, err := w.getTables(ctx, tx)
 	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
 	w.mu.data = data
-
+	w.mu.levels = levels
 	if w.delay > 0 {
 		go func() {
 			for {
@@ -101,33 +107,39 @@ func newWatcher(
 // Refresh immediately refreshes the watcher's internal cache. This
 // is intended for use by tests.
 func (w *watcher) Refresh(ctx context.Context, tx pgxtype.Querier) error {
-	data, err := w.getTables(ctx, tx)
+	data, levels, err := w.getTables(ctx, tx)
 	if err != nil {
 		return err
 	}
 
 	w.mu.Lock()
 	w.mu.data = data
+	w.mu.levels = levels
 	w.mu.Unlock()
 	w.cond.Broadcast()
 	return nil
 }
 
 // Snapshot returns the known tables in the given user-defined schema.
-func (w *watcher) Snapshot(in ident.Schema) map[ident.Table][]types.ColData {
+func (w *watcher) Snapshot() types.DatabaseTables {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	ret := make(dbSchema, len(w.mu.data))
+	ret := make(map[ident.Table]types.TableSchema, len(w.mu.data))
 	for table, cols := range w.mu.data {
-		if in.Contains(table) {
-			// https://github.com/golang/go/wiki/SliceTricks#copy
-			out := make([]types.ColData, len(cols))
-			copy(out, cols)
-			ret[table] = out
+		// https://github.com/golang/go/wiki/SliceTricks#copy
+		out := make([]types.ColData, len(cols.columns))
+		copy(out, cols.columns)
+		ret[table] = types.TableSchema{
+			Columns: out,
 		}
 	}
-	return ret
+	lout := make([]ident.Table, len(w.mu.levels))
+	copy(lout, w.mu.levels)
+	return types.DatabaseTables{
+		Tables:           ret,
+		TablesSortedByFK: lout,
+	}
 }
 
 // Watch will send updated column data for the given table until the
@@ -152,12 +164,12 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 
 		var last []types.ColData
 		for {
-			next, ok := w.mu.data[table]
+			n, ok := w.mu.data[table]
 			// Respond to context cancellation or dropping the table.
 			if !ok || ctx.Err() != nil {
 				return
 			}
-
+			next := n.columns
 			// We're read-locked, so this isn't hugely critical.
 			if !colSliceEqual(last, next) {
 				select {
@@ -176,10 +188,54 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 	return ch, cancel, nil
 }
 
-const tableTemplate = `SELECT schema_name, table_name FROM [SHOW TABLES FROM %s]`
+// Get all the tables and 'level' of dependencies based on FK constraints
+// To prevent infinite loops caused by cyclic dependencies set an upper limit on recursive calls.
+// Level 0 tables don't have FK constraints.
+// Level N tables reference at least one table at Level N-1,
+//                 and possibly other tables at Level N-1 or lower levels.
+const tableTemplate = `
+WITH RECURSIVE
+        limits AS (
+            SELECT
+				count(*) + 1 AS maxdepth
+			FROM 
+				[SHOW TABLES FROM %s]
+        ),
+        refs AS (               
+				SELECT 
+					0 AS depth, '' AS referenced_table_name, schema_name, table_name
+				FROM 
+					[SHOW TABLES FROM %s]
+				UNION ALL
+						SELECT  
+							refs.depth + 1 AS depth,
+							s.referenced_table_name,
+							schema_name,
+							s.table_name
+						FROM    
+							refs,   
+							%s.information_schema.referential_constraints s
+						WHERE   
+							refs.table_name = s.referenced_table_name
+							AND refs.depth < (SELECT maxdepth FROM limits) 
+		)
+SELECT
+        schema_name, table_name, max(depth) AS depth
+FROM
+        refs
+GROUP BY
+        schema_name, table_name
+ORDER BY
+        depth
 
-func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (dbSchema, error) {
+`
+
+func (w *watcher) getTables(
+	ctx context.Context, tx pgxtype.Querier,
+) (dbSchema, tablesByLevel, error) {
 	var ret dbSchema
+	var levels map[int][]ident.Table
+	maxDepth := 0
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		rows, err := tx.Query(ctx, w.sql.tables)
 		if err != nil {
@@ -188,20 +244,41 @@ func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (dbSchema, 
 		defer rows.Close()
 
 		ret = make(dbSchema)
+
+		levels = make(map[int][]ident.Table)
 		for rows.Next() {
 			var schema, table string
-			if err := rows.Scan(&schema, &table); err != nil {
+			var depth int
+			if err := rows.Scan(&schema, &table, &depth); err != nil {
 				return err
 			}
 			tbl := ident.NewTable(w.dbName, ident.New(schema), ident.New(table))
+			log.Tracef("Found table %s level %d \n", tbl, depth)
 			cols, err := getColumns(ctx, tx, tbl)
 			if err != nil {
 				return err
 			}
-			ret[tbl] = cols
+			t := tableInfo{
+				columns: cols,
+				level:   depth,
+			}
+			ret[tbl] = t
+			levels[depth] = append(levels[depth], tbl)
+			if depth > maxDepth {
+				maxDepth = depth
+			}
 		}
 		return nil
 	})
 
-	return ret, errors.Wrap(err, w.sql.tables)
+	sortedTables := make([]ident.Table, 0, len(ret))
+
+	for i := 0; i <= maxDepth; i++ {
+		if i > len(ret) {
+			return nil, nil, errors.New("detected cycle in FK references")
+		}
+		sortedTables = append(sortedTables, levels[i]...)
+	}
+
+	return ret, sortedTables, errors.Wrap(err, w.sql.tables)
 }

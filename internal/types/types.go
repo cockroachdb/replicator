@@ -94,6 +94,18 @@ type ColData struct {
 	Type    string
 }
 
+// TableSchema maintains the columns in a table.
+type TableSchema struct {
+	Columns []ColData
+}
+
+// DatabaseTables maintains the tables in a database.
+// The TablesSortedByFK field holds the tables in an order that satisfies FK constraints.
+type DatabaseTables struct {
+	Tables           map[ident.Table]TableSchema
+	TablesSortedByFK []ident.Table
+}
+
 // Watcher allows table metadata to be observed.
 //
 // The methods in this type return column data such that primary key
@@ -104,9 +116,8 @@ type Watcher interface {
 	// for updated schema information. This is intended for testing and
 	// does not need to be called in the general case.
 	Refresh(context.Context, pgxtype.Querier) error
-	// Snapshot returns the tables known to be part of the given
-	// user-defined schema.
-	Snapshot(in ident.Schema) map[ident.Table][]ColData
+	// Snapshot returns the tables known to be part of a database.
+	Snapshot() DatabaseTables
 	// Watch returns a channel that emits updated column data for the
 	// given table.  The channel will be closed if there
 	Watch(table ident.Table) (_ <-chan []ColData, cancel func(), _ error)
