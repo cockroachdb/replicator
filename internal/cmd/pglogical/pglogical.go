@@ -53,6 +53,8 @@ func Command() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
+	f.DurationVar(&cfg.ApplyTimeout, "applyTimeout", 30*time.Second,
+		"the maximum amount of time to wait for an update to be applied")
 	f.BoolVar(&cfg.Immediate, "immediate", false, "apply data without waiting for transaction boundaries")
 	f.StringVar(&metricsAddr, "metricsAddr", "", "a host:port to serve metrics from at /_/varz")
 	f.DurationVar(&cfg.RetryDelay, "retryDelay", 10*time.Second,
@@ -61,6 +63,7 @@ func Command() *cobra.Command {
 	f.StringVar(&cfg.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&cfg.TargetConn, "targetConn", "", "the target cluster's connection string")
 	f.StringVar(&targetDB, "targetDB", "", "the SQL database in the target cluster to update")
+	f.IntVar(&cfg.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")
 	f.StringVar(&cfg.Publication, "publicationName", "",
 		"the publication within the source database to replicate")
 	return cmd

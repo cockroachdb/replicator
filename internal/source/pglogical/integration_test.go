@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -78,7 +79,9 @@ func testPGLogical(t *testing.T, immediate bool) {
 		}
 	}
 
-	const rowCount = 1024
+	// We want enough rows here to make sure that the batching and
+	// coalescing logic gets exercised.
+	rowCount := 10 * batches.Size()
 	keys := make([]int, rowCount)
 	vals := make([]string, rowCount)
 	for i := range keys {
@@ -99,13 +102,14 @@ func testPGLogical(t *testing.T, immediate bool) {
 	connCtx, cancelConn := context.WithCancel(ctx)
 	defer cancelConn()
 	_, stopped, err := NewConn(connCtx, &Config{
-		Immediate:   immediate,
-		Publication: dbName.Raw(),
-		RetryDelay:  time.Nanosecond,
-		Slot:        dbName.Raw(),
-		SourceConn:  *pgConnString + dbName.Raw(),
-		TargetConn:  crdbPool.Config().ConnString(),
-		TargetDB:    dbName,
+		ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+		Immediate:    immediate,
+		Publication:  dbName.Raw(),
+		RetryDelay:   time.Nanosecond,
+		Slot:         dbName.Raw(),
+		SourceConn:   *pgConnString + dbName.Raw(),
+		TargetConn:   crdbPool.Config().ConnString(),
+		TargetDB:     dbName,
 	})
 	if !a.NoError(err) {
 		return

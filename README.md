@@ -308,6 +308,7 @@ Flags:
       --sourceConn string        the source database's connection string
       --targetConn string        the target cluster's connection string
       --targetDB string          the SQL database in the target cluster to update
+      --targetDBConns int        the maximum pool size to the target cluster (default 1024)
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout

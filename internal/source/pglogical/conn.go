@@ -21,18 +21,19 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/cdc-sink/internal/util/serial"
+	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/google/uuid"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgproto3/v2"
+	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
@@ -40,21 +41,25 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// lsnStamp adapts the LSN offset type to a comparable Stamp value.
+type lsnStamp pglogrepl.LSN
+
+func (s lsnStamp) Less(other stamp.Stamp) bool {
+	o := other.(lsnStamp)
+	return s < o
+}
+
 // A Conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
 // status updates.
 type Conn struct {
-	// Apply mutations to the backing store.
-	appliers types.Appliers
 	// Columns, as ordered by the source database.
 	columns map[ident.Table][]types.ColData
-	// Tables that need to be drained.
-	dirty     map[ident.Table]struct{}
-	immediate bool
-	// Batches of mutations to stage.
-	pending map[ident.Table][]types.Mutation
-	// Callbacks to release the slices in pending.
-	pendingReleases []func()
+	// The fan manages the fan-out of applying mutations across multiple
+	// SQL connections.
+	fan *fan.Fan
+	// Locked on mu.
+	logPosUpdated *sync.Cond
 	// The pg publication name to subscribe to.
 	publicationName string
 	// Map source ids to target tables.
@@ -62,20 +67,22 @@ type Conn struct {
 	// The amount of time to sleep between retries of the replication
 	// loop.
 	retryDelay time.Duration
-	// Stage mutations in the backing store.
-	stagers types.Stagers
+	// Allows us to force the concurrent applier logic to concentrate
+	// its work into a single underlying database transaction. This will
+	// be nil when running in the default, concurrent, mode.
+	serializer *serial.Pool
 	// The name of the slot within the publication.
 	slotName string
 	// The configuration for opening replication connections.
 	sourceConfig *pgconn.Config
 	// The SQL database we're going to be writing into.
 	targetDB ident.Ident
-	// Connection string for the target database.
-	targetPool *pgxpool.Pool
 	// Likely nil.
 	testControls *TestControls
 	// Drain.
 	timeKeeper types.TimeKeeper
+	// The log offset of the transaction being processed.
+	txLSN pglogrepl.LSN
 	// The (eventual) commit time of the transaction being processed.
 	txTime hlc.Time
 
@@ -109,6 +116,9 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 	}
 	if config.TargetDB.IsEmpty() {
 		return nil, nil, errors.New("no target db was configured")
+	}
+	if config.ApplyTimeout == 0 {
+		config.ApplyTimeout = defaultApplyTimeout
 	}
 
 	// Verify that the publication and replication slots were configured
@@ -165,6 +175,12 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 		_, err := conn.Exec(ctx, "SET application_name=$1", "cdc-sink")
 		return err
 	}
+	// Bigger pools are better for CRDB.
+	if config.TargetDBConns == 0 {
+		targetCfg.MaxConns = defaultTargetDBConns
+	} else {
+		targetCfg.MaxConns = int32(config.TargetDBConns)
+	}
 	// Ensure connection diversity through long-lived loadbalancers.
 	targetCfg.MaxConnLifetime = 10 * time.Minute
 	// Keep one spare connection.
@@ -182,32 +198,49 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 
 	watchers, cancelWatchers := schemawatch.NewWatchers(targetPool)
 	appliers, cancelAppliers := apply.NewAppliers(watchers)
-	stagers := stage.NewStagers(targetPool, ident.StagingDB)
 
 	ret := &Conn{
-		appliers:        appliers,
 		columns:         make(map[ident.Table][]types.ColData),
-		dirty:           make(map[ident.Table]struct{}),
-		immediate:       config.Immediate,
-		pending:         make(map[ident.Table][]types.Mutation),
 		publicationName: config.Publication,
 		relations:       make(map[uint32]ident.Table),
 		retryDelay:      config.RetryDelay,
 		slotName:        config.Slot,
 		sourceConfig:    sourceConfig,
-		stagers:         stagers,
 		targetDB:        config.TargetDB,
-		targetPool:      targetPool,
 		testControls:    config.TestControls,
 		timeKeeper:      timeKeeper,
 	}
+	ret.logPosUpdated = sync.NewCond(&ret.mu)
 	if ret.retryDelay == 0 {
 		ret.retryDelay = defaultRetryDelay
+	}
+
+	// If the user wants to preserve transaction boundaries, we inject a
+	// helper which forces all database operations to be applied within
+	// a single transaction.
+	var applyQuerier pgxtype.Querier = targetPool
+	applyShards := 16
+	if !config.Immediate {
+		ret.serializer = &serial.Pool{Pool: targetPool}
+		applyQuerier = ret.serializer
+		applyShards = 1
+	}
+	var cancelFan func()
+	ret.fan, cancelFan, err = fan.New(
+		appliers,
+		config.ApplyTimeout,
+		applyQuerier,
+		func(stamp stamp.Stamp) { ret.setLogPos(pglogrepl.LSN(stamp.(lsnStamp))) },
+		applyShards,
+	)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	stopper := make(chan struct{})
 	go func() {
 		_ = ret.run(ctx)
+		cancelFan()
 		cancelAppliers()
 		cancelWatchers()
 		cancelTimeKeeper()
@@ -218,9 +251,23 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 	return ret, stopper, nil
 }
 
+// reset the connection's internal status to an idle state. This
+// will be called any time there is an error applying mutations.
+func (c *Conn) reset() {
+	c.fan.Reset()
+	c.txLSN = 0
+	c.txTime = hlc.Zero()
+	if s := c.serializer; s != nil {
+		// Don't really care about the transaction state.
+		_ = s.Rollback(context.Background())
+	}
+}
+
 // run blocks while the connection is processing messages.
 func (c *Conn) run(ctx context.Context) error {
 	for ctx.Err() == nil {
+		// Ensure that we're in a clear state when recovering.
+		c.reset()
 		group, ctx := errgroup.WithContext(ctx)
 
 		// Start a background goroutine to maintain the replication
@@ -278,6 +325,7 @@ func (c *Conn) setLogPos(pos pglogrepl.LSN) {
 	c.mu.clientXLogPos = pos
 	log.WithField("LSN", pos).Trace("updated LSN")
 	lsnOffset.Set(float64(pos))
+	c.logPosUpdated.Broadcast()
 }
 
 // decodeMutation converts the incoming tuple data into a Mutation.
@@ -339,45 +387,6 @@ func (c *Conn) decodeMutation(
 	return mut, errors.WithStack(err)
 }
 
-// flush commits all pending mutations to their respective stages or
-// applies them in immediate-mode. It will also zero-out the length of
-// the associated pending slice.
-func (c *Conn) flush(ctx context.Context, tbl ident.Table) error {
-	if ctrl := c.testControls; ctrl != nil {
-		if fn := c.testControls.BreakSinkFlush; fn != nil {
-			if fn() {
-				return errors.New("breaking sink flush for test")
-			}
-		}
-	}
-
-	found := c.pending[tbl]
-	if len(found) == 0 {
-		return nil
-	}
-
-	if c.immediate {
-		// TODO(bob): Eventually we'll have data-driven configuration.
-		app, err := c.appliers.Get(ctx, tbl, nil /* cas */, types.Deadlines{})
-		if err != nil {
-			return err
-		}
-		if err := app.Apply(ctx, c.targetPool, found); err != nil {
-			return err
-		}
-	} else {
-		stager, err := c.stagers.Get(ctx, tbl)
-		if err != nil {
-			return err
-		}
-		if err := stager.Store(ctx, c.targetPool, found); err != nil {
-			return err
-		}
-	}
-	c.pending[tbl] = found[:0]
-	return nil
-}
-
 // learn updates the source database namespace mappings.
 func (c *Conn) learn(msg *pglogrepl.RelationMessage) {
 	// The replication protocol says that we'll see these
@@ -412,75 +421,27 @@ func (c *Conn) learn(msg *pglogrepl.RelationMessage) {
 // target cluster. It will also update the WAL position that we report
 // back to the source database.
 func (c *Conn) onCommit(ctx context.Context, msg *pglogrepl.CommitMessage) error {
-	// Flush in-memory data to the staging tables.
-	for tbl := range c.pending {
-		if err := c.flush(ctx, tbl); err != nil {
-			return err
-		}
-	}
-
-	// In immediate mode, the call(s) to flush() above will have
-	// committed to the target tables. Otherwise, apply the transaction
-	// data, through the usual drain-and-apply mechanism.
-	if !c.immediate {
-		if err := retry.Retry(ctx, func(ctx context.Context) error {
-			tx, err := c.targetPool.Begin(ctx)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer tx.Rollback(ctx)
-
-			// Calculate the windows of mutations to be flushed. This is
-			// tracked on a per-target-schema basis, so we probably only
-			// wind up calling TimeKeeper.Put once.
-			schemaStartTimes := make(map[ident.Schema]hlc.Time, len(c.dirty))
-			for tbl := range c.dirty {
-				schema := tbl.AsSchema()
-				if _, found := schemaStartTimes[schema]; found {
-					continue
-				}
-				prev, err := c.timeKeeper.Put(ctx, tx, tbl.AsSchema(), c.txTime)
-				if err != nil {
-					return err
-				}
-				schemaStartTimes[schema] = prev
-				log.Tracef("committing %s %s -> %s", schema, prev, c.txTime)
-			}
-
-			for tbl := range c.dirty {
-				stage, err := c.stagers.Get(ctx, tbl)
-				if err != nil {
-					return err
-				}
-
-				prev := schemaStartTimes[tbl.AsSchema()]
-				muts, err := stage.Drain(ctx, tx, prev, c.txTime)
-				if err != nil {
-					return err
-				}
-
-				app, err := c.appliers.Get(ctx, tbl, nil /* casColumns */, types.Deadlines{})
-				if err != nil {
-					return err
-				}
-
-				if err := app.Apply(ctx, tx, muts); err != nil {
-					return err
-				}
-			}
-			return tx.Commit(ctx)
-		}); err != nil {
-			return err
-		}
-	}
-
-	// Advance our high-water mark within the source's WAL,
-	// which will be reported by the keepalive loop.
-	c.setLogPos(msg.TransactionEndLSN)
-	c.reset()
 	commitCount.Inc()
 	commitTime.Set(float64(msg.CommitTime.Unix()))
-	return nil
+
+	mark := lsnStamp(msg.CommitLSN)
+	if err := c.fan.Mark(mark); err != nil {
+		return err
+	}
+
+	// If we're running in serial (as opposed to concurrent) mode, we
+	// want to wait for the pending mutations to be flushed to the
+	// single transaction, and then we'll commit it.
+	if c.serializer == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	for c.mu.clientXLogPos < msg.CommitLSN {
+		c.logPosUpdated.Wait()
+	}
+	c.mu.Unlock()
+	return c.serializer.Commit(ctx)
 }
 
 // onDataTuple will add an incoming row tuple to the in-memory slice,
@@ -506,19 +467,7 @@ func (c *Conn) onDataTuple(
 		return err
 	}
 
-	found := c.pending[tbl]
-	if found == nil {
-		next, fn := batches.Mutation()
-		c.pendingReleases = append(c.pendingReleases, fn)
-		found = next
-	}
-	found = append(found, mut)
-	c.dirty[tbl] = struct{}{}
-	c.pending[tbl] = found
-	if len(found) == cap(found) {
-		return c.flush(ctx, tbl)
-	}
-	return nil
+	return c.fan.Enqueue(ctx, lsnStamp(c.txLSN), tbl, []types.Mutation{mut})
 }
 
 // processMessages receives a sequence of logical replication messages,
@@ -532,7 +481,8 @@ func (c *Conn) processMessages(ctx context.Context, ch <-chan pglogrepl.Message)
 		case *rollbackMessage:
 			// This is a custom message that we'll insert to indicate
 			// that the upstream message provider is going to restart
-			// the feed.
+			// the feed. We want to abandon any in-memory mutations,
+			// since the restart will wind up replaying them.
 			c.reset()
 
 		case *pglogrepl.RelationMessage:
@@ -545,7 +495,11 @@ func (c *Conn) processMessages(ctx context.Context, ch <-chan pglogrepl.Message)
 			// Starting a new transaction. We're going to accept the
 			// transaction time as reported by the server as our
 			// HLC timestamp for staging purposes.
+			c.txLSN = msg.FinalLSN
 			c.txTime = hlc.From(msg.CommitTime)
+			if s := c.serializer; s != nil {
+				err = s.Begin(ctx)
+			}
 
 		case *pglogrepl.CommitMessage:
 			err = c.onCommit(ctx, msg)
@@ -690,15 +644,6 @@ func (c *Conn) readReplicationData(ctx context.Context, ch chan<- pglogrepl.Mess
 		}
 	}
 	return nil
-}
-
-// reset abandons any in-flight data that we've accumulated.
-func (c *Conn) reset() {
-	c.dirty = make(map[ident.Table]struct{})
-	for tbl, muts := range c.pending {
-		c.pending[tbl] = muts[:0]
-	}
-	c.txTime = hlc.Zero()
 }
 
 // traceTuple

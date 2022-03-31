@@ -28,7 +28,9 @@ import (
 )
 
 var connString = flag.String("testConnect",
-	"postgresql://root@localhost:26257/defaultdb?sslmode=disable&experimental_enable_hash_sharded_indexes=true",
+	"postgresql://root@localhost:26257/defaultdb"+
+		"?sslmode=disable"+
+		"&experimental_enable_hash_sharded_indexes=true",
 	"the connection string to use for testing")
 
 var globalDBInfo struct {

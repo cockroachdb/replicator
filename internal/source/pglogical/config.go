@@ -16,13 +16,20 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
-const defaultRetryDelay = 10 * time.Second
+const (
+	defaultApplyTimeout  = 30 * time.Second
+	defaultRetryDelay    = 10 * time.Second
+	defaultTargetDBConns = 1024
+)
 
 // Config contains the configuration necessary for creating a
 // replication connection. All field, other than TestControls, are
 // mandatory.
 type Config struct {
-	// Place the configuration into immediate mode, where mutations are
+	// The maximum length of time to wait for an incoming transaction
+	// to settle (i.e. to detect stalls in the target database).
+	ApplyTimeout time.Duration
+	// Place the configuration into fan mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool
 	// The name of the publication to attach to.
@@ -38,6 +45,9 @@ type Config struct {
 	TargetConn string
 	// The SQL database in the target cluster to write into.
 	TargetDB ident.Ident
+	// The number of connections to the target database. If zero, a
+	// default value will be used.
+	TargetDBConns int
 	// Additional controls for testing.
 	TestControls *TestControls
 }
