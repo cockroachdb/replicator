@@ -22,7 +22,7 @@ const defaultRetryDelay = 10 * time.Second
 // replication connection. All field, other than TestControls, are
 // mandatory.
 type Config struct {
-	// Place the configuration into immediate mode, where mutations are
+	// Place the configuration into fan mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool
 	// The name of the publication to attach to.

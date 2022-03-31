@@ -78,7 +78,7 @@ func testPGLogical(t *testing.T, immediate bool) {
 		}
 	}
 
-	const rowCount = 1024
+	const rowCount = 10_000
 	keys := make([]int, rowCount)
 	vals := make([]string, rowCount)
 	for i := range keys {
