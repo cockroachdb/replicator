@@ -100,9 +100,9 @@ type TableSchema struct {
 }
 
 // DatabaseTables maintains the tables in a database.
-// The TablesSortedByFK field holds the tables in an order that satisfies FK constraints.
 type DatabaseTables struct {
-	Tables           map[ident.Table]TableSchema
+	Tables map[ident.Table]TableSchema
+	// The TablesSortedByFK field holds the tables in an order that satisfies FK constraints.
 	TablesSortedByFK []ident.Table
 }
 
@@ -118,8 +118,7 @@ type Watcher interface {
 	Refresh(context.Context, pgxtype.Querier) error
 	// Snapshot returns the tables known to be part of a database.
 	Snapshot() DatabaseTables
-	// Watch returns a channel that emits updated column data for the
-	// given table.  The channel will be closed if there
+	// Snapshot returns the tables known to be part of a database.
 	Watch(table ident.Table) (_ <-chan []ColData, cancel func(), _ error)
 }
 

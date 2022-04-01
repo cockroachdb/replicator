@@ -16,6 +16,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -120,7 +121,7 @@ func (w *watcher) Refresh(ctx context.Context, tx pgxtype.Querier) error {
 	return nil
 }
 
-// Snapshot returns the known tables in the given user-defined schema.
+// Snapshot returns the known tables in the database.
 func (w *watcher) Snapshot() types.DatabaseTables {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -164,12 +165,12 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 
 		var last []types.ColData
 		for {
-			n, ok := w.mu.data[table]
+			tableData, ok := w.mu.data[table]
 			// Respond to context cancellation or dropping the table.
 			if !ok || ctx.Err() != nil {
 				return
 			}
-			next := n.columns
+			next := tableData.columns
 			// We're read-locked, so this isn't hugely critical.
 			if !colSliceEqual(last, next) {
 				select {
@@ -195,39 +196,33 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 //                 and possibly other tables at Level N-1 or lower levels.
 const tableTemplate = `
 WITH RECURSIVE
-        limits AS (
-            SELECT
-				count(*) + 1 AS maxdepth
-			FROM 
+	limits AS (SELECT count(*) + 1 AS maxdepth FROM [SHOW TABLES FROM %s]),
+	refs
+		AS (
+			SELECT
+				0 AS depth, '' AS referenced_table_name, schema_name, table_name
+			FROM
 				[SHOW TABLES FROM %s]
-        ),
-        refs AS (               
-				SELECT 
-					0 AS depth, '' AS referenced_table_name, schema_name, table_name
-				FROM 
-					[SHOW TABLES FROM %s]
-				UNION ALL
-						SELECT  
-							refs.depth + 1 AS depth,
-							s.referenced_table_name,
-							schema_name,
-							s.table_name
-						FROM    
-							refs,   
-							%s.information_schema.referential_constraints s
-						WHERE   
-							refs.table_name = s.referenced_table_name
-							AND refs.depth < (SELECT maxdepth FROM limits) 
+			UNION ALL
+				SELECT
+					refs.depth + 1 AS depth,
+					s.referenced_table_name,
+					schema_name,
+					s.table_name
+				FROM
+					refs, %s.information_schema.referential_constraints AS s
+				WHERE
+					refs.table_name = s.referenced_table_name
+					AND refs.depth < (SELECT maxdepth FROM limits)
 		)
 SELECT
-        schema_name, table_name, max(depth) AS depth
+	schema_name, table_name, max(depth) AS depth
 FROM
-        refs
+	refs
 GROUP BY
-        schema_name, table_name
+	schema_name, table_name
 ORDER BY
-        depth
-
+	depth;
 `
 
 func (w *watcher) getTables(
@@ -241,11 +236,11 @@ func (w *watcher) getTables(
 		if err != nil {
 			return err
 		}
+
 		defer rows.Close()
-
 		ret = make(dbSchema)
-
 		levels = make(map[int][]ident.Table)
+
 		for rows.Next() {
 			var schema, table string
 			var depth int
@@ -271,14 +266,21 @@ func (w *watcher) getTables(
 		return nil
 	})
 
-	sortedTables := make([]ident.Table, 0, len(ret))
-
-	for i := 0; i <= maxDepth; i++ {
-		if i > len(ret) {
-			return nil, nil, errors.New("detected cycle in FK references")
-		}
-		sortedTables = append(sortedTables, levels[i]...)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, w.sql.tables)
 	}
 
-	return ret, sortedTables, errors.Wrap(err, w.sql.tables)
+	sortedTables := make([]ident.Table, 0, len(ret))
+	for l := 0; l <= maxDepth; l++ {
+		if l > len(ret) {
+			return nil, nil, errors.New("detected cycle in FK references")
+		}
+		tables := levels[l]
+		sort.SliceStable(tables, func(i, j int) bool {
+			return tables[i].String() < tables[j].String()
+		})
+		sortedTables = append(sortedTables, tables...)
+	}
+
+	return ret, sortedTables, nil
 }

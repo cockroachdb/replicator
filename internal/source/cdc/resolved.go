@@ -19,11 +19,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/apply/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // Resolved is the name of table that we track resolved timestamps in.
@@ -117,64 +119,24 @@ func (h *Handler) resolved(ctx context.Context, req *request) error {
 		if err != nil {
 			return err
 		}
-		// Get the tables to process, sorted based on the FK constraints
-		targetTables := watcher.Snapshot().TablesSortedByFK
-		stores := make([]types.Stager, 0, len(targetTables))
-		appliers := make([]types.Applier, 0, len(targetTables))
-		deletes := make([][]types.Mutation, 0, len(targetTables))
-		// Prepare to merge data.
-		for _, table := range targetTables {
-			if table.AsSchema() == target {
-				store, err := h.Stores.Get(ctx, table)
-				if err != nil {
-					return err
-				}
-				stores = append(stores, store)
-				applier, err := h.Appliers.Get(ctx, table, req.casColumns, req.deadlines)
-				if err != nil {
-					return err
-				}
-				appliers = append(appliers, applier)
+
+		allTables := watcher.Snapshot().TablesSortedByFK
+		targetTables := make([]ident.Table, 0, len(allTables))
+		for _, tbl := range allTables {
+			if tbl.AsSchema() == target {
+				targetTables = append(targetTables, tbl)
 			}
 		}
-
-		prev, err := h.Swapper.Put(ctx, tx, target, req.timestamp)
+		target := sequencer.Target{
+			Tables:         targetTables,
+			CasColumns:     nil,
+			Deadlines:      types.Deadlines{},
+			CheckTimestamp: true,
+		}
+		err = h.Sequencer.Apply(ctx, tx, target, req.timestamp)
 		if err != nil {
+			log.Error(err)
 			return err
-		}
-
-		if hlc.Compare(req.timestamp, prev) < 0 {
-			return errors.Errorf(
-				"resolved timestamp went backwards: received %s had %s",
-				req.timestamp, prev)
-		}
-		// To support FK constraints in the target, process upserts first,
-		// and accumulate deletes.
-		for i := range stores {
-			muts, err := stores[i].Drain(ctx, tx, prev, req.timestamp)
-			if err != nil {
-				return err
-			}
-			dmuts := make([]types.Mutation, 0, len(muts))
-			umuts := make([]types.Mutation, 0, len(muts))
-			for _, m := range muts {
-				if m.IsDelete() {
-					dmuts = append(dmuts, m)
-				} else {
-					umuts = append(umuts, m)
-				}
-			}
-			deletes = append(deletes, dmuts)
-			if err := appliers[i].Apply(ctx, tx, umuts); err != nil {
-				return err
-			}
-		}
-		// Delete must be processed in the opposite order
-		for i := len(deletes) - 1; i >= 0; i-- {
-			dmuts := deletes[i]
-			if err := appliers[i].Apply(ctx, tx, dmuts); err != nil {
-				return err
-			}
 		}
 		return tx.Commit(ctx)
 	})

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/apply/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -58,9 +59,10 @@ type Handler struct {
 	Appliers      types.Appliers      // Update tables within TargetDb.
 	Authenticator types.Authenticator // Access checks.
 	Pool          *pgxpool.Pool       // Access to the target cluster.
-	Stores        types.Stagers       // Record incoming json blobs.
-	Swapper       types.TimeKeeper    // Tracks named timestamps.
-	Watchers      types.Watchers      // Schema data.
+	Sequencer     sequencer.Sequencer
+	Stores        types.Stagers    // Record incoming json blobs.
+	Swapper       types.TimeKeeper // Tracks named timestamps.
+	Watchers      types.Watchers   // Schema data.
 }
 
 // A request is configured by the various parseURL methods in Handler.

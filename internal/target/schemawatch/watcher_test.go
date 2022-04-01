@@ -100,16 +100,30 @@ func TestWatch(t *testing.T) {
 	a.Error(err)
 }
 
-func createTableStatement(refs ...sinktest.TableInfo) string {
+func createTableSimplePKStatement(refs ...sinktest.TableInfo) string {
 	stm := "CREATE TABLE %s (pk INT PRIMARY KEY "
 	for i, ref := range refs {
 		stm += ", fk_" + strconv.Itoa(i) + " INT REFERENCES " + ref.Name().String() + " (pk) "
 	}
 	stm += ")"
-	fmt.Println(stm)
 	return stm
 }
-func TestWatchFK(t *testing.T) {
+
+func createTableComposityPKStatement(refs ...sinktest.TableInfo) string {
+	stm := "CREATE TABLE %s (pk1 INT, pk2 INT,  CONSTRAINT pk PRIMARY KEY (pk1, pk2) "
+	for i := range refs {
+		stm += ", fk1_" + strconv.Itoa(i) + " INT "
+		stm += ", fk2_" + strconv.Itoa(i) + " INT "
+	}
+	for i, ref := range refs {
+		stm += ", CONSTRAINT fk_ref_" + strconv.Itoa(i) +
+			" FOREIGN KEY (" + " fk1_" + strconv.Itoa(i) + ", fk2_" + strconv.Itoa(i) + ")" +
+			" REFERENCES " + ref.Name().String() + " (pk1, pk2) "
+	}
+	stm += ")"
+	return stm
+}
+func TestWatchSimpleFK(t *testing.T) {
 	a := assert.New(t)
 	*RefreshDelay = time.Second
 	defer func() { *RefreshDelay = time.Minute }()
@@ -129,31 +143,30 @@ func TestWatchFK(t *testing.T) {
 	// Level 2. T3 -> T1,T2
 	// Level 3. T4 -> T1,T2,T3 ; T5 -> T1, T3
 	// Level 4. T6 -> T5
-	tbl1, err := sinktest.CreateTable(ctx, dbName, createTableStatement())
+	tbl1, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement())
 	if !a.NoError(err) {
 		return
 	}
 
-	tbl2, err := sinktest.CreateTable(ctx, dbName, createTableStatement(tbl1))
+	tbl2, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl1))
 	if !a.NoError(err) {
 		return
 	}
 
-	tbl3, err := sinktest.CreateTable(ctx, dbName, createTableStatement(tbl1, tbl2))
+	tbl3, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl1, tbl2))
 	if !a.NoError(err) {
 		return
 	}
 
-	tbl4, err := sinktest.CreateTable(ctx, dbName, createTableStatement(tbl1, tbl2, tbl3))
+	tbl4, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl1, tbl2, tbl3))
 	if !a.NoError(err) {
 		return
 	}
-
-	tbl5, err := sinktest.CreateTable(ctx, dbName, createTableStatement(tbl1, tbl3))
+	tbl5, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl1, tbl3))
 	if !a.NoError(err) {
 		return
 	}
-	tbl6, err := sinktest.CreateTable(ctx, dbName, createTableStatement(tbl5))
+	tbl6, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl5))
 	if !a.NoError(err) {
 		return
 	}
@@ -167,14 +180,138 @@ func TestWatchFK(t *testing.T) {
 
 	snapshot := w.Snapshot()
 	tables := snapshot.TablesSortedByFK
-	// Expected T1, T2, T3,  T4 or T5, T5 or T4 , T6
+	var level3_t1, level3_t2 sinktest.TableInfo
+	if tbl4.String() < tbl5.String() {
+		level3_t1, level3_t2 = tbl4, tbl5
+	} else {
+		level3_t1, level3_t2 = tbl5, tbl4
+	}
 	a.Equal(6, len(tables))
-	tbl4Otbl5 := []string{tbl4.String(), tbl5.String()}
 	a.Equal(tbl1.String(), tables[0].String())
 	a.Equal(tbl2.String(), tables[1].String())
 	a.Equal(tbl3.String(), tables[2].String())
-	a.Contains(tbl4Otbl5, tables[3].String())
-	a.Contains(tbl4Otbl5, tables[4].String())
+	a.Equal(level3_t1.String(), tables[3].String())
+	a.Equal(level3_t2.String(), tables[4].String())
 	a.Equal(tbl6.String(), tables[5].String())
+}
+func TestWatchCompositeFK(t *testing.T) {
+	a := assert.New(t)
+	*RefreshDelay = time.Second
+	defer func() { *RefreshDelay = time.Minute }()
+
+	ctx, dbInfo, cancel := sinktest.Context()
+	defer cancel()
+
+	dbName, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	// Tables
+	// Level 0. T1
+	// Level 1. T2 -> T1
+	// Level 2. T3 -> T1,T2
+	// Level 3. T4 -> T1,T2,T3 ; T5 -> T1, T3
+	// Level 4. T6 -> T5
+	tbl1, err := sinktest.CreateTable(ctx, dbName, createTableComposityPKStatement())
+	if !a.NoError(err) {
+		return
+	}
+
+	tbl2, err := sinktest.CreateTable(ctx, dbName, createTableComposityPKStatement(tbl1))
+	if !a.NoError(err) {
+		return
+	}
+
+	tbl3, err := sinktest.CreateTable(ctx, dbName, createTableComposityPKStatement(tbl1, tbl2))
+	if !a.NoError(err) {
+		return
+	}
+
+	tbl4, err := sinktest.CreateTable(ctx, dbName, createTableComposityPKStatement(tbl1, tbl2, tbl3))
+	if !a.NoError(err) {
+		return
+	}
+	tbl5, err := sinktest.CreateTable(ctx, dbName, createTableComposityPKStatement(tbl1, tbl3))
+	if !a.NoError(err) {
+		return
+	}
+	tbl6, err := sinktest.CreateTable(ctx, dbName, createTableComposityPKStatement(tbl5))
+	if !a.NoError(err) {
+		return
+	}
+
+	w, cancel, err := newWatcher(ctx, dbInfo.Pool(), dbName)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+	a.Equal(time.Second, w.delay)
+
+	snapshot := w.Snapshot()
+	tables := snapshot.TablesSortedByFK
+	var level3_t1, level3_t2 sinktest.TableInfo
+	if tbl4.String() < tbl5.String() {
+		level3_t1, level3_t2 = tbl4, tbl5
+	} else {
+		level3_t1, level3_t2 = tbl5, tbl4
+	}
+	a.Equal(6, len(tables))
+	a.Equal(tbl1.String(), tables[0].String())
+	a.Equal(tbl2.String(), tables[1].String())
+	a.Equal(tbl3.String(), tables[2].String())
+	a.Equal(level3_t1.String(), tables[3].String())
+	a.Equal(level3_t2.String(), tables[4].String())
+	a.Equal(tbl6.String(), tables[5].String())
+}
+
+func TestWatchFKLoop(t *testing.T) {
+	a := assert.New(t)
+	*RefreshDelay = time.Second
+	defer func() { *RefreshDelay = time.Minute }()
+
+	ctx, dbInfo, cancel := sinktest.Context()
+	defer cancel()
+
+	dbName, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	// Tables
+	// Level 0. T1 -> T4
+	// Level 1. T2 -> T1
+	// Level 2. T3 -> T1,T2
+	// Level 3. T4 -> T1,T2,T3
+	tbl1, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement())
+	if !a.NoError(err) {
+		return
+	}
+
+	tbl2, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl1))
+	if !a.NoError(err) {
+		return
+	}
+
+	tbl3, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl1, tbl2))
+	if !a.NoError(err) {
+		return
+	}
+
+	tbl4, err := sinktest.CreateTable(ctx, dbName, createTableSimplePKStatement(tbl1, tbl2, tbl3))
+	if !a.NoError(err) {
+		return
+	}
+
+	err = tbl1.Exec(ctx, "ALTER TABLE %s ADD COLUMN fk INT REFERENCES "+tbl4.String()+"(pk)")
+	if !a.NoError(err) {
+		return
+	}
+
+	_, _, err = newWatcher(ctx, dbInfo.Pool(), dbName)
+
+	a.EqualError(err, "detected cycle in FK references")
 
 }
