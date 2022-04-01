@@ -21,6 +21,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
@@ -438,65 +439,24 @@ func (c *Conn) onCommit(ctx context.Context, msg *pglogrepl.CommitMessage) error
 			if err != nil {
 				return err
 			}
-			// Calculate the windows of mutations to be flushed. This is
-			// tracked on a per-target-schema basis, so we probably only
-			// wind up calling TimeKeeper.Put once.
-			schemaStartTimes := make(map[ident.Schema]hlc.Time, len(c.dirty))
-			for tbl := range c.dirty {
-				schema := tbl.AsSchema()
-				if _, found := schemaStartTimes[schema]; found {
-					continue
-				}
-				prev, err := c.timeKeeper.Put(ctx, tx, tbl.AsSchema(), c.txTime)
-				if err != nil {
-					return err
-				}
-				schemaStartTimes[schema] = prev
-				log.Tracef("committing %s %s -> %s", schema, prev, c.txTime)
-			}
-			deletes := make([][]types.Mutation, 0, len(c.dirty))
-			appliers := make([]types.Applier, 0, len(c.dirty))
-			targetTables := watcher.Snapshot().TablesSortedByFK
-			for _, tbl := range targetTables {
+			// Compute the tables that need to be updated
+			targetTables := make([]ident.Table, 0, len(c.dirty))
+			for _, tbl := range watcher.Snapshot().TablesSortedByFK {
 				if _, ok := c.dirty[tbl]; ok {
-					prev := schemaStartTimes[tbl.AsSchema()]
-					stage, err := c.stagers.Get(ctx, tbl)
-					if err != nil {
-						return err
-					}
-					muts, err := stage.Drain(ctx, tx, prev, c.txTime)
-					if err != nil {
-						return err
-					}
-					dmuts := make([]types.Mutation, 0, len(muts))
-					umuts := make([]types.Mutation, 0, len(muts))
-
-					for _, m := range muts {
-						if m.IsDelete() {
-							dmuts = append(dmuts, m)
-						} else {
-							umuts = append(umuts, m)
-						}
-					}
-
-					app, err := c.appliers.Get(ctx, tbl, nil /* casColumns */, types.Deadlines{})
-					deletes = append(deletes, dmuts)
-					appliers = append(appliers, app)
-					if err != nil {
-						return err
-					}
-					if err := app.Apply(ctx, tx, umuts); err != nil {
-						return err
-					}
+					targetTables = append(targetTables, tbl)
 				}
-
 			}
-			// Delete must be processed in the opposite order
-			for i := len(deletes) - 1; i >= 0; i-- {
-				dmuts := deletes[i]
-				if err := appliers[i].Apply(ctx, tx, dmuts); err != nil {
-					return err
-				}
+			target := sequencer.Target{
+				Tables:     targetTables,
+				CasColumns: nil,
+				Deadlines:  types.Deadlines{},
+			}
+
+			seq := sequencer.New(c.appliers, c.stagers, c.timeKeeper)
+			err = seq.Apply(ctx, tx, target, c.txTime)
+			if err != nil {
+				log.Error(err)
+				return err
 			}
 			return tx.Commit(ctx)
 		}); err != nil {

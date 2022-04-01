@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
@@ -145,13 +146,15 @@ func newServer(
 			}),
 	))
 	mux.Handle("/_/", http.NotFoundHandler()) // Reserve all under /_/
+	stores := stage.NewStagers(pool, ident.StagingDB)
 	mux.Handle("/", logWrapper(&cdc.Handler{
 		Authenticator: authenticator,
 		Appliers:      appliers,
 		Pool:          pool,
-		Stores:        stage.NewStagers(pool, ident.StagingDB),
+		Stores:        stores,
 		Swapper:       swapper,
 		Watchers:      watchers,
+		Sequencer:     sequencer.New(appliers, stores, swapper),
 	}))
 
 	l, err := net.Listen("tcp", bindAddr)

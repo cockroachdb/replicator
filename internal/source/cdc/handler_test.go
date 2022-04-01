@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/reject"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
@@ -65,13 +66,15 @@ func testHandler(t *testing.T, immediate bool) {
 	appliers, cancel := apply.NewAppliers(watchers)
 	defer cancel()
 
+	stores := stage.NewStagers(dbInfo.Pool(), ident.StagingDB)
 	h := &Handler{
 		Appliers:      appliers,
 		Authenticator: trust.New(),
 		Pool:          dbInfo.Pool(),
-		Stores:        stage.NewStagers(dbInfo.Pool(), ident.StagingDB),
+		Stores:        stores,
 		Swapper:       swapper,
 		Watchers:      watchers,
+		Sequencer:     sequencer.New(appliers, stores, swapper),
 	}
 
 	// Validate the "classic" endpoints where files containing
