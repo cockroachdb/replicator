@@ -567,13 +567,14 @@ func (c *Conn) readReplicationData(ctx context.Context, ch chan<- pglogrepl.Mess
 		}
 
 		if time.Now().After(standbyDeadline) {
+			logPos := c.getLogPos()
 			err = pglogrepl.SendStandbyStatusUpdate(ctx, replConn, pglogrepl.StandbyStatusUpdate{
-				WALWritePosition: c.getLogPos(),
+				WALWritePosition: logPos,
 			})
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			log.Trace("Sent Standby status message")
+			log.WithField("WALWritePosition", logPos).Trace("sent Standby status message")
 			standbyDeadline = time.Now().Add(standbyTimeout)
 		}
 
