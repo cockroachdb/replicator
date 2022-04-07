@@ -13,6 +13,7 @@ package fan
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -91,6 +92,68 @@ func TestFanSmoke(t *testing.T) {
 		if !a.NoError(ctx.Err()) {
 			return
 		}
+		consistentUpdated.Wait()
+	}
+	consistentUpdated.L.Unlock()
+}
+
+// This validates that the consistent point will still advance, even
+// if a bucket is being continuously hammered with updates.
+func TestBucketSaturation(t *testing.T) {
+	a := assert.New(t)
+
+	ctx, dbInfo, cancel := sinktest.Context()
+	defer cancel()
+
+	dbName, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
+	defer cancel()
+
+	tbl, err := sinktest.CreateTable(ctx, dbName,
+		"CREATE TABLE %s (k INT PRIMARY KEY, v STRING)")
+	if !a.NoError(err) {
+		return
+	}
+
+	appliers, cancel := apply.NewAppliers(watchers)
+	defer cancel()
+
+	// Provide a correct way for the callback to report where the
+	// consistent point has advanced to.
+	consistentUpdated := sync.NewCond(&sync.Mutex{})
+	consistentCallbacks := 0
+
+	imm, cancel, err := New(
+		appliers,
+		2*time.Minute,
+		dbInfo.Pool(),
+		func(stamp stamp.Stamp) {
+			consistentUpdated.L.Lock()
+			defer consistentUpdated.L.Unlock()
+			consistentCallbacks++
+			consistentUpdated.Broadcast()
+		},
+		16,        // shards
+		1024*1024, // backpressure bytes chosen to force delays
+	)
+	defer cancel()
+	if !a.NoError(err) {
+		return
+	}
+
+	// Generate data to be applied, in a separate goroutine.
+	go func() {
+		_, _ = generateMutations(ctx, imm, tbl.Name(), math.MaxInt)
+	}()
+
+	// Ensure that several updates to the consistent point happen.
+	consistentUpdated.L.Lock()
+	for consistentCallbacks < 10 {
 		consistentUpdated.Wait()
 	}
 	consistentUpdated.L.Unlock()
