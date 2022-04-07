@@ -38,6 +38,10 @@ var (
 		"connection string for PostgreSQL instance")
 )
 
+func TestMain(m *testing.M) {
+	sinktest.IntegrationMain(m, sinktest.PostgreSQLName)
+}
+
 // This is a general smoke-test of the logical replication feed.
 func TestPGLogical(t *testing.T) {
 	t.Run("consistent", func(t *testing.T) { testPGLogical(t, false) })
