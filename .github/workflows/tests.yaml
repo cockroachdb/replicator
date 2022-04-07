@@ -59,15 +59,22 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck -checks all ./...
 
   integration:
-    name: Integration Tests crdb-${{ matrix.cockroachdb }} pg-${{ matrix.postgresql }}
+    name: Integration Tests crdb-${{ matrix.cockroachdb }} ${{ matrix.integration }}
     strategy:
       fail-fast: false
       matrix:
         cockroachdb: [ v20.2, v21.1, v21.2 ]
-        postgresql: [ v11, v12, v13, v14 ]
+        # This matrix component should use the target names listed
+        # in the docker-compose.yml file in the parent directory.
+        integration:
+          - "mysql-v8"
+          - "postgresql-v11"
+          - "postgresql-v12"
+          - "postgresql-v13"
+          - "postgresql-v14"
     runs-on: ubuntu-latest
     env:
-      COVER_OUT: coverage-${{ matrix.coverage }}.out
+      COVER_OUT: coverage.out
     steps:
       - uses: actions/checkout@v2
 
@@ -98,19 +105,22 @@ jobs:
         working-directory: .github
         run: docker-compose up -d cockroachdb-${{ matrix.cockroachdb }}
 
-      - name: Start PostgreSQL
+      - name: Start ${{ matrix.integration }}
+        if: ${{ matrix.integration }}
         working-directory: .github
-        run: docker-compose up -d postgresql-${{ matrix.postgresql }}
+        run: docker-compose up -d ${{ matrix.integration }}
 
       - name: Go Tests
         env:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
+          CDC_INTEGRATION: ${{ matrix.integration }}
         run: go test -v -race -coverpkg=./internal/... -covermode=atomic -coverprofile=${{ env.COVER_OUT }} ./...
 
       - name: Manual Benchmarks
         if: ${{ github.event.inputs.run_bench }}
         env:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
+          CDC_INTEGRATION: ${{ matrix.integration }}
         run: go test -v -benchtime 10s -bench . ./...
 
       - name: Stop databases
