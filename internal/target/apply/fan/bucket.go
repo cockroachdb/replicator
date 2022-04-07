@@ -154,7 +154,8 @@ func (b *bucket) Stopped() <-chan struct{} {
 // flushLoop is executed from a per-bucket goroutine.
 func (b *bucket) flushLoop() {
 	defer close(b.stopped)
-	var consistent stamp.Stamp
+	consistent := b.Consistent()
+	callbackFn := b.onConsistent
 outer:
 	for range b.wakeup {
 		// Once woken up, drain everything that we have to send, until
@@ -167,16 +168,17 @@ outer:
 				log.WithError(err).Warn("error while flushing mutations; will retry")
 				continue outer
 			}
+
+			// If the consistent point advanced, send a callback.
+			if callbackFn != nil {
+				nextConsistent := b.Consistent()
+				if stamp.Compare(nextConsistent, consistent) > 0 {
+					callbackFn(b, nextConsistent)
+					consistent = nextConsistent
+				}
+			}
 			if !more {
 				break
-			}
-		}
-
-		// If the consistent point advanced, send a callback.
-		if fn := b.onConsistent; fn != nil {
-			nextConsistent := b.Consistent()
-			if stamp.Compare(nextConsistent, consistent) > 0 {
-				fn(b, nextConsistent)
 			}
 		}
 	}
