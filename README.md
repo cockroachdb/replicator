@@ -299,6 +299,8 @@ Usage:
   cdc-sink pglogical [flags]
 
 Flags:
+      --applyTimeout duration    the maximum amount of time to wait for an update to be applied (default 30s)
+      --bytesInFlight int        apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
   -h, --help                     help for pglogical
       --immediate                apply data without waiting for transaction boundaries
       --metricsAddr string       a host:port to serve metrics from at /_/varz
@@ -308,6 +310,7 @@ Flags:
       --sourceConn string        the source database's connection string
       --targetConn string        the target cluster's connection string
       --targetDB string          the SQL database in the target cluster to update
+      --targetDBConns int        the maximum pool size to the target cluster (default 1024)
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout
