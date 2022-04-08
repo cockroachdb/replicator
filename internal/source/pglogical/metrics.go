@@ -16,14 +16,6 @@ import (
 )
 
 var (
-	commitCount = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "pglogical_commit_total",
-		Help: "the number transactions from the source database that were applied",
-	})
-	commitTime = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "pglogical_last_commit_seconds",
-		Help: "the original time of the most recently applied commit from the source database",
-	})
 	dialFailureCount = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "pglogical_dial_failure_total",
 		Help: "the number of times we failed to create a replication connection",
@@ -31,9 +23,5 @@ var (
 	dialSuccessCount = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "pglogical_dial_success_total",
 		Help: "the number of times we successfully dialed a replication connection",
-	})
-	lsnOffset = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "pglogical_lsn_offset_bytes",
-		Help: "the LSN offset that we are reporting to the source database",
 	})
 )
