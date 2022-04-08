@@ -11,60 +11,42 @@
 package pglogical
 
 import (
-	"time"
-
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-)
-
-const (
-	defaultApplyTimeout  = 30 * time.Second
-	defaultRetryDelay    = 10 * time.Second
-	defaultTargetDBConns = 1024
-	defaultBytesInFlight = 10 * 1024 * 1024
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/pkg/errors"
 )
 
 // Config contains the configuration necessary for creating a
 // replication connection. All field, other than TestControls, are
 // mandatory.
 type Config struct {
-	// The maximum length of time to wait for an incoming transaction
-	// to settle (i.e. to detect stalls in the target database).
-	ApplyTimeout time.Duration
-	// The maximum number of raw tuple-data that has yet to be applied
-	// to the target database. This will act as an approximate upper
-	// bound on the amount of in-memory tuple data by pausing the
-	// replication receiver until sufficient number of other mutations
-	// have been applied.
-	BytesInFlight int
-	// Place the configuration into fan mode, where mutations are
-	// applied without waiting for transaction boundaries.
-	Immediate bool
+	logical.Config
+
 	// The name of the publication to attach to.
 	Publication string
 	// The replication slot to attach to.
 	Slot string
 	// Connection string for the source db.
 	SourceConn string
-	// The amount of time to sleep between replication-loop retries.
-	// If zero, a default value will be used.
-	RetryDelay time.Duration
-	// Connection string for the target cluster.
-	TargetConn string
-	// The SQL database in the target cluster to write into.
-	TargetDB ident.Ident
-	// The number of connections to the target database. If zero, a
-	// default value will be used.
-	TargetDBConns int
-	// Additional controls for testing.
-	TestControls *TestControls
+
+	// Used in testing to inject errors during processing.
+	withChaosProb float32
 }
 
-// TestControls define a collection of testing hook points for injecting
-// behavior in a testing scenario. The function callbacks in this type
-// must be prepared to be called from arbitrary goroutines. All fields
-// in this type are optional.
-type TestControls struct {
-	BreakOnDataTuple     func() bool
-	BreakReplicationFeed func() bool
-	BreakSinkFlush       func() bool
+// Preflight updates the configuration with sane defaults or returns an
+// error if there are missing options for which a default cannot be
+// provided.
+func (c *Config) Preflight() error {
+	if err := c.Config.Preflight(); err != nil {
+		return err
+	}
+	if c.Publication == "" {
+		return errors.New("no publication name was configured")
+	}
+	if c.Slot == "" {
+		return errors.New("no replication slot name was configured")
+	}
+	if c.SourceConn == "" {
+		return errors.New("no source connection was configured")
+	}
+	return nil
 }
