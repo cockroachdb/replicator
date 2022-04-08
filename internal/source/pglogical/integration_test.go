@@ -17,11 +17,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"math/rand"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -43,12 +43,17 @@ func TestMain(m *testing.M) {
 }
 
 // This is a general smoke-test of the logical replication feed.
+//
+// The probabilities are chosen to make the tests pass within a
+// reasonable timeframe, given the large number of rows that we insert.
 func TestPGLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testPGLogical(t, false) })
-	t.Run("immediate", func(t *testing.T) { testPGLogical(t, true) })
+	t.Run("consistent", func(t *testing.T) { testPGLogical(t, false, 0) })
+	t.Run("consistent-chaos", func(t *testing.T) { testPGLogical(t, false, 0.0005) })
+	t.Run("immediate", func(t *testing.T) { testPGLogical(t, true, 0) })
+	t.Run("immediate-chaos", func(t *testing.T) { testPGLogical(t, true, 0.0005) })
 }
 
-func testPGLogical(t *testing.T, immediate bool) {
+func testPGLogical(t *testing.T, immediate bool, withChaosProb float32) {
 	a := assert.New(t)
 
 	ctx, info, cancel := sinktest.Context()
@@ -106,14 +111,17 @@ func testPGLogical(t *testing.T, immediate bool) {
 	connCtx, cancelConn := context.WithCancel(ctx)
 	defer cancelConn()
 	_, stopped, err := NewConn(connCtx, &Config{
-		ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-		Immediate:    immediate,
-		Publication:  dbName.Raw(),
-		RetryDelay:   time.Nanosecond,
-		Slot:         dbName.Raw(),
-		SourceConn:   *pgConnString + dbName.Raw(),
-		TargetConn:   crdbPool.Config().ConnString(),
-		TargetDB:     dbName,
+		Config: logical.Config{
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:    immediate,
+			RetryDelay:   time.Nanosecond,
+			TargetConn:   crdbPool.Config().ConnString(),
+			TargetDB:     dbName,
+		},
+		Publication:   dbName.Raw(),
+		Slot:          dbName.Raw(),
+		SourceConn:    *pgConnString + dbName.Raw(),
+		withChaosProb: withChaosProb,
 	})
 	if !a.NoError(err) {
 		return
@@ -192,100 +200,6 @@ func testPGLogical(t *testing.T, immediate bool) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-	}
-
-	cancelConn()
-	select {
-	case <-ctx.Done():
-		a.Fail("cancelConn timed out")
-	case <-stopped:
-		// OK
-	}
-}
-
-// This test creates a connection and sets various flags to ensure
-// that we have covered certain failure cases.
-func TestChaos(t *testing.T) {
-	a := assert.New(t)
-
-	ctx, info, cancel := sinktest.Context()
-	defer cancel()
-	crdbPool := info.Pool()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
-
-	pgPool, cancel, err := setupPGPool(dbName)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
-
-	// Create the schema in both locations.
-	tgt := ident.NewTable(dbName, ident.Public, ident.New("t"))
-	var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
-	if _, err := pgPool.Exec(ctx, schema); !a.NoError(err) {
-		return
-	}
-	if _, err := crdbPool.Exec(ctx, schema); !a.NoError(err) {
-		return
-	}
-
-	// Start the connection.
-	connCtx, cancelConn := context.WithCancel(ctx)
-	defer cancelConn()
-	_, stopped, err := NewConn(connCtx, &Config{
-		Immediate:   true,
-		Publication: dbName.Raw(),
-		Slot:        dbName.Raw(),
-		SourceConn:  *pgConnString + dbName.Raw(),
-		RetryDelay:  time.Nanosecond,
-		TargetConn:  crdbPool.Config().ConnString(),
-		TargetDB:    dbName,
-		TestControls: &TestControls{
-			BreakReplicationFeed: func() bool {
-				// We see multiple messages per row, so we don't need
-				// to fail as often.
-				return rand.Intn(100) == 0
-			},
-			BreakSinkFlush: func() bool {
-				return rand.Intn(10) == 0
-			},
-			BreakOnDataTuple: func() bool {
-				return rand.Intn(10) == 0
-			},
-		},
-	})
-	if !a.NoError(err) {
-		return
-	}
-
-	// We're going to insert as a number of transactions, to ensure
-	// that we cycle through all of the different error cases.
-	const rowCount = 100
-	for i := 0; i < rowCount; i++ {
-		if _, err := pgPool.Exec(ctx,
-			fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", tgt),
-			i, fmt.Sprintf("v=%d", i),
-		); !a.NoError(err) {
-			return
-		}
-	}
-
-	// Wait for everything to happen.
-	for {
-		var count int
-		if err := crdbPool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
-			return
-		}
-		log.Infof("count is %d of %d", count, rowCount)
-		if count == rowCount {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	cancelConn()
@@ -413,12 +327,14 @@ func TestDataTypes(t *testing.T) {
 	connCtx, cancelConn := context.WithCancel(ctx)
 	defer cancelConn()
 	_, stopped, err := NewConn(connCtx, &Config{
+		Config: logical.Config{
+			RetryDelay: time.Nanosecond,
+			TargetConn: crdbPool.Config().ConnString(),
+			TargetDB:   dbName,
+		},
 		Publication: dbName.Raw(),
-		RetryDelay:  time.Nanosecond,
 		Slot:        dbName.Raw(),
 		SourceConn:  *pgConnString + dbName.Raw(),
-		TargetConn:  crdbPool.Config().ConnString(),
-		TargetDB:    dbName,
 	})
 	if !a.NoError(err) {
 		return
