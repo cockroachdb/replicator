@@ -77,6 +77,10 @@ type State interface {
 	GetConsistentPoint() stamp.Stamp
 	// GetTargetDB returns the target database name.
 	GetTargetDB() ident.Ident
+	// RestoreConsistentPoint restores the state saved into the target database
+	RestoreConsistentPoint(ctx context.Context, t stamp.Stamp) error
+	// SaveConsistentPoint saves the state  into the target database
+	SaveConsistentPoint(ctx context.Context) error
 }
 
 // OffsetStamp is a Stamp which can represent itself as an absolute

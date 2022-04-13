@@ -13,19 +13,38 @@ package mylogical
 import (
 	"context"
 	"fmt"
-	"os"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/replication"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
+type startStamp int
+
+var _ stamp.Stamp = startStamp(0)
+
+func (f startStamp) Less(other stamp.Stamp) bool {
+	return f < other.(startStamp)
+}
+func (f startStamp) Marshall() string {
+	return strconv.FormatInt(int64(f), 10)
+}
+
+func (f startStamp) Unmarshall(v string) (stamp.Stamp, error) {
+	res, err := strconv.ParseInt(v, 0, 64)
+	return startStamp(res), err
+}
+func TestMain(m *testing.M) {
+	sinktest.IntegrationMain(m, sinktest.MySQLName)
+}
 func TestMYLogical(t *testing.T) {
 	t.Run("consistent", func(t *testing.T) { testMYLogical(t, false) })
 	t.Run("immediate", func(t *testing.T) { testMYLogical(t, true) })
@@ -54,52 +73,48 @@ func testMYLogical(t *testing.T, immediate bool) {
 	tgt := ident.NewTable(dbName, ident.Public, ident.New("t"))
 
 	// MySQL only has a single-level namespace; that is, no user-defined schemas.
-	if err := myExec(ctx, myPool,
-		fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt.Table().Raw()),
+	if _, err := myExec(ctx, myPool,
+		fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v varchar(20))`, tgt.Table().Raw()),
 	); !a.NoError(err) {
+		log.Fatal(err)
 		return
 	}
 	if _, err := crdbPool.Exec(ctx,
-		fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)); !a.NoError(err) {
+		fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v string)`, tgt)); !a.NoError(err) {
 		return
 	}
 
-	syncer := replication.NewBinlogSyncer(replication.BinlogSyncerConfig{
-		ServerID:                666,
-		Flavor:                  "mysql",
-		Host:                    "127.0.0.1",
-		Port:                    3306,
-		User:                    "root",
-		Password:                "SoupOrSecret",
-		Localhost:               "",
-		Charset:                 "utf8",
-		SemiSyncEnabled:         false,
-		RawModeEnabled:          false,
-		TLSConfig:               nil,
-		ParseTime:               true,
-		TimestampStringLocation: time.UTC,
-		UseDecimal:              false,
-		RecvBufferSize:          0,
-		HeartbeatPeriod:         0,
-		ReadTimeout:             0,
-		MaxReconnectAttempts:    0,
-		DisableRetrySync:        false,
-		VerifyChecksum:          false,
-		DumpCommandFlag:         0,
-		Option:                  nil,
-	})
-
-	streamer, err := syncer.StartSyncGTID(&mysql.MysqlGTIDSet{})
+	res, err := myExec(ctx, myPool, "select source_uuid, min(interval_start), max(interval_end) from mysql.gtid_executed group by source_uuid;")
 	if !a.NoError(err) {
+		return
+	}
+	var uuid string
+	var last int64
+
+	if len(res.Values) > 0 {
+		uuid = string(res.Values[0][0].AsString())
+		last = res.Values[0][2].AsInt64()
+		log.Infof("Master status: %s %d", uuid, last)
+	} else {
+		return
+	}
+	tbl := ident.NewTable(ident.StagingDB, ident.Public, ident.New("checkpoint"))
+	cp, err := logical.NewCheckPoint(ctx, crdbPool, tbl, uuid)
+	if !a.NoError(err) {
+		return
+	}
+
+	cp.Save(ctx, startStamp(last))
+	if err := cp.Save(ctx, startStamp(last)); !a.NoError(err) {
 		return
 	}
 
 	// Insert data into source table.
 	const rowCount = 1024
-	if err := myDo(ctx, myPool,
-		func(ctx context.Context, conn *client.Conn) error {
+	if _, err := myDo(ctx, myPool,
+		func(ctx context.Context, conn *client.Conn) (*mysql.Result, error) {
 			if err := conn.Begin(); err != nil {
-				return err
+				return nil, err
 			}
 			defer conn.Rollback()
 
@@ -108,40 +123,122 @@ func testMYLogical(t *testing.T, immediate bool) {
 					fmt.Sprintf("INSERT INTO %s VALUES (?, ?)", tgt.Table().Raw()),
 					i, fmt.Sprintf("v=%d", i),
 				); err != nil {
-					return err
+					return nil, err
 				}
 			}
 
-			return conn.Commit()
+			return nil, conn.Commit()
 		},
 	); !a.NoError(err) {
 		return
 	}
 
-	f, err := os.Create("/tmp/test.out")
+	// Start the connection, to demonstrate that we can backfill pending mutations.
+	connCtx, cancelConn := context.WithCancel(ctx)
+	defer cancelConn()
+	_, stopped, err := NewConn(connCtx, &Config{
+		Config: logical.Config{
+			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:          immediate,
+			RetryDelay:         10 * time.Second,
+			TargetConn:         crdbPool.Config().ConnString(),
+			TargetDB:           dbName,
+			CheckPointSourceID: uuid,
+		},
+		ServerID:   100,
+		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
+	})
 	if !a.NoError(err) {
 		return
 	}
-	defer f.Close()
 
 	for {
-		evtCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		ev, err := streamer.GetEvent(evtCtx)
-		cancel()
-		if !a.NoError(err) {
+		var count int
+		if err := crdbPool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
 			return
 		}
+		log.Trace("backfill count", count)
+		if count == rowCount {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
-		ev.Event.Dump(f)
+	// Let's perform an update in a single transaction.
+
+	_, err = myDo(ctx, myPool,
+		func(ctx context.Context, conn *client.Conn) (*mysql.Result, error) {
+			if err := conn.Begin(); err != nil {
+				return nil, err
+			}
+			defer conn.Rollback()
+			conn.Execute(fmt.Sprintf("UPDATE %s SET v = 'updated'", tgt.Table().Raw()))
+			return nil, conn.Commit()
+		})
+
+	if !a.NoError(err) {
+		return
+	}
+	// Wait for the update to propagate.
+	for {
+		var count int
+		if err := crdbPool.QueryRow(ctx,
+			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+			return
+		}
+		log.Trace("update count", count)
+		if count == rowCount {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	_, err = myDo(ctx, myPool,
+		func(ctx context.Context, conn *client.Conn) (*mysql.Result, error) {
+			if err := conn.Begin(); err != nil {
+				return nil, err
+			}
+			defer conn.Rollback()
+			conn.Execute(fmt.Sprintf("DELETE FROM %s WHERE k < 50", tgt.Table().Raw()))
+			return nil, conn.Commit()
+		})
+
+	if !a.NoError(err) {
+		return
+	}
+
+	// Wait for the deletes to propagate.
+
+	for {
+		var count int
+		if err := crdbPool.QueryRow(ctx,
+			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+			return
+		}
+		log.Trace("delete count", count)
+		if count == rowCount-50 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	cancelConn()
+	select {
+	case <-ctx.Done():
+		a.Fail("cancelConn timed out")
+	case <-stopped:
+		// OK
 	}
 }
 
 func myDo(
-	ctx context.Context, pool *client.Pool, fn func(context.Context, *client.Conn) error,
-) error {
+	ctx context.Context,
+	pool *client.Pool,
+	fn func(context.Context, *client.Conn) (*mysql.Result, error),
+) (*mysql.Result, error) {
 	conn, err := pool.GetConn(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer pool.PutConn(conn)
 
@@ -149,10 +246,11 @@ func myDo(
 }
 
 // myExec is similar in spirit to pgx.Exec.
-func myExec(ctx context.Context, pool *client.Pool, stmt string, args ...interface{}) error {
-	return myDo(ctx, pool, func(ctx context.Context, conn *client.Conn) error {
-		_, err := conn.Execute(stmt, args...)
-		return err
+func myExec(
+	ctx context.Context, pool *client.Pool, stmt string, args ...interface{},
+) (*mysql.Result, error) {
+	return myDo(ctx, pool, func(ctx context.Context, conn *client.Conn) (*mysql.Result, error) {
+		return conn.Execute(stmt, args...)
 	})
 }
 

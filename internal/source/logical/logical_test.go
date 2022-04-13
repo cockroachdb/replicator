@@ -13,6 +13,7 @@ package logical
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,14 @@ var _ stamp.Stamp = fakeMessage(0)
 
 func (f fakeMessage) Less(other stamp.Stamp) bool {
 	return f < other.(fakeMessage)
+}
+func (f fakeMessage) Marshall() string {
+	return strconv.FormatInt(int64(f), 10)
+}
+
+func (f fakeMessage) Unmarshall(v string) (stamp.Stamp, error) {
+	res, err := strconv.ParseInt(v, 0, 64)
+	return fakeMessage(res), err
 }
 
 // generatorDialect implements logical.Dialect to generate mutations

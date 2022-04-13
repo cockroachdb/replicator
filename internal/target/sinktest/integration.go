@@ -27,6 +27,8 @@ const (
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
 	PostgreSQLName = "postgresql"
+	// MySQLName same as above.
+	MySQLName = "mysql"
 )
 
 // IntegrationMain runs the tests if the value of IntegrationEnvName

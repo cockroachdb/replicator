@@ -13,6 +13,7 @@ package logical
 import (
 	"context"
 	"math/rand"
+	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -24,42 +25,48 @@ import (
 // in this package.
 var ErrChaos = errors.New("chaos")
 
+var random = rand.New(rand.NewSource(0))
+var mu sync.Mutex
+
+func newRandom() float32 {
+	mu.Lock()
+	defer mu.Unlock()
+	return random.Float32()
+}
+
 // WithChaos returns a wrapper around a Dialect that will inject errors
 // at various points throughout the execution.
 func WithChaos(delegate Dialect, prob float32) Dialect {
 	return &chaosDialect{
 		delegate: delegate,
 		prob:     prob,
-		r:        rand.New(rand.NewSource(0)),
 	}
 }
 
 type chaosDialect struct {
 	delegate Dialect
 	prob     float32
-	r        *rand.Rand
 }
 
 var _ Dialect = (*chaosDialect)(nil)
 
 func (d *chaosDialect) ReadInto(ctx context.Context, ch chan<- Message, state State) error {
-	if d.r.Float32() < d.prob {
+	if newRandom() < d.prob {
 		return ErrChaos
 	}
 	return d.delegate.ReadInto(ctx, ch, state)
 }
 
 func (d *chaosDialect) Process(ctx context.Context, ch <-chan Message, events Events) error {
-	if d.r.Float32() < d.prob {
+	if newRandom() < d.prob {
 		return ErrChaos
 	}
-	return d.delegate.Process(ctx, ch, &chaosEvents{events, d.prob, d.r})
+	return d.delegate.Process(ctx, ch, &chaosEvents{events, d.prob})
 }
 
 type chaosEvents struct {
 	delegate Events
 	prob     float32
-	r        *rand.Rand
 }
 
 var _ Events = (*chaosEvents)(nil)
@@ -71,30 +78,35 @@ func (e *chaosEvents) GetConsistentPoint() stamp.Stamp {
 func (e *chaosEvents) GetTargetDB() ident.Ident {
 	return e.delegate.GetTargetDB()
 }
-
+func (e *chaosEvents) RestoreConsistentPoint(ctx context.Context, t stamp.Stamp) error {
+	return e.delegate.RestoreConsistentPoint(ctx, t)
+}
+func (e *chaosEvents) SaveConsistentPoint(ctx context.Context) error {
+	return e.delegate.SaveConsistentPoint(ctx)
+}
 func (e *chaosEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
-	if e.r.Float32() < e.prob {
+	if newRandom() < e.prob {
 		return ErrChaos
 	}
 	return e.delegate.OnBegin(ctx, point)
 }
 
 func (e *chaosEvents) OnCommit(ctx context.Context) error {
-	if e.r.Float32() < e.prob {
+	if newRandom() < e.prob {
 		return ErrChaos
 	}
 	return e.delegate.OnCommit(ctx)
 }
 
 func (e *chaosEvents) OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error {
-	if e.r.Float32() < e.prob {
+	if newRandom() < e.prob {
 		return ErrChaos
 	}
 	return e.delegate.OnData(ctx, target, muts)
 }
 
 func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
-	if e.r.Float32() < e.prob {
+	if newRandom() < e.prob {
 		return ErrChaos
 	}
 	return e.delegate.OnRollback(ctx, msg)

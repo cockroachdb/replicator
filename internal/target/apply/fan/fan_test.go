@@ -13,6 +13,7 @@ package fan
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +31,15 @@ type intStamp int
 
 func (s intStamp) Less(other stamp.Stamp) bool {
 	return s < other.(intStamp)
+}
+
+func (s intStamp) Marshall() string {
+	return strconv.FormatInt(int64(s), 10)
+}
+
+func (s intStamp) Unmarshall(v string) (stamp.Stamp, error) {
+	res, err := strconv.ParseInt(v, 0, 64)
+	return intStamp(res), err
 }
 
 func TestFanSmoke(t *testing.T) {

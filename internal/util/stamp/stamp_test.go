@@ -12,6 +12,7 @@ package stamp
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,15 @@ func (s intStamp) Coalesce(tail Stamped) Stamped {
 		return nil
 	}
 	return tail
+}
+
+func (s intStamp) Marshall() string {
+	return strconv.FormatInt(int64(s), 10)
+}
+
+func (s intStamp) Unmarshall(v string) (Stamp, error) {
+	res, err := strconv.ParseInt(v, 0, 64)
+	return intStamp(res), err
 }
 
 func (s intStamp) Less(other Stamp) bool {

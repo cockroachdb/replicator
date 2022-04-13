@@ -20,6 +20,8 @@ type Stamp interface {
 	// Less returns true if the callee should be sorted before the other
 	// Stamp.
 	Less(other Stamp) bool
+	Marshall() string
+	Unmarshall(string) (Stamp, error)
 }
 
 // Compare returns -1, 0, or 1 if a is less than, equal to, or

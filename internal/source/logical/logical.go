@@ -39,6 +39,8 @@ import (
 // impl is not internally synchronized; it assumes that it is being
 // driven by a serial stream of data.
 type impl struct {
+	// Optional checkpoint saved into the target database
+	checkpoint *Checkpoint
 	// Locked on mu.
 	consistentPointUpdated *sync.Cond
 	// The Dialect contains message-processing, specific to a particular
@@ -103,11 +105,19 @@ func Start(
 
 	watchers, cancelWatchers := schemawatch.NewWatchers(targetPool)
 	appliers, cancelAppliers := apply.NewAppliers(watchers)
-
+	var checkpoint *Checkpoint
+	if config.CheckPointSourceID != "" {
+		tbl := ident.NewTable(ident.StagingDB, ident.Public, ident.New("checkpoint"))
+		checkpoint, err = NewCheckPoint(ctx, targetPool, tbl, config.CheckPointSourceID)
+		if err != nil {
+			return nil, errors.Wrap(err, "could not create checkpoint table")
+		}
+	}
 	loop := &impl{
 		dialect:    dialect,
 		retryDelay: config.RetryDelay,
 		targetDB:   config.TargetDB,
+		checkpoint: checkpoint,
 		mu: struct {
 			sync.Mutex
 			consistentPoint stamp.Stamp
@@ -152,6 +162,26 @@ func Start(
 }
 
 // GetConsistentPoint implements State.
+func (l *impl) SaveConsistentPoint(ctx context.Context) error {
+	if l.checkpoint == nil {
+		return nil
+	}
+	return l.checkpoint.Save(ctx, l.GetConsistentPoint())
+}
+func (l *impl) RestoreConsistentPoint(ctx context.Context, t stamp.Stamp) error {
+	if l.checkpoint == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t, err := l.checkpoint.Restore(ctx, t)
+	if err != nil {
+		return err
+	}
+	l.mu.consistentPoint = t
+	return nil
+}
+
 func (l *impl) GetConsistentPoint() stamp.Stamp {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -288,10 +318,13 @@ func (l *impl) run(ctx context.Context) {
 
 		if err := group.Wait(); err != nil {
 			log.WithError(err).Errorf("error in replication loop; retrying in %s", l.retryDelay)
-			select {
-			case <-ctx.Done():
-			case <-time.After(l.retryDelay):
-			}
+			time.Sleep(l.retryDelay)
+			// it seems that the context get cancelled when there is an error,
+			// so we never wait.
+			//select {
+			//case <-ctx.Done():
+			//case <-time.After(l.retryDelay):
+			//}
 		}
 	}
 	log.Info("shut down replication loop")

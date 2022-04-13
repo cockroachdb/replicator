@@ -35,6 +35,8 @@ type Config struct {
 	// replication receiver until sufficient number of other mutations
 	// have been applied.
 	BytesInFlight int
+	// If present, the key used to save checkpoints.
+	CheckPointSourceID string
 	// Place the configuration into immediate mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool
