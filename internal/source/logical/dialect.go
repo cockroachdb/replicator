@@ -38,6 +38,9 @@ type Dialect interface {
 	// various OnEvent methods. If this method returns an error, the
 	// entire replication loop will be restarted.
 	Process(ctx context.Context, ch <-chan Message, events Events) error
+
+	// UnmarshalStamp decodes a stamp in string format to a stamp.Stamp.
+	UnmarshalStamp([]byte) (stamp.Stamp, error)
 }
 
 // A Message is specific to a Dialect.

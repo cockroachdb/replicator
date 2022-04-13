@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/memo"
 	"github.com/cockroachdb/cdc-sink/internal/util/serial"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/jackc/pgtype/pgxtype"
@@ -47,6 +48,8 @@ type impl struct {
 	// The fan manages the fan-out of applying mutations across multiple
 	// SQL connections.
 	fan *fan.Fan
+	// Optional checkpoint saved into the target database
+	memo types.Memo
 	// openTransaction tracks the latest value passed to OnCommit.
 	openTransaction stamp.Stamp
 	// The amount of time to sleep between retries of the replication
@@ -56,8 +59,12 @@ type impl struct {
 	// its work into a single underlying database transaction. This will
 	// be nil when running in the default, concurrent, mode.
 	serializer *serial.Pool
+	// the key used to persist the consistentPoint stamp.
+	consistentPointKey string
 	// The SQL database we're going to be writing into.
 	targetDB ident.Ident
+	// targetPool
+	targetPool pgxtype.Querier
 
 	mu struct {
 		sync.Mutex
@@ -67,7 +74,14 @@ type impl struct {
 		// from the Fan in an asynchronous manner.
 		consistentPoint stamp.Stamp
 	}
+
+	standbyDeadline time.Time
 }
+
+var (
+	memoTbl        = ident.NewTable(ident.StagingDB, ident.Public, ident.New("memo"))
+	standbyTimeout = 5 * time.Second
+)
 
 // Start constructs a new replication loop that will process messages
 // until the context is cancelled. The returned channel can be monitored
@@ -105,10 +119,30 @@ func Start(
 	appliers, cancelAppliers := apply.NewAppliers(watchers)
 
 	loop := &impl{
-		dialect:    dialect,
-		retryDelay: config.RetryDelay,
-		targetDB:   config.TargetDB,
+		dialect:            dialect,
+		retryDelay:         config.RetryDelay,
+		targetDB:           config.TargetDB,
+		consistentPointKey: config.ConsistentPointKey,
+		standbyDeadline:    time.Now().Add(standbyTimeout),
+		targetPool:         targetPool,
 	}
+	if config.ConsistentPointKey != "" {
+		loop.memo, err = memo.New(ctx, targetPool, memoTbl)
+		if err != nil {
+			return nil, errors.Wrap(err, "could not create memo table")
+		}
+		cp, err := loop.retrieveConsistentPoint(ctx, targetPool, loop.memo,
+			config.ConsistentPointKey,
+			[]byte(config.DefaultConsistentPoint))
+		if err != nil {
+			return nil, errors.Wrap(err, "could not restore consistentPoint")
+		}
+		loop.mu.consistentPoint, err = dialect.UnmarshalStamp([]byte(cp))
+		if err != nil {
+			return nil, errors.Wrap(err, "could not restore consistentPoint")
+		}
+	}
+
 	loop.consistentPointUpdated = sync.NewCond(&loop.mu)
 
 	// If the user wants to preserve transaction boundaries, we inject a
@@ -147,7 +181,26 @@ func Start(
 	return stopper, nil
 }
 
-// GetConsistentPoint implements State.
+func (l *impl) saveConsistentPoint(ctx context.Context, tx pgxtype.Querier) error {
+	if l.memo == nil {
+		return nil
+	}
+	m, err := l.GetConsistentPoint().MarshalText()
+	if err != nil {
+		return err
+	}
+	return l.memo.Put(ctx, tx, l.consistentPointKey, m)
+}
+
+func (l *impl) retrieveConsistentPoint(
+	ctx context.Context, tx pgxtype.Querier, memo types.Memo, sourceID string, defaultValue []byte,
+) ([]byte, error) {
+	if memo == nil {
+		return []byte(""), nil
+	}
+	return memo.Get(ctx, tx, sourceID, []byte(defaultValue))
+}
+
 func (l *impl) GetConsistentPoint() stamp.Stamp {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -209,6 +262,15 @@ func (l *impl) OnCommit(ctx context.Context) error {
 		l.mu.Unlock()
 		// err is checked by the deferred call above.
 		err = l.serializer.Commit(ctx)
+	}
+
+	if time.Now().After(l.standbyDeadline) {
+		log.Infof("Saving checkpoint %v", l.GetConsistentPoint())
+		err = l.saveConsistentPoint(ctx, l.targetPool)
+		if err != nil {
+			return err
+		}
+		l.standbyDeadline = time.Now().Add(standbyTimeout)
 	}
 	return err
 }

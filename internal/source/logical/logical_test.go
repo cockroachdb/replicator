@@ -13,6 +13,7 @@ package logical
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,9 @@ var _ stamp.Stamp = fakeMessage(0)
 
 func (f fakeMessage) Less(other stamp.Stamp) bool {
 	return f < other.(fakeMessage)
+}
+func (f fakeMessage) MarshalText() (text []byte, err error) {
+	return []byte(strconv.FormatInt(int64(f), 10)), nil
 }
 
 // generatorDialect implements logical.Dialect to generate mutations
@@ -169,6 +173,11 @@ func (g *generatorDialect) Process(ctx context.Context, ch <-chan Message, event
 			return err
 		}
 	}
+}
+
+func (g *generatorDialect) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
+	res, err := strconv.ParseInt(string(stamp), 0, 64)
+	return fakeMessage(res), err
 }
 
 func TestLogical(t *testing.T) {

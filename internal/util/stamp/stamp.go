@@ -12,11 +12,15 @@
 // invariants when queuing (time-)stamped values.
 package stamp
 
-import "sync"
+import (
+	"encoding"
+	"sync"
+)
 
 // A Stamp is a comparable value (possibly a time, or an offset within a
 // log file).
 type Stamp interface {
+	encoding.TextMarshaler
 	// Less returns true if the callee should be sorted before the other
 	// Stamp.
 	Less(other Stamp) bool

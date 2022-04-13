@@ -9,11 +9,11 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.2.0
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/google/uuid v1.1.2
-	github.com/jackc/pgconn v1.10.1
+	github.com/jackc/pgconn v1.12.0
 	github.com/jackc/pglogrepl v0.0.0-20211030141007-2b9e46709343
-	github.com/jackc/pgproto3/v2 v2.2.0
-	github.com/jackc/pgtype v1.9.1
-	github.com/jackc/pgx/v4 v4.14.1
+	github.com/jackc/pgproto3/v2 v2.3.0
+	github.com/jackc/pgtype v1.11.0
+	github.com/jackc/pgx/v4 v4.16.0
 	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.11.0
@@ -40,7 +40,7 @@ require (
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20200714003250-2b9c44734f2b // indirect
-	github.com/jackc/puddle v1.2.0 // indirect
+	github.com/jackc/puddle v1.2.1 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
