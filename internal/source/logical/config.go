@@ -35,6 +35,11 @@ type Config struct {
 	// replication receiver until sufficient number of other mutations
 	// have been applied.
 	BytesInFlight int
+	// If present, the key used to persist consistent point identifiers.
+	ConsistentPointKey string
+	// The default Consistent Point to use for replication.
+	// Consistent Point persisted in the target database will be used, if available.
+	DefaultConsistentPoint string
 	// Place the configuration into immediate mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool

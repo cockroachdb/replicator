@@ -23,6 +23,10 @@ const (
 	// integration tests for some databases. We expect this to be of the
 	// format "database-v123".
 	IntegrationEnvName = "CDC_INTEGRATION"
+	// MySQLName must be kept in alignment with the
+	// .github/docker-compose.yml file and the integration matrix
+	// variable in workflows/tests.yaml.
+	MySQLName = "mysql"
 	// PostgreSQLName must be kept in alignment with the
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
