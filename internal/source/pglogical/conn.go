@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
@@ -42,6 +43,7 @@ var (
 func (s lsnStamp) AsLSN() pglogrepl.LSN        { return pglogrepl.LSN(s) }
 func (s lsnStamp) AsOffset() uint64            { return uint64(s) }
 func (s lsnStamp) Less(other stamp.Stamp) bool { return s < other.(lsnStamp) }
+func (s lsnStamp) String() string              { return strconv.FormatInt(int64(s), 10) }
 
 // A Conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
@@ -305,6 +307,12 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 		}
 	}
 	return nil
+}
+
+// UnmarshalStamp decodes a string representation of a Stamp.
+func (c *Conn) UnmarshalStamp(stamp string) (stamp.Stamp, error) {
+	res, err := strconv.ParseInt(stamp, 0, 64)
+	return lsnStamp(res), err
 }
 
 // decodeMutation converts the incoming tuple data into a Mutation.

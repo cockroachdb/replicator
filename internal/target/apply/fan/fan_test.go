@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +32,10 @@ type intStamp int
 
 func (s intStamp) Less(other stamp.Stamp) bool {
 	return s < other.(intStamp)
+}
+
+func (s intStamp) String() string {
+	return strconv.FormatInt(int64(s), 10)
 }
 
 func TestFanSmoke(t *testing.T) {

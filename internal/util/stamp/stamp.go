@@ -12,11 +12,15 @@
 // invariants when queuing (time-)stamped values.
 package stamp
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // A Stamp is a comparable value (possibly a time, or an offset within a
 // log file).
 type Stamp interface {
+	fmt.Stringer
 	// Less returns true if the callee should be sorted before the other
 	// Stamp.
 	Less(other Stamp) bool

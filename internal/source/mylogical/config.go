@@ -11,106 +11,127 @@
 package mylogical
 
 import (
-	"time"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"io/ioutil"
+	"net/url"
+	"strconv"
 
-	"github.com/pkg/errors"
-
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/go-mysql-org/go-mysql/replication"
+	log "github.com/sirupsen/logrus"
 )
-
-const (
-	defaultRetryDelay = 10 * time.Second
-	defaultServerID   = 42
-)
-
-var wildcard = ident.New("*")
 
 // Config contains the configuration necessary for creating a
-// replication connection. All field, other than TestControls, are
-// mandatory.
+// replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
-	// Place the configuration into immediate mode, where mutations are
-	// applied without waiting for transaction boundaries.
-	Immediate bool
-	// The source database's hostname or IP address.
-	SourceHost string
-	// The password to use when connecting to the source database.
-	SourcePassword string
-	// If zero, the protocol default of 3306 will be used.
-	SourcePort int
-	// The unique replication ID to be reported by the client.
-	SourceServerID int
-	// SourceTables must contain at least one entry in order to filter
-	// incoming binlog entries. All tables in a database may be selected
-	// by using a "*" as the table name.
-	SourceTables []ident.Table
-	// The username to connect to the source database as.
-	SourceUser string
-	// The amount of time to sleep between replication-loop retries.
-	// If zero, a default value will be used.
-	RetryDelay time.Duration
-	// Connection string for the target cluster.
-	TargetConn string
-	// The SQL database in the target cluster to write into.
-	TargetDB ident.Ident
-	// Additional controls for testing.
-	TestControls *TestControls
+	logical.Config
+
+	// Connection string for the source db.
+	SourceConn string
+
+	binlogSyncerConfig replication.BinlogSyncerConfig
+
+	// Used in testing to inject errors during processing.
+	withChaosProb float32
 }
 
-// Copy returns a deep copy of the Config.
-func (c *Config) Copy() *Config {
-	cpy := *c
-	cpy.SourceTables = make([]ident.Table, len(c.SourceTables))
-	copy(cpy.SourceTables, c.SourceTables)
-	return &cpy
+func newClientTLSConfig(
+	caPem, certPem, keyPem []byte, insecureSkipVerify bool, serverName string,
+) (*tls.Config, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPem) {
+		return nil, errors.New("failed to add ca PEM")
+	}
+	var certs []tls.Certificate
+	if certPem != nil {
+		cert, err := tls.X509KeyPair(certPem, keyPem)
+		if err != nil {
+			return nil, errors.New("failed to add ca PEM")
+		}
+		certs = []tls.Certificate{cert}
+	}
+	config := &tls.Config{
+		Certificates:       certs,
+		InsecureSkipVerify: insecureSkipVerify,
+		RootCAs:            pool,
+		ServerName:         serverName,
+	}
+	return config, nil
 }
 
-// preflight returns  an error if a critical field is missing data.
-func (c *Config) preflight() error {
-	if c.SourceHost == "" {
-		return errors.New("no source host specified")
+// Preflight updates the configuration with sane defaults or returns an
+// error if there are missing options for which a default cannot be
+// provided.
+func (c *Config) Preflight() error {
+	if err := c.Config.Preflight(); err != nil {
+		return err
 	}
-	if c.SourcePort == 0 {
-		return errors.New("no source port specified")
+	if c.ConsistentPointKey == "" {
+		return errors.New("no CheckPointKey was configured")
 	}
-	if c.SourcePassword == "" {
-		return errors.New("no source password specified")
+	serverID, err := strconv.ParseInt(c.ConsistentPointKey, 10, 32)
+	if err != nil {
+		return errors.New("no CheckPointKey was configured")
 	}
-	if len(c.SourceTables) == 0 {
-		return errors.New("no source table filters")
+	if c.SourceConn == "" {
+		return errors.New("no SourceConn was configured")
 	}
-	if c.SourceUser == "" {
-		return errors.New("no source user specified")
+
+	u, err := url.Parse(c.SourceConn)
+	if err != nil {
+		return err
 	}
-	if c.TargetConn == "" {
-		return errors.New("no target connection string specified")
+	port, err := strconv.ParseInt(u.Port(), 0, 16)
+	if err != nil {
+		return err
 	}
-	if c.TargetDB.IsEmpty() {
-		return errors.New("no target database specified")
+	pass, _ := u.User.Password()
+	params := u.Query()
+	sslmode := params.Get("sslmode")
+	// TODO add Tlssupport
+	var tls *tls.Config
+
+	switch sslmode {
+	case "disable":
+		tls = nil
+	case "require", "verify-ca", "verify-full":
+		caCert, err := ioutil.ReadFile(params.Get("sslrootcert"))
+		if err != nil {
+			return err
+		}
+		var cert, key []byte
+		if params.Get("sslcert") != "" {
+			cert, err = ioutil.ReadFile(params.Get("sslcert"))
+			if err != nil {
+				return err
+			}
+			key, err = ioutil.ReadFile(params.Get("sslkey"))
+			if err != nil {
+				return err
+			}
+		}
+		tls, err = newClientTLSConfig(caCert, cert, key, sslmode == "require", u.Hostname())
+		if err != nil {
+			return err
+		}
+	default:
+		return errors.New("invalid sslmode")
 	}
+
+	log.Tracef("TLS %+v", tls)
+	cfg := replication.BinlogSyncerConfig{
+		ServerID:  uint32(serverID),
+		Flavor:    "mysql",
+		Host:      u.Hostname(),
+		Port:      uint16(port),
+		User:      u.User.Username(),
+		Password:  pass,
+		TLSConfig: tls,
+	}
+
+	c.binlogSyncerConfig = cfg
+
 	return nil
-}
-
-// TestControls define a collection of testing hook points for injecting
-// behavior in a testing scenario. The function callbacks in this type
-// must be prepared to be called from arbitrary goroutines. All fields
-// in this type are optional.
-type TestControls struct {
-	BreakOnDataTuple     func() bool
-	BreakReplicationFeed func() bool
-	BreakSinkFlush       func() bool
-}
-
-func accept(filters []ident.Table, incoming ident.Table) bool {
-	for _, filter := range filters {
-		if filter.Database() != incoming.Database() {
-			continue
-		}
-		// MySQL doesn't support user-defined schemas, so we ignore
-		// the schema component.
-		if filter.Table() == wildcard || filter.Table() == incoming.Table() {
-			return true
-		}
-	}
-	return false
 }
