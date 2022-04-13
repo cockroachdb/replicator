@@ -57,6 +57,10 @@ func (d *chaosDialect) Process(ctx context.Context, ch <-chan Message, events Ev
 	return d.delegate.Process(ctx, ch, &chaosEvents{events, d.prob})
 }
 
+func (d *chaosDialect) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
+	return d.delegate.UnmarshalStamp(stamp)
+}
+
 type chaosEvents struct {
 	delegate Events
 	prob     float32

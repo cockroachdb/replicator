@@ -354,6 +354,70 @@ To clean up from the above:
 - `SELECT pg_drop_replication_slot('cdc_sink');`
 - `DROP PUBLICATION my_pub;`
 
+## MySQL Replication
+
+Another possibility is to connect to a MySQL database instance to
+consume a transaction-based replication feed using global transaction identifiers (GTIDs). 
+This is primarily intended for migration use-cases, in which it
+is desirable to have a minimum- or zero-downtime migration from MySQL to CockroachDB. 
+For an overview of MySQL replication with GTDIs, refer to https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html.
+
+```text
+Usage:
+  cdc-sink mylogical [flags]
+
+Flags:
+      --applyTimeout duration      the maximum amount of time to wait for an update to be applied (default 30s)
+      --bytesInFlight int          apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
+      --consistentPointKey string   unique key used for this process to persist state information
+      --defaultGTIDSet string      default GTIDSet. Used if no state is persisted
+  -h, --help                       help for mylogical
+      --immediate                  apply data without waiting for transaction boundaries
+      --metricsAddr string         a host:port to serve metrics from at /_/varz
+      --retryDelay duration        the amount of time to sleep between replication retries (default 10s)
+      --sourceConn string          the source database's connection string
+      --targetConn string          the target cluster's connection string
+      --targetDB string            the SQL database in the target cluster to update
+      --targetDBConns int          the maximum pool size to the target cluster (default 1024)
+
+Global Flags:
+      --logDestination string   write logs to a file, instead of stdout
+      --logFormat string        choose log output format [ fluent, text ] (default "text")
+  -v, --verbose count           increase logging verbosity to debug; repeat for trace
+```
+
+The theory of operation is similar to the standard use case, the only difference is that `cdc-sink`
+connects to the source database to receive a replication feed, rather than act as the target for a
+webhook.
+
+### Setup
+- The MySQL server should have the following settings:
+```
+      --gtid-mode=on
+      --enforce-gtid-consistency=on
+      --binlog-row-metadata=full
+```
+-  Verify the master status, on the MySQL server
+```
+    show master status;
+```
+- Perform a backup of the database
+```
+   mysqldump db_name > backup-file.sql
+```
+- Note the GTID state at the beginning of the backup, as reported in the backup file. For instance:
+```
+--
+-- GTID state at the beginning of the backup
+--
+
+SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-8';
+```
+
+- Import the database into Cockroach DB, following the instructions at https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html.
+
+- Run `cdc-sink mylogical` with at least the  `--sourceConn`, `--targetConn`, `--consistentPointKey`, `--defaultGTIDSet` and `--targetDB`. 
+Set `--defaultGTIDSet` to the GTID state shown above.
 ## Security Considerations
 
 At a high level, `cdc-sink` accepts network connections to apply arbitrary mutations to the target

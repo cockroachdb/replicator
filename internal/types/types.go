@@ -47,6 +47,15 @@ type Authenticator interface {
 // Deadlines associate a column identifier with a duration.
 type Deadlines map[ident.Ident]time.Duration
 
+// A Memo is a key store that persists a value associated to a key
+type Memo interface {
+	// Get retrieves the value associate to the given key.
+	// If the value is not found, it returns the given default value.
+	Get(ctx context.Context, tx pgxtype.Querier, key string, def []byte) ([]byte, error)
+	// Put stores a value associated to the key.
+	Put(ctx context.Context, tx pgxtype.Querier, key string, value []byte) error
+}
+
 // A Mutation describes a row to upsert into the target database.  That
 // is, it is a collection of column values to apply to a row in some
 // table.
@@ -91,7 +100,8 @@ type ColData struct {
 	Ignored bool
 	Name    ident.Ident
 	Primary bool
-	Type    string
+	// Type of the column. Dialect might choose to use a string representation or a enum.
+	Type interface{}
 }
 
 // Watcher allows table metadata to be observed.

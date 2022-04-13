@@ -21,19 +21,16 @@ services:
     network_mode: host
     command: start-single-node --insecure
   mysql-v8:
-<<<<<<< HEAD
     image: mysql:8-debian
-=======
-    image: mysql:8.0
->>>>>>> 0f60576 (wip: MySQL logical replication support)
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
       MYSQL_DATABASE: _cdc_sink
-    command: |
+    command: 
       --default-authentication-plugin=mysql_native_password
-      --gtid_mode=on
-      --enforce_gtid_consistency=on
+      --gtid-mode=on
+      --enforce-gtid-consistency=on
+      --binlog-row-metadata=full
     ports:
       - "3306:3306"
   postgresql-v11:
