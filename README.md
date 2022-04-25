@@ -391,16 +391,34 @@ connects to the source database to receive a replication feed, rather than act a
 webhook.
 
 ### Setup
-TODO: Intial backfill
 - The MySQL server should have the following settings:
 ```
       --gtid-mode=on
       --enforce-gtid-consistency=on
       --binlog-row-metadata=full
 ```
-- Find the identifier (UUID) for the server by running
+-  Verify the master status
 ```
     show master status;
+```
+- Perform a backup of the database
+```
+   mysqldump db_name > backup-file.sql
+```
+- Note the GTID state at the beginning of the backup, as reported in the backup file. For instance:
+```
+--
+-- GTID state at the beginning of the backup
+--
+
+SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-8';
+```
+
+- Import the database into Cockroach DB, following the instructions at https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html.
+- Set the latest GTID value in the checkpoint table in the _cdc_sink target database: 
+```
+use _cdc_sink;
+insert into checkpoint values (''6fa7e6ef-c49a-11ec-950a-0242ac120002','8');
 ```
 - Run `cdc-sink mylogical` with at least the `--sourceId`, `--sourceConn`, `--targetConn`, `--serverId`
   and `--targetDB` .
