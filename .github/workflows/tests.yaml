@@ -2,6 +2,8 @@ name: Tests
 permissions: read-all
 on:
   push:
+    branches: [ master ]
+    tags: [ 'v*.*.*' ]
   pull_request:
   workflow_dispatch: # Allow manual runs to kick off benchmarks
     inputs:
