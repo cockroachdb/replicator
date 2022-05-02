@@ -7,7 +7,7 @@ require (
 	github.com/gofrs/uuid v4.2.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.4.1
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
-	github.com/google/uuid v1.1.2
+	github.com/google/uuid v1.3.0
 	github.com/jackc/pgconn v1.10.1
 	github.com/jackc/pglogrepl v0.0.0-20211030141007-2b9e46709343
 	github.com/jackc/pgproto3/v2 v2.3.0
