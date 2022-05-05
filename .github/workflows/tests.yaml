@@ -70,6 +70,7 @@ jobs:
         # in the docker-compose.yml file in the parent directory.
         integration:
           - "mysql-v8"
+          - "mysql-mariadb-v10"
           - "postgresql-v11"
           - "postgresql-v12"
           - "postgresql-v13"
