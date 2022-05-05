@@ -354,31 +354,33 @@ To clean up from the above:
 - `SELECT pg_drop_replication_slot('cdc_sink');`
 - `DROP PUBLICATION my_pub;`
 
-## MySQL Replication
+## MySQL/MariaDB Replication
 
-Another possibility is to connect to a MySQL database instance to
+Another possibility is to connect to a MySQL/MariaDB database instance to
 consume a transaction-based replication feed using global transaction identifiers (GTIDs). 
 This is primarily intended for migration use-cases, in which it
 is desirable to have a minimum- or zero-downtime migration from MySQL to CockroachDB. 
 For an overview of MySQL replication with GTDIs, refer to https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html.
+For an overview of MariaDB replication refer to https://mariadb.com/kb/en/replication-overview/
 
 ```text
 Usage:
   cdc-sink mylogical [flags]
 
 Flags:
-      --applyTimeout duration      the maximum amount of time to wait for an update to be applied (default 30s)
-      --bytesInFlight int          apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
+      --applyTimeout duration       the maximum amount of time to wait for an update to be applied (default 30s)
+      --bytesInFlight int           apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
       --consistentPointKey string   unique key used for this process to persist state information
-      --defaultGTIDSet string      default GTIDSet. Used if no state is persisted
-  -h, --help                       help for mylogical
-      --immediate                  apply data without waiting for transaction boundaries
-      --metricsAddr string         a host:port to serve metrics from at /_/varz
-      --retryDelay duration        the amount of time to sleep between replication retries (default 10s)
-      --sourceConn string          the source database's connection string
-      --targetConn string          the target cluster's connection string
-      --targetDB string            the SQL database in the target cluster to update
-      --targetDBConns int          the maximum pool size to the target cluster (default 1024)
+      --defaultGTIDSet string       default GTIDSet. Used if no state is persisted
+      --flavor string               flavor: mariadb or mysql
+  -h, --help                        help for mylogical
+      --immediate                   apply data without waiting for transaction boundaries
+      --metricsAddr string          a host:port to serve metrics from at /_/varz
+      --retryDelay duration         the amount of time to sleep between replication retries (default 10s)
+      --sourceConn string           the source database's connection string
+      --targetConn string           the target cluster's connection string
+      --targetDB string             the SQL database in the target cluster to update
+      --targetDBConns int           the maximum pool size to the target cluster (default 1024)
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout
@@ -397,16 +399,27 @@ webhook.
       --enforce-gtid-consistency=on
       --binlog-row-metadata=full
 ```
--  Verify the master status, on the MySQL server
+- If server is MariaDB, it should have the following settings:
+```
+      --log-bin
+      --server_id=1
+      --log-basename=master1
+      --binlog-format=row
+      --binlog-row-metadata=full
+```
+-  Verify the master status, on the MySQL/MariaDB server
 ```
     show master status;
 ```
-- Perform a backup of the database
+- Perform a backup of the database. Note: Starting with MariaDB 10.0.13, mysqldump automatically includes the GTID position as a comment in the backup file if either the --master-data or --dump-slave option is used.
 ```
-   mysqldump db_name > backup-file.sql
+   mysqldump -p db_name > backup-file.sql
 ```
+
 - Note the GTID state at the beginning of the backup, as reported in the backup file. For instance:
+
 ```
+-- MySQL:
 --
 -- GTID state at the beginning of the backup
 --
@@ -414,9 +427,18 @@ webhook.
 SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-8';
 ```
 
+```
+-- MariaDB:
+--
+-- GTID to start replication from
+--
+
+-- SET GLOBAL gtid_slave_pos='0-1-1';
+```
+
 - Import the database into Cockroach DB, following the instructions at https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html.
 
-- Run `cdc-sink mylogical` with at least the  `--sourceConn`, `--targetConn`, `--consistentPointKey`, `--defaultGTIDSet` and `--targetDB`. 
+- Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`, `--consistentPointKey`, `--defaultGTIDSet` and `--targetDB`. 
 Set `--defaultGTIDSet` to the GTID state shown above.
 ## Security Considerations
 

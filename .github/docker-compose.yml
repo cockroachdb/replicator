@@ -33,6 +33,20 @@ services:
       --binlog-row-metadata=full
     ports:
       - "3306:3306"
+  mysql-mariadb-v10:
+    image: mariadb:10
+    platform: linux/x86_64
+    environment:
+      MARIADB_ROOT_PASSWORD: SoupOrSecret
+      MARIADB_DATABASE: _cdc_sink
+    command:
+      --log-bin
+      --server_id=1
+      --log-basename=master1
+      --binlog-format=row
+      --binlog-row-metadata=full
+    ports:
+      - "3306:3306"
   postgresql-v11:
     image: postgres:11
     environment:

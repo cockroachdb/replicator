@@ -32,6 +32,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	clientID = "123456"
+)
+
 type startStamp int
 
 var _ stamp.Stamp = startStamp(0)
@@ -62,9 +66,25 @@ func testMYLogical(t *testing.T, immediate bool) {
 		return
 	}
 
+	config := &Config{
+		Config: logical.Config{
+			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:          immediate,
+			RetryDelay:         10 * time.Second,
+			TargetConn:         crdbPool.Config().ConnString(),
+			TargetDB:           dbName,
+			ConsistentPointKey: clientID,
+		},
+		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
+	}
+	err = config.Preflight()
+	if !a.NoError(err) {
+		return
+	}
+
 	defer cancel()
 
-	myPool, cancel, err := setupMYPool(dbName)
+	myPool, cancel, err := setupMYPool(config)
 	if !a.NoError(err) {
 		return
 	}
@@ -85,7 +105,13 @@ func testMYLogical(t *testing.T, immediate bool) {
 		return
 	}
 
-	gtidSet, err := initReplication(ctx, myPool, crdbPool)
+	flavor, err := getFlavor(ctx, config)
+	if !a.NoError(err) {
+		return
+	}
+
+	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool)
+	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
 	}
@@ -117,18 +143,7 @@ func testMYLogical(t *testing.T, immediate bool) {
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	connCtx, cancelConn := context.WithCancel(ctx)
 	defer cancelConn()
-	_, stopped, err := NewConn(connCtx, &Config{
-		Config: logical.Config{
-			ApplyTimeout:           2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:              immediate,
-			RetryDelay:             10 * time.Second,
-			TargetConn:             crdbPool.Config().ConnString(),
-			TargetDB:               dbName,
-			ConsistentPointKey:     "123456",
-			DefaultConsistentPoint: gtidSet,
-		},
-		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
-	})
+	_, stopped, err := NewConn(connCtx, config)
 	if !a.NoError(err) {
 		return
 	}
@@ -229,7 +244,6 @@ func TestDataTypes(t *testing.T) {
 		crdb   string
 		values []interface{} // We automatically test for NULL below.
 	}{
-
 		// BIGINT(size)
 		{`bigint`, ``, `bigint`, []interface{}{0, -1, 112358}},
 		// BINARY(size)
@@ -311,16 +325,35 @@ func TestDataTypes(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
-	//log.Info("DBNAME " + dbName.String())
 	defer cancel()
+	config := &Config{
+		Config: logical.Config{
+			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:          false,           // we care about transaction semantics
+			RetryDelay:         10 * time.Second,
+			TargetConn:         crdbPool.Config().ConnString(),
+			TargetDB:           dbName,
+			ConsistentPointKey: clientID,
+		},
+		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
+	}
+	err = config.Preflight()
+	if !a.NoError(err) {
+		return
+	}
 
-	myPool, cancel, err := setupMYPool(dbName)
+	myPool, cancel, err := setupMYPool(config)
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	gtidSet, err := initReplication(ctx, myPool, crdbPool)
+	flavor, err := getFlavor(ctx, config)
+	if !a.NoError(err) {
+		return
+	}
+	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool)
+	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
 	}
@@ -379,18 +412,7 @@ func TestDataTypes(t *testing.T) {
 
 	connCtx, cancelConn := context.WithCancel(ctx)
 	defer cancelConn()
-	_, stopped, err := NewConn(connCtx, &Config{
-		Config: logical.Config{
-			ApplyTimeout:           2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:              false,           // we care about transaction semantics
-			RetryDelay:             10 * time.Second,
-			TargetConn:             crdbPool.Config().ConnString(),
-			TargetDB:               dbName,
-			ConsistentPointKey:     "123456",
-			DefaultConsistentPoint: gtidSet,
-		},
-		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
-	})
+	_, stopped, err := NewConn(connCtx, config)
 	if !a.NoError(err) {
 		return
 	}
@@ -443,12 +465,15 @@ func myExec(
 		return conn.Execute(stmt, args...)
 	})
 }
-func setupMYPool(database ident.Ident) (*client.Pool, func(), error) {
+func setupMYPool(config *Config) (*client.Pool, func(), error) {
+	database := config.TargetDB
+	addr := fmt.Sprintf("%s:%d", config.host, config.port)
 	var baseConn *client.Conn
 	var err error
 	for i := 0; i < 10; i++ {
-		baseConn, err = client.Connect("127.0.0.1:3306", "root", "SoupOrSecret", "")
+		baseConn, err = client.Connect(addr, config.user, config.password, "")
 		if err != nil {
+			log.Warn(err)
 			log.Warn("Failed to establish connection to MySQL. Retrying...")
 			time.Sleep(2 * time.Second)
 		} else {
@@ -473,9 +498,9 @@ func setupMYPool(database ident.Ident) (*client.Pool, func(), error) {
 		1,                                  // minSize
 		1024,                               // maxSize
 		10,                                 // maxIdle
-		"127.0.0.1:3306",                   // address
-		"root",                             // user
-		"SoupOrSecret",                     // password
+		addr,                               // address
+		config.user,                        // user
+		config.password,                    // password
 		database.Raw(),                     // default db
 	)
 	return pool, func() {
@@ -498,29 +523,43 @@ func setupMYPool(database ident.Ident) (*client.Pool, func(), error) {
 }
 
 func initReplication(
-	ctx context.Context, myPool *client.Pool, crdbPool pgxtype.Querier,
+	ctx context.Context, flavor string, myPool *client.Pool, crdbPool pgxtype.Querier,
 ) (string, error) {
-	res, err := myExec(ctx, myPool, "select source_uuid, min(interval_start), max(interval_end) from mysql.gtid_executed group by source_uuid;")
-	if err != nil {
-		return "", err
-	}
-	var uuid string
-	var last int64
+	var gtidSet string
+	switch flavor {
+	case mysql.MySQLFlavor:
+		res, err := myExec(ctx, myPool, "select source_uuid, min(interval_start), max(interval_end) from mysql.gtid_executed group by source_uuid;")
+		if err != nil {
+			return "", err
+		}
+		var uuid string
+		var last int64
 
-	if len(res.Values) > 0 {
-		uuid = string(res.Values[0][0].AsString())
-		last = res.Values[0][2].AsInt64()
-		log.Infof("Master status: %s %d", uuid, last)
-	} else {
-		return "", errors.New("Unable to retrieve master status")
+		if len(res.Values) > 0 {
+			uuid = string(res.Values[0][0].AsString())
+			last = res.Values[0][2].AsInt64()
+			log.Infof("Master status: %s %d", uuid, last)
+		} else {
+			return "", errors.New("Unable to retrieve master status")
+		}
+		gtidSet = fmt.Sprintf("%s:1-%d", uuid, last)
+	case mysql.MariaDBFlavor:
+		res, err := myExec(ctx, myPool, "select @@gtid_binlog_pos;")
+		if err != nil {
+			return "", err
+		}
+		if len(res.Values) > 0 {
+			gtidSet = string(res.Values[0][0].AsString())
+		}
 	}
+
 	tbl := ident.NewTable(ident.StagingDB, ident.Public, ident.New("memo"))
 	cp, err := memo.New(ctx, crdbPool, tbl)
 	if err != nil {
 		return "", err
 	}
-	gtidSet := fmt.Sprintf("%s:1-%d", uuid, last)
-	err = cp.Put(ctx, crdbPool, uuid, []byte(gtidSet))
+	log.Infof("gtidSet: %s", gtidSet)
+	err = cp.Put(ctx, crdbPool, clientID, []byte(gtidSet))
 	if err != nil {
 		return "", err
 	}
