@@ -18,22 +18,28 @@ import (
 	"strconv"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 )
 
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
 	logical.Config
-
 	// Connection string for the source db.
 	SourceConn string
 
-	binlogSyncerConfig replication.BinlogSyncerConfig
-
+	// host is the MySQL/MariaDB server host.
+	host string
+	// password is the MySQL/MariaDB password.
+	password string
+	// port is the MySQL/MariaDB server host.
+	port uint16
+	// processID is the unique ID to identify this process to the master.
+	processID uint32
+	// tlsConfig has the TLS configuration. It can be nil for non-secure transport.
+	tlsConfig *tls.Config
+	// user is for MySQL user.
+	user string
 	// Used in testing to inject errors during processing.
 	withChaosProb float32
 }
@@ -88,12 +94,14 @@ func (c *Config) Preflight() error {
 		return err
 	}
 	if c.ConsistentPointKey == "" {
-		return errors.New("no CheckPointKey was configured")
+		return errors.New("no ConsistentPointKey was configured")
 	}
-	serverID, err := strconv.ParseInt(c.ConsistentPointKey, 10, 32)
+	processID, err := strconv.ParseInt(c.ConsistentPointKey, 10, 32)
 	if err != nil {
-		return errors.New("no CheckPointKey was configured")
+		return errors.New("the ConsistentPointKey must be an integer")
 	}
+	c.processID = uint32(processID)
+
 	if c.SourceConn == "" {
 		return errors.New("no SourceConn was configured")
 	}
@@ -104,9 +112,12 @@ func (c *Config) Preflight() error {
 	}
 	port, err := strconv.ParseInt(u.Port(), 0, 16)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "invalid port %s", u.Port())
 	}
-	pass, _ := u.User.Password()
+	c.host = u.Hostname()
+	c.port = uint16(port)
+	c.user = u.User.Username()
+	c.password, _ = u.User.Password()
 	params := u.Query()
 	sslmode := params.Get("sslmode")
 	var tls *tls.Config
@@ -122,16 +133,6 @@ func (c *Config) Preflight() error {
 	default:
 		return errors.Errorf("invalid sslmode: %q", sslmode)
 	}
-
-	log.Tracef("TLS %+v", tls)
-	c.binlogSyncerConfig = replication.BinlogSyncerConfig{
-		ServerID:  uint32(serverID),
-		Flavor:    mysql.MySQLFlavor,
-		Host:      u.Hostname(),
-		Port:      uint16(port),
-		User:      u.User.Username(),
-		Password:  pass,
-		TLSConfig: tls,
-	}
+	c.tlsConfig = tls
 	return nil
 }

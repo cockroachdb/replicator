@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/google/uuid"
@@ -34,49 +35,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// mySQLStamp adapts mysql.MysqlGTIDSet, so it implements the required String and Less methods.
-type mySQLStamp struct {
-	gtidset *mysql.MysqlGTIDSet
-}
-
-var (
-	_ stamp.Stamp = newStamp()
-)
-
-func newStamp() mySQLStamp {
-	gtidset := new(mysql.MysqlGTIDSet)
-	gtidset.Sets = make(map[string]*mysql.UUIDSet)
-	return mySQLStamp{
-		gtidset: gtidset,
-	}
-}
-func (s mySQLStamp) MarshalText() (text []byte, err error) {
-	if s.gtidset == nil {
-		return []byte(""), nil
-	}
-	return []byte(s.gtidset.String()), nil
-}
-func (s mySQLStamp) Less(other stamp.Stamp) bool {
-	if o, ok := other.(mySQLStamp); ok {
-		if o.gtidset == nil {
-			return false
-		}
-		if s.gtidset == nil {
-			return true
-		}
-		return o.gtidset.Contain(s.gtidset) && !s.gtidset.Equal(o.gtidset)
-	}
-	return false
-}
-
-func (s mySQLStamp) AddSet() (text []byte, err error) {
-	if s.gtidset == nil {
-		return []byte(""), nil
-	}
-	return []byte(s.gtidset.String()), nil
-}
-
-// A Conn encapsulates all wire-connection behavior. It is
+// Conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
 // status updates.
 type Conn struct {
@@ -84,8 +43,10 @@ type Conn struct {
 	columns map[ident.Table][]types.ColData
 	// Key to set/retrieve state
 	consistentPointKey string
-	// Last GTIDEvent
-	lastGTIDEvent mySQLStamp
+	// Flavor is one of the mysql.MySQLFlavor or mysql.MariaDBFlavor constants
+	flavor string
+	// Last Stamp
+	lastStamp stamp.Stamp
 	// Map source ids to target tables.
 	relations map[uint64]ident.Table
 	// The configuration for opening replication connections.
@@ -115,11 +76,30 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 		return nil, nil, err
 	}
 
-	cfg := config.binlogSyncerConfig
+	flavor, err := getFlavor(ctx, config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	stamp, err := newStamp(flavor)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cfg := replication.BinlogSyncerConfig{
+		ServerID:  config.processID,
+		Flavor:    flavor,
+		Host:      config.host,
+		Port:      config.port,
+		User:      config.user,
+		Password:  config.password,
+		TLSConfig: config.tlsConfig,
+	}
 	ret := &Conn{
 		columns:            make(map[ident.Table][]types.ColData),
 		consistentPointKey: config.ConsistentPointKey,
-		lastGTIDEvent:      newStamp(),
+		flavor:             flavor,
+		lastStamp:          stamp,
 		relations:          make(map[uint64]ident.Table),
 		sourceConfig:       cfg,
 	}
@@ -135,6 +115,17 @@ func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struc
 	}
 
 	return ret, stopper, nil
+}
+
+func newStamp(flavor string) (stamp.Stamp, error) {
+	switch flavor {
+	case mysql.MySQLFlavor:
+		return newMySQLStamp(), nil
+	case mysql.MariaDBFlavor:
+		return newMariadbStamp(), nil
+	default:
+		return nil, errors.Errorf("Invalid flavor  %s", flavor)
+	}
 }
 
 // Process implements logical.Dialect and receives a sequence of logical
@@ -172,10 +163,14 @@ func (c *Conn) Process(
 		//  binlog_row_metadata = full (default = minimal)
 		//  https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_row_metadata
 		//
+		// MySQL:
 		// According to https://dev.mysql.com/blog-archive/taking-advantage-of-new-transaction-length-metadata/
 		// A DML will start with a GTID event, followed by a QUERY(BEGIN) event,
 		// followed by sets of either QUERY events (with their own pre-statement events) or TABLE_MAP and ROWS events,
 		// followed by a QUERY(COMMIT|ROLLBACK) or a XID event.
+		//
+		// MariaDB:
+		// we expect a MariadbGTIDEvent with the GTID to begin the transaction
 		log.Tracef("processing %T", ev.Event)
 
 	EventProcessing:
@@ -185,18 +180,30 @@ func (c *Conn) Process(
 			// and restart the process from the last committed transaction.
 			log.Tracef("Commit")
 			err = events.OnCommit(ctx)
+
 		case *replication.GTIDEvent:
 			// A transaction is executed and committed on the source.
 			// This client transaction is assigned a GTID composed of the source's UUID
 			// and the smallest nonzero transaction sequence number not yet used on this server (GNO)
-			u, _ := uuid.FromBytes(e.SID)
-			s := fmt.Sprintf("%s:%d", u.String(), e.GNO)
-			a, err := mysql.ParseUUIDSet(s)
-			if err == nil {
-				if clone, ok := c.lastGTIDEvent.gtidset.Clone().(*mysql.MysqlGTIDSet); ok {
-					clone.AddSet(a)
-					c.lastGTIDEvent = mySQLStamp{gtidset: clone}
+			switch s := c.lastStamp.(type) {
+			case mySQLStamp:
+				u, _ := uuid.FromBytes(e.SID)
+				ns := fmt.Sprintf("%s:%d", u.String(), e.GNO)
+				a, err := mysql.ParseUUIDSet(ns)
+				if err == nil {
+					c.lastStamp = s.addMysqlGTIDSet(a)
 				}
+			default:
+				errors.Errorf("unexpected GTIDEvent for %T", s)
+			}
+		case *replication.MariadbGTIDEvent:
+			switch s := c.lastStamp.(type) {
+			case mariadbStamp:
+				a := e.GTID
+				c.lastStamp = s.addMariaGTIDSet(&a)
+				events.OnBegin(ctx, c.lastStamp)
+			default:
+				errors.Errorf("unexpected MariadbGTIDEvent for %T", s)
 			}
 
 		case *replication.QueryEvent:
@@ -204,7 +211,7 @@ func (c *Conn) Process(
 			// DDL statement would also sent here.
 			log.Tracef("Query:  %s %+v\n", e.Query, e.GSet)
 			if string(e.Query) == "BEGIN" {
-				err = events.OnBegin(ctx, c.lastGTIDEvent)
+				err = events.OnBegin(ctx, c.lastStamp)
 			}
 		case *replication.TableMapEvent:
 			err = c.onRelation(e, events.GetTargetDB())
@@ -245,7 +252,8 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	if err != nil {
 		return errors.Wrap(err, "unable to parse gtidset")
 	}
-	gtidset, err := mysql.ParseGTIDSet(mysql.MySQLFlavor, string(m))
+
+	gtidset, err := mysql.ParseGTIDSet(c.flavor, string(m))
 	if err != nil {
 		return errors.Wrap(err, "unable to parse gtidset")
 	}
@@ -256,10 +264,12 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 		return errors.WithStack(err)
 	}
 	dialSuccessCount.Inc()
-	if a, ok := gtidset.(*mysql.MysqlGTIDSet); ok {
-		c.lastGTIDEvent.gtidset = a
-	}
 
+	c.lastStamp, err = c.UnmarshalStamp([]byte(gtidset.String()))
+	if err != nil {
+		dialFailureCount.Inc()
+		return err
+	}
 	for ctx.Err() == nil {
 		ev, err := streamer.GetEvent(ctx)
 		if err != nil {
@@ -271,7 +281,9 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 			*replication.GTIDEvent,
 			*replication.TableMapEvent,
 			*replication.RowsEvent,
-			*replication.QueryEvent:
+			*replication.QueryEvent,
+			*replication.MariadbGTIDEvent,
+			*replication.MariadbAnnotateRowsEvent:
 			select {
 			case ch <- *ev:
 			case <-ctx.Done():
@@ -279,7 +291,9 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 			}
 		case *replication.GenericEvent,
 			*replication.RotateEvent,
-			*replication.PreviousGTIDsEvent:
+			*replication.PreviousGTIDsEvent,
+			*replication.MariadbGTIDListEvent,
+			*replication.MariadbBinlogCheckPointEvent:
 			// skip these
 		case *replication.FormatDescriptionEvent:
 			// this is sent when establishing a connection
@@ -300,21 +314,35 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 }
 
 // UnmarshalStamp decodes GTID Sets expressed as strings.
+// Supports MySQL or MariaDB
 // See https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html
+// and https://mariadb.com/kb/en/gtid/
 // Examples:
-// E11FA47-71CA-11E1-9E33-C80AA9429562:1-3:11:47-49
-// 2174B383-5441-11E8-B90A-C80AA9429562:1-3, 24DA167-0C0C-11E8-8442-00059A3C7B00:1-19
+// MySQL: E11FA47-71CA-11E1-9E33-C80AA9429562:1-3:11:47-49
+// MariaDB: 0-1-1
 func (c *Conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
 	log.Tracef("UnmarshalStamp %s", stamp)
-	s, err := mysql.ParseGTIDSet(mysql.MySQLFlavor, string(stamp))
+	s, err := mysql.ParseGTIDSet(c.flavor, string(stamp))
 	if err != nil {
 		return nil, errors.Wrapf(err, "cannot unmarshal stamp %s", string(stamp))
 	}
-	ret, ok := s.(*mysql.MysqlGTIDSet)
-	if !ok {
-		return nil, errors.New("cannot unmarshal stamp " + string(stamp))
+	switch c.flavor {
+	case mysql.MySQLFlavor:
+		ret, ok := s.(*mysql.MysqlGTIDSet)
+		if !ok {
+			return nil, errors.New("cannot unmarshal stamp " + string(stamp))
+		}
+		return mySQLStamp{gtidset: ret}, nil
+	case mysql.MariaDBFlavor:
+		ret, ok := s.(*mysql.MariadbGTIDSet)
+		if !ok {
+			return nil, errors.New("cannot unmarshal stamp " + string(stamp))
+		}
+		return mariadbStamp{gtidset: ret}, nil
+	default:
+		return nil, errors.New("invalid flavor")
 	}
-	return mySQLStamp{gtidset: ret}, nil
+
 }
 
 func (c *Conn) onDataTuple(
@@ -349,12 +377,7 @@ func (c *Conn) onDataTuple(
 			case nil:
 				enc[targetCol.Name.Raw()] = nil
 			case []byte:
-				// if it is json, need to convert to string
-				if targetCol.Type == mysql.MYSQL_TYPE_JSON {
-					enc[targetCol.Name.Raw()] = string(s)
-				} else {
-					enc[targetCol.Name.Raw()] = s
-				}
+				enc[targetCol.Name.Raw()] = string(s)
 			case int64:
 				// if it's a bit need to convert to a string representation
 				if targetCol.Type == mysql.MYSQL_TYPE_BIT {
@@ -418,5 +441,90 @@ func (c *Conn) onRelation(msg *replication.TableMapEvent, targetDB ident.Ident) 
 		}
 	}
 	c.columns[tbl] = colData
+	return nil
+}
+
+var (
+	// Required settings. { {"system variable", "expected value"}}
+	mySQLSystemSettings = [][]string{
+		{"gtid_mode", "ON"},
+		{"enforce_gtid_consistency", "ON"},
+		{"binlog_row_metadata", "FULL"},
+	}
+	mariaDBSystemSettings = [][]string{
+		{"log_bin", "1"},
+		{"binlog_format", "ROW"},
+		{"binlog_row_metadata", "FULL"},
+	}
+)
+
+// getFlavor connects to the server and tries to determine the type of server by looking at the
+// @@version_comment system variable.
+// Based on the type of server it also verifies that the settings defined in the
+// mySQLSystemSettings and mariaDBSystemSettings slices are correctly configured for the replication to work.
+// It returns mysql.MariaDBFlavor or mysql.MySQLFlavor upon success.
+func getFlavor(ctx context.Context, config *Config) (string, error) {
+	addr := fmt.Sprintf("%s:%d", config.host, config.port)
+	c, err := client.Connect(addr, config.user, config.password, "", func(c *client.Conn) {
+		c.SetTLSConfig(config.tlsConfig)
+	})
+	if err != nil {
+		return "", err
+	}
+	defer c.Close()
+	res, err := c.Execute("select @@version_comment;")
+	if err != nil {
+		return "", err
+	}
+	if len(res.Values) == 0 {
+		return "", errors.New("unable to retrieve version")
+	}
+
+	version := string(res.Values[0][0].AsString())
+	log.Infof("Version info: %s", version)
+	if strings.Contains(version, "mariadb") {
+		for _, v := range mariaDBSystemSettings {
+			err = checkSystemSetting(ctx, c, v[0], v[1])
+			if err != nil {
+				return "", err
+			}
+		}
+		return mysql.MariaDBFlavor, nil
+	} else if strings.Contains(version, "MySQL") {
+		for _, v := range mySQLSystemSettings {
+			err = checkSystemSetting(ctx, c, v[0], v[1])
+			if err != nil {
+				return "", err
+			}
+		}
+		return mysql.MySQLFlavor, nil
+	} else {
+		return "", errors.New("unknown server")
+	}
+}
+
+func checkSystemSetting(
+	ctx context.Context, c *client.Conn, variable string, expected string,
+) error {
+	res, err := c.Execute(fmt.Sprintf("select @@%s;", variable))
+	if err != nil {
+		return err
+	}
+	if len(res.Values) == 0 {
+		return errors.New("unable to retrieve system setting")
+	}
+
+	var value string
+	switch res.Values[0][0].Type {
+	case mysql.FieldValueTypeSigned:
+		value = strconv.FormatInt(res.Values[0][0].AsInt64(), 10)
+	case mysql.FieldValueTypeUnsigned:
+		value = strconv.FormatUint(res.Values[0][0].AsUint64(), 10)
+	default:
+		value = string(res.Values[0][0].AsString())
+	}
+	if value != expected {
+		return errors.Errorf("invalid server setting for %s. Expected %s, found %s", variable, expected, value)
+	}
 	return nil
 }
