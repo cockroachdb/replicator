@@ -15,7 +15,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
-// mariadbStamp adapts mysql.MariadbGTIDSet, so it implements the required String and Less methods.
+// mariadbStamp adapts mysql.MariadbGTIDSet, so it implements the required MarshalText and Less methods.
 type mariadbStamp struct {
 	gtidset *mysql.MariadbGTIDSet
 }
@@ -33,21 +33,19 @@ func newMariadbStamp() mariadbStamp {
 }
 func (s mariadbStamp) MarshalText() (text []byte, err error) {
 	if s.gtidset == nil {
-		return []byte(""), nil
+		return nil, nil
 	}
 	return []byte(s.gtidset.String()), nil
 }
 func (s mariadbStamp) Less(other stamp.Stamp) bool {
-	if o, ok := other.(mariadbStamp); ok {
-		if o.gtidset == nil {
-			return false
-		}
-		if s.gtidset == nil {
-			return true
-		}
-		return o.gtidset.Contain(s.gtidset) && !s.gtidset.Equal(o.gtidset)
+	o := other.(mariadbStamp)
+	if o.gtidset == nil {
+		return false
 	}
-	return false
+	if s.gtidset == nil {
+		return true
+	}
+	return o.gtidset.Contain(s.gtidset) && !s.gtidset.Equal(o.gtidset)
 }
 
 func (s mariadbStamp) addMariaGTIDSet(a *mysql.MariadbGTID) mariadbStamp {
@@ -55,5 +53,5 @@ func (s mariadbStamp) addMariaGTIDSet(a *mysql.MariadbGTID) mariadbStamp {
 		clone.AddSet(a)
 		return mariadbStamp{gtidset: clone}
 	}
-	return s
+	panic("gtidset inside mariadbStamp must be a *mysql.MariadbGTIDSet")
 }

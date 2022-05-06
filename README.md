@@ -372,7 +372,6 @@ Flags:
       --bytesInFlight int           apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
       --consistentPointKey string   unique key used for this process to persist state information
       --defaultGTIDSet string       default GTIDSet. Used if no state is persisted
-      --flavor string               flavor: mariadb or mysql
   -h, --help                        help for mylogical
       --immediate                   apply data without waiting for transaction boundaries
       --metricsAddr string          a host:port to serve metrics from at /_/varz

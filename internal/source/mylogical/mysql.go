@@ -15,7 +15,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
-// mySQLStamp adapts mysql.MysqlGTIDSet, so it implements the required String and Less methods.
+// mySQLStamp adapts mysql.MysqlGTIDSet, so it implements the required MarshalText and Less methods.
 type mySQLStamp struct {
 	gtidset *mysql.MysqlGTIDSet
 }
@@ -33,21 +33,19 @@ func newMySQLStamp() mySQLStamp {
 }
 func (s mySQLStamp) MarshalText() (text []byte, err error) {
 	if s.gtidset == nil {
-		return []byte(""), nil
+		return nil, nil
 	}
 	return []byte(s.gtidset.String()), nil
 }
 func (s mySQLStamp) Less(other stamp.Stamp) bool {
-	if o, ok := other.(mySQLStamp); ok {
-		if o.gtidset == nil {
-			return false
-		}
-		if s.gtidset == nil {
-			return true
-		}
-		return o.gtidset.Contain(s.gtidset) && !s.gtidset.Equal(o.gtidset)
+	o := other.(mySQLStamp)
+	if o.gtidset == nil {
+		return false
 	}
-	return false
+	if s.gtidset == nil {
+		return true
+	}
+	return o.gtidset.Contain(s.gtidset) && !s.gtidset.Equal(o.gtidset)
 }
 
 func (s mySQLStamp) addMysqlGTIDSet(a *mysql.UUIDSet) mySQLStamp {
@@ -55,5 +53,6 @@ func (s mySQLStamp) addMysqlGTIDSet(a *mysql.UUIDSet) mySQLStamp {
 		clone.AddSet(a)
 		return mySQLStamp{gtidset: clone}
 	}
-	return s
+	// this should not happen.
+	panic("gtidset inside mySQLStamp must be a *mysql.UUIDSet")
 }

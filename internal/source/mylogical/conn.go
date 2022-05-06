@@ -43,7 +43,7 @@ type Conn struct {
 	columns map[ident.Table][]types.ColData
 	// Key to set/retrieve state
 	consistentPointKey string
-	// Flavor: MySql or MariaDB
+	// Flavor is one of the mysql.MySQLFlavor or mysql.MariaDBFlavor constants
 	flavor string
 	// Last Stamp
 	lastStamp stamp.Stamp
@@ -126,7 +126,6 @@ func newStamp(flavor string) (stamp.Stamp, error) {
 	default:
 		return nil, errors.Errorf("Invalid flavor  %s", flavor)
 	}
-
 }
 
 // Process implements logical.Dialect and receives a sequence of logical
@@ -201,10 +200,8 @@ func (c *Conn) Process(
 			switch s := c.lastStamp.(type) {
 			case mariadbStamp:
 				a := e.GTID
-				if err == nil {
-					c.lastStamp = s.addMariaGTIDSet(&a)
-					events.OnBegin(ctx, c.lastStamp)
-				}
+				c.lastStamp = s.addMariaGTIDSet(&a)
+				events.OnBegin(ctx, c.lastStamp)
 			default:
 				errors.Errorf("unexpected MariadbGTIDEvent for %T", s)
 			}
@@ -447,6 +444,25 @@ func (c *Conn) onRelation(msg *replication.TableMapEvent, targetDB ident.Ident) 
 	return nil
 }
 
+var (
+	// Required settings. { {"system variable", "expected value"}}
+	mySQLSystemSettings = [][]string{
+		{"gtid_mode", "ON"},
+		{"enforce_gtid_consistency", "ON"},
+		{"binlog_row_metadata", "FULL"},
+	}
+	mariaDBSystemSettings = [][]string{
+		{"log_bin", "1"},
+		{"binlog_format", "ROW"},
+		{"binlog_row_metadata", "FULL"},
+	}
+)
+
+// getFlavor connects to the server and tries to determine the type of server by looking at the
+// @@version_comment system variable.
+// Based on the type of server it also verifies that the settings defined in the
+// mySQLSystemSettings and mariaDBSystemSettings slices are correctly configured for the replication to work.
+// It returns mysql.MariaDBFlavor or mysql.MySQLFlavor upon success.
 func getFlavor(ctx context.Context, config *Config) (string, error) {
 	addr := fmt.Sprintf("%s:%d", config.host, config.port)
 	c, err := client.Connect(addr, config.user, config.password, "", func(c *client.Conn) {
@@ -460,16 +476,55 @@ func getFlavor(ctx context.Context, config *Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if len(res.Values) > 0 {
-		version := string(res.Values[0][0].AsString())
-		log.Infof("Version info: %s", version)
-		if strings.Contains(version, "mariadb") {
-			return mysql.MariaDBFlavor, nil
-		} else if strings.Contains(version, "MySQL") {
-			return mysql.MySQLFlavor, nil
-		} else {
-			return "", errors.New("unknown server")
-		}
+	if len(res.Values) == 0 {
+		return "", errors.New("unable to retrieve version")
 	}
-	return "", errors.New("unable to retrieve version")
+
+	version := string(res.Values[0][0].AsString())
+	log.Infof("Version info: %s", version)
+	if strings.Contains(version, "mariadb") {
+		for _, v := range mariaDBSystemSettings {
+			err = checkSystemSetting(ctx, c, v[0], v[1])
+			if err != nil {
+				return "", err
+			}
+		}
+		return mysql.MariaDBFlavor, nil
+	} else if strings.Contains(version, "MySQL") {
+		for _, v := range mySQLSystemSettings {
+			err = checkSystemSetting(ctx, c, v[0], v[1])
+			if err != nil {
+				return "", err
+			}
+		}
+		return mysql.MySQLFlavor, nil
+	} else {
+		return "", errors.New("unknown server")
+	}
+}
+
+func checkSystemSetting(
+	ctx context.Context, c *client.Conn, variable string, expected string,
+) error {
+	res, err := c.Execute(fmt.Sprintf("select @@%s;", variable))
+	if err != nil {
+		return err
+	}
+	if len(res.Values) == 0 {
+		return errors.New("unable to retrieve system setting")
+	}
+
+	var value string
+	switch res.Values[0][0].Type {
+	case mysql.FieldValueTypeSigned:
+		value = strconv.FormatInt(res.Values[0][0].AsInt64(), 10)
+	case mysql.FieldValueTypeUnsigned:
+		value = strconv.FormatUint(res.Values[0][0].AsUint64(), 10)
+	default:
+		value = string(res.Values[0][0].AsString())
+	}
+	if value != expected {
+		return errors.Errorf("invalid server setting for %s. Expected %s, found %s", variable, expected, value)
+	}
+	return nil
 }
