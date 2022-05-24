@@ -37,8 +37,6 @@ func colSliceEqual(a, b []types.ColData) bool {
 //
 // Parts of the CTE:
 // * pk_name: finds the name of the primary key constraint for the table
-// or returns the CRDB-default "primary" value in cases where no
-// explicit PK.
 // * pks: extracts the names of the PK columns and their relative
 // positions. We exclude any "storing" columns to account for rowid
 // value.
@@ -51,9 +49,7 @@ const sqlColumnsQuery = `
 WITH
 pk_name AS (
 	SELECT constraint_name FROM [SHOW CONSTRAINTS FROM %[1]s]
-	WHERE constraint_type = 'PRIMARY KEY'
-	UNION ALL SELECT 'primary'
-	LIMIT 1),
+	WHERE constraint_type = 'PRIMARY KEY'),
 pks AS (
 	SELECT column_name, seq_in_index FROM [SHOW INDEX FROM %[1]s]
 	JOIN pk_name ON (index_name = constraint_name)
@@ -90,6 +86,7 @@ func getColumns(
 
 		// Clear from previous loop.
 		columns = columns[:0]
+		foundPrimay := false
 		for rows.Next() {
 			var column types.ColData
 			var name string
@@ -97,8 +94,33 @@ func getColumns(
 				return err
 			}
 			column.Name = ident.New(name)
+			if column.Primary {
+				foundPrimay = true
+			}
 			columns = append(columns, column)
 		}
+
+		// If there are no primary key columns, we know that a synthetic
+		// rowid column will exist. We'll prepend it to the slice and
+		// then delete the
+		if !foundPrimay {
+			rowID := types.ColData{
+				Ignored: false,
+				Name:    ident.New("rowid"),
+				Primary: true,
+				Type:    "INT8",
+			}
+			// Filter and prepend.
+			curIdx := 0
+			for _, col := range columns {
+				if col.Name != rowID.Name {
+					columns[curIdx] = col
+					curIdx++
+				}
+			}
+			columns = append([]types.ColData{rowID}, columns[:curIdx]...)
+		}
+
 		return nil
 	})
 	return columns, err

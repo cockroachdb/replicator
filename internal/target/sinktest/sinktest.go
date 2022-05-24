@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,9 +29,7 @@ import (
 )
 
 var connString = flag.String("testConnect",
-	"postgresql://root@localhost:26257/defaultdb"+
-		"?sslmode=disable"+
-		"&experimental_enable_hash_sharded_indexes=true",
+	"postgresql://root@localhost:26257/defaultdb?sslmode=disable",
 	"the connection string to use for testing")
 
 var globalDBInfo struct {
@@ -45,6 +44,7 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 	if globalDBInfo.DBInfo != nil {
 		return globalDBInfo.DBInfo, nil
 	}
+	globalDBInfo.DBInfo = &DBInfo{}
 
 	if !flag.Parsed() {
 		flag.Parse()
@@ -60,7 +60,27 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "could not open database connection")
 	}
-	globalDBInfo.DBInfo = &DBInfo{db: pool}
+
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		return pool.QueryRow(ctx, "SELECT version()").Scan(&globalDBInfo.version)
+	}); err != nil {
+		return nil, errors.Wrap(err, "could not determine cluster version")
+	}
+
+	// Reset the pool to one that enables the hash-sharded feature in
+	// older versions of CockroachDB.
+	if !strings.Contains(globalDBInfo.version, "v22.") {
+		cfg := pool.Config().Copy()
+		cfg.ConnConfig.RuntimeParams["experimental_enable_hash_sharded_indexes"] = "true"
+
+		pool.Close()
+		pool, err = pgxpool.ConnectConfig(ctx, cfg)
+		if err != nil {
+			return nil, errors.Wrap(err, "could not re-open pool")
+		}
+	}
+
+	globalDBInfo.db = pool
 
 	if lic, ok := os.LookupEnv("COCKROACH_DEV_LICENSE"); ok {
 		if err := retry.Execute(ctx, pool,
@@ -79,12 +99,6 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 	if err := retry.Execute(ctx, pool,
 		"SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
 		return nil, errors.Wrap(err, "could not enable rangefeeds")
-	}
-
-	if err := retry.Retry(ctx, func(ctx context.Context) error {
-		return pool.QueryRow(ctx, "SELECT version()").Scan(&globalDBInfo.version)
-	}); err != nil {
-		return nil, errors.Wrap(err, "could not determine cluster version")
 	}
 
 	return globalDBInfo.DBInfo, nil
