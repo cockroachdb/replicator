@@ -20,6 +20,10 @@ services:
     image: cockroachdb/cockroach:latest-v21.2
     network_mode: host
     command: start-single-node --insecure
+  cockroachdb-v22.1:
+    image: cockroachdb/cockroach:latest-v22.1
+    network_mode: host
+    command: start-single-node --insecure
   mysql-v8:
     image: mysql:8-debian
     platform: linux/x86_64
