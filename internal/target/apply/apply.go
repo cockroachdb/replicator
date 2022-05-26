@@ -185,6 +185,12 @@ func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		allArgs = append(allArgs, args...)
 	}
 
+	for idx, arg := range allArgs {
+		if num, ok := arg.(json.Number); ok {
+			allArgs[idx] = removeExponent(num)
+		}
+	}
+
 	tag, err := db.Exec(ctx, sql, allArgs...)
 	if err != nil {
 		return errors.Wrap(err, sql)
@@ -273,6 +279,12 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 					"unexpected columns %v: "+
 					"key %s@%s",
 				a.target, unexpected, string(muts[i].Key), muts[i].Time)
+		}
+	}
+
+	for idx, arg := range allArgs {
+		if num, ok := arg.(json.Number); ok {
+			allArgs[idx] = removeExponent(num)
 		}
 	}
 
