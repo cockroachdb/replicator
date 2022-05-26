@@ -166,6 +166,9 @@ func TestAllDataTypes(t *testing.T) {
 		{`date`, `DATE`, `2016-01-25`, true},
 		{`date_null`, `DATE`, ``, false},
 		{`decimal`, `DECIMAL`, `1.2345`, true},
+		{`decimal_eng_6,0`, `DECIMAL(6,0)`, `4e+2`, true},
+		{`decimal_eng_6,2`, `DECIMAL(6,2)`, `4.98765e+2`, true},
+		{`decimal_eng_50,2`, `DECIMAL(600,2)`, `4e+50`, true}, // Bigger than int64
 		{`decimal_null`, `DECIMAL`, ``, false},
 		{`float`, `FLOAT`, `1.2345`, true},
 		{`float_null`, `FLOAT`, ``, false},
@@ -272,6 +275,12 @@ func TestAllDataTypes(t *testing.T) {
 		{`uuid_null`, `UUID`, ``, false},
 	}
 
+	expectInstead := map[string]string{
+		"decimal_eng_6,0":  "400",
+		"decimal_eng_6,2":  "498.77",
+		"decimal_eng_50,2": "400000000000000000000000000000000000000000000000000.00",
+	}
+
 	a := assert.New(t)
 
 	ctx, dbInfo, cancel := sinktest.Context()
@@ -338,7 +347,11 @@ func TestAllDataTypes(t *testing.T) {
 			a.NoError(dbInfo.Pool().QueryRow(ctx,
 				fmt.Sprintf("SELECT ifnull(to_json(val)::string, 'null') FROM %s", tbl),
 			).Scan(&jsonFound))
-			a.Equal(jsonValue, jsonFound)
+			if alternate, ok := expectInstead[tc.name]; ok {
+				a.Equal(alternate, jsonFound)
+			} else {
+				a.Equal(jsonValue, jsonFound)
+			}
 		})
 	}
 }
