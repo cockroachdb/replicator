@@ -79,7 +79,7 @@ func (b *bucket) Consistent() stamp.Stamp {
 }
 
 // Enqueue adds mutations to be processed and their associated stamp.
-func (b *bucket) Enqueue(stamp stamp.Stamp, muts []types.Mutation) error {
+func (b *bucket) Enqueue(stamp stamp.Stamp, mut types.Mutation) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.mu.stopFlag {
@@ -87,10 +87,7 @@ func (b *bucket) Enqueue(stamp stamp.Stamp, muts []types.Mutation) error {
 	}
 
 	// Apply backpressure based on the number of bytes in the mutations.
-	toAcquire := int64(0)
-	for _, mut := range muts {
-		toAcquire += mutationWeight(mut)
-	}
+	toAcquire := mutationWeight(mut)
 	// This should succeed in the majority case.  If not, the target
 	// cluster is likely under-sized or the connection pool is too
 	// small.
@@ -105,7 +102,7 @@ func (b *bucket) Enqueue(stamp stamp.Stamp, muts []types.Mutation) error {
 		log.Debugf("backpressure relieved")
 	}
 
-	return b.mu.work.Enqueue(newBatch(stamp, muts))
+	return b.mu.work.Enqueue(newBatch(stamp, mut))
 }
 
 // Flush requests the bucket to flush any in-memory data it has. Results

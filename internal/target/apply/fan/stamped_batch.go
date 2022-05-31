@@ -30,9 +30,9 @@ type stampedBatch struct {
 
 var _ stamp.Coalescing = (*stampedBatch)(nil)
 
-func newBatch(stamp stamp.Stamp, muts []types.Mutation) *stampedBatch {
+func newBatch(stamp stamp.Stamp, mut types.Mutation) *stampedBatch {
 	ret := &stampedBatch{stamp: stamp}
-	ret.mu.muts = muts
+	ret.mu.muts = []types.Mutation{mut}
 	return ret
 }
 
