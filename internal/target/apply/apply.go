@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
+	"github.com/cockroachdb/cdc-sink/internal/util/msort"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -107,6 +108,15 @@ func (a *apply) Apply(ctx context.Context, tx pgxtype.Querier, muts []types.Muta
 	defer r()
 	upserts, r := batches.Mutation()
 	defer r()
+
+	// We want to ensure that we achieve a last-one-wins behavior within
+	// an immediate-mode batch. This does perform unnecessary work
+	// in the staged mode, since we perform the per-key deduplication
+	// and sorting as part of de-queuing mutations.
+	//
+	// See also the discussion on TestRepeatedKeysWithIgnoredColumns
+	msort.ByTime(muts)
+	muts = msort.UniqueByKey(muts)
 
 	countError := func(err error) error {
 		if err != nil {
