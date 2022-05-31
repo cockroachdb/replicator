@@ -109,7 +109,7 @@ func (f *Fan) Enqueue(
 			return err
 		}
 		// The bucket will coalesce tail values.
-		if err := bucket.Enqueue(stamp, muts); err != nil {
+		if err := bucket.Enqueue(stamp, mut); err != nil {
 			return err
 		}
 	}
