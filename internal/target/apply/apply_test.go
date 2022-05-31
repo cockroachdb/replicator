@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -72,7 +73,7 @@ func TestApply(t *testing.T) {
 			p := Payload{Pk0: i, Pk1: fmt.Sprintf("X%dX", i)}
 			bytes, err := json.Marshal(p)
 			a.NoError(err)
-			adds[i] = types.Mutation{Data: bytes}
+			adds[i] = types.Mutation{Data: bytes, Key: bytes}
 
 			bytes, err = json.Marshal([]interface{}{p.Pk0, p.Pk1})
 			a.NoError(err)
@@ -98,6 +99,7 @@ func TestApply(t *testing.T) {
 		if err := app.Apply(ctx, dbInfo.Pool(), []types.Mutation{
 			{
 				Data: []byte(`{"pk0":1, "pk1":0, "no_good":true}`),
+				Key:  []byte(`[1, 0]`),
 			},
 		}); a.Error(err) {
 			a.Contains(err.Error(), "unexpected columns [no_good]")
@@ -109,6 +111,7 @@ func TestApply(t *testing.T) {
 		if err := app.Apply(ctx, dbInfo.Pool(), []types.Mutation{
 			{
 				Data: []byte(`{"pk0":1}`),
+				Key:  []byte(`[1]`),
 			},
 		}); a.Error(err) {
 			a.Contains(err.Error(), "missing PK column pk1")
@@ -340,6 +343,7 @@ func TestAllDataTypes(t *testing.T) {
 
 			mut := types.Mutation{
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
+				Key:  []byte(`[1]`),
 			}
 			a.NoError(app.Apply(ctx, dbInfo.Pool(), []types.Mutation{mut}))
 
@@ -482,7 +486,10 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		a.NoError(err)
 
 		// Applying a discarded mutation should never result in an error.
-		a.NoError(app.Apply(ctx, dbInfo.Pool(), []types.Mutation{{Data: bytes}}))
+		a.NoError(app.Apply(ctx, dbInfo.Pool(), []types.Mutation{{
+			Data: bytes,
+			Key:  []byte(fmt.Sprintf(`[%d]`, id)),
+		}}))
 
 		ct, err := tbl.RowCount(ctx)
 		a.Equal(1, ct)
@@ -497,6 +504,85 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 		lastTime = expectedTime
 		lastVersion = expectedVersion
+	}
+}
+
+// This tests a case in which cdc-sink does not upsert all columns in
+// the target table and where multiple updates to the same key are
+// contained in the batch (which can happen in immediate mode). In this
+// case, we'll see an error message that UPSERT cannot affect the same
+// row multiple times.
+//
+// X-Ref: https://github.com/cockroachdb/cockroach/issues/44466
+// X-Ref: https://github.com/cockroachdb/cockroach/pull/45372
+func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
+	a := assert.New(t)
+	ctx, dbInfo, cancel := sinktest.Context()
+	defer cancel()
+
+	dbName, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
+	defer cancel()
+
+	type Payload struct {
+		Pk0 int    `json:"pk0"`
+		Val string `json:"val"`
+	}
+	tbl, err := sinktest.CreateTable(ctx, dbName,
+		"CREATE TABLE %s (pk0 INT PRIMARY KEY, ignored INT AS (1) STORED, val STRING)")
+	if !a.NoError(err) {
+		return
+	}
+
+	// Detect hopeful future case where UPSERT has the desired behavior.
+	_, err = dbInfo.Pool().Exec(ctx,
+		fmt.Sprintf("UPSERT INTO %s (pk0, val) VALUES ($1, $2), ($3, $4)", tbl.Name()),
+		1, "1", 1, "1")
+	if a.Error(err) {
+		a.Contains(err.Error(), "cannot affect row a second time")
+	} else {
+		a.FailNow("the workaround is no longer necessary for this version of CRDB")
+	}
+
+	watcher, err := watchers.Get(ctx, dbName)
+	if !a.NoError(err) {
+		return
+	}
+
+	app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	p1 := Payload{Pk0: 10, Val: "First"}
+	bytes1, err := json.Marshal(p1)
+	a.NoError(err)
+
+	p2 := Payload{Pk0: 10, Val: "Repeated"}
+	bytes2, err := json.Marshal(p2)
+	a.NoError(err)
+
+	muts := []types.Mutation{
+		{Data: bytes1, Key: []byte(fmt.Sprintf(`[%d]`, p1.Pk0)), Time: hlc.New(1, 1)},
+		{Data: bytes2, Key: []byte(fmt.Sprintf(`[%d]`, p2.Pk0)), Time: hlc.New(1, 2)},
+	}
+
+	// Verify insertion.
+	a.NoError(app.Apply(ctx, dbInfo.Pool(), muts))
+
+	count, err := sinktest.GetRowCount(ctx, dbInfo.Pool(), tbl.Name())
+	if a.NoError(err) && a.Equal(1, count) {
+		row := dbInfo.Pool().QueryRow(ctx,
+			fmt.Sprintf("SELECT val FROM %s WHERE pk0 = $1", tbl.Name()), 10)
+		var val string
+		a.NoError(row.Scan(&val))
+		a.Equal("Repeated", val)
 	}
 }
 
@@ -545,7 +631,10 @@ func TestVirtualColumns(t *testing.T) {
 		p := Payload{A: 1, B: 2, C: 3}
 		bytes, err := json.Marshal(p)
 		a.NoError(err)
-		muts := []types.Mutation{{Data: bytes}}
+		muts := []types.Mutation{{
+			Data: bytes,
+			Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
+		}}
 
 		a.NoError(app.Apply(ctx, dbInfo.Pool(), muts))
 	})
@@ -555,7 +644,10 @@ func TestVirtualColumns(t *testing.T) {
 		p := Payload{A: 1, B: 2, C: 3, X: -1}
 		bytes, err := json.Marshal(p)
 		a.NoError(err)
-		muts := []types.Mutation{{Data: bytes}}
+		muts := []types.Mutation{{
+			Data: bytes,
+			Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
+		}}
 
 		err = app.Apply(ctx, dbInfo.Pool(), muts)
 		if a.Error(err) {
