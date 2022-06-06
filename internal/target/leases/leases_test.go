@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/errgroup"
@@ -252,7 +253,7 @@ func TestLeases(t *testing.T) {
 					a.True(atomic.CompareAndSwapInt32(&running, 0, 1))
 					time.Sleep(l.cfg.Poll)
 					atomic.StoreInt32(&running, 0)
-					return ErrCancelSingleton
+					return types.ErrCancelSingleton
 				})
 				return nil
 			})

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/google/uuid"
@@ -44,8 +45,8 @@ type lease struct {
 	nonce   uuid.UUID
 }
 
-// Leases coordinates global, singleton activities.
-type Leases struct {
+// leases coordinates global, singleton activities.
+type leases struct {
 	cfg Config
 	sql struct {
 		acquire string
@@ -53,6 +54,8 @@ type Leases struct {
 		renew   string
 	}
 }
+
+var _ types.Leases = (*leases)(nil)
 
 const (
 	schema = `
@@ -63,24 +66,20 @@ CREATE TABLE IF NOT EXISTS %s (
 )`
 )
 
-// New constructs a instance of Leases.
-func New(ctx context.Context, cfg Config) (*Leases, error) {
+// New constructs a instance of leases.
+func New(ctx context.Context, cfg Config) (*leases, error) {
 	_, err := cfg.Pool.Exec(ctx, fmt.Sprintf(schema, cfg.Target))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	l := &Leases{cfg: cfg}
+	l := &leases{cfg: cfg}
 	l.sql.acquire = fmt.Sprintf(acquireTemplate, cfg.Target)
 	l.sql.release = fmt.Sprintf(releaseTemplate, cfg.Target)
 	l.sql.renew = fmt.Sprintf(renewTemplate, cfg.Target)
 
 	return l, nil
 }
-
-// ErrCancelSingleton may be returned by callbacks passed to
-// Leases.Singleton to shut down cleanly.
-var ErrCancelSingleton = errors.New("singleton requested cancellation")
 
 // Singleton executes a callback when the named lease is acquired.
 //
@@ -93,7 +92,7 @@ var ErrCancelSingleton = errors.New("singleton requested cancellation")
 // the callback returns ErrCancelSingleton, it will not be retried. In
 // all other cases, the callback function is retried once a lease is
 // re-acquired.
-func (l *Leases) Singleton(ctx context.Context, name string, fn func(ctx context.Context) error) {
+func (l *leases) Singleton(ctx context.Context, name string, fn func(ctx context.Context) error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -120,7 +119,7 @@ func (l *Leases) Singleton(ctx context.Context, name string, fn func(ctx context
 
 		// Execute the callback.
 		err := fn(ctx)
-		if errors.Is(err, ErrCancelSingleton) {
+		if errors.Is(err, types.ErrCancelSingleton) {
 			log.WithField("lease", name).Trace("callback requested shutdown")
 			cancel()
 			return
@@ -135,7 +134,7 @@ func (l *Leases) Singleton(ctx context.Context, name string, fn func(ctx context
 
 // waitToAcquire blocks until the named lease can be acquired. If the
 // context is canceled, this method will return nil.
-func (l *Leases) waitToAcquire(ctx context.Context, name string) (acquired lease, ok bool) {
+func (l *leases) waitToAcquire(ctx context.Context, name string) (acquired lease, ok bool) {
 	entry := log.WithField("lease", name)
 	for {
 		entry.Trace("attempting to acquire")
@@ -164,7 +163,7 @@ func (l *Leases) waitToAcquire(ctx context.Context, name string) (acquired lease
 // keepRenewed will return with no error when the context is canceled.
 // It returns the status of the lease at the last successful renewal to
 // aid in testing.
-func (l *Leases) keepRenewed(ctx context.Context, tgt lease) lease {
+func (l *leases) keepRenewed(ctx context.Context, tgt lease) lease {
 	for {
 		now := time.Now()
 		// Wait up to half of the expiration time. Subtracting the
@@ -208,7 +207,7 @@ func (l *Leases) keepRenewed(ctx context.Context, tgt lease) lease {
 }
 
 // acquire returns a non-nil lease if it was able to acquire the named lease.
-func (l *Leases) acquire(ctx context.Context, name string) (acquired lease, ok bool, err error) {
+func (l *leases) acquire(ctx context.Context, name string) (acquired lease, ok bool, err error) {
 	err = retry.Retry(ctx, func(ctx context.Context) error {
 		var err error
 		acquired, ok, err = l.tryAcquire(ctx, name, time.Now())
@@ -242,7 +241,7 @@ UPSERT INTO %[1]s
 `
 
 // tryAcquire returns a non-nil lease if it was able to acquire the named lease.
-func (l *Leases) tryAcquire(
+func (l *leases) tryAcquire(
 	ctx context.Context, name string, now time.Time,
 ) (acquired lease, ok bool, err error) {
 	expires := now.Add(l.cfg.Lifetime)
@@ -259,7 +258,7 @@ func (l *Leases) tryAcquire(
 }
 
 // release destroys the given lease.
-func (l *Leases) release(ctx context.Context, rel lease) (bool, error) {
+func (l *leases) release(ctx context.Context, rel lease) (bool, error) {
 	var ret bool
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		var err error
@@ -275,7 +274,7 @@ func (l *Leases) release(ctx context.Context, rel lease) (bool, error) {
 const releaseTemplate = `DELETE FROM %s WHERE name=$1::STRING AND nonce=$2::UUID`
 
 // tryRelease deletes the lease from the database.
-func (l *Leases) tryRelease(ctx context.Context, rel lease) (ok bool, err error) {
+func (l *leases) tryRelease(ctx context.Context, rel lease) (ok bool, err error) {
 	tag, err := l.cfg.Pool.Exec(ctx, l.sql.release, rel.name, rel.nonce)
 	if err != nil {
 		return false, errors.WithStack(err)
@@ -288,7 +287,7 @@ func (l *Leases) tryRelease(ctx context.Context, rel lease) (ok bool, err error)
 	return true, nil
 }
 
-func (l *Leases) renew(ctx context.Context, tgt lease) (renewed lease, ok bool, err error) {
+func (l *leases) renew(ctx context.Context, tgt lease) (renewed lease, ok bool, err error) {
 	err = retry.Retry(ctx, func(ctx context.Context) error {
 		var err error
 		renewed, ok, err = l.tryRenew(ctx, tgt, time.Now())
@@ -307,7 +306,7 @@ const renewTemplate = `UPDATE %s SET expires=$1::TIMESTAMPTZ WHERE name=$2::STRI
 // input lease struct will be updated with the new expiration time and
 // returned to the caller. The boolean return value will be false if the
 // lease was stolen.
-func (l *Leases) tryRenew(ctx context.Context, tgt lease, now time.Time) (lease, bool, error) {
+func (l *leases) tryRenew(ctx context.Context, tgt lease, now time.Time) (lease, bool, error) {
 	expires := now.Add(l.cfg.Lifetime)
 
 	tag, err := l.cfg.Pool.Exec(ctx, l.sql.renew, expires, tgt.name, tgt.nonce)
