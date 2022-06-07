@@ -26,6 +26,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Table contains a default table name for managing leases.
+var Table = ident.NewTable(ident.StagingDB, ident.Public, ident.New("leases"))
+
 // Config is passed to New.
 type Config struct {
 	Pool   pgxtype.Querier // Database access.
@@ -66,8 +69,8 @@ CREATE TABLE IF NOT EXISTS %s (
 )`
 )
 
-// New constructs a instance of leases.
-func New(ctx context.Context, cfg Config) (*leases, error) {
+// New constructs an instance of types.Leases.
+func New(ctx context.Context, cfg Config) (types.Leases, error) {
 	_, err := cfg.Pool.Exec(ctx, fmt.Sprintf(schema, cfg.Target))
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -194,6 +197,9 @@ func (l *leases) keepRenewed(ctx context.Context, tgt lease) lease {
 		})
 
 		switch {
+		case errors.Is(err, context.Canceled):
+			entry.Trace("context canceled")
+			return tgt
 		case err != nil:
 			entry.WithError(err).Warn("could not renew lease")
 			continue
@@ -247,7 +253,9 @@ func (l *leases) tryAcquire(
 	expires := now.Add(l.cfg.Lifetime)
 	var nonce uuid.UUID
 
-	row := l.cfg.Pool.QueryRow(ctx, l.sql.acquire, name, expires, now)
+	// Explicit call to Format needed for compatibility with CRDB 20.2.
+	row := l.cfg.Pool.QueryRow(ctx, l.sql.acquire, name,
+		expires.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err := row.Scan(&nonce); errors.Is(err, pgx.ErrNoRows) {
 		return lease{}, false, nil
 	} else if err != nil {

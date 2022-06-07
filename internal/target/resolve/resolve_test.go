@@ -87,8 +87,15 @@ CREATE TABLE %s (
 	t.Run("smoke test", func(t *testing.T) {
 		// Boot the resolver in the sub-test, so that we know it's not
 		// going to steal work from other sub-tests.
-		resolvers, cancel, err := New(ctx,
-			appliers, lss, pendingTable, dbInfo.Pool(), stagers, tks, watchers)
+		resolvers, cancel, err := New(ctx, Config{
+			Appliers:   appliers,
+			Leases:     lss,
+			MetaTable:  pendingTable,
+			Pool:       dbInfo.Pool(),
+			Stagers:    stagers,
+			Timekeeper: tks,
+			Watchers:   watchers,
+		})
 		if !a.NoError(err) {
 			return
 		}
@@ -142,13 +149,13 @@ CREATE TABLE %s (
 		// Wait for data to be promoted.
 		var promotedCount int
 		for promotedCount < expectedResolved {
+			time.Sleep(10 * time.Millisecond)
 			err := dbInfo.Pool().QueryRow(ctx,
 				fmt.Sprintf("SELECT count(*) FROM %s", dataTable),
 			).Scan(&promotedCount)
 			if !a.NoError(err) {
 				return
 			}
-			time.Sleep(100 * time.Millisecond)
 		}
 		a.Equal(expectedResolved, promotedCount)
 	})

@@ -64,15 +64,14 @@ var _ types.Resolver = (*resolve)(nil)
 // in the factory.
 const schema = `
 CREATE TABLE IF NOT EXISTS %[1]s (
-  target_db      STRING  NOT NULL,
-  target_schema  STRING  NOT NULL,
-  source_nanos   INT     NOT NULL,
-  source_logical INT     NOT NULL,
-  target_nanos   INT,
-  target_logical INT,
+  target_db         STRING  NOT NULL,
+  target_schema     STRING  NOT NULL,
+  source_nanos      INT     NOT NULL,
+  source_logical    INT     NOT NULL,
+  target_applied_at TIMESTAMPTZ,
   PRIMARY KEY (target_db, target_schema, source_nanos, source_logical),
   INDEX (target_db, target_schema, source_nanos, source_logical)
-    WHERE target_nanos IS NULL AND target_logical IS NULL
+    WHERE target_applied_at IS NULL
 )`
 
 func newResolve(
@@ -120,7 +119,7 @@ func newResolve(
 	return ret, cancel, nil
 }
 
-// This query conditionally insert a new mark for a target schema if
+// This query conditionally inserts a new mark for a target schema if
 // there is no previous mark or if the proposed mark is after the
 // latest-known mark for the target schema.
 //
@@ -131,24 +130,25 @@ func newResolve(
 const markTemplate = `
 WITH
 not_before AS (
-  SELECT source_nanos, source_logical FROM %[1]s
+  SELECT x.source_nanos, x.source_logical FROM %[1]s x
   WHERE target_db=$1 AND target_schema=$2
-  ORDER BY source_nanos desc, source_logical desc
+  ORDER BY x.source_nanos desc, x.source_logical desc
   LIMIT 1),
 to_insert AS (
-  SELECT $1, $2, $3, $4
+  SELECT $1::STRING, $2::STRING, $3::INT, $4::INT
   WHERE (SELECT count(*) FROM not_before) = 0
      OR ($3::INT, $4::INT) > (SELECT (source_nanos, source_logical) FROM not_before))
-INSERT INTO %[1]s (target_db, target_schema, source_nanos, source_logical)
-SELECT * from to_insert`
+INSERT INTO %[1]s
+SELECT * FROM to_insert`
 
 func (r *resolve) Mark(ctx context.Context, tx pgxtype.Querier, next hlc.Time) (bool, error) {
 	tag, err := tx.Exec(ctx,
 		r.sql.mark,
 		r.target.Database().Raw(),
 		r.target.Schema().Raw(),
-		next.Nanos(),
-		next.Logical(),
+		// The sql driver gets the wrong type back from CRDB v20.2
+		fmt.Sprintf("%d", next.Nanos()),
+		fmt.Sprintf("%d", next.Logical()),
 	)
 	ret := tag.RowsAffected() > 0
 	if ret {
@@ -173,7 +173,7 @@ func (r *resolve) loop(ctx context.Context) {
 		for {
 			r.metrics.lastAttempt.SetToCurrentTime()
 
-			resolved, didWork, err := r.flush(ctx)
+			resolved, didWork, err := r.Flush(ctx)
 			if err != nil {
 				r.metrics.errors.Inc()
 				entry.WithError(err).Warn("could not resolve; will retry")
@@ -197,23 +197,22 @@ func (r *resolve) loop(ctx context.Context) {
 	})
 }
 
+// We don't use cluster_logical_time() here, because it can create
+// a situation where the transaction interferes with itself.
 const dequeueTemplate = `
 UPDATE %[1]s
-SET
-  target_nanos = split_part(cluster_logical_timestamp()::STRING, '.', 1)::INT,
-  target_logical = split_part(cluster_logical_timestamp()::STRING, '.', 2)::INT
+SET target_applied_at=now()
 WHERE target_db=$1
   AND target_schema=$2
-  AND target_nanos IS NULL
-  AND target_logical IS NULL
+  AND target_applied_at IS NULL
 ORDER BY source_nanos, source_logical
 LIMIT 1
 RETURNING source_nanos, source_logical
 `
 
-// flush executes a single iteration of the asynchronous resolver logic.
+// Flush executes a single iteration of the asynchronous resolver logic.
 // This method returns true if work was actually performed.
-func (r *resolve) flush(ctx context.Context) (hlc.Time, bool, error) {
+func (r *resolve) Flush(ctx context.Context) (hlc.Time, bool, error) {
 	var resolved hlc.Time
 	var didWork bool
 
@@ -301,7 +300,7 @@ func (r *resolve) flush(ctx context.Context) (hlc.Time, bool, error) {
 const scanForTargetTemplate = `
 SELECT DISTINCT target_db, target_schema
 FROM %[1]s
-WHERE target_nanos IS NULL AND target_logical IS NULL
+WHERE target_applied_at IS NULL
 `
 
 // scanForTargetSchemas is used by the factory to ensure that any schema

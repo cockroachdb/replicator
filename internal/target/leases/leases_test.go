@@ -39,13 +39,14 @@ func TestLeases(t *testing.T) {
 		return
 	}
 
-	l, err := New(ctx, Config{
+	intf, err := New(ctx, Config{
 		Pool:       dbInfo.Pool(),
 		Target:     tbl.Name(),
 		Lifetime:   time.Minute,
 		Poll:       time.Second,
 		RetryDelay: time.Second,
 	})
+	l := intf.(*leases)
 	if !a.NoError(err) {
 		return
 	}
@@ -251,7 +252,7 @@ func TestLeases(t *testing.T) {
 				// running, then requests to be shut down.
 				l.Singleton(egCtx, t.Name(), func(ctx context.Context) error {
 					a.True(atomic.CompareAndSwapInt32(&running, 0, 1))
-					time.Sleep(l.cfg.Poll)
+					time.Sleep(3 * l.cfg.Poll)
 					atomic.StoreInt32(&running, 0)
 					return types.ErrCancelSingleton
 				})

@@ -23,6 +23,22 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Config is passed to New.
+type Config struct {
+	Appliers   types.Appliers
+	Leases     types.Leases
+	MetaTable  ident.Table
+	Pool       *pgxpool.Pool
+	Stagers    types.Stagers
+	Timekeeper types.TimeKeeper
+	Watchers   types.Watchers
+}
+
+// Table is the usual choice for the timestamp table in normal operating
+// conditions.
+var Table = ident.NewTable(
+	ident.StagingDB, ident.Public, ident.New("pending_timestamps"))
+
 type factory struct {
 	appliers   types.Appliers
 	leases     types.Leases
@@ -42,28 +58,19 @@ type factory struct {
 var _ types.Resolvers = (*factory)(nil)
 
 // New constructs a Resolver factory.
-func New(
-	ctx context.Context,
-	appliers types.Appliers,
-	leases types.Leases,
-	metaTable ident.Table,
-	pool *pgxpool.Pool,
-	stagers types.Stagers,
-	timekeeper types.TimeKeeper,
-	watchers types.Watchers,
-) (_ types.Resolvers, cancel func(), _ error) {
-	if _, err := pool.Exec(ctx, fmt.Sprintf(schema, metaTable)); err != nil {
+func New(ctx context.Context, cfg Config) (_ types.Resolvers, cancel func(), _ error) {
+	if _, err := cfg.Pool.Exec(ctx, fmt.Sprintf(schema, cfg.MetaTable)); err != nil {
 		return nil, func() {}, errors.WithStack(err)
 	}
 
 	f := &factory{
-		appliers:   appliers,
-		leases:     leases,
-		metaTable:  metaTable,
-		pool:       pool,
-		stagers:    stagers,
-		timekeeper: timekeeper,
-		watchers:   watchers,
+		appliers:   cfg.Appliers,
+		leases:     cfg.Leases,
+		metaTable:  cfg.MetaTable,
+		pool:       cfg.Pool,
+		stagers:    cfg.Stagers,
+		timekeeper: cfg.Timekeeper,
+		watchers:   cfg.Watchers,
 	}
 	f.mu.instances = make(map[ident.Schema]*resolve)
 
