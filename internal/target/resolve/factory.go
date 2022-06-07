@@ -12,11 +12,15 @@ package resolve
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 type factory struct {
@@ -37,6 +41,7 @@ type factory struct {
 
 var _ types.Resolvers = (*factory)(nil)
 
+// New constructs a Resolver factory.
 func New(
 	ctx context.Context,
 	appliers types.Appliers,
@@ -45,7 +50,12 @@ func New(
 	pool *pgxpool.Pool,
 	stagers types.Stagers,
 	timekeeper types.TimeKeeper,
+	watchers types.Watchers,
 ) (_ types.Resolvers, cancel func(), _ error) {
+	if _, err := pool.Exec(ctx, fmt.Sprintf(schema, metaTable)); err != nil {
+		return nil, func() {}, errors.WithStack(err)
+	}
+
 	f := &factory{
 		appliers:   appliers,
 		leases:     leases,
@@ -53,10 +63,17 @@ func New(
 		pool:       pool,
 		stagers:    stagers,
 		timekeeper: timekeeper,
+		watchers:   watchers,
 	}
 	f.mu.instances = make(map[ident.Schema]*resolve)
 
+	// Run the bootstrap in a background context.
+	bootstrapCtx, cancelBoot := context.WithCancel(context.Background())
+	go f.bootstrapResolvers(bootstrapCtx)
+
 	return f, func() {
+		defer cancelBoot()
+
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		for _, fn := range f.mu.cleanup {
@@ -69,7 +86,7 @@ func New(
 
 // Get implements types.Resolvers.
 func (f *factory) Get(ctx context.Context, target ident.Schema) (types.Resolver, error) {
-	if ret := f.getUnlocked(target); ret != nil {
+	if ret, ok := f.getUnlocked(target); ok {
 		return ret, nil
 	}
 
@@ -80,7 +97,9 @@ func (f *factory) Get(ctx context.Context, target ident.Schema) (types.Resolver,
 		return found, nil
 	}
 
-	ret, cancel, err := newResolve(ctx, f.appliers, f.leases, f.metaTable, f.pool, f.stagers, target, f.timekeeper, f.watchers)
+	ret, cancel, err := newResolve(ctx,
+		f.appliers, f.leases, f.metaTable, f.pool, f.stagers, target,
+		f.timekeeper, f.watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -89,8 +108,35 @@ func (f *factory) Get(ctx context.Context, target ident.Schema) (types.Resolver,
 	return ret, nil
 }
 
-func (f *factory) getUnlocked(target ident.Schema) types.Resolver {
+func (f *factory) getUnlocked(target ident.Schema) (types.Resolver, bool) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.mu.instances[target]
+	found, ok := f.mu.instances[target]
+	return found, ok
+}
+
+// bootstrapResolvers ensures that there is an active resolve instance
+// for every target schema listed in the metaTable. This ensures that,
+// in a zero-incoming-traffic situation, previously-marked values will
+// eventually be processed.
+func (f *factory) bootstrapResolvers(ctx context.Context) {
+	for {
+		toEnsure, err := scanForTargetSchemas(ctx, f.pool, f.metaTable)
+		if err != nil {
+			log.WithError(err).Warn("could not scan for bootstrap schemas")
+		}
+		// toEnsure will be nil if there was an error.
+		for _, schema := range toEnsure {
+			if _, err := f.Get(ctx, schema); err != nil {
+				log.WithField("schema", schema).WithError(err).Warn("could not bootstrap schema")
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+			// We can run this at a slow cycle, since other nodes will
+			// create their resolve instances based on incoming traffic.
+		}
+	}
 }

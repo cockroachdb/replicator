@@ -119,8 +119,8 @@ func (l *leases) Singleton(ctx context.Context, name string, fn func(ctx context
 
 		// Execute the callback.
 		err := fn(ctx)
-		if errors.Is(err, types.ErrCancelSingleton) {
-			log.WithField("lease", name).Trace("callback requested shutdown")
+		if errors.Is(err, types.ErrCancelSingleton) || errors.Is(err, context.Canceled) {
+			log.WithField("lease", name).Trace("callback requested shutdown or was canceled")
 			cancel()
 			return
 		}

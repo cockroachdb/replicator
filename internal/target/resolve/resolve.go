@@ -40,6 +40,9 @@ type resolve struct {
 	timekeeper types.TimeKeeper
 	watcher    types.Watcher
 
+	// Used for a fast-path wakeup if there's only one instance.
+	fastWakeup chan struct{}
+
 	metrics struct {
 		active       prometheus.Gauge
 		errors       prometheus.Counter
@@ -68,7 +71,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
   target_nanos   INT,
   target_logical INT,
   PRIMARY KEY (target_db, target_schema, source_nanos, source_logical),
-  INDEX %[1]s_unresolved (target_db, target_schema, source_nanos, source_logical)
+  INDEX (target_db, target_schema, source_nanos, source_logical)
     WHERE target_nanos IS NULL AND target_logical IS NULL
 )`
 
@@ -83,10 +86,6 @@ func newResolve(
 	timekeeper types.TimeKeeper,
 	watchers types.Watchers,
 ) (_ *resolve, cancel func(), _ error) {
-	if _, err := pool.Exec(ctx, fmt.Sprintf(schema, metaTable)); err != nil {
-		return nil, func() {}, errors.WithStack(err)
-	}
-
 	watcher, err := watchers.Get(ctx, target.Database())
 	if err != nil {
 		return nil, func() {}, err
@@ -95,6 +94,7 @@ func newResolve(
 	ret := &resolve{
 		appliers:   appliers,
 		leases:     leases,
+		fastWakeup: make(chan struct{}, 1),
 		pool:       pool,
 		stagers:    stagers,
 		target:     target,
@@ -113,16 +113,34 @@ func newResolve(
 	ret.sql.dequeue = fmt.Sprintf(dequeueTemplate, metaTable)
 	ret.sql.mark = fmt.Sprintf(markTemplate, metaTable)
 
-	flushCtx, cancel := context.WithCancel(ctx)
+	// Run the flush behavior in an isolated context.
+	flushCtx, cancel := context.WithCancel(context.Background())
 	go ret.loop(flushCtx)
 
 	return ret, cancel, nil
 }
 
+// This query conditionally insert a new mark for a target schema if
+// there is no previous mark or if the proposed mark is after the
+// latest-known mark for the target schema.
+//
+// $1 = target_db
+// $2 = target_schema
+// $3 = source_nanos
+// $4 = source_logical
 const markTemplate = `
+WITH
+not_before AS (
+  SELECT source_nanos, source_logical FROM %[1]s
+  WHERE target_db=$1 AND target_schema=$2
+  ORDER BY source_nanos desc, source_logical desc
+  LIMIT 1),
+to_insert AS (
+  SELECT $1, $2, $3, $4
+  WHERE (SELECT count(*) FROM not_before) = 0
+     OR ($3::INT, $4::INT) > (SELECT (source_nanos, source_logical) FROM not_before))
 INSERT INTO %[1]s (target_db, target_schema, source_nanos, source_logical)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT DO NOTHING`
+SELECT * from to_insert`
 
 func (r *resolve) Mark(ctx context.Context, tx pgxtype.Querier, next hlc.Time) (bool, error) {
 	tag, err := tx.Exec(ctx,
@@ -132,7 +150,15 @@ func (r *resolve) Mark(ctx context.Context, tx pgxtype.Querier, next hlc.Time) (
 		next.Nanos(),
 		next.Logical(),
 	)
-	return tag.RowsAffected() > 0, errors.WithStack(err)
+	ret := tag.RowsAffected() > 0
+	if ret {
+		// Non-blocking send to local fast-path channel.
+		select {
+		case r.fastWakeup <- struct{}{}:
+		default:
+		}
+	}
+	return ret, errors.WithStack(err)
 }
 
 // loop starts a goroutine to asynchronously process resolved timestamps.
@@ -165,6 +191,7 @@ func (r *resolve) loop(ctx context.Context) {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(time.Second):
+			case <-r.fastWakeup:
 			}
 		}
 	})
@@ -269,4 +296,35 @@ func (r *resolve) flush(ctx context.Context) (hlc.Time, bool, error) {
 	})
 
 	return resolved, didWork, err
+}
+
+const scanForTargetTemplate = `
+SELECT DISTINCT target_db, target_schema
+FROM %[1]s
+WHERE target_nanos IS NULL AND target_logical IS NULL
+`
+
+// scanForTargetSchemas is used by the factory to ensure that any schema
+// with unprocessed, resolved timestamps will have an associated resolve
+// instance. This function is declared here to keep the sql queries in a
+// single file.
+func scanForTargetSchemas(
+	ctx context.Context, db pgxtype.Querier, metaTable ident.Table,
+) ([]ident.Schema, error) {
+	rows, err := db.Query(ctx, fmt.Sprintf(scanForTargetTemplate, metaTable))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rows.Close()
+	var ret []ident.Schema
+	for rows.Next() {
+		var db, schema string
+		if err := rows.Scan(&db, &schema); err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		ret = append(ret, ident.NewSchema(ident.New(db), ident.New(schema)))
+	}
+
+	return ret, nil
 }

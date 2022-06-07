@@ -28,9 +28,9 @@ type TableInfo struct {
 	name ident.Table
 }
 
-// CreateTable creates a test table and returns a unique name. The
-// schemaSpec parameter must have exactly one %s substitution parameter
-// for the database name and table name.
+// CreateTable creates a test table and returns a unique name. If the
+// schemaSpec parameter is non-empty, it must have exactly one %s
+// substitution parameter for the database name and table name.
 func CreateTable(ctx context.Context, dbName ident.Ident, schemaSpec string) (TableInfo, error) {
 	var table ident.Table
 	db := DB(ctx)
@@ -63,7 +63,10 @@ outer:
 		}
 	}
 
-	err := retry.Execute(ctx, db.Pool(), fmt.Sprintf(schemaSpec, table))
+	var err error
+	if schemaSpec != "" {
+		err = retry.Execute(ctx, db.Pool(), fmt.Sprintf(schemaSpec, table))
+	}
 	return TableInfo{db, table}, errors.WithStack(err)
 }
 
