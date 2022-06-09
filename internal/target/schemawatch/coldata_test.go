@@ -42,6 +42,11 @@ func TestGetColumns(t *testing.T) {
 	}
 	testcases := []testcase{
 		{
+			"", // It's legal to create a table with no columns.
+			[]string{"rowid"},
+			nil,
+		},
+		{
 			"a INT",
 			[]string{"rowid"},
 			[]string{"a"},

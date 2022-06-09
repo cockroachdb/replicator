@@ -100,6 +100,19 @@ func getColumns(
 			columns = append(columns, column)
 		}
 
+		// It's legal, if unusual, to create a table with no columns.
+		if len(columns) == 0 {
+			columns = []types.ColData{
+				{
+					Ignored: false,
+					Name:    ident.New("rowid"),
+					Primary: true,
+					Type:    "INT8",
+				},
+			}
+			return nil
+		}
+
 		// If there are no primary key columns, we know that a synthetic
 		// rowid column will exist. We'll create a new slice which
 		// respects the ordering guarantees.
