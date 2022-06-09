@@ -93,6 +93,23 @@ func (m Mutation) IsDelete() bool {
 	return len(m.Data) == 0 || bytes.Equal(m.Data, nullBytes)
 }
 
+// Resolver describes a service which records resolved timestamps from
+// a source cluster and asynchronously resolves them.
+type Resolver interface {
+	// Flush is used by tests to ensure that all marked timestamps
+	// have been processed.
+	Flush(ctx context.Context) (resolved hlc.Time, didWork bool, err error)
+	// Mark records a resolved timestamp. The returned boolean will be
+	// true if the resolved timestamp had not been previously recorded.
+	Mark(ctx context.Context, tx pgxtype.Querier, next hlc.Time) (bool, error)
+}
+
+// Resolvers is a factory for Resolver instances.
+type Resolvers interface {
+	// Get returns the Resolver which manages the given schema.
+	Get(ctx context.Context, target ident.Schema) (Resolver, error)
+}
+
 // Stager describes a service which can durably persist some
 // number of Mutations.
 type Stager interface {
