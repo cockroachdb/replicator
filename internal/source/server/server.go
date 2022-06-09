@@ -25,6 +25,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
+	"github.com/cockroachdb/cdc-sink/internal/target/leases"
+	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
@@ -110,8 +112,34 @@ func newServer(
 		return nil, nil, err
 	}
 
+	lss, err := leases.New(ctx, leases.Config{
+		Pool:       pool,
+		Target:     leases.Table,
+		GuardTime:  10 * time.Millisecond,
+		Lifetime:   time.Minute,
+		Poll:       time.Second,
+		RetryDelay: time.Second,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
 	watchers, cancelWatchers := schemawatch.NewWatchers(pool)
 	appliers, cancelAppliers := apply.NewAppliers(watchers)
+	stagers := stage.NewStagers(pool, ident.StagingDB)
+
+	resolvers, cancelResolvers, err := resolve.New(ctx, resolve.Config{
+		Appliers:   appliers,
+		Leases:     lss,
+		MetaTable:  resolve.Table,
+		Pool:       pool,
+		Stagers:    stagers,
+		Timekeeper: swapper,
+		Watchers:   watchers,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var authenticator types.Authenticator
 	var cancelAuth func()
@@ -149,7 +177,8 @@ func newServer(
 		Authenticator: authenticator,
 		Appliers:      appliers,
 		Pool:          pool,
-		Stores:        stage.NewStagers(pool, ident.StagingDB),
+		Resolvers:     resolvers,
+		Stores:        stagers,
 		Swapper:       swapper,
 		Watchers:      watchers,
 	}))
@@ -179,6 +208,7 @@ func newServer(
 			log.WithError(err).Error("did not shut down cleanly")
 		}
 		_ = l.Close()
+		cancelResolvers()
 		cancelAuth()
 		cancelAppliers()
 		cancelWatchers()
