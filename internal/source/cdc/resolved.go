@@ -104,7 +104,19 @@ func (h *Handler) resolved(ctx context.Context, req *request) error {
 	if req.immediate {
 		return nil
 	}
-	target := req.target.(ident.Schema)
+	target := req.target.AsSchema()
+	resolver, err := h.Resolvers.Get(ctx, target)
+	if err != nil {
+		return err
+	}
+	marked, err := resolver.Mark(ctx, h.Pool, req.timestamp)
+	if marked {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.New("did not mark timestamp, has it gone backwards?")
 
 	return retry.Retry(ctx, func(ctx context.Context) error {
 		tx, err := h.Pool.Begin(ctx)
