@@ -13,7 +13,8 @@ package sinktest
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"os"
+	"sync/atomic"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
@@ -28,14 +29,21 @@ type DBInfo struct {
 	version string
 }
 
+// Ensure unique database identifiers within a test run.
+var dbIdentCounter int32
+
 // CreateDB creates a new testing SQL DATABASE whose lifetime is bounded
 // by that of the associated context, which must be derived from the
 // Context() method in this package.
 func CreateDB(ctx context.Context) (dbName ident.Ident, cancel func(), _ error) {
 	dbInfo := DB(ctx)
 	pool := dbInfo.Pool()
-	dbNum := rand.Intn(10000)
-	name := ident.New(fmt.Sprintf("_test_db_%d", dbNum))
+	dbNum := atomic.AddInt32(&dbIdentCounter, 1)
+
+	// Each package tests run in a separate binary, so we need a
+	// "globally" unique ID.  While PIDs do recycle, they're highly
+	// unlikely to do so during a single run of the test suite.
+	name := ident.New(fmt.Sprintf("_test_db_%d_%d", os.Getpid(), dbNum))
 
 	cancel = func() {
 		err := retry.Execute(ctx, pool, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", name))
