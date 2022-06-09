@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgtype/pgxtype"
+	"github.com/pkg/errors"
 )
 
 // An Applier accepts some number of Mutations and applies them to
@@ -46,6 +47,26 @@ type Authenticator interface {
 
 // Deadlines associate a column identifier with a duration.
 type Deadlines map[ident.Ident]time.Duration
+
+// ErrCancelSingleton may be returned by callbacks passed to
+// leases.Singleton to shut down cleanly.
+var ErrCancelSingleton = errors.New("singleton requested cancellation")
+
+// Leases coordinates behavior across multiple instances of cdc-sink.
+type Leases interface {
+	// Singleton executes a callback when the named lease is acquired.
+	//
+	// The lease will be released in the following circumstances:
+	//   * The callback function returns.
+	//   * The lease cannot be renewed before it expires.
+	//   * The outer context is canceled.
+	//
+	// If the callback returns a non-nil error, the error will be
+	// logged. If the callback returns ErrCancelSingleton, it will not
+	// be retried. In all other cases, the callback function is retried
+	// once a lease is re-acquired.
+	Singleton(ctx context.Context, name string, fn func(ctx context.Context) error)
+}
 
 // A Memo is a key store that persists a value associated to a key
 type Memo interface {
