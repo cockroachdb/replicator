@@ -58,6 +58,9 @@ func TestParse(t *testing.T) {
 				a.Equal(test.expectedNanos, actual.Nanos(), "nanos")
 				a.Equal(test.expectedLogical, actual.Logical(), "logical")
 				a.Equal(test.testcase, actual.String())
+				bytes, err := actual.MarshalJSON()
+				a.NoError(err)
+				a.Equal([]byte(fmt.Sprintf("%q", test.testcase)), bytes)
 			} else if !test.expectedPass {
 				a.Error(actualErr)
 			}
