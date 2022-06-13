@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/cmd/pglogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/start"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/version"
+	"github.com/cockroachdb/cdc-sink/internal/util/logfmt"
 	joonix "github.com/joonix/log"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -57,13 +58,13 @@ func main() {
 
 			switch logFormat {
 			case "fluent":
-				log.SetFormatter(joonix.NewFormatter())
+				log.SetFormatter(logfmt.Wrap(joonix.NewFormatter()))
 			case "text":
-				log.SetFormatter(&log.TextFormatter{
+				log.SetFormatter(logfmt.Wrap(&log.TextFormatter{
 					FullTimestamp:   true,
 					PadLevelText:    true,
 					TimestampFormat: time.Stamp,
-				})
+				}))
 			default:
 				return errors.Errorf("unknown log format: %q", logFormat)
 			}
