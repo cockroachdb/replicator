@@ -19,6 +19,7 @@ import (
 	"flag"
 	"net"
 	"net/http"
+	_ "net/http/pprof" // Register pprof debugging endpoints.
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
@@ -127,6 +128,11 @@ func newServer(
 	}
 
 	mux := &http.ServeMux{}
+	// The pprof handlers attach themselves to the system-default mux.
+	// The index page also assumes that the handlers are reachable from
+	// this specific prefix. It seems unlikely that this would collide
+	// with an actual database schema.
+	mux.Handle("/debug/pprof/", http.DefaultServeMux)
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
 			log.WithError(err).Warn("health check failed")
