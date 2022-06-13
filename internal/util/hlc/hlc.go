@@ -15,6 +15,7 @@ package hlc
 // The code in this file is reworked from sink_table.go.
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -80,6 +81,12 @@ func (t Time) Logical() int { return t.logical }
 
 // Nanos returns the nanosecond wall time.
 func (t Time) Nanos() int64 { return t.nanos }
+
+// MarshalJSON represents the time as a JSON string. This is used when
+// logging timestamps.
+func (t Time) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.String())
+}
 
 // String returns the Time as a
 func (t Time) String() string {
