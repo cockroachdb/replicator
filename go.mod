@@ -5,7 +5,7 @@ go 1.17
 require (
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20210128092314-b3eff0b87c79
-	github.com/go-mysql-org/go-mysql v1.5.0
+	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/gofrs/uuid v4.2.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.4.1
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
