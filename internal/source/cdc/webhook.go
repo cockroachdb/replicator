@@ -105,6 +105,18 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 		toProcess[target] = append(toProcess[target], mut)
 	}
 
+	// Create Store instances up front. The first time a target table is
+	// used, the Stager must create the staging table. We want to ensure
+	// that this happens before we create the transaction below.
+	stores := make(map[ident.Table]types.Stager, len(toProcess))
+	for table := range toProcess {
+		s, err := h.Stores.Get(ctx, table)
+		if err != nil {
+			return err
+		}
+		stores[table] = s
+	}
+
 	return retry.Retry(ctx, func(ctx context.Context) error {
 		tx, err := h.Pool.Begin(ctx)
 		if err != nil {
@@ -123,11 +135,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 					return err
 				}
 			} else {
-				store, err := h.Stores.Get(ctx, target)
-				if err != nil {
-					return err
-				}
-				if err := store.Store(ctx, tx, muts); err != nil {
+				if err := stores[target].Store(ctx, tx, muts); err != nil {
 					return err
 				}
 			}
