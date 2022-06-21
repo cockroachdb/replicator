@@ -146,6 +146,11 @@ func (r *resolve) Mark(ctx context.Context, tx pgxtype.Querier, next hlc.Time) (
 	)
 	ret := tag.RowsAffected() > 0
 	if ret {
+		log.WithFields(log.Fields{
+			"schema":   r.target,
+			"resolved": next,
+		}).Trace("marked new resolved timestamp")
+
 		// Non-blocking send to local fast-path channel.
 		select {
 		case r.fastWakeup <- struct{}{}:
@@ -173,17 +178,21 @@ func (r *resolve) loop(ctx context.Context) {
 			r.metrics.successes.Inc()
 
 			// Retry immediately if we did some work.
-			if didWork {
-				entry.Trace("successfully resolved mutations")
+			if didWork > 0 {
+				entry.Tracef("successfully resolved %d mutations", didWork)
 				continue
 			}
 		}
 
 		// Create a variable delay that averages once per second.
 		delay := 500*time.Millisecond + time.Duration(rand.Int63n(int64(time.Second)))
-		// This Stop() / Reset() flow is per the timer docs.
-		if !timer.Stop() {
-			<-timer.C
+
+		// Reset() can only be called if the timer has been stopped
+		// and drained.
+		timer.Stop()
+		select {
+		case <-timer.C:
+		default:
 		}
 		timer.Reset(delay)
 
@@ -197,9 +206,9 @@ func (r *resolve) loop(ctx context.Context) {
 }
 
 // Flush implements the Resolver interface.
-func (r *resolve) Flush(ctx context.Context) (hlc.Time, bool, error) {
+func (r *resolve) Flush(ctx context.Context) (hlc.Time, types.FlushDetail, error) {
 	var resolved hlc.Time
-	var didWork bool
+	var detail types.FlushDetail
 
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		tx, err := r.pool.Begin(ctx)
@@ -213,8 +222,10 @@ func (r *resolve) Flush(ctx context.Context) (hlc.Time, bool, error) {
 		case nil:
 			// OK
 		case errNoWork:
+			detail = types.FlushNoWork
 			return nil
 		case errBlocked:
+			detail = types.FlushBlocked
 			return nil
 		default:
 			return err
@@ -260,21 +271,24 @@ func (r *resolve) Flush(ctx context.Context) (hlc.Time, bool, error) {
 		}
 
 		// Dequeue and apply the mutations.
+		mutCount := 0
 		for i := range stagers {
 			muts, err := stagers[i].Drain(ctx, tx, prev, resolved)
 			if err != nil {
 				return err
 			}
+			mutCount += len(muts)
 
 			if err := appliers[i].Apply(ctx, tx, muts); err != nil {
 				return err
 			}
 		}
+		detail = types.FlushDetail(mutCount)
 
 		return errors.WithStack(tx.Commit(ctx))
 	})
 
-	return resolved, didWork, err
+	return resolved, detail, err
 }
 
 // The FOR UPDATE NOWAIT will quickly fail the query with a 55P03 code

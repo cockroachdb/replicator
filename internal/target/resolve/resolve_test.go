@@ -200,6 +200,8 @@ CREATE TABLE %s (
 			// haven't yet been cleaned up.
 			if err == errBlocked {
 				i--
+				// Ensure that the transaction is released.
+				_ = tx.Rollback(ctx)
 				continue
 			}
 			a.Equal(hlc.New(int64(i+1), i+1), found)

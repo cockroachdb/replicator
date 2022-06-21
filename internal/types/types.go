@@ -93,13 +93,28 @@ func (m Mutation) IsDelete() bool {
 	return len(m.Data) == 0 || bytes.Equal(m.Data, nullBytes)
 }
 
+// FlushDetail provides additional detail about the outcome of a call
+// to Resolver.Flush.  Values greater than FlushNoWork (zero) indicate
+// the number of mutations that were processed.
+type FlushDetail int
+
+// These constants count down from zero.
+const (
+	// FlushNoWork indicates that the method completed successfully, but
+	// that there were no unresolved timestamps to flush.
+	FlushNoWork FlushDetail = -iota
+	// FlushBlocked indicates that no work was performed because another
+	// process was in the middle of flushing the same target schema.
+	FlushBlocked
+)
+
 // Resolver describes a service which records resolved timestamps from
 // a source cluster and asynchronously resolves them.
 type Resolver interface {
 	// Flush is called by tests to execute a single iteration of the
 	// asynchronous resolver logic. This method returns true if work was
 	// actually performed.
-	Flush(ctx context.Context) (resolved hlc.Time, didWork bool, err error)
+	Flush(ctx context.Context) (resolved hlc.Time, detail FlushDetail, err error)
 	// Mark records a resolved timestamp. The returned boolean will be
 	// true if the resolved timestamp had not been previously recorded.
 	Mark(ctx context.Context, tx pgxtype.Querier, next hlc.Time) (bool, error)

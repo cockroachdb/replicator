@@ -19,10 +19,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/pkg/errors"
 )
 
@@ -104,60 +102,17 @@ func (h *Handler) resolved(ctx context.Context, req *request) error {
 	if req.immediate {
 		return nil
 	}
-	target := req.target.(ident.Schema)
-
-	return retry.Retry(ctx, func(ctx context.Context) error {
-		tx, err := h.Pool.Begin(ctx)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback(ctx)
-
-		watcher, err := h.Watchers.Get(ctx, target.Database())
-		if err != nil {
-			return err
-		}
-		targetTables := watcher.Snapshot(target)
-
-		// Prepare to merge data.
-		stores := make([]types.Stager, 0, len(targetTables))
-		appliers := make([]types.Applier, 0, len(targetTables))
-		for table := range targetTables {
-			store, err := h.Stores.Get(ctx, table)
-			if err != nil {
-				return err
-			}
-			stores = append(stores, store)
-
-			applier, err := h.Appliers.Get(ctx, table, req.casColumns, req.deadlines)
-			if err != nil {
-				return err
-			}
-			appliers = append(appliers, applier)
-		}
-
-		prev, err := h.Swapper.Put(ctx, tx, target, req.timestamp)
-		if err != nil {
-			return err
-		}
-
-		if hlc.Compare(req.timestamp, prev) < 0 {
-			return errors.Errorf(
-				"resolved timestamp went backwards: received %s had %s",
-				req.timestamp, prev)
-		}
-
-		for i := range stores {
-			muts, err := stores[i].Drain(ctx, tx, prev, req.timestamp)
-			if err != nil {
-				return err
-			}
-
-			if err := appliers[i].Apply(ctx, tx, muts); err != nil {
-				return err
-			}
-		}
-
-		return tx.Commit(ctx)
-	})
+	target := req.target.AsSchema()
+	resolver, err := h.Resolvers.Get(ctx, target)
+	if err != nil {
+		return err
+	}
+	marked, err := resolver.Mark(ctx, h.Pool, req.timestamp)
+	if marked {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.New("did not mark timestamp, has it gone backwards?")
 }
