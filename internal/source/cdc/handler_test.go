@@ -16,14 +16,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/reject"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
+	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
@@ -65,13 +68,56 @@ func testHandler(t *testing.T, immediate bool) {
 	appliers, cancel := apply.NewAppliers(watchers)
 	defer cancel()
 
+	stagers := stage.NewStagers(dbInfo.Pool(), ident.StagingDB)
+
+	resolvers, cancel, err := resolve.New(ctx, resolve.Config{
+		Appliers:   appliers,
+		MetaTable:  resolve.Table,
+		Pool:       dbInfo.Pool(),
+		Stagers:    stagers,
+		Timekeeper: swapper,
+		Watchers:   watchers,
+	})
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
 	h := &Handler{
 		Appliers:      appliers,
 		Authenticator: trust.New(),
 		Pool:          dbInfo.Pool(),
-		Stores:        stage.NewStagers(dbInfo.Pool(), ident.StagingDB),
-		Swapper:       swapper,
-		Watchers:      watchers,
+		Resolvers:     resolvers,
+		Stores:        stagers,
+	}
+
+	// In async mode, we want to reach into the implementation to
+	// force the marked, resolved timestamp to be operated on.
+	maybeFlush := func(target ident.Schematic) error {
+		if immediate {
+			return nil
+		}
+		resolver, err := h.Resolvers.Get(ctx, target.AsSchema())
+		if err != nil {
+			return err
+		}
+		for {
+			_, detail, err := resolver.Flush(ctx)
+			if err != nil {
+				return err
+			}
+			// If another process was flushing the same target, wait
+			// until it's done.
+			if detail == types.FlushBlocked {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			// There may be more work to perform.
+			if detail > 0 {
+				continue
+			}
+			return nil
+		}
 	}
 
 	// Validate the "classic" endpoints where files containing
@@ -93,12 +139,13 @@ func testHandler(t *testing.T, immediate bool) {
 `),
 		}))
 
-		// Flush them and verify that the target rows were materialized.
+		// Send the resolved timestamp request.
 		a.NoError(h.resolved(ctx, &request{
 			immediate: immediate,
-			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
+			target:    tableInfo.Name(),
 			timestamp: hlc.New(2, 0),
 		}))
+		a.NoError(maybeFlush(tableInfo.Name()))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -116,9 +163,10 @@ func testHandler(t *testing.T, immediate bool) {
 
 		a.NoError(h.resolved(ctx, &request{
 			immediate: immediate,
-			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
+			target:    tableInfo.Name(),
 			timestamp: hlc.New(5, 0),
 		}))
+		a.NoError(maybeFlush(tableInfo.Name()))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -148,6 +196,7 @@ func testHandler(t *testing.T, immediate bool) {
 			target:    schema,
 			body:      strings.NewReader(`{ "resolved" : "20.0" }`),
 		}))
+		a.NoError(maybeFlush(schema))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -170,6 +219,7 @@ func testHandler(t *testing.T, immediate bool) {
 			target:    schema,
 			body:      strings.NewReader(`{ "resolved" : "40.0" }`),
 		}))
+		a.NoError(maybeFlush(schema))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -212,7 +262,7 @@ func testHandler(t *testing.T, immediate bool) {
 			timestamp: hlc.New(25, 0),
 		})
 		if immediate {
-			// Resolved timestamp tracking is disable in immediate mode.
+			// Resolved timestamp tracking is disabled in immediate mode.
 			a.NoError(err)
 		} else if a.Error(err) {
 			a.Contains(err.Error(), "backwards")

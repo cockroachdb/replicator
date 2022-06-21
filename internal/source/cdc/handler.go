@@ -58,9 +58,8 @@ type Handler struct {
 	Appliers      types.Appliers      // Update tables within TargetDb.
 	Authenticator types.Authenticator // Access checks.
 	Pool          *pgxpool.Pool       // Access to the target cluster.
+	Resolvers     types.Resolvers     // Record resolved timestamps.
 	Stores        types.Stagers       // Record incoming json blobs.
-	Swapper       types.TimeKeeper    // Tracks named timestamps.
-	Watchers      types.Watchers      // Schema data.
 }
 
 // A request is configured by the various parseURL methods in Handler.
