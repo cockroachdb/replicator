@@ -57,20 +57,23 @@ func TestMYLogical(t *testing.T) {
 func testMYLogical(t *testing.T, immediate bool) {
 	a := assert.New(t)
 
-	ctx, info, cancel := sinktest.Context()
-	defer cancel()
-	crdbPool := info.Pool()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	// Create a basic test fixture.
+	fixture, cancel, err := sinktest.NewBaseFixture()
 	if !a.NoError(err) {
 		return
 	}
+	defer cancel()
+
+	ctx := fixture.Context
+	dbName := fixture.TestDB.Ident()
+	crdbPool := fixture.Pool
 
 	config := &Config{
 		Config: logical.Config{
 			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
 			Immediate:          immediate,
 			RetryDelay:         10 * time.Second,
+			StagingDB:          fixture.StagingDB.Ident(),
 			TargetConn:         crdbPool.Config().ConnString(),
 			TargetDB:           dbName,
 			ConsistentPointKey: clientID,
@@ -110,7 +113,7 @@ func testMYLogical(t *testing.T, immediate bool) {
 		return
 	}
 
-	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool)
+	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.StagingDB.Ident())
 	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
@@ -141,12 +144,11 @@ func testMYLogical(t *testing.T, immediate bool) {
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	connCtx, cancelConn := context.WithCancel(ctx)
-	defer cancelConn()
-	_, stopped, err := NewConn(connCtx, config)
+	loop, cancelLoop, err := Start(ctx, config)
 	if !a.NoError(err) {
 		return
 	}
+	defer cancelLoop()
 
 	for {
 		var count int
@@ -218,11 +220,11 @@ func testMYLogical(t *testing.T, immediate bool) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	cancelConn()
+	cancelLoop()
 	select {
 	case <-ctx.Done():
 		a.Fail("cancelConn timed out")
-	case <-stopped:
+	case <-loop.Stopped():
 		// OK
 	}
 }
@@ -317,20 +319,23 @@ func TestDataTypes(t *testing.T) {
 		{`year`, ``, `string`, []interface{}{"2022"}},
 	}
 
-	ctx, info, cancel := sinktest.Context()
-	defer cancel()
-	crdbPool := info.Pool()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	// Create a basic test fixture.
+	fixture, cancel, err := sinktest.NewBaseFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
+
+	ctx := fixture.Context
+	dbName := fixture.TestDB.Ident()
+	crdbPool := fixture.Pool
+
 	config := &Config{
 		Config: logical.Config{
 			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
 			Immediate:          false,           // we care about transaction semantics
 			RetryDelay:         10 * time.Second,
+			StagingDB:          fixture.StagingDB.Ident(),
 			TargetConn:         crdbPool.Config().ConnString(),
 			TargetDB:           dbName,
 			ConsistentPointKey: clientID,
@@ -352,7 +357,7 @@ func TestDataTypes(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
-	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool)
+	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.StagingDB.Ident())
 	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
@@ -410,12 +415,12 @@ func TestDataTypes(t *testing.T) {
 		}
 	}
 
-	connCtx, cancelConn := context.WithCancel(ctx)
-	defer cancelConn()
-	_, stopped, err := NewConn(connCtx, config)
+	// Start the connection, to demonstrate that we can backfill pending mutations.
+	loop, cancelLoop, err := Start(ctx, config)
 	if !a.NoError(err) {
 		return
 	}
+	defer cancelLoop()
 
 	// Wait for rows to show up.
 	for idx, tc := range tcs {
@@ -436,9 +441,9 @@ func TestDataTypes(t *testing.T) {
 		})
 	}
 
-	cancelConn()
+	cancelLoop()
 	select {
-	case <-stopped:
+	case <-loop.Stopped():
 	case <-ctx.Done():
 	}
 }
@@ -523,7 +528,11 @@ func setupMYPool(config *Config) (*client.Pool, func(), error) {
 }
 
 func initReplication(
-	ctx context.Context, flavor string, myPool *client.Pool, crdbPool pgxtype.Querier,
+	ctx context.Context,
+	flavor string,
+	myPool *client.Pool,
+	crdbPool pgxtype.Querier,
+	stagingDB ident.Ident,
 ) (string, error) {
 	var gtidSet string
 	switch flavor {
@@ -553,7 +562,7 @@ func initReplication(
 		}
 	}
 
-	tbl := ident.NewTable(ident.StagingDB, ident.Public, ident.New("memo"))
+	tbl := ident.NewTable(stagingDB, ident.Public, ident.New("memo"))
 	cp, err := memo.New(ctx, crdbPool, tbl)
 	if err != nil {
 		return "", err

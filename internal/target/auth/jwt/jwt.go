@@ -43,11 +43,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"flag"
-	"fmt"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -100,64 +96,6 @@ type authenticator struct {
 }
 
 var _ types.Authenticator = (*authenticator)(nil)
-
-// New returns a JWT-based Authenticator.
-//
-// The cancel callback is guaranteed to be non-nil.
-func New(
-	ctx context.Context, db pgxtype.Querier, stagingDB ident.Ident,
-) (auth types.Authenticator, cancel func(), err error) {
-	cancel = func() {}
-
-	keyTable := ident.NewTable(stagingDB, ident.Public, PublicKeysTable)
-	revokedTable := ident.NewTable(stagingDB, ident.Public, RevokedIdsTable)
-
-	// Boostrap the schema.
-	if _, err = db.Exec(ctx, fmt.Sprintf(ensureKeysTemplate, keyTable)); err != nil {
-		err = errors.WithStack(err)
-		return
-	}
-	if _, err = db.Exec(ctx, fmt.Sprintf(ensureRevokedTemplate, revokedTable)); err != nil {
-		err = errors.WithStack(err)
-		return
-	}
-
-	impl := &authenticator{}
-	impl.sql.selectKeys = fmt.Sprintf(selectKeysTemplate, keyTable)
-	impl.sql.selectRevoked = fmt.Sprintf(selectRevokedTemplate, revokedTable)
-
-	// Initial data load also sets up fields in the mu struct.
-	if err = impl.refresh(ctx, db); err != nil {
-		return
-	}
-
-	// Start a refresh loop that will also listen for HUP signals.
-	if *RefreshDelay > 0 {
-		var background context.Context
-		background, cancel = context.WithCancel(context.Background())
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGHUP)
-		go func(ctx context.Context) {
-			defer close(ch)
-			defer signal.Stop(ch)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ch:
-					log.Debug("reloading JWT data due to SIGHUP")
-				case <-time.After(*RefreshDelay):
-				}
-				if err := impl.refresh(ctx, db); err != nil {
-					log.WithError(err).Warn("could not refresh JWT data")
-				}
-			}
-		}(background)
-	}
-
-	auth = impl
-	return
-}
 
 // Check implements types.Authenticator.
 func (a *authenticator) Check(

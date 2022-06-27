@@ -31,13 +31,6 @@ type factory struct {
 
 var _ types.Watchers = (*factory)(nil)
 
-// NewWatchers creates a types.Watchers factory.
-func NewWatchers(pool *pgxpool.Pool) (_ types.Watchers, cancel func()) {
-	w := &factory{pool: pool}
-	w.mu.data = make(map[ident.Ident]*watcher)
-	return w, w.close
-}
-
 // Get creates or returns a memoized watcher for the given database.
 func (f *factory) Get(ctx context.Context, db ident.Ident) (types.Watcher, error) {
 	if ret := f.getUnlocked(db); ret != nil {

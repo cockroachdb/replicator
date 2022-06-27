@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package stage
+package stage_test
 
 import (
 	"fmt"
@@ -26,28 +26,29 @@ import (
 // TestPutAndDrain will insert and dequeue a batch of Mutations.
 func TestPutAndDrain(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	a.NotEmpty(dbInfo.Version())
-	defer cancel()
 
-	targetDB, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	factory := NewStagers(dbInfo.Pool(), ident.StagingDB)
+	ctx := fixture.Context
+	a.NotEmpty(fixture.DBInfo.Version())
+
+	targetDB := fixture.TestDB.Ident()
 
 	dummyTarget := ident.NewTable(
 		targetDB, ident.Public, ident.New("target"))
 
-	s, err := factory.Get(ctx, dummyTarget)
+	s, err := fixture.Stagers.Get(ctx, dummyTarget)
 	if !a.NoError(err) {
 		return
 	}
 	a.NotNil(s)
 
-	stagingTable := s.(*stage).stage
+	// Steal implementation details to cross-check DB state.
+	stagingTable := s.(interface{ GetTable() ident.Table }).GetTable()
 
 	// Cook test data.
 	total := 3 * batches.Size()
@@ -61,24 +62,24 @@ func TestPutAndDrain(t *testing.T) {
 	}
 
 	// Insert.
-	a.NoError(s.Store(ctx, dbInfo.Pool(), muts))
+	a.NoError(s.Store(ctx, fixture.Pool, muts))
 
 	// Sanity-check table.
-	count, err := sinktest.GetRowCount(ctx, dbInfo.Pool(), stagingTable)
+	count, err := sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(total, count)
 
 	// Ensure that data insertion is idempotent.
-	a.NoError(s.Store(ctx, dbInfo.Pool(), muts))
+	a.NoError(s.Store(ctx, fixture.Pool, muts))
 
 	// Sanity-check table.
-	count, err = sinktest.GetRowCount(ctx, dbInfo.Pool(), stagingTable)
+	count, err = sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(total, count)
 
 	// Dequeue.
 	ret, err := s.Drain(ctx,
-		dbInfo.Pool(),
+		fixture.Pool,
 		hlc.Zero(),
 		hlc.New(int64(1000*total+1), 0),
 	)
@@ -86,7 +87,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.Len(ret, total)
 
 	// Should be empty now.
-	count, err = sinktest.GetRowCount(ctx, dbInfo.Pool(), stagingTable)
+	count, err = sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(0, count)
 }
@@ -107,21 +108,19 @@ func BenchmarkStage(b *testing.B) {
 }
 
 func benchmarkStage(b *testing.B, batchSize int) {
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	targetDB, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer cancel()
 
-	factory := NewStagers(dbInfo.Pool(), ident.StagingDB)
+	ctx := fixture.Context
+	targetDB := fixture.TestDB.Ident()
 
 	dummyTarget := ident.NewTable(
 		targetDB, ident.Public, ident.New("target"))
 
-	s, err := factory.Get(ctx, dummyTarget)
+	s, err := fixture.Stagers.Get(ctx, dummyTarget)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -138,7 +137,7 @@ func benchmarkStage(b *testing.B, batchSize int) {
 				batch[i] = mut
 				atomic.AddInt64(&allBytes, int64(len(mut.Data)+len(mut.Key)))
 			}
-			if err := s.Store(ctx, dbInfo.Pool(), batch); err != nil {
+			if err := s.Store(ctx, fixture.Pool, batch); err != nil {
 				b.Fatal(err)
 			}
 		}

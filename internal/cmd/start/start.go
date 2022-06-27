@@ -12,23 +12,35 @@
 package start
 
 import (
-	"flag"
-
 	"github.com/cockroachdb/cdc-sink/internal/source/server"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
 // Command returns the command to start the server.
 func Command() *cobra.Command {
+	var cfg server.Config
 	cmd := &cobra.Command{
 		Args:  cobra.NoArgs,
 		Short: "start the server",
 		Use:   "start",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return server.Main(cmd.Context())
+			s, cancel, err := server.NewServer(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
+			defer cancel()
+
+			// Pause any log.Exit() or log.Fatal() until the server exits.
+			log.DeferExitHandler(func() {
+				cancel()
+				<-s.Stopped()
+			})
+			<-s.Stopped()
+			return nil
 		},
 	}
-	// TODO: Move configuration from globals?
-	cmd.Flags().AddGoFlagSet(flag.CommandLine)
+	cfg.Bind(cmd.Flags())
+
 	return cmd
 }

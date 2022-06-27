@@ -18,14 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/reject"
-	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/target/stage"
-	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -41,54 +34,19 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Helper()
 	a := assert.New(t)
 
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := newTestFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	tableInfo, err := sinktest.CreateTable(ctx, dbName,
+	ctx := fixture.Context
+	h := fixture.Handler
+
+	tableInfo, err := fixture.CreateTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	if !a.NoError(err) {
 		return
-	}
-
-	swapper, cancel, err := timekeeper.NewTimeKeeper(ctx, dbInfo.Pool(), Resolved)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
-
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
-
-	appliers, cancel := apply.NewAppliers(watchers)
-	defer cancel()
-
-	stagers := stage.NewStagers(dbInfo.Pool(), ident.StagingDB)
-
-	resolvers, cancel, err := resolve.New(ctx, resolve.Config{
-		Appliers:   appliers,
-		MetaTable:  resolve.Table,
-		Pool:       dbInfo.Pool(),
-		Stagers:    stagers,
-		Timekeeper: swapper,
-		Watchers:   watchers,
-	})
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
-
-	h := &Handler{
-		Appliers:      appliers,
-		Authenticator: trust.New(),
-		Pool:          dbInfo.Pool(),
-		Resolvers:     resolvers,
-		Stores:        stagers,
 	}
 
 	// In async mode, we want to reach into the implementation to

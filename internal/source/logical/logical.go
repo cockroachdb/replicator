@@ -16,30 +16,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/memo"
 	"github.com/cockroachdb/cdc-sink/internal/util/serial"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
 
-// impl provides a common feature set for processing single-stream,
+// Loop provides a common feature set for processing single-stream,
 // logical replication feeds. This can be used to build feeds from any
 // data source which has well-defined "consistent points", such as
 // write-ahead-log offsets or explicit transaction ids.
-//
-// impl is not internally synchronized; it assumes that it is being
+type Loop struct {
+	loop *loop
+}
+
+// Stopped returns a channel that is closed when the Loop has shut down.
+func (l *Loop) Stopped() <-chan struct{} {
+	return l.loop.stopped
+}
+
+// loop is not internally synchronized; it assumes that it is being
 // driven by a serial stream of data.
-type impl struct {
+type loop struct {
 	// the key used to persist the consistentPoint stamp.
 	consistentPointKey string
 	// Locked on mu.
@@ -63,6 +66,7 @@ type impl struct {
 	serializer *serial.Pool
 	// Tracks when it is time to update the consistentPoint.
 	standbyDeadline time.Time
+	stopped         chan struct{}
 	// The SQL database we're going to be writing into.
 	targetDB ident.Ident
 	// Used to update the consistentPoint in the target database.
@@ -78,110 +82,9 @@ type impl struct {
 	}
 }
 
-var (
-	memoTbl        = ident.NewTable(ident.StagingDB, ident.Public, ident.New("memo"))
-	standbyTimeout = 5 * time.Second
-)
+var standbyTimeout = 5 * time.Second
 
-// Start constructs a new replication loop that will process messages
-// until the context is cancelled. The returned channel can be monitored
-// to know when the loop has halted.
-func Start(
-	ctx context.Context, config *Config, dialect Dialect,
-) (stopped <-chan struct{}, _ error) {
-	if err := config.Preflight(); err != nil {
-		return nil, err
-	}
-
-	// Bring up connection to target database.
-	targetCfg, err := pgxpool.ParseConfig(config.TargetConn)
-	if err != nil {
-		return nil, errors.Wrapf(err, "could not parse %q", config.TargetConn)
-	}
-	// Identify traffic.
-	targetCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		_, err := conn.Exec(ctx, "SET application_name=$1", "cdc-sink")
-		return err
-	}
-	// Bigger pools are better for CRDB.
-	targetCfg.MaxConns = int32(config.TargetDBConns)
-	// Ensure connection diversity through long-lived loadbalancers.
-	targetCfg.MaxConnLifetime = 10 * time.Minute
-	// Keep one spare connection.
-	targetCfg.MinConns = 1
-
-	targetPool, err := pgxpool.ConnectConfig(ctx, targetCfg)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not connect to CockroachDB")
-	}
-
-	watchers, cancelWatchers := schemawatch.NewWatchers(targetPool)
-	appliers, cancelAppliers := apply.NewAppliers(watchers)
-
-	loop := &impl{
-		dialect:            dialect,
-		retryDelay:         config.RetryDelay,
-		targetDB:           config.TargetDB,
-		consistentPointKey: config.ConsistentPointKey,
-		standbyDeadline:    time.Now().Add(standbyTimeout),
-		targetPool:         targetPool,
-	}
-	if config.ConsistentPointKey != "" {
-		loop.memo, err = memo.New(ctx, targetPool, memoTbl)
-		if err != nil {
-			return nil, errors.Wrap(err, "could not create memo table")
-		}
-		cp, err := loop.retrieveConsistentPoint(ctx, loop.memo,
-			config.ConsistentPointKey,
-			[]byte(config.DefaultConsistentPoint))
-		if err != nil {
-			return nil, errors.Wrap(err, "could not restore consistentPoint")
-		}
-		loop.mu.consistentPoint, err = dialect.UnmarshalStamp([]byte(cp))
-		if err != nil {
-			return nil, errors.Wrap(err, "could not restore consistentPoint")
-		}
-	}
-
-	loop.consistentPointUpdated = sync.NewCond(&loop.mu)
-
-	// If the user wants to preserve transaction boundaries, we inject a
-	// helper which forces all database operations to be applied within
-	// a single transaction.
-	var applyQuerier pgxtype.Querier = targetPool
-	applyShards := 16
-	if !config.Immediate {
-		loop.serializer = &serial.Pool{Pool: targetPool}
-		applyQuerier = loop.serializer
-		applyShards = 1
-	}
-	var cancelFan func()
-	loop.fan, cancelFan, err = fan.New(
-		appliers,
-		config.ApplyTimeout,
-		applyQuerier,
-		loop.setConsistentPoint,
-		applyShards,
-		config.BytesInFlight,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	stopper := make(chan struct{})
-	go func() {
-		loop.run(ctx)
-		cancelFan()
-		cancelAppliers()
-		cancelWatchers()
-		targetPool.Close()
-		close(stopper)
-	}()
-
-	return stopper, nil
-}
-
-func (l *impl) saveConsistentPoint(ctx context.Context) error {
+func (l *loop) saveConsistentPoint(ctx context.Context) error {
 	if l.memo == nil {
 		return nil
 	}
@@ -193,28 +96,29 @@ func (l *impl) saveConsistentPoint(ctx context.Context) error {
 	return l.memo.Put(ctx, l.targetPool, l.consistentPointKey, m)
 }
 
-func (l *impl) retrieveConsistentPoint(
+func (l *loop) retrieveConsistentPoint(
 	ctx context.Context, memo types.Memo, sourceID string, defaultValue []byte,
 ) ([]byte, error) {
 	if memo == nil {
 		return []byte(""), nil
 	}
-	return memo.Get(ctx, l.targetPool, sourceID, []byte(defaultValue))
+	return memo.Get(ctx, l.targetPool, sourceID, defaultValue)
 }
 
-func (l *impl) GetConsistentPoint() stamp.Stamp {
+// GetConsistentPoint implements State.
+func (l *loop) GetConsistentPoint() stamp.Stamp {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.mu.consistentPoint
 }
 
 // GetTargetDB implements State.
-func (l *impl) GetTargetDB() ident.Ident {
+func (l *loop) GetTargetDB() ident.Ident {
 	return l.targetDB
 }
 
 // OnBegin implements Events.
-func (l *impl) OnBegin(ctx context.Context, point stamp.Stamp) error {
+func (l *loop) OnBegin(ctx context.Context, point stamp.Stamp) error {
 	if l.openTransaction != nil {
 		return errors.Errorf("OnBegin already called at %s", l.openTransaction)
 	}
@@ -226,7 +130,7 @@ func (l *impl) OnBegin(ctx context.Context, point stamp.Stamp) error {
 }
 
 // OnCommit implements Events.
-func (l *impl) OnCommit(ctx context.Context) error {
+func (l *loop) OnCommit(ctx context.Context) error {
 	if l.openTransaction == nil {
 		return errors.New("OnCommit called without matching OnBegin")
 	}
@@ -276,12 +180,12 @@ func (l *impl) OnCommit(ctx context.Context) error {
 }
 
 // OnData implements Events.
-func (l *impl) OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error {
+func (l *loop) OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error {
 	return l.fan.Enqueue(ctx, l.openTransaction, target, muts)
 }
 
 // OnRollback implements Events.
-func (l *impl) OnRollback(ctx context.Context, msg Message) error {
+func (l *loop) OnRollback(_ context.Context, msg Message) error {
 	if !IsRollback(msg) {
 		return errors.New("the rollback message must be passed to OnRollback")
 	}
@@ -290,7 +194,7 @@ func (l *impl) OnRollback(ctx context.Context, msg Message) error {
 }
 
 // reset is called before every attempt at running the replication loop.
-func (l *impl) reset() {
+func (l *loop) reset() {
 	l.fan.Reset()
 	l.openTransaction = nil
 	if s := l.serializer; s != nil {
@@ -300,7 +204,7 @@ func (l *impl) reset() {
 }
 
 // run blocks while the connection is processing messages.
-func (l *impl) run(ctx context.Context) {
+func (l *loop) run(ctx context.Context) {
 	defer log.Info("replication loop shut down")
 	for {
 		// Ensure that we're in a clear state when recovering.
@@ -339,7 +243,7 @@ func (l *impl) run(ctx context.Context) {
 		// restart the source goroutine.
 		group.Go(func() error {
 			err := l.dialect.Process(groupCtx, ch, l)
-			if err != nil {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				log.WithError(err).Error("error while applying replication messages; stopping")
 			}
 			return err
@@ -361,7 +265,7 @@ func (l *impl) run(ctx context.Context) {
 	}
 }
 
-func (l *impl) setConsistentPoint(p stamp.Stamp) {
+func (l *loop) setConsistentPoint(p stamp.Stamp) {
 	l.mu.Lock()
 	l.mu.consistentPoint = p
 	l.mu.Unlock()

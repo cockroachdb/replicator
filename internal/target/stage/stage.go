@@ -145,6 +145,9 @@ func (s *stage) Drain(
 	return ret, nil
 }
 
+// GetTable returns the table that the stage is storing into.
+func (s *stage) GetTable() ident.Table { return s.stage }
+
 // The extra cast on $4 is because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468
 const putTemplate = `
