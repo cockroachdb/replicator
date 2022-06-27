@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package schemawatch
+package schemawatch_test
 
 // This file contains code repackaged from sql_test.go.
 
@@ -18,22 +18,19 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetColumns(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
 
-	// Create the test db
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
+
+	ctx := fixture.Context
 
 	type testcase struct {
 		tableSchema string
@@ -128,7 +125,7 @@ func TestGetColumns(t *testing.T) {
 
 	// Virtual columns not supported before v21.1.
 	// Oldest target is v20.2.
-	if !strings.Contains(dbInfo.Version(), "v20.2.") {
+	if !strings.Contains(fixture.DBInfo.Version(), "v20.2.") {
 		testcases = append(testcases,
 			testcase{
 				tableSchema: "a INT, b INT, " +
@@ -145,13 +142,13 @@ func TestGetColumns(t *testing.T) {
 		t.Run(fmt.Sprintf("%d:%s", i, test.tableSchema), func(t *testing.T) {
 			a := assert.New(t)
 
-			tableName := ident.NewTable(dbName, ident.Public, ident.Newf("test_%d", i))
-			if !a.NoError(retry.Execute(ctx, dbInfo.Pool(),
-				fmt.Sprintf(`CREATE TABLE %s ( %s )`, tableName, test.tableSchema))) {
+			ti, err := fixture.CreateTable(ctx, fmt.Sprintf(`CREATE TABLE %%s ( %s )`, test.tableSchema))
+			if !a.NoError(err) {
 				return
 			}
-			colData, err := getColumns(ctx, dbInfo.Pool(), tableName)
-			if !a.NoError(err) {
+			tableName := ti.Name()
+			colData, ok := fixture.Watcher.Snapshot(tableName.AsSchema())[tableName]
+			if !a.Truef(ok, "Snapshot() did not return info for %s", tableName) {
 				return
 			}
 			var primaryKeys, dataCols []string

@@ -12,30 +12,14 @@ package resolve
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
-
-// Config is passed to New.
-type Config struct {
-	Appliers   types.Appliers
-	MetaTable  ident.Table
-	Pool       *pgxpool.Pool
-	Stagers    types.Stagers
-	Timekeeper types.TimeKeeper
-	Watchers   types.Watchers
-}
-
-// Table is the usual choice for the timestamp table in normal operating
-// conditions.
-var Table = ident.NewTable(ident.StagingDB, ident.Public, ident.New("pending_timestamps"))
 
 type factory struct {
 	appliers   types.Appliers
@@ -55,39 +39,6 @@ type factory struct {
 }
 
 var _ types.Resolvers = (*factory)(nil)
-
-// New constructs a Resolver factory.
-func New(ctx context.Context, cfg Config) (_ types.Resolvers, cancel func(), _ error) {
-	if _, err := cfg.Pool.Exec(ctx, fmt.Sprintf(schema, cfg.MetaTable)); err != nil {
-		return nil, func() {}, errors.WithStack(err)
-	}
-
-	f := &factory{
-		appliers:   cfg.Appliers,
-		metaTable:  cfg.MetaTable,
-		pool:       cfg.Pool,
-		stagers:    cfg.Stagers,
-		timekeeper: cfg.Timekeeper,
-		watchers:   cfg.Watchers,
-	}
-	f.mu.instances = make(map[ident.Schema]*resolve)
-
-	// Run the bootstrap in a background context.
-	bootstrapCtx, cancelBoot := context.WithCancel(context.Background())
-	go f.bootstrapResolvers(bootstrapCtx)
-
-	return f, func() {
-		defer cancelBoot()
-
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		for _, fn := range f.mu.cleanup {
-			fn()
-		}
-		f.mu.cleanup = nil
-		f.mu.instances = make(map[ident.Schema]*resolve)
-	}, nil
-}
 
 // Get implements types.Resolvers.
 func (f *factory) Get(ctx context.Context, target ident.Schema) (types.Resolver, error) {
@@ -133,7 +84,7 @@ func (f *factory) getUnlocked(target ident.Schema) (types.Resolver, bool) {
 // eventually be processed.
 func (f *factory) bootstrapResolvers(ctx context.Context) {
 	for {
-		toEnsure, err := scanForTargetSchemas(ctx, f.pool, f.metaTable)
+		toEnsure, err := ScanForTargetSchemas(ctx, f.pool, f.metaTable)
 		if err != nil {
 			log.WithError(err).Warn("could not scan for bootstrap schemas")
 		}

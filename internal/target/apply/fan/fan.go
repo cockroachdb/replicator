@@ -26,11 +26,50 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// A ConsistentCallback is passed to New
+// A ConsistentCallback is passed to Fans.New.
 type ConsistentCallback func(stamp.Stamp)
 
+// Fans is a factory for constructing Fan instances.
+type Fans struct {
+	Appliers types.Appliers
+	Pool     pgxtype.Querier
+}
+
+// New returns a new Fan-out helper with the given configuration.
+func (f *Fans) New(
+	applyTimeout time.Duration, onConsistent ConsistentCallback, shardCount int, bytesInFlight int,
+) (_ *Fan, cancel func(), _ error) {
+	if onConsistent == nil {
+		onConsistent = func(stamp.Stamp) {}
+	}
+
+	ret := &Fan{
+		appliers:          f.Appliers,
+		applyTimeout:      applyTimeout,
+		backpressureBytes: bytesInFlight,
+		onConsistent:      onConsistent,
+		pool:              f.Pool,
+		shardCount:        shardCount,
+		stopped:           make(chan struct{}),
+		wakeup:            make(chan struct{}, 1),
+	}
+	// Initialize other data members.
+	ret.Reset()
+
+	go ret.flushLoop()
+
+	return ret, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := ret.stop(ctx); err != nil {
+			log.WithError(err).Warn("fan helper did not shut down cleanly")
+		}
+	}, nil
+}
+
 // Fan allows a serial stream of mutations to be applied across
-// concurrent SQL connections to the target cluster.
+// concurrent SQL connections to the target cluster. Instances of Fan
+// are constructed via Fans.
 type Fan struct {
 	appliers          types.Appliers
 	applyTimeout      time.Duration
@@ -50,44 +89,6 @@ type Fan struct {
 		minMap       *stamp.MinMap // Keys are *bucket.
 		stopFlag     bool          // Set when canceled.
 	}
-}
-
-// New constructs a Fan instance and returns a cancellation
-// function which will perform a graceful shutdown.
-func New(
-	a types.Appliers,
-	applyTimeout time.Duration,
-	pool pgxtype.Querier,
-	onConsistent ConsistentCallback,
-	shardCount int,
-	bytesInFlight int,
-) (_ *Fan, cancel func(), _ error) {
-	if onConsistent == nil {
-		onConsistent = func(stamp.Stamp) {}
-	}
-
-	ret := &Fan{
-		appliers:          a,
-		applyTimeout:      applyTimeout,
-		backpressureBytes: bytesInFlight,
-		onConsistent:      onConsistent,
-		pool:              pool,
-		shardCount:        shardCount,
-		stopped:           make(chan struct{}),
-		wakeup:            make(chan struct{}, 1),
-	}
-	// Initialize other data members.
-	ret.Reset()
-
-	go ret.flushLoop()
-
-	return ret, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := ret.stop(ctx); err != nil {
-			log.WithError(err).Warn("fan helper did not shut down cleanly")
-		}
-	}, nil
 }
 
 // Enqueue mutations with the given stamp.

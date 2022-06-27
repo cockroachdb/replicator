@@ -13,7 +13,6 @@ package server
 import (
 	"net/url"
 	"path"
-	"strings"
 	"testing"
 	"time"
 
@@ -52,58 +51,49 @@ func testIntegration(t *testing.T, immediate bool) {
 		}
 	}()
 
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	sourceDB, cancel, err := sinktest.CreateDB(ctx)
+	// Create a source database connection.
+	sourceFixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	targetDB, cancel, err := sinktest.CreateDB(ctx)
+	sourceCtx := sourceFixture.Context
+
+	// The target fixture contains the cdc-sink server.
+	targetFixture, cancel, err := newTestFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	// Prefer the webhook format for current versions of CRDB.
-	useWebhook := true
-	if strings.Contains(dbInfo.Version(), "v20.2.") || strings.Contains(dbInfo.Version(), "v21.1.") {
-		useWebhook = false
-	}
-
-	*GenerateSelfSigned = useWebhook
-	defer func() { *GenerateSelfSigned = false }()
-
-	// Pick an ephemeral port.
-	srv, stopped, err := newServer(ctx, "127.0.0.1:0", dbInfo.Pool().Config().ConnString())
-	if !a.NoError(err) {
-		return
-	}
-	// Run the server loop in the background.
-	go srv.serve()
+	targetCtx := targetFixture.Context
+	targetDB := targetFixture.TestDB.Ident()
+	targetPool := targetFixture.Pool
+	useWebhook := targetFixture.Config.GenerateSelfSigned
 
 	// Set up source and target tables.
-	source, err := sinktest.CreateTable(ctx, sourceDB, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
+	source, err := sourceFixture.CreateTable(sourceCtx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
 	if !a.NoError(err) {
 		return
 	}
 
-	target := sinktest.NewTableInfo(dbInfo, ident.NewTable(targetDB, ident.Public, source.Name().Table()))
-	if !a.NoError(target.Exec(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")) {
+	// Since we're creating the target table without using the helper
+	// CreateTable(), we need to manually refresh the target's Watcher.
+	target := sinktest.NewTableInfo(targetFixture.DBInfo, ident.NewTable(targetDB, ident.Public, source.Name().Table()))
+	if !a.NoError(target.Exec(targetCtx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")) {
 		return
 	}
+	a.NoError(targetFixture.Watcher.Refresh(targetCtx, targetPool))
 
 	// Add base data to the source table.
-	a.NoError(source.Exec(ctx, "INSERT INTO %s (pk, val) VALUES (1, 'one')"))
-	ct, err := source.RowCount(ctx)
+	a.NoError(source.Exec(sourceCtx, "INSERT INTO %s (pk, val) VALUES (1, 'one')"))
+	ct, err := source.RowCount(sourceCtx)
 	a.NoError(err)
 	a.Equal(1, ct)
 
 	// Allow access.
-	method, priv, err := jwt.InsertTestingKey(ctx, dbInfo.Pool(), srv.authenticator, ident.StagingDB)
-	defer cancel()
+	method, priv, err := jwt.InsertTestingKey(targetCtx, targetPool, targetFixture.Authenticator, targetFixture.StagingDB)
 	if !a.NoError(err) {
 		return
 	}
@@ -125,7 +115,7 @@ func testIntegration(t *testing.T, immediate bool) {
 	if useWebhook {
 		feedURL = url.URL{
 			Scheme:   "webhook-https",
-			Host:     srv.listener.Addr().String(),
+			Host:     targetFixture.Listener.Addr().String(),
 			Path:     path.Join(target.Name().Database().Raw(), target.Name().Schema().Raw()),
 			RawQuery: params.Encode(),
 		}
@@ -140,7 +130,7 @@ func testIntegration(t *testing.T, immediate bool) {
 		params.Set("access_token", token)
 		feedURL = url.URL{
 			Scheme:   "experimental-http",
-			Host:     srv.listener.Addr().String(),
+			Host:     targetFixture.Listener.Addr().String(),
 			Path:     path.Join(target.Name().Database().Raw(), target.Name().Schema().Raw()),
 			RawQuery: params.Encode(),
 		}
@@ -149,13 +139,13 @@ func testIntegration(t *testing.T, immediate bool) {
 			"WITH updated,resolved='1s'"
 	}
 	log.Debugf("changefeed URL is %s", feedURL.String())
-	if !a.NoError(source.Exec(ctx, createStmt)) {
+	if !a.NoError(source.Exec(sourceCtx, createStmt)) {
 		return
 	}
 
 	// Wait for the backfilled value.
 	for {
-		ct, err := target.RowCount(ctx)
+		ct, err := target.RowCount(targetCtx)
 		if !a.NoError(err) {
 			return
 		}
@@ -167,14 +157,14 @@ func testIntegration(t *testing.T, immediate bool) {
 	}
 
 	// Insert an additional value
-	a.NoError(source.Exec(ctx, "INSERT INTO %s (pk, val) VALUES (2, 'two')"))
-	ct, err = source.RowCount(ctx)
+	a.NoError(source.Exec(sourceCtx, "INSERT INTO %s (pk, val) VALUES (2, 'two')"))
+	ct, err = source.RowCount(sourceCtx)
 	a.NoError(err)
 	a.Equal(2, ct)
 
 	// Wait for the streamed value.
 	for {
-		ct, err := target.RowCount(ctx)
+		ct, err := target.RowCount(targetCtx)
 		if !a.NoError(err) {
 			return
 		}

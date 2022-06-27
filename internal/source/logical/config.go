@@ -15,6 +15,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -35,6 +36,8 @@ type Config struct {
 	// replication receiver until sufficient number of other mutations
 	// have been applied.
 	BytesInFlight int
+	// Used in testing to inject errors during processing.
+	ChaosProb float32
 	// If present, the key used to persist consistent point identifiers.
 	ConsistentPointKey string
 	// The default Consistent Point to use for replication.
@@ -46,6 +49,9 @@ type Config struct {
 	// The amount of time to sleep between replication-loop retries.
 	// If zero, a default value will be used.
 	RetryDelay time.Duration
+	// The name of a SQL database in the target cluster to store
+	// metadata in.
+	StagingDB ident.Ident
 	// Connection string for the target cluster.
 	TargetConn string
 	// The SQL database in the target cluster to write into.
@@ -53,6 +59,24 @@ type Config struct {
 	// The number of connections to the target database. If zero, a
 	// default value will be used.
 	TargetDBConns int
+
+	stagingDB string // Temporary storage for StagingDB.
+	targetDB  string // Temporary storage for TargetDB.
+}
+
+// Bind adds flags to the set.
+func (c *Config) Bind(f *pflag.FlagSet) {
+	f.DurationVar(&c.ApplyTimeout, "applyTimeout", 30*time.Second,
+		"the maximum amount of time to wait for an update to be applied")
+	f.IntVar(&c.BytesInFlight, "bytesInFlight", 10*1024*1024,
+		"apply backpressure when amount of in-flight mutation data reaches this limit")
+	f.BoolVar(&c.Immediate, "immediate", false, "apply data without waiting for transaction boundaries")
+	f.DurationVar(&c.RetryDelay, "retryDelay", 10*time.Second,
+		"the amount of time to sleep between replication retries")
+	f.StringVar(&c.stagingDB, "stagingDB", "_cdc_sink", "a SQL database to store metadata in")
+	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
+	f.StringVar(&c.targetDB, "targetDB", "", "the SQL database in the target cluster to update")
+	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")
 }
 
 // Preflight ensures that unset configuration options have sane defaults
@@ -68,11 +92,20 @@ func (c *Config) Preflight() error {
 	if c.RetryDelay == 0 {
 		c.RetryDelay = defaultRetryDelay
 	}
+	if c.StagingDB.IsEmpty() {
+		if c.stagingDB == "" {
+			return errors.New("no staging database specified")
+		}
+		c.StagingDB = ident.New(c.stagingDB)
+	}
 	if c.TargetConn == "" {
 		return errors.New("no target connection string specified")
 	}
 	if c.TargetDB.IsEmpty() {
-		return errors.New("no target database specified")
+		if c.targetDB == "" {
+			return errors.New("no target database specified")
+		}
+		c.TargetDB = ident.New(c.targetDB)
 	}
 	if c.TargetDBConns == 0 {
 		c.TargetDBConns = defaultTargetDBConns

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package timekeeper
+package timekeeper_test
 
 import (
 	"testing"
@@ -22,30 +22,24 @@ import (
 // This test applies a sequence of timestamp puts to the same key.
 func TestPut(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	a.NotEmpty(dbInfo.Version())
-	defer cancel()
 
-	targetDB, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	table := ident.NewTable(targetDB, ident.Public, ident.New("timestamps"))
-	s, cancel, err := NewTimeKeeper(ctx, dbInfo.Pool(), table)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
+	ctx := fixture.Context
+	tk := fixture.TimeKeeper
+	schema := ident.NewSchema(ident.New("some_db"), ident.New("some_schema"))
 
 	const count = 10
 	prev := hlc.Zero()
 	for i := 0; i <= count; i++ {
 		next := hlc.New(int64(1000*i), i)
-		found, err := s.Put(ctx,
-			dbInfo.Pool(),
-			ident.NewSchema(table.Database(), table.Schema()),
+		found, err := tk.Put(ctx,
+			fixture.Pool,
+			schema,
 			next,
 		)
 		if !a.NoError(err) {
@@ -61,22 +55,15 @@ func TestPut(t *testing.T) {
 
 func BenchmarkTimekeeper(b *testing.B) {
 	a := assert.New(b)
-	ctx, dbInfo, cancel := sinktest.Context()
-	a.NotEmpty(dbInfo.Version())
-	defer cancel()
 
-	targetDB, cancel, err := sinktest.CreateDB(ctx)
-	if !a.NoError(err) {
-		return
+	fixture, cancel, err := sinktest.NewFixture()
+	if err != nil {
+		b.Fatal(err)
 	}
 	defer cancel()
 
-	table := ident.NewTable(targetDB, ident.Public, ident.New("timestamps"))
-	tk, cancel, err := NewTimeKeeper(ctx, dbInfo.Pool(), table)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
+	ctx := fixture.Context
+	tk := fixture.TimeKeeper
 
 	s := ident.NewSchema(ident.New("db"), ident.Public)
 	var ts int64
@@ -86,7 +73,7 @@ func BenchmarkTimekeeper(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ts++
 		logical++
-		_, err := tk.Put(ctx, dbInfo.Pool(), s, hlc.New(ts, logical))
+		_, err := tk.Put(ctx, fixture.Pool, s, hlc.New(ts, logical))
 		if !a.NoError(err) {
 			return
 		}

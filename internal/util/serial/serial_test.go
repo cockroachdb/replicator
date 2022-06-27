@@ -64,11 +64,15 @@ func (u *fakeUnlockable) Unlocked() bool { return bool(*u) }
 
 func TestPool(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	a.NotEmpty(dbInfo.Version())
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
 	defer cancel()
 
-	p := &Pool{Pool: dbInfo.Pool()}
+	ctx := fixture.Context
+	p := &Pool{Pool: fixture.Pool}
 
 	t.Run("begin commit rollback", func(t *testing.T) {
 		a := assert.New(t)

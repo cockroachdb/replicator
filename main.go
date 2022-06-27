@@ -10,7 +10,8 @@
 
 package main
 
-//go:generate go run github.com/cockroachdb/crlfmt -w .
+//go:generate go run github.com/google/wire/cmd/wire gen ./...
+//go:generate go run github.com/cockroachdb/crlfmt -w -ignore _gen.go .
 
 import (
 	"context"

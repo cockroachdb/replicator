@@ -27,7 +27,6 @@ import (
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgproto3/v2"
-	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -47,10 +46,10 @@ func (s lsnStamp) MarshalText() (text []byte, err error) {
 	return []byte(strconv.FormatInt(int64(s), 10)), nil
 }
 
-// A Conn encapsulates all wire-connection behavior. It is
+// A conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
 // status updates.
-type Conn struct {
+type conn struct {
 	// Columns, as ordered by the source database.
 	columns map[ident.Table][]types.ColData
 	// The pg publication name to subscribe to.
@@ -63,85 +62,11 @@ type Conn struct {
 	sourceConfig *pgconn.Config
 }
 
-var _ logical.Dialect = (*Conn)(nil)
-
-// NewConn constructs a new pglogical replication feed.
-//
-// The feed will terminate when the context is canceled and the stopped
-// channel will be closed once shutdown is complete.
-func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struct{}, _ error) {
-	if err := config.Preflight(); err != nil {
-		return nil, nil, err
-	}
-
-	// Verify that the publication and replication slots were configured
-	// by the user. We could create the replication slot ourselves, but
-	// we want to coordinate the timing of the backup, restore, and
-	// streaming operations.
-	source, err := pgx.Connect(ctx, config.SourceConn)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "could not connect to source database")
-	}
-	defer source.Close(context.Background())
-
-	// Ensure that the requested publication exists.
-	var count int
-	if err := source.QueryRow(ctx,
-		"SELECT count(*) FROM pg_publication WHERE pubname = $1",
-		config.Publication,
-	).Scan(&count); err != nil {
-		return nil, nil, errors.WithStack(err)
-	}
-	if count != 1 {
-		return nil, nil, errors.Errorf(
-			`run CREATE PUBLICATION %s FOR ALL TABLES; in source database`,
-			config.Publication)
-	}
-	log.Tracef("validated that publication %q exists", config.Publication)
-
-	// Verify that the consumer slot exists.
-	if err := source.QueryRow(ctx,
-		"SELECT count(*) FROM pg_replication_slots WHERE slot_name = $1",
-		config.Slot,
-	).Scan(&count); err != nil {
-		return nil, nil, errors.WithStack(err)
-	}
-	if count != 1 {
-		return nil, nil, errors.Errorf(
-			"run SELECT pg_create_logical_replication_slot('%s', 'pgoutput'); in source database, "+
-				"then perform bulk data copy",
-			config.Slot)
-	}
-	log.Tracef("validated that replication slot %q exists", config.Slot)
-
-	// Copy the configuration and tweak it for replication behavior.
-	sourceConfig := source.Config().Config.Copy()
-	sourceConfig.RuntimeParams["replication"] = "database"
-
-	ret := &Conn{
-		columns:         make(map[ident.Table][]types.ColData),
-		publicationName: config.Publication,
-		relations:       make(map[uint32]ident.Table),
-		slotName:        config.Slot,
-		sourceConfig:    sourceConfig,
-	}
-	// Add chaos, for testing.
-	var dialect logical.Dialect = ret
-	if config.withChaosProb > 0 {
-		dialect = logical.WithChaos(dialect, config.withChaosProb)
-	}
-
-	stopper, err := logical.Start(ctx, &config.Config, dialect)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return ret, stopper, nil
-}
+var _ logical.Dialect = (*conn)(nil)
 
 // Process implements logical.Dialect and receives a sequence of logical
 // replication messages, or possibly a rollbackMessage.
-func (c *Conn) Process(
+func (c *conn) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	for {
@@ -199,7 +124,7 @@ func (c *Conn) Process(
 // ReadInto implements logical.Dialect, opens a replication connection,
 // and writes parsed messages into the provided channel. This method
 // also manages the keepalive protocol.
-func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state logical.State) error {
+func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state logical.State) error {
 	replConn, err := pgconn.ConnectConfig(ctx, c.sourceConfig)
 	if err != nil {
 		return errors.WithStack(err)
@@ -312,13 +237,13 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 }
 
 // UnmarshalStamp decodes a string representation of a Stamp.
-func (c *Conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
+func (c *conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
 	res, err := strconv.ParseInt(string(stamp), 0, 64)
 	return lsnStamp(res), err
 }
 
 // decodeMutation converts the incoming tuple data into a Mutation.
-func (c *Conn) decodeMutation(
+func (c *conn) decodeMutation(
 	tbl ident.Table, data *pglogrepl.TupleData, isDelete bool,
 ) (types.Mutation, error) {
 	var mut types.Mutation
@@ -378,7 +303,7 @@ func (c *Conn) decodeMutation(
 
 // onDataTuple will add an incoming row tuple to the in-memory slice,
 // possibly flushing it when the batch size limit is reached.
-func (c *Conn) onDataTuple(
+func (c *conn) onDataTuple(
 	ctx context.Context,
 	events logical.Events,
 	relation uint32,
@@ -399,7 +324,7 @@ func (c *Conn) onDataTuple(
 }
 
 // learn updates the source database namespace mappings.
-func (c *Conn) onRelation(msg *pglogrepl.RelationMessage, targetDB ident.Ident) {
+func (c *conn) onRelation(msg *pglogrepl.RelationMessage, targetDB ident.Ident) {
 	// The replication protocol says that we'll see these
 	// descriptors before any use of the relation id in the
 	// stream. We'll map the int value to our table identifiers.

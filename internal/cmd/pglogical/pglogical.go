@@ -15,10 +15,8 @@ package pglogical
 import (
 	"net"
 	"net/http"
-	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/pglogical"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -31,7 +29,7 @@ import (
 // Command returns the pglogical subcommand.
 func Command() *cobra.Command {
 	cfg := &pglogical.Config{}
-	var metricsAddr, targetDB string
+	var metricsAddr string
 	cmd := &cobra.Command{
 		Args:  cobra.NoArgs,
 		Short: "start a pg logical replication feed",
@@ -42,32 +40,26 @@ func Command() *cobra.Command {
 					return err
 				}
 			}
-			cfg.TargetDB = ident.New(targetDB)
 
-			_, stopped, err := pglogical.NewConn(cmd.Context(), cfg)
+			loop, cancelLoop, err := pglogical.Start(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
-			<-stopped
+			// Pause any log.Exit() or log.Fatal() until the server exits.
+			log.DeferExitHandler(func() {
+				cancelLoop()
+				<-loop.Stopped()
+			})
+			// Wait for shutdown. The main function uses log.Exit()
+			// to call the above handler.
+			<-cmd.Context().Done()
 			return nil
 		},
 	}
-	f := cmd.Flags()
-	f.DurationVar(&cfg.ApplyTimeout, "applyTimeout", 30*time.Second,
-		"the maximum amount of time to wait for an update to be applied")
-	f.BoolVar(&cfg.Immediate, "immediate", false, "apply data without waiting for transaction boundaries")
-	f.IntVar(&cfg.BytesInFlight, "bytesInFlight", 10*1024*1024,
-		"apply backpressure when amount of in-flight mutation data reaches this limit")
-	f.StringVar(&metricsAddr, "metricsAddr", "", "a host:port to serve metrics from at /_/varz")
-	f.DurationVar(&cfg.RetryDelay, "retryDelay", 10*time.Second,
-		"the amount of time to sleep between replication retries")
-	f.StringVar(&cfg.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
-	f.StringVar(&cfg.SourceConn, "sourceConn", "", "the source database's connection string")
-	f.StringVar(&cfg.TargetConn, "targetConn", "", "the target cluster's connection string")
-	f.StringVar(&targetDB, "targetDB", "", "the SQL database in the target cluster to update")
-	f.IntVar(&cfg.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")
-	f.StringVar(&cfg.Publication, "publicationName", "",
-		"the publication within the source database to replicate")
+	cfg.Bind(cmd.Flags())
+	cmd.Flags().StringVar(&metricsAddr, "metricsAddr", "",
+		"a host:port to serve metrics from at /_/varz")
+
 	return cmd
 }
 

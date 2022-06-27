@@ -30,7 +30,7 @@ import (
 // InsertTestingKey generates a new private key and updates the existing
 // Authenticator with the associated public key.
 func InsertTestingKey(
-	ctx context.Context, tx pgxtype.Querier, auth types.Authenticator, stagingDB ident.Ident,
+	ctx context.Context, tx pgxtype.Querier, auth types.Authenticator, stagingDB ident.StagingDB,
 ) (method jwt.SigningMethod, signer crypto.PrivateKey, err error) {
 	impl, ok := auth.(*authenticator)
 	if !ok {
@@ -44,7 +44,7 @@ func InsertTestingKey(
 		return
 	}
 
-	err = insertKey(ctx, tx, stagingDB, bytes)
+	err = insertKey(ctx, tx, stagingDB.Ident(), bytes)
 	if err != nil {
 		return
 	}
@@ -86,7 +86,7 @@ func InsertRevokedToken(
 	ctx context.Context,
 	tx pgxtype.Querier,
 	auth types.Authenticator,
-	stagingDB ident.Ident,
+	stagingDB ident.StagingDB,
 	id string,
 ) error {
 	impl, ok := auth.(*authenticator)
@@ -94,7 +94,7 @@ func InsertRevokedToken(
 		return errors.Errorf("unexpected Authenticator type %t", auth)
 	}
 
-	keyTable := ident.NewTable(stagingDB, ident.Public, RevokedIdsTable)
+	keyTable := ident.NewTable(stagingDB.Ident(), ident.Public, RevokedIdsTable)
 	_, err := tx.Exec(ctx,
 		fmt.Sprintf("INSERT INTO %s (id) VALUES ($1)", keyTable),
 		id,

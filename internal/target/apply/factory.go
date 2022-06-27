@@ -35,21 +35,6 @@ type factory struct {
 
 var _ types.Appliers = (*factory)(nil)
 
-// NewAppliers returns an instance of types.Appliers.
-func NewAppliers(watchers types.Watchers) (_ types.Appliers, cancel func()) {
-	f := &factory{watchers: watchers}
-	f.mu.instances = make(map[cacheKey]*apply)
-	return f, func() {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		for _, fn := range f.mu.cleanup {
-			fn()
-		}
-		f.mu.cleanup = nil
-		f.mu.instances = nil
-	}
-}
-
 // Get creates or returns a memoized instance of the table's Applier.
 func (f *factory) Get(
 	ctx context.Context, table ident.Table, casColumns []ident.Ident, deadlines types.Deadlines,

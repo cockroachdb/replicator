@@ -31,17 +31,6 @@ type factory struct {
 
 var _ types.Stagers = (*factory)(nil)
 
-// NewStagers returns an instance of types.Stagers that stores
-// temporary data in the given SQL database.
-func NewStagers(db *pgxpool.Pool, stagingDB ident.Ident) types.Stagers {
-	f := &factory{
-		db:        db,
-		stagingDB: stagingDB,
-	}
-	f.mu.instances = make(map[ident.Table]*stage)
-	return f
-}
-
 // Get returns a memoized instance of a stage for the given table.
 func (f *factory) Get(ctx context.Context, target ident.Table) (types.Stager, error) {
 	if ret := f.getUnlocked(target); ret != nil {
