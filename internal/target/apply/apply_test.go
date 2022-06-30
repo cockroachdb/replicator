@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package apply
+package apply_test
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
@@ -31,38 +30,29 @@ import (
 // This test inserts and deletes rows from a trivial table.
 func TestApply(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
 
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
+	ctx := fixture.Context
 
 	type Payload struct {
 		Pk0 int    `json:"pk0"`
 		Pk1 string `json:"pk1"`
 	}
-	tbl, err := sinktest.CreateTable(ctx, dbName,
+	tbl, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (pk0 INT, pk1 STRING, PRIMARY KEY (pk0,pk1))")
 	if !a.NoError(err) {
 		return
 	}
 
-	watcher, err := watchers.Get(ctx, dbName)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
 	if !a.NoError(err) {
 		return
 	}
-
-	app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
 
 	t.Run("smoke", func(t *testing.T) {
 		a := assert.New(t)
@@ -81,13 +71,13 @@ func TestApply(t *testing.T) {
 		}
 
 		// Verify insertion
-		a.NoError(app.Apply(ctx, dbInfo.Pool(), adds))
+		a.NoError(app.Apply(ctx, fixture.Pool, adds))
 		ct, err := tbl.RowCount(ctx)
 		a.Equal(count, ct)
 		a.NoError(err)
 
 		// Verify that they can be deleted.
-		a.NoError(app.Apply(ctx, dbInfo.Pool(), dels))
+		a.NoError(app.Apply(ctx, fixture.Pool, dels))
 		ct, err = tbl.RowCount(ctx)
 		a.Equal(0, ct)
 		a.NoError(err)
@@ -96,7 +86,7 @@ func TestApply(t *testing.T) {
 	// Verify unexpected incoming column
 	t.Run("unexpected", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, dbInfo.Pool(), []types.Mutation{
+		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
 			{
 				Data: []byte(`{"pk0":1, "pk1":0, "no_good":true}`),
 				Key:  []byte(`[1, 0]`),
@@ -108,7 +98,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_upsert", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, dbInfo.Pool(), []types.Mutation{
+		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
 			{
 				Data: []byte(`{"pk0":1}`),
 				Key:  []byte(`[1]`),
@@ -120,7 +110,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_delete_too_few", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, dbInfo.Pool(), []types.Mutation{
+		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
 			{
 				Key: []byte(`[1]`),
 			},
@@ -131,7 +121,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_delete_too_many", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, dbInfo.Pool(), []types.Mutation{
+		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
 			{
 				Key: []byte(`[1, 2, 3]`),
 			},
@@ -286,17 +276,13 @@ func TestAllDataTypes(t *testing.T) {
 
 	a := assert.New(t)
 
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
+	ctx := fixture.Context
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -310,32 +296,22 @@ func TestAllDataTypes(t *testing.T) {
 				create = fmt.Sprintf("CREATE TABLE %%s (k int primary key, val %s)", tc.columnType)
 			}
 
-			tbl, err := sinktest.CreateTable(ctx, dbName, create)
+			tbl, err := fixture.CreateTable(ctx, create)
 			if !a.NoError(err) {
 				return
 			}
 
-			watcher, err := watchers.Get(ctx, dbName)
+			app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
 			if !a.NoError(err) {
 				return
 			}
-
-			if !a.NoError(watcher.Refresh(ctx, dbInfo.Pool())) {
-				return
-			}
-
-			app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
-			if !a.NoError(err) {
-				return
-			}
-			defer cancel()
 
 			var jsonValue string
 			if tc.columnValue == "" {
 				jsonValue = "null"
 			} else {
 				q := fmt.Sprintf("SELECT to_json($1::%s)::string", tc.columnType)
-				if !a.NoError(dbInfo.Pool().QueryRow(ctx, q, tc.columnValue).Scan(&jsonValue)) {
+				if !a.NoError(fixture.Pool.QueryRow(ctx, q, tc.columnValue).Scan(&jsonValue)) {
 					return
 				}
 			}
@@ -345,10 +321,10 @@ func TestAllDataTypes(t *testing.T) {
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
 				Key:  []byte(`[1]`),
 			}
-			a.NoError(app.Apply(ctx, dbInfo.Pool(), []types.Mutation{mut}))
+			a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{mut}))
 
 			var jsonFound string
-			a.NoError(dbInfo.Pool().QueryRow(ctx,
+			a.NoError(fixture.Pool.QueryRow(ctx,
 				fmt.Sprintf("SELECT ifnull(to_json(val)::string, 'null') FROM %s", tbl),
 			).Scan(&jsonFound))
 			if alternate, ok := expectInstead[tc.name]; ok {
@@ -370,14 +346,14 @@ func TestConditionals(t *testing.T) {
 
 func testConditions(t *testing.T, cas, deadline bool) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
 
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
+
+	ctx := fixture.Context
 
 	// The payload and the table are just a key and version field.
 	type Payload struct {
@@ -386,23 +362,15 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		TS  time.Time `json:"ts"`
 	}
 
-	tbl, err := sinktest.CreateTable(ctx, dbName,
+	tbl, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP)")
-	if !a.NoError(err) {
-		return
-	}
-
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
-	watcher, err := watchers.Get(ctx, dbName)
 	if !a.NoError(err) {
 		return
 	}
 
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
-		_, cancel, err := newApply(watcher, tbl.Name(), []ident.Ident{ident.New("bad_column")}, types.Deadlines{})
-		defer cancel()
+		_, err := fixture.Appliers.Get(ctx, tbl.Name(), []ident.Ident{ident.New("bad_column")}, types.Deadlines{})
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -410,8 +378,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
-		_, cancel, err := newApply(watcher, tbl.Name(), nil, types.Deadlines{ident.New("bad_column"): 0})
-		defer cancel()
+		_, err := fixture.Appliers.Get(ctx, tbl.Name(), nil, types.Deadlines{ident.New("bad_column"): 0})
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -422,7 +389,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	// Utility function to retrieve the most recently set data.
 	getRow := func() (version int, ts time.Time, err error) {
-		err = dbInfo.Pool().QueryRow(ctx,
+		err = fixture.Pool.QueryRow(ctx,
 			fmt.Sprintf("SELECT ver, ts FROM %s WHERE pk = $1", tbl.Name()), id,
 		).Scan(&version, &ts)
 		return
@@ -437,11 +404,10 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	if deadline {
 		deadlines[ident.New("ts")] = 10 * time.Minute
 	}
-	app, cancel, err := newApply(watcher, tbl.Name(), casColumns, deadlines)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name(), casColumns, deadlines)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	now := time.Now().UTC().Round(time.Second)
 	past := now.Add(-time.Hour)
@@ -486,7 +452,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		a.NoError(err)
 
 		// Applying a discarded mutation should never result in an error.
-		a.NoError(app.Apply(ctx, dbInfo.Pool(), []types.Mutation{{
+		a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d]`, id)),
 		}}))
@@ -517,30 +483,27 @@ func testConditions(t *testing.T, cas, deadline bool) {
 // X-Ref: https://github.com/cockroachdb/cockroach/pull/45372
 func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
 
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
+	ctx := fixture.Context
 
 	type Payload struct {
 		Pk0 int    `json:"pk0"`
 		Val string `json:"val"`
 	}
-	tbl, err := sinktest.CreateTable(ctx, dbName,
+	tbl, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (pk0 INT PRIMARY KEY, ignored INT AS (1) STORED, val STRING)")
 	if !a.NoError(err) {
 		return
 	}
 
 	// Detect hopeful future case where UPSERT has the desired behavior.
-	_, err = dbInfo.Pool().Exec(ctx,
+	_, err = fixture.Pool.Exec(ctx,
 		fmt.Sprintf("UPSERT INTO %s (pk0, val) VALUES ($1, $2), ($3, $4)", tbl.Name()),
 		1, "1", 1, "1")
 	if a.Error(err) {
@@ -549,16 +512,10 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		a.FailNow("the workaround is no longer necessary for this version of CRDB")
 	}
 
-	watcher, err := watchers.Get(ctx, dbName)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
 	if !a.NoError(err) {
 		return
 	}
-
-	app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
 
 	p1 := Payload{Pk0: 10, Val: "First"}
 	bytes1, err := json.Marshal(p1)
@@ -574,11 +531,11 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 
 	// Verify insertion.
-	a.NoError(app.Apply(ctx, dbInfo.Pool(), muts))
+	a.NoError(app.Apply(ctx, fixture.Pool, muts))
 
-	count, err := sinktest.GetRowCount(ctx, dbInfo.Pool(), tbl.Name())
+	count, err := sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
 	if a.NoError(err) && a.Equal(1, count) {
-		row := dbInfo.Pool().QueryRow(ctx,
+		row := fixture.Pool.QueryRow(ctx,
 			fmt.Sprintf("SELECT val FROM %s WHERE pk0 = $1", tbl.Name()), 10)
 		var val string
 		a.NoError(row.Scan(&val))
@@ -591,17 +548,14 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 // in incoming payloads.
 func TestVirtualColumns(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
 
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
+	ctx := fixture.Context
 
 	type Payload struct {
 		A int `json:"a"`
@@ -609,22 +563,16 @@ func TestVirtualColumns(t *testing.T) {
 		C int `json:"c"`
 		X int `json:"x,omitempty"`
 	}
-	tbl, err := sinktest.CreateTable(ctx, dbName,
+	tbl, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (a INT, b INT, c INT AS (a + b) STORED, PRIMARY KEY (a,b))")
 	if !a.NoError(err) {
 		return
 	}
 
-	watcher, err := watchers.Get(ctx, dbName)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
 	if !a.NoError(err) {
 		return
 	}
-
-	app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
 
 	t.Run("computed-is-ignored", func(t *testing.T) {
 		a := assert.New(t)
@@ -636,7 +584,7 @@ func TestVirtualColumns(t *testing.T) {
 			Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
 		}}
 
-		a.NoError(app.Apply(ctx, dbInfo.Pool(), muts))
+		a.NoError(app.Apply(ctx, fixture.Pool, muts))
 	})
 
 	t.Run("unknown-still-breaks", func(t *testing.T) {
@@ -649,7 +597,7 @@ func TestVirtualColumns(t *testing.T) {
 			Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
 		}}
 
-		err = app.Apply(ctx, dbInfo.Pool(), muts)
+		err = app.Apply(ctx, fixture.Pool, muts)
 		if a.Error(err) {
 			a.Contains(err.Error(), "unexpected columns")
 		}
@@ -689,24 +637,17 @@ func BenchmarkApply(b *testing.B) {
 
 func benchConditions(b *testing.B, cfg benchConfig) {
 	a := assert.New(b)
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
 
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	tbl, err := sinktest.CreateTable(ctx, dbName,
+	ctx := fixture.Context
+
+	tbl, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (pk UUID PRIMARY KEY, ver INT, ts TIMESTAMP)")
-	if !a.NoError(err) {
-		return
-	}
-
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
-	watcher, err := watchers.Get(ctx, dbName)
 	if !a.NoError(err) {
 		return
 	}
@@ -720,11 +661,10 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	if cfg.deadline {
 		deadlines[ident.New("ts")] = time.Hour
 	}
-	app, cancel, err := newApply(watcher, tbl.Name(), casColumns, deadlines)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name(), casColumns, deadlines)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	// Create a source of Mutatation data.
 	muts := sinktest.MutationGenerator(ctx, 100000, 0)
@@ -743,7 +683,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 			}
 
 			// Applying a discarded mutation should never result in an error.
-			if !a.NoError(app.Apply(context.Background(), dbInfo.Pool(), batch)) {
+			if !a.NoError(app.Apply(context.Background(), fixture.Pool, batch)) {
 				return
 			}
 			loops++

@@ -24,9 +24,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Resolved is the name of table that we track resolved timestamps in.
-var Resolved = ident.NewTable(ident.StagingDB, ident.Public, ident.New("resolved"))
-
 // Example: /test/public/2020-04-04/202004042351304139680000000000000.RESOLVED
 // Format is: /[targetDB]/[targetSchema]/[date]/[timestamp].RESOLVED
 var (

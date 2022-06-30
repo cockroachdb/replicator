@@ -56,15 +56,16 @@ func TestPGLogical(t *testing.T) {
 func testPGLogical(t *testing.T, immediate bool, withChaosProb float32) {
 	a := assert.New(t)
 
-	ctx, info, cancel := sinktest.Context()
-	defer cancel()
-	crdbPool := info.Pool()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	// Create a basic test fixture.
+	fixture, cancel, err := sinktest.NewBaseFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
+
+	ctx := fixture.Context
+	dbName := fixture.TestDB.Ident()
+	crdbPool := fixture.Pool
 
 	pgPool, cancel, err := setupPGPool(dbName)
 	if !a.NoError(err) {
@@ -108,20 +109,19 @@ func testPGLogical(t *testing.T, immediate bool, withChaosProb float32) {
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	connCtx, cancelConn := context.WithCancel(ctx)
-	defer cancelConn()
-	_, stopped, err := NewConn(connCtx, &Config{
+	loop, cancelLoop, err := Start(ctx, &Config{
 		Config: logical.Config{
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			ChaosProb:    withChaosProb,
 			Immediate:    immediate,
 			RetryDelay:   time.Nanosecond,
+			StagingDB:    fixture.StagingDB.Ident(),
 			TargetConn:   crdbPool.Config().ConnString(),
 			TargetDB:     dbName,
 		},
-		Publication:   dbName.Raw(),
-		Slot:          dbName.Raw(),
-		SourceConn:    *pgConnString + dbName.Raw(),
-		withChaosProb: withChaosProb,
+		Publication: dbName.Raw(),
+		Slot:        dbName.Raw(),
+		SourceConn:  *pgConnString + dbName.Raw(),
 	})
 	if !a.NoError(err) {
 		return
@@ -202,11 +202,11 @@ func testPGLogical(t *testing.T, immediate bool, withChaosProb float32) {
 		}
 	}
 
-	cancelConn()
+	cancelLoop()
 	select {
 	case <-ctx.Done():
 		a.Fail("cancelConn timed out")
-	case <-stopped:
+	case <-loop.Stopped():
 		// OK
 	}
 }
@@ -266,15 +266,16 @@ func TestDataTypes(t *testing.T) {
 		// xml
 	}
 
-	ctx, info, cancel := sinktest.Context()
-	defer cancel()
-	crdbPool := info.Pool()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	// Create a basic test fixture.
+	fixture, cancel, err := sinktest.NewBaseFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
+
+	ctx := fixture.Context
+	dbName := fixture.TestDB.Ident()
+	crdbPool := fixture.Pool
 
 	pgPool, cancel, err := setupPGPool(dbName)
 	if !a.NoError(err) {
@@ -285,16 +286,19 @@ func TestDataTypes(t *testing.T) {
 	// Create a dummy table for each type
 	tgts := make([]ident.Table, len(tcs))
 	for idx, tc := range tcs {
-		tgt := ident.NewTable(dbName, ident.Public, ident.New(fmt.Sprintf("tgt_%s_%d", tc.name, idx)))
-		tgts[idx] = tgt
 
 		// Create the schema in both locations.
-		var schema = fmt.Sprintf("CREATE TABLE %s (k INT PRIMARY KEY, v %s)",
-			tgt, tc.name)
-		if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", tc.name) {
+		var schema = fmt.Sprintf("CREATE TABLE %%s (k INT PRIMARY KEY, v %s)", tc.name)
+		ti, err := fixture.CreateTable(ctx, schema)
+		if !a.NoErrorf(err, "CRDB %s", tc.name) {
 			return
 		}
-		if _, err := crdbPool.Exec(ctx, schema); !a.NoErrorf(err, "CRDB %s", tc.name) {
+		tgt := ti.Name()
+		tgts[idx] = tgt
+
+		// Substitute the created table name to send to postgres.
+		schema = fmt.Sprintf(schema, tgt)
+		if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", tc.name) {
 			return
 		}
 
@@ -324,11 +328,10 @@ func TestDataTypes(t *testing.T) {
 	log.Info(tgts)
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	connCtx, cancelConn := context.WithCancel(ctx)
-	defer cancelConn()
-	_, stopped, err := NewConn(connCtx, &Config{
+	loop, cancelLoop, err := Start(ctx, &Config{
 		Config: logical.Config{
 			RetryDelay: time.Nanosecond,
+			StagingDB:  fixture.StagingDB.Ident(),
 			TargetConn: crdbPool.Config().ConnString(),
 			TargetDB:   dbName,
 		},
@@ -346,8 +349,8 @@ func TestDataTypes(t *testing.T) {
 			a := assert.New(t)
 			var count int
 			for count == 0 {
-				if err := crdbPool.QueryRow(ctx,
-					fmt.Sprintf("SELECT count(*) FROM %s", tgts[idx])).Scan(&count); !a.NoError(err) {
+				count, err = sinktest.GetRowCount(ctx, crdbPool, tgts[idx])
+				if !a.NoError(err) {
 					return
 				}
 				if count == 0 {
@@ -359,9 +362,9 @@ func TestDataTypes(t *testing.T) {
 		})
 	}
 
-	cancelConn()
+	cancelLoop()
 	select {
-	case <-stopped:
+	case <-loop.Stopped():
 	case <-ctx.Done():
 	}
 }

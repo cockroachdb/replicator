@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
@@ -56,7 +57,11 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.Connect(ctx, *connString)
+	cfg, err := stdpool.ParseConfig(*connString)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not open database connection")
 	}
@@ -70,7 +75,7 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 	// Reset the pool to one that enables the hash-sharded feature in
 	// older versions of CockroachDB.
 	if strings.Contains(globalDBInfo.version, "v20.") || strings.Contains(globalDBInfo.version, "v21.") {
-		cfg := pool.Config().Copy()
+		cfg := cfg.Copy()
 		cfg.ConnConfig.RuntimeParams["experimental_enable_hash_sharded_indexes"] = "true"
 
 		pool.Close()

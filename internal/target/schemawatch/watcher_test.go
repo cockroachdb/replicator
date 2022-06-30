@@ -8,13 +8,14 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package schemawatch
+package schemawatch_test
 
 import (
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
@@ -25,30 +26,25 @@ func TestWatch(t *testing.T) {
 	a := assert.New(t)
 
 	// Override the delay to exercise the background goroutine.
-	*RefreshDelay = time.Second
-	defer func() { *RefreshDelay = time.Minute }()
+	const delay = time.Second
+	*schemawatch.RefreshDelay = delay
+	defer func() { *schemawatch.RefreshDelay = time.Minute }()
 
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
+
+	ctx := fixture.Context
+	dbName := fixture.TestDB.Ident()
+	w := fixture.Watcher
 
 	// Bootstrap column.
-	tblInfo, err := sinktest.CreateTable(ctx, dbName, "CREATE TABLE %s (pk INT PRIMARY KEY)")
+	tblInfo, err := fixture.CreateTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY)")
 	if !a.NoError(err) {
 		return
 	}
-
-	w, cancel, err := newWatcher(ctx, dbInfo.Pool(), dbName)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
-	a.Equal(time.Second, w.delay)
 
 	ch, cancel, err := w.Watch(tblInfo.Name())
 	if !a.NoError(err) {
@@ -57,7 +53,7 @@ func TestWatch(t *testing.T) {
 	defer cancel()
 
 	select {
-	case <-time.After(2 * w.delay):
+	case <-time.After(2 * delay):
 		a.FailNow("timed out waiting for channel data")
 	case data := <-ch:
 		if a.Len(data, 1) {
@@ -66,13 +62,13 @@ func TestWatch(t *testing.T) {
 	}
 
 	// Add a column and expect to see it.
-	if !a.NoError(retry.Execute(ctx, dbInfo.Pool(),
+	if !a.NoError(retry.Execute(ctx, fixture.Pool,
 		fmt.Sprintf("ALTER TABLE %s ADD COLUMN v STRING", tblInfo.Name()))) {
 		return
 	}
 
 	select {
-	case <-time.After(2 * w.delay):
+	case <-time.After(2 * delay):
 		a.FailNow("timed out waiting for channel data")
 	case data := <-ch:
 		if a.Len(data, 2) {
@@ -86,7 +82,7 @@ func TestWatch(t *testing.T) {
 		return
 	}
 	select {
-	case <-time.After(2 * w.delay):
+	case <-time.After(2 * delay):
 		a.FailNow("timed out waiting for channel close")
 	case _, open := <-ch:
 		a.False(open)

@@ -35,10 +35,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Conn encapsulates all wire-connection behavior. It is
+// conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
 // status updates.
-type Conn struct {
+type conn struct {
 	// Columns, as ordered by the source database.
 	columns map[ident.Table][]types.ColData
 	// Key to set/retrieve state
@@ -65,57 +65,7 @@ const (
 
 //go:generate go run golang.org/x/tools/cmd/stringer -type=mutationType
 
-var _ logical.Dialect = (*Conn)(nil)
-
-// NewConn constructs a new MySQL replication feed.
-//
-// The feed will terminate when the context is canceled and the stopped
-// channel will be closed once shutdown is complete.
-func NewConn(ctx context.Context, config *Config) (_ *Conn, stopped <-chan struct{}, _ error) {
-	if err := config.Preflight(); err != nil {
-		return nil, nil, err
-	}
-
-	flavor, err := getFlavor(ctx, config)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	stamp, err := newStamp(flavor)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cfg := replication.BinlogSyncerConfig{
-		ServerID:  config.processID,
-		Flavor:    flavor,
-		Host:      config.host,
-		Port:      config.port,
-		User:      config.user,
-		Password:  config.password,
-		TLSConfig: config.tlsConfig,
-	}
-	ret := &Conn{
-		columns:            make(map[ident.Table][]types.ColData),
-		consistentPointKey: config.ConsistentPointKey,
-		flavor:             flavor,
-		lastStamp:          stamp,
-		relations:          make(map[uint64]ident.Table),
-		sourceConfig:       cfg,
-	}
-
-	var dialect logical.Dialect = ret
-	if config.withChaosProb > 0 {
-		dialect = logical.WithChaos(dialect, config.withChaosProb)
-	}
-
-	stopper, err := logical.Start(ctx, &config.Config, dialect)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return ret, stopper, nil
-}
+var _ logical.Dialect = (*conn)(nil)
 
 func newStamp(flavor string) (stamp.Stamp, error) {
 	switch flavor {
@@ -130,7 +80,7 @@ func newStamp(flavor string) (stamp.Stamp, error) {
 
 // Process implements logical.Dialect and receives a sequence of logical
 // replication messages, or possibly a rollbackMessage.
-func (c *Conn) Process(
+func (c *conn) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	for {
@@ -241,7 +191,7 @@ func (c *Conn) Process(
 
 // ReadInto implements logical.Dialect, opens a replication connection,
 // and writes supported events into the provided channel.
-func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state logical.State) error {
+func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state logical.State) error {
 	syncer := replication.NewBinlogSyncer(c.sourceConfig)
 	defer syncer.Close()
 	if state.GetConsistentPoint() == nil {
@@ -320,7 +270,7 @@ func (c *Conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 // Examples:
 // MySQL: E11FA47-71CA-11E1-9E33-C80AA9429562:1-3:11:47-49
 // MariaDB: 0-1-1
-func (c *Conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
+func (c *conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
 	log.Tracef("UnmarshalStamp %s", stamp)
 	s, err := mysql.ParseGTIDSet(c.flavor, string(stamp))
 	if err != nil {
@@ -345,7 +295,7 @@ func (c *Conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
 
 }
 
-func (c *Conn) onDataTuple(
+func (c *conn) onDataTuple(
 	ctx context.Context, events logical.Events, tuple *replication.RowsEvent, operation mutationType,
 ) error {
 	tbl, ok := c.relations[tuple.TableID]
@@ -416,7 +366,7 @@ func (c *Conn) onDataTuple(
 // onRelation updates the source database namespace mappings.
 // Columns names are only available if
 // set global binlog_row_metadata = full;
-func (c *Conn) onRelation(msg *replication.TableMapEvent, targetDB ident.Ident) error {
+func (c *conn) onRelation(msg *replication.TableMapEvent, targetDB ident.Ident) error {
 	tbl := ident.NewTable(
 		ident.New(string(msg.Schema)),
 		ident.Public,

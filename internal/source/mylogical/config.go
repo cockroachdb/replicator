@@ -40,8 +40,6 @@ type Config struct {
 	tlsConfig *tls.Config
 	// user is for MySQL user.
 	user string
-	// Used in testing to inject errors during processing.
-	withChaosProb float32
 }
 
 func newClientTLSConfig(

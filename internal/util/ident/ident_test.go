@@ -67,6 +67,8 @@ func TestQualified(t *testing.T) {
 func TestRelative(t *testing.T) {
 	foo := New("foo")
 
+	stagingDB := New("stagingDB")
+
 	tcs := []struct {
 		table       string
 		expected    Table
@@ -79,17 +81,17 @@ func TestRelative(t *testing.T) {
 		},
 		{
 			table:    "foo",
-			expected: NewTable(StagingDB, Public, foo),
+			expected: NewTable(stagingDB, Public, foo),
 			qual:     TableOnly,
 		},
 		{
 			table:    "other.foo",
-			expected: NewTable(StagingDB, Public, foo),
+			expected: NewTable(stagingDB, Public, foo),
 			qual:     TableAndDatabase,
 		},
 		{
 			table:    "other.schema.foo",
-			expected: NewTable(StagingDB, New("schema"), foo),
+			expected: NewTable(stagingDB, New("schema"), foo),
 			qual:     FullyQualified,
 		},
 		{
