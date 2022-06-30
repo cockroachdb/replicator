@@ -21,17 +21,16 @@ import (
 func TestRoundtrip(t *testing.T) {
 	a := assert.New(t)
 
-	ctx, info, cancel := sinktest.Context()
-	defer cancel()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	pool := info.Pool()
-	tgt := ident.NewTable(dbName, ident.Public, ident.New("t"))
+	ctx := fixture.Context
+	pool := fixture.Pool
+
+	tgt := ident.NewTable(fixture.TestDB.Ident(), ident.Public, ident.New("t"))
 	memo, err := New(ctx, pool, tgt)
 	if !a.NoError(err) {
 		return

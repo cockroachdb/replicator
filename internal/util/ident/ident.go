@@ -21,8 +21,7 @@ import (
 
 // Well-known identifiers.
 var (
-	StagingDB = New("_cdc_sink") // "_cdc_sink"
-	Public    = New("public")    // "public"
+	Public = New("public") // "public"
 )
 
 // An Ident is a quoted SQL identifier, generally a table, column, or
@@ -42,6 +41,14 @@ func New(raw string) Ident {
 func Newf(format string, args ...interface{}) Ident {
 	return New(fmt.Sprintf(format, args...))
 }
+
+// StagingDB is a type alias for the name of the "_cdc_sink" database.
+// It serves as an injection point for uniquely naming the staging
+// database in test cases.
+type StagingDB Ident
+
+// Ident returns the underying database identifier.
+func (s StagingDB) Ident() Ident { return Ident(s) }
 
 // Qualification is a return value from Relative, indicating how many
 // name parts were present in the initial input.

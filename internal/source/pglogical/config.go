@@ -13,6 +13,7 @@ package pglogical
 import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/pkg/errors"
+	"github.com/spf13/pflag"
 )
 
 // Config contains the configuration necessary for creating a
@@ -27,9 +28,15 @@ type Config struct {
 	Slot string
 	// Connection string for the source db.
 	SourceConn string
+}
 
-	// Used in testing to inject errors during processing.
-	withChaosProb float32
+// Bind adds flags to the set.
+func (c *Config) Bind(f *pflag.FlagSet) {
+	c.Config.Bind(f)
+	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
+	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
+	f.StringVar(&c.Publication, "publicationName", "",
+		"the publication within the source database to replicate")
 }
 
 // Preflight updates the configuration with sane defaults or returns an

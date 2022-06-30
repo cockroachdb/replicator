@@ -13,12 +13,9 @@ package sinktest
 import (
 	"context"
 	"fmt"
-	"math/rand"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/jackc/pgx/v4"
-	"github.com/pkg/errors"
 )
 
 // TableInfo provides a named table and a means to access it.
@@ -26,45 +23,6 @@ import (
 type TableInfo struct {
 	*DBInfo
 	name ident.Table
-}
-
-// CreateTable creates a test table and returns a unique name. The
-// schemaSpec parameter must have exactly one %s substitution parameter
-// for the database name and table name.
-func CreateTable(ctx context.Context, dbName ident.Ident, schemaSpec string) (TableInfo, error) {
-	var table ident.Table
-	db := DB(ctx)
-	if db == nil {
-		return TableInfo{}, errors.New("no database in context")
-	}
-
-outer:
-	for {
-		// Create the testing database
-		tableNum := rand.Intn(10000)
-		tableName := ident.New(fmt.Sprintf("_test_table_%d", tableNum))
-
-		// Find the DB.
-		var actualTableName string
-		err := retry.Retry(ctx, func(ctx context.Context) error {
-			return db.Pool().QueryRow(ctx,
-				fmt.Sprintf("SELECT table_name FROM [SHOW TABLES FROM %s] WHERE table_name = $1", dbName),
-				tableName.Raw(),
-			).Scan(&actualTableName)
-		})
-		switch err {
-		case pgx.ErrNoRows:
-			table = ident.NewTable(dbName, ident.Public, tableName)
-			break outer
-		case nil:
-			continue
-		default:
-			return TableInfo{}, errors.WithStack(err)
-		}
-	}
-
-	err := retry.Execute(ctx, db.Pool(), fmt.Sprintf(schemaSpec, table))
-	return TableInfo{db, table}, errors.WithStack(err)
 }
 
 // NewTableInfo constructs a TableInfo using the given name.

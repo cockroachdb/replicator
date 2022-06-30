@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package fan
+package fan_test
 
 import (
 	"context"
@@ -19,8 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -41,36 +40,27 @@ func (s intStamp) MarshalText() (text []byte, err error) {
 func TestFanSmoke(t *testing.T) {
 	a := assert.New(t)
 
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
+	ctx := fixture.Context
 
-	tbl, err := sinktest.CreateTable(ctx, dbName,
+	tbl, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (k INT PRIMARY KEY, v STRING)")
 	if !a.NoError(err) {
 		return
 	}
-
-	appliers, cancel := apply.NewAppliers(watchers)
-	defer cancel()
 
 	// Provide a correct way for the callback to report where the
 	// consistent point has advanced to.
 	consistentUpdated := sync.NewCond(&sync.Mutex{})
 	var consistentPoint intStamp
 
-	imm, cancel, err := New(
-		appliers,
+	imm, cancel, err := fixture.Fans.New(
 		2*time.Minute,
-		dbInfo.Pool(),
 		func(stamp stamp.Stamp) {
 			consistentUpdated.L.Lock()
 			defer consistentUpdated.L.Unlock()
@@ -107,36 +97,27 @@ func TestFanSmoke(t *testing.T) {
 func TestBucketSaturation(t *testing.T) {
 	a := assert.New(t)
 
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
-	defer cancel()
+	ctx := fixture.Context
 
-	tbl, err := sinktest.CreateTable(ctx, dbName,
+	tbl, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (k INT PRIMARY KEY, v STRING)")
 	if !a.NoError(err) {
 		return
 	}
-
-	appliers, cancel := apply.NewAppliers(watchers)
-	defer cancel()
 
 	// Provide a correct way for the callback to report where the
 	// consistent point has advanced to.
 	consistentUpdated := sync.NewCond(&sync.Mutex{})
 	consistentCallbacks := 0
 
-	imm, cancel, err := New(
-		appliers,
+	imm, cancel, err := fixture.Fans.New(
 		2*time.Minute,
-		dbInfo.Pool(),
 		func(stamp stamp.Stamp) {
 			consistentUpdated.L.Lock()
 			defer consistentUpdated.L.Unlock()
@@ -173,7 +154,7 @@ func TestBucketSaturation(t *testing.T) {
 }
 
 func generateMutations(
-	ctx context.Context, imm *Fan, tbl ident.Table, batchCount int,
+	ctx context.Context, imm *fan.Fan, tbl ident.Table, batchCount int,
 ) (intStamp, error) {
 	id := 0
 	for batchID := 0; batchID < batchCount; batchID++ {

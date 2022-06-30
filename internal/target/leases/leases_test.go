@@ -27,22 +27,22 @@ import (
 
 func TestLeases(t *testing.T) {
 	a := assert.New(t)
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
 
-	dbName, cancel, err := sinktest.CreateDB(ctx)
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
 	defer cancel()
 
-	tbl, err := sinktest.CreateTable(ctx, dbName, schema)
+	ctx := fixture.Context
+
+	tbl, err := fixture.CreateTable(ctx, schema)
 	if !a.NoError(err) {
 		return
 	}
 
 	intf, err := New(ctx, Config{
-		Pool:   dbInfo.Pool(),
+		Pool:   fixture.Pool,
 		Target: tbl.Name(),
 	})
 	l := intf.(*leases)

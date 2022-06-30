@@ -347,11 +347,11 @@ FROM %[1]s
 WHERE target_applied_at IS NULL
 `
 
-// scanForTargetSchemas is used by the factory to ensure that any schema
+// ScanForTargetSchemas is used by the factory to ensure that any schema
 // with unprocessed, resolved timestamps will have an associated resolve
 // instance. This function is declared here to keep the sql queries in a
-// single file.
-func scanForTargetSchemas(
+// single file. It is exported to aid in testing.
+func ScanForTargetSchemas(
 	ctx context.Context, db pgxtype.Querier, metaTable ident.Table,
 ) ([]ident.Schema, error) {
 	rows, err := db.Query(ctx, fmt.Sprintf(scanForTargetTemplate, metaTable))

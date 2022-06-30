@@ -27,9 +27,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Table contains a default table name for managing leases.
-var Table = ident.NewTable(ident.StagingDB, ident.Public, ident.New("leases"))
-
 const (
 	defaultLifetime = time.Minute
 	defaultPoll     = time.Second

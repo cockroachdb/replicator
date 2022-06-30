@@ -16,7 +16,6 @@ package timekeeper
 import (
 	"context"
 	"flag"
-	"fmt"
 	"sync"
 	"time"
 
@@ -49,36 +48,6 @@ type timekeeper struct {
 }
 
 var _ types.TimeKeeper = (*timekeeper)(nil)
-
-// NewTimeKeeper constructs a types.TimeKeeper using the specified table
-// for storage.
-func NewTimeKeeper(
-	ctx context.Context, tx pgxtype.Querier, target ident.Table,
-) (_ types.TimeKeeper, cancel func(), _ error) {
-	if err := retry.Execute(ctx, tx, fmt.Sprintf(`
-CREATE TABLE IF NOT EXISTS %s (
-key STRING NOT NULL,
-nanos INT8 NOT NULL,
-logical INT8 NOT NULL,
-PRIMARY KEY (key, nanos, logical)
-)
-`, target)); err != nil {
-		return nil, func() {}, errors.WithStack(err)
-	}
-
-	ret := &timekeeper{pool: tx}
-	ret.mu.cleanups = make(map[ident.Schema]hlc.Time)
-	ret.sql.append = fmt.Sprintf(appendTemplate, target)
-	ret.sql.cleanup = fmt.Sprintf(cleanupTemplate, target)
-
-	// Start a background process to purge old resolved timestamps.
-	ctx, cancel = context.WithCancel(ctx)
-	if *cleanupDelay > 0 {
-		go ret.cleanupLoop(ctx)
-	}
-
-	return ret, cancel, nil
-}
 
 // This query adds a new row at the end of the key's span. Since we
 // include the timestamp data in the table's PK, we don't wind up

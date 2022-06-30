@@ -23,16 +23,17 @@ import (
 func TestJWT(t *testing.T) {
 	a := assert.New(t)
 
-	ctx, dbInfo, cancel := sinktest.Context()
-	defer cancel()
-
-	dbName, cancel, err := sinktest.CreateDB(ctx)
-	defer cancel()
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
+	defer cancel()
 
-	auth, cancel, err := New(ctx, dbInfo.Pool(), dbName)
+	ctx := fixture.Context
+	pool := fixture.Pool
+	stagingDB := fixture.StagingDB
+
+	auth, cancel, err := ProvideAuth(ctx, pool, stagingDB)
 	defer cancel()
 	if !a.NoError(err) {
 		return
@@ -42,7 +43,7 @@ func TestJWT(t *testing.T) {
 	impl := auth.(*authenticator)
 	a.Empty(impl.mu.publicKeys)
 
-	method, priv, err := InsertTestingKey(ctx, dbInfo.Pool(), auth, dbName)
+	method, priv, err := InsertTestingKey(ctx, pool, auth, stagingDB)
 	if !a.NoError(err) {
 		return
 	}
@@ -63,7 +64,7 @@ func TestJWT(t *testing.T) {
 	a.True(ok)
 
 	// Revoke the token id and revalidate.
-	a.NoError(InsertRevokedToken(ctx, dbInfo.Pool(), auth, dbName, inserted.ID))
+	a.NoError(InsertRevokedToken(ctx, pool, auth, stagingDB, inserted.ID))
 	ok, err = auth.Check(ctx, target, tkn)
 	a.NoError(err)
 	a.False(ok)
