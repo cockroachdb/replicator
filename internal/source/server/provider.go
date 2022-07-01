@@ -236,12 +236,13 @@ func ProvideTLSConfig(config Config) (*tls.Config, error) {
 }
 
 func provideTestConfig(dbInfo *sinktest.DBInfo) Config {
-	// Prefer the webhook format for current versions of CRDB.
+	// In older versions of CRDB, the webhook endpoint is not available so no
+	// self signed certificate is needed. This acts as a signal as to wether the
+	// webhook endpoint is available.
 	useWebhook := true
 	if strings.Contains(dbInfo.Version(), "v20.2.") || strings.Contains(dbInfo.Version(), "v21.1.") {
 		useWebhook = false
 	}
-
 	return Config{
 		BindAddr: "127.0.0.1:0",
 		// ConnectionString unnecessary; injected by sinktest provider instead.
