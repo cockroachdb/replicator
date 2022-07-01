@@ -21,7 +21,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
@@ -236,15 +235,9 @@ func ProvideTLSConfig(config Config) (*tls.Config, error) {
 }
 
 func provideTestConfig(dbInfo *sinktest.DBInfo) Config {
-	// Prefer the webhook format for current versions of CRDB.
-	useWebhook := true
-	if strings.Contains(dbInfo.Version(), "v20.2.") || strings.Contains(dbInfo.Version(), "v21.1.") {
-		useWebhook = false
-	}
-
 	return Config{
 		BindAddr: "127.0.0.1:0",
 		// ConnectionString unnecessary; injected by sinktest provider instead.
-		GenerateSelfSigned: useWebhook,
+		GenerateSelfSigned: false, /* don't use webhook */
 	}
 }
