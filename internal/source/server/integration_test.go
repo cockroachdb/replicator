@@ -37,11 +37,13 @@ func TestIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short tests requested")
 	}
-	t.Run("deferred", func(t *testing.T) { testIntegration(t, false) })
-	t.Run("immediate", func(t *testing.T) { testIntegration(t, true) })
+	t.Run("deferred_http", func(t *testing.T) { testIntegration(t, false, false) })
+	t.Run("deferred_webhook", func(t *testing.T) { testIntegration(t, false, true) })
+	t.Run("immediate_http", func(t *testing.T) { testIntegration(t, true, false) })
+	t.Run("immediate_webhook", func(t *testing.T) { testIntegration(t, true, true) })
 }
 
-func testIntegration(t *testing.T, immediate bool) {
+func testIntegration(t *testing.T, immediate bool, webhook shouldUseWebhook) {
 	a := assert.New(t)
 
 	var stopped <-chan struct{}
@@ -61,7 +63,7 @@ func testIntegration(t *testing.T, immediate bool) {
 	sourceCtx := sourceFixture.Context
 
 	// The target fixture contains the cdc-sink server.
-	targetFixture, cancel, err := newTestFixture()
+	targetFixture, cancel, err := newTestFixture(webhook)
 	if !a.NoError(err) {
 		return
 	}
@@ -70,7 +72,12 @@ func testIntegration(t *testing.T, immediate bool) {
 	targetCtx := targetFixture.Context
 	targetDB := targetFixture.TestDB.Ident()
 	targetPool := targetFixture.Pool
-	useWebhook := targetFixture.Config.GenerateSelfSigned
+	selfSigned := targetFixture.Config.GenerateSelfSigned
+
+	// Webhook requires a selfSigned isn't supported on this version of CRDB, don't run the test.
+	if bool(webhook) && !selfSigned {
+		t.Skipf("Webhook is not compatible with %s version of cockroach.", targetFixture.DBInfo.Version())
+	}
 
 	// Set up source and target tables.
 	source, err := sourceFixture.CreateTable(sourceCtx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
@@ -106,13 +113,11 @@ func testIntegration(t *testing.T, immediate bool) {
 	if immediate {
 		params.Set(cdc.ImmediateParam, "true")
 	}
-	if useWebhook {
-		params.Set("insecure_tls_skip_verify", "true")
-	}
 	// Set up the changefeed.
 	var feedURL url.URL
 	var createStmt string
-	if useWebhook {
+	if webhook {
+		params.Set("insecure_tls_skip_verify", "true")
 		feedURL = url.URL{
 			Scheme:   "webhook-https",
 			Host:     targetFixture.Listener.Addr().String(),

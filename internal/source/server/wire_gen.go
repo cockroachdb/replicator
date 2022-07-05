@@ -103,7 +103,7 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 
 // Injectors from test_fixture.go:
 
-func newTestFixture() (*testFixture, func(), error) {
+func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func(), error) {
 	contextContext, cleanup, err := sinktest.ProvideContext()
 	if err != nil {
 		return nil, nil, err
@@ -182,7 +182,8 @@ func newTestFixture() (*testFixture, func(), error) {
 		MetaTable:   metaTable,
 		Watcher:     watcher,
 	}
-	config := provideTestConfig(dbInfo)
+	serverConnectionMode := provideConnectionMode(dbInfo, serverShouldUseWebhook)
+	config := provideTestConfig(serverConnectionMode)
 	authenticator, cleanup8, err := ProvideAuthenticator(contextContext, pool, config, stagingDB)
 	if err != nil {
 		cleanup7()
