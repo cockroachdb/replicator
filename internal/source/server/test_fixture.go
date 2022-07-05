@@ -30,11 +30,12 @@ type testFixture struct {
 	Server        *Server
 }
 
-func newTestFixture() (*testFixture, func(), error) {
+func newTestFixture(shouldUseWebhook) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,
 		sinktest.TestSet,
+		provideConnectionMode,
 		provideTestConfig,
 		wire.Struct(new(testFixture), "*"),
 	))
