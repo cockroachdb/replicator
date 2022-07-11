@@ -123,7 +123,11 @@ func ProvidePool(ctx context.Context, config *Config) (*pgxpool.Pool, func(), er
 		return nil, nil, err
 	}
 	targetPool, err := pgxpool.ConnectConfig(ctx, targetCfg)
-	return targetPool, targetPool.Close, errors.Wrap(err, "could not connect to CockroachDB")
+	cancelMetrics := stdpool.PublishMetrics(targetPool)
+	return targetPool, func() {
+		cancelMetrics()
+		targetPool.Close()
+	}, errors.Wrap(err, "could not connect to CockroachDB")
 }
 
 // ProvideQuerier is called by Wire. If we're running in serial (i.e.

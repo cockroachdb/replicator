@@ -134,7 +134,11 @@ func ProvidePool(ctx context.Context, config Config) (*pgxpool.Pool, func(), err
 		return nil, nil, errors.Wrapf(err, "could not parse %q", config.ConnectionString)
 	}
 	pool, err := pgxpool.ConnectConfig(ctx, cfg)
-	return pool, pool.Close, errors.Wrap(err, "could not connect to CockroachDB")
+	cancelMetrics := stdpool.PublishMetrics(pool)
+	return pool, func() {
+		cancelMetrics()
+		pool.Close()
+	}, errors.Wrap(err, "could not connect to CockroachDB")
 }
 
 // ProvideStagingDB is called by Wire to return the name of the
