@@ -83,10 +83,10 @@ func ParseConfig(connectString string) (*pgxpool.Config, error) {
 		if timed, ok := conn.PgConn().Conn().(*timedConn); ok {
 			readyLatency.Observe(time.Since(timed.start).Seconds())
 		}
-		return err
+		return nil
 	}
 
-	return cfg, err
+	return cfg, nil
 }
 
 type timedConn struct {
