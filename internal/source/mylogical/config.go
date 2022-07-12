@@ -19,6 +19,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/pkg/errors"
+	"github.com/spf13/pflag"
 )
 
 // Config contains the configuration necessary for creating a
@@ -40,6 +41,17 @@ type Config struct {
 	tlsConfig *tls.Config
 	// user is for MySQL user.
 	user string
+}
+
+// Bind adds flags to the set. It delegates to the embedded Config.Bind.
+func (c *Config) Bind(f *pflag.FlagSet) {
+	c.Config.Bind(f)
+	f.StringVar(&c.DefaultConsistentPoint, "defaultGTIDSet", "",
+		"default GTIDSet. Used if no state is persisted")
+	f.StringVar(&c.ConsistentPointKey, "consistentPointKey", "",
+		"unique key used for this process to persist state information")
+	f.StringVar(&c.SourceConn, "sourceConn", "",
+		"the source database's connection string")
 }
 
 func newClientTLSConfig(
