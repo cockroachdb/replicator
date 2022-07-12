@@ -70,6 +70,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"the maximum amount of time to wait for an update to be applied")
 	f.IntVar(&c.BytesInFlight, "bytesInFlight", 10*1024*1024,
 		"apply backpressure when amount of in-flight mutation data reaches this limit")
+	// ConsistentPointKey used only by mylogical.
+	// DefaultConsistentPoint used only by mylogical.
 	f.BoolVar(&c.Immediate, "immediate", false, "apply data without waiting for transaction boundaries")
 	f.DurationVar(&c.RetryDelay, "retryDelay", 10*time.Second,
 		"the amount of time to sleep between replication retries")
