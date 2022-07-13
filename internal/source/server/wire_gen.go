@@ -15,6 +15,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
+	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"net"
@@ -134,14 +135,7 @@ func newTestFixture() (*testFixture, func(), error) {
 	}
 	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup5 := apply.ProvideFactory(watchers)
-	fans := &fan.Fans{
-		Appliers: appliers,
-		Pool:     pool,
-	}
-	metaTable := sinktest.ProvideMetaTable(stagingDB, testDB)
-	stagers := stage.ProvideFactory(pool, stagingDB)
-	targetTable := sinktest.ProvideTimestampTable(stagingDB, testDB)
-	timeKeeper, cleanup6, err := timekeeper.ProvideTimeKeeper(contextContext, pool, targetTable)
+	configs, cleanup6, err := tblconf.ProvideConfigs(contextContext, pool, stagingDB)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -150,8 +144,26 @@ func newTestFixture() (*testFixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	resolvers, cleanup7, err := resolve.ProvideFactory(contextContext, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	fans := &fan.Fans{
+		Appliers: appliers,
+		Pool:     pool,
+	}
+	metaTable := sinktest.ProvideMetaTable(stagingDB, testDB)
+	stagers := stage.ProvideFactory(pool, stagingDB)
+	targetTable := sinktest.ProvideTimestampTable(stagingDB, testDB)
+	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(contextContext, pool, targetTable)
 	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	resolvers, cleanup8, err := resolve.ProvideFactory(contextContext, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -162,6 +174,7 @@ func newTestFixture() (*testFixture, func(), error) {
 	}
 	watcher, err := sinktest.ProvideWatcher(contextContext, testDB, watchers)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -174,6 +187,7 @@ func newTestFixture() (*testFixture, func(), error) {
 	fixture := &sinktest.Fixture{
 		BaseFixture: baseFixture,
 		Appliers:    appliers,
+		Configs:     configs,
 		Fans:        fans,
 		Resolvers:   resolvers,
 		Stagers:     stagers,
@@ -183,8 +197,9 @@ func newTestFixture() (*testFixture, func(), error) {
 		Watcher:     watcher,
 	}
 	config := provideTestConfig(dbInfo)
-	authenticator, cleanup8, err := ProvideAuthenticator(contextContext, pool, config, stagingDB)
+	authenticator, cleanup9, err := ProvideAuthenticator(contextContext, pool, config, stagingDB)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -194,8 +209,9 @@ func newTestFixture() (*testFixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	listener, cleanup9, err := ProvideListener(config)
+	listener, cleanup10, err := ProvideListener(config)
 	if err != nil {
+		cleanup9()
 		cleanup8()
 		cleanup7()
 		cleanup6()
@@ -216,6 +232,7 @@ func newTestFixture() (*testFixture, func(), error) {
 	serveMux := ProvideMux(handler, pool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
+		cleanup10()
 		cleanup9()
 		cleanup8()
 		cleanup7()
@@ -227,7 +244,7 @@ func newTestFixture() (*testFixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup10 := ProvideServer(listener, serveMux, tlsConfig)
+	server, cleanup11 := ProvideServer(listener, serveMux, tlsConfig)
 	serverTestFixture := &testFixture{
 		Fixture:       fixture,
 		Authenticator: authenticator,
@@ -236,6 +253,7 @@ func newTestFixture() (*testFixture, func(), error) {
 		Server:        server,
 	}
 	return serverTestFixture, func() {
+		cleanup11()
 		cleanup10()
 		cleanup9()
 		cleanup8()

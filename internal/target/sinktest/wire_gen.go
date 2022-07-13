@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
+	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 )
 
@@ -87,14 +88,7 @@ func NewFixture() (*Fixture, func(), error) {
 	}
 	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup5 := apply.ProvideFactory(watchers)
-	fans := &fan.Fans{
-		Appliers: appliers,
-		Pool:     pool,
-	}
-	metaTable := ProvideMetaTable(stagingDB, testDB)
-	stagers := stage.ProvideFactory(pool, stagingDB)
-	targetTable := ProvideTimestampTable(stagingDB, testDB)
-	timeKeeper, cleanup6, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
+	configs, cleanup6, err := tblconf.ProvideConfigs(context, pool, stagingDB)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -103,8 +97,26 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	resolvers, cleanup7, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	fans := &fan.Fans{
+		Appliers: appliers,
+		Pool:     pool,
+	}
+	metaTable := ProvideMetaTable(stagingDB, testDB)
+	stagers := stage.ProvideFactory(pool, stagingDB)
+	targetTable := ProvideTimestampTable(stagingDB, testDB)
+	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
 	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	resolvers, cleanup8, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -115,6 +127,7 @@ func NewFixture() (*Fixture, func(), error) {
 	}
 	watcher, err := ProvideWatcher(context, testDB, watchers)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -127,6 +140,7 @@ func NewFixture() (*Fixture, func(), error) {
 	fixture := &Fixture{
 		BaseFixture: baseFixture,
 		Appliers:    appliers,
+		Configs:     configs,
 		Fans:        fans,
 		Resolvers:   resolvers,
 		Stagers:     stagers,
@@ -136,6 +150,7 @@ func NewFixture() (*Fixture, func(), error) {
 		Watcher:     watcher,
 	}
 	return fixture, func() {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
