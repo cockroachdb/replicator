@@ -18,11 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
+	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -36,12 +33,7 @@ import (
 
 // TestSet contains providers to create a self-contained Fixture.
 var TestSet = wire.NewSet(
-	apply.Set,
-	fan.Set,
-	resolve.Set,
-	schemawatch.Set,
-	stage.Set,
-	timekeeper.Set,
+	target.Set,
 
 	ProvideContext,
 	ProvideDBInfo,

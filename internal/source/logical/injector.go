@@ -16,17 +16,13 @@ package logical
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/google/wire"
 )
 
 func Start(ctx context.Context, config *Config, dialect Dialect) (*Loop, func(), error) {
 	panic(wire.Build(
 		Set,
-		apply.Set,
-		fan.Set,
-		schemawatch.Set,
+		target.Set,
 	))
 }

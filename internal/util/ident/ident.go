@@ -107,6 +107,12 @@ func (n Ident) MarshalJSON() ([]byte, error) {
 	return json.Marshal(n.Raw())
 }
 
+// MarshalText returns the Ident's raw form, allowing the Ident type
+// to be used as a JSON map-key.
+func (n Ident) MarshalText() ([]byte, error) {
+	return []byte(n.Raw()), nil
+}
+
 // Raw returns the original, raw value.
 func (n Ident) Raw() string {
 	return n.r
@@ -122,6 +128,12 @@ func (n *Ident) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*n = New(raw)
+	return nil
+}
+
+// UnmarshalText converts a raw string into an Ident.
+func (n *Ident) UnmarshalText(data []byte) error {
+	*n = New(string(data))
 	return nil
 }
 
@@ -152,6 +164,11 @@ func (s Schema) Database() Ident { return s.db }
 // MarshalJSON returns the Schema as a two-element array.
 func (s Schema) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]string{s.Database().Raw(), s.Schema().Raw()})
+}
+
+// MarshalText returns the raw, dotted form of the Schema.
+func (s Schema) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
 }
 
 // Schema returns the schema's name.
@@ -214,6 +231,11 @@ func (t Table) Database() Ident { return t.db }
 // MarshalJSON returns the ident as a three-element array.
 func (t Table) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]string{t.Database().Raw(), t.Schema().Raw(), t.Table().Raw()})
+}
+
+// MarshalText returns the raw, dotted form of the Table.
+func (t Table) MarshalText() ([]byte, error) {
+	return []byte(t.Raw()), nil
 }
 
 // Schema returns the table's enclosing schema.
