@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -49,7 +50,7 @@ func TestApply(t *testing.T) {
 		return
 	}
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -301,7 +302,7 @@ func TestAllDataTypes(t *testing.T) {
 				return
 			}
 
-			app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+			app, err := fixture.Appliers.Get(ctx, tbl.Name())
 			if !a.NoError(err) {
 				return
 			}
@@ -370,7 +371,13 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
-		_, err := fixture.Appliers.Get(ctx, tbl.Name(), []ident.Ident{ident.New("bad_column")}, types.Deadlines{})
+
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &tblconf.Config{
+			CASColumns: []ident.Ident{ident.New("bad_column")},
+		}))
+		a.NoError(fixture.Configs.Refresh(ctx))
+
+		_, err := fixture.Appliers.Get(ctx, tbl.Name())
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -378,7 +385,13 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
-		_, err := fixture.Appliers.Get(ctx, tbl.Name(), nil, types.Deadlines{ident.New("bad_column"): 0})
+
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &tblconf.Config{
+			Deadlines: types.Deadlines{ident.New("bad_column"): time.Second},
+		}))
+		a.NoError(fixture.Configs.Refresh(ctx))
+
+		_, err := fixture.Appliers.Get(ctx, tbl.Name())
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -396,15 +409,16 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	var casColumns []ident.Ident
+	configData := tblconf.NewConfig()
 	if cas {
-		casColumns = []ident.Ident{ident.New("ver")}
+		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
-	deadlines := types.Deadlines{}
 	if deadline {
-		deadlines[ident.New("ts")] = 10 * time.Minute
+		configData.Deadlines[ident.New("ts")] = 10 * time.Minute
 	}
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), casColumns, deadlines)
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Refresh(ctx))
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -512,7 +526,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		a.FailNow("the workaround is no longer necessary for this version of CRDB")
 	}
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -569,7 +583,7 @@ func TestVirtualColumns(t *testing.T) {
 		return
 	}
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -653,15 +667,16 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	var casColumns []ident.Ident
+	configData := tblconf.NewConfig()
 	if cfg.cas {
-		casColumns = []ident.Ident{ident.New("ver")}
+		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
-	deadlines := types.Deadlines{}
 	if cfg.deadline {
-		deadlines[ident.New("ts")] = time.Hour
+		configData.Deadlines[ident.New("ts")] = time.Hour
 	}
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), casColumns, deadlines)
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Refresh(ctx))
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}

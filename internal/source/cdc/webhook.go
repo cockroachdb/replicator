@@ -127,7 +127,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 		// Stage or apply the per-target mutations.
 		for target, muts := range toProcess {
 			if req.immediate {
-				applier, err := h.Appliers.Get(ctx, target, req.casColumns, req.deadlines)
+				applier, err := h.Appliers.Get(ctx, target)
 				if err != nil {
 					return err
 				}

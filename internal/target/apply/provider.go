@@ -11,7 +11,9 @@
 package apply
 
 import (
+	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
 )
 
@@ -23,9 +25,12 @@ var Set = wire.NewSet(
 // ProvideFactory is called by Wire to construct the factory. The cancel
 // function will, in turn, destroy the per-schema types.Applier
 // instances.
-func ProvideFactory(watchers types.Watchers) (types.Appliers, func()) {
-	f := &factory{watchers: watchers}
-	f.mu.instances = make(map[cacheKey]*apply)
+func ProvideFactory(configs *tblconf.Configs, watchers types.Watchers) (types.Appliers, func()) {
+	f := &factory{
+		configs:  configs,
+		watchers: watchers,
+	}
+	f.mu.instances = make(map[ident.Table]*apply)
 	return f, func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()

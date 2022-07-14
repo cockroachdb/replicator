@@ -45,10 +45,10 @@ type Config struct {
 }
 
 // configZero is a sentinel value for "no configuration".
-var configZero = newConfig()
+var configZero = NewConfig()
 
-// newConfig constructs a Config with all map fields populated.
-func newConfig() *Config {
+// NewConfig constructs a Config with all map fields populated.
+func NewConfig() *Config {
 	return &Config{
 		Deadlines: make(types.Deadlines),
 		Exprs:     make(map[SourceColumn]string),
@@ -59,7 +59,7 @@ func newConfig() *Config {
 
 // Copy returns a copy of the Config.
 func (t *Config) Copy() *Config {
-	ret := newConfig()
+	ret := NewConfig()
 
 	ret.CASColumns = append([]SourceColumn(nil), t.CASColumns...)
 	for k, v := range t.Deadlines {
@@ -80,7 +80,13 @@ func (t *Config) Copy() *Config {
 
 // IsZero returns true if the Config represents the absence of a
 // configuration.
-func (t *Config) IsZero() bool { return t == configZero }
+func (t *Config) IsZero() bool {
+	return len(t.CASColumns) == 0 &&
+		len(t.Deadlines) == 0 &&
+		len(t.Exprs) == 0 &&
+		len(t.Ignore) == 0 &&
+		len(t.Renames) == 0
+}
 
 // Configs provides a lookup service for per-destination-table
 // configurations.
@@ -186,7 +192,7 @@ func (c *Configs) Refresh(ctx context.Context) error {
 
 		tableData, found := next[targetTableIdent]
 		if !found {
-			tableData = &tempConfig{newConfig(), make(map[int]SourceColumn)}
+			tableData = &tempConfig{NewConfig(), make(map[int]SourceColumn)}
 			next[targetTableIdent] = tableData
 		}
 
@@ -260,12 +266,29 @@ func (c *Configs) refreshLoop(ctx context.Context) {
 	}
 }
 
-// Store will replace the stored table configuration. This method does
-// not refresh the internal map, instead, call Refresh once the
-// associated database transaction has committed.
+// Store will replace the stored table configuration with the one
+// provided. An empty or nil Config will delete any existing
+// configuration. This method does not refresh the internal map,
+// instead, call Refresh once the associated database transaction has
+// committed.
 func (c *Configs) Store(
 	ctx context.Context, tx pgxtype.Querier, table ident.Table, cfg *Config,
 ) error {
+	// Delete existing configuration data for the table.
+	_, err := tx.Exec(ctx,
+		c.sql.delete,
+		table.Database().Raw(),
+		table.Schema().Raw(),
+		table.Table().Raw())
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// Nothing else to do.
+	if cfg == nil {
+		return nil
+	}
+
 	// Collect all referenced source columns.
 	casIdx := make(map[SourceColumn]int)
 	refs := make(map[SourceColumn]struct{})
@@ -292,16 +315,6 @@ func (c *Configs) Store(
 		if !val.IsEmpty() {
 			refs[col] = struct{}{}
 		}
-	}
-
-	// Delete existing configuration data for the table.
-	_, err := tx.Exec(ctx,
-		c.sql.delete,
-		table.Database().Raw(),
-		table.Schema().Raw(),
-		table.Table().Raw())
-	if err != nil {
-		return errors.WithStack(err)
 	}
 
 	// Insert relevant data for each referenced column. We rely on the

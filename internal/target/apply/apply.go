@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -34,10 +35,7 @@ import (
 
 // apply will upsert mutations and deletions into a target table.
 type apply struct {
-	cancel     context.CancelFunc
-	casColumns []ident.Ident
-	deadlines  types.Deadlines
-	target     ident.Table
+	target ident.Table
 
 	deletes   prometheus.Counter
 	durations prometheus.Observer
@@ -56,19 +54,11 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	w types.Watcher, target ident.Table, casColumns []ident.Ident, deadlines types.Deadlines,
+	target ident.Table, cfgs *tblconf.Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
-	ch, cancel, err := w.Watch(target)
-	if err != nil {
-		return nil, cancel, err
-	}
-
 	labelValues := metrics.TableValues(target)
 	a := &apply{
-		cancel:     cancel,
-		casColumns: casColumns,
-		deadlines:  deadlines,
-		target:     target,
+		target: target,
 
 		deletes:   applyDeletes.WithLabelValues(labelValues...),
 		durations: applyDurations.WithLabelValues(labelValues...),
@@ -76,27 +66,64 @@ func newApply(
 		upserts:   applyUpserts.WithLabelValues(labelValues...),
 	}
 
-	// Wait for the initial column data to be loaded.
-	select {
-	case colData := <-ch:
-		if err := a.refreshUnlocked(colData); err != nil {
-			return nil, cancel, err
-		}
-	case <-time.After(10 * time.Second):
-		return nil, cancel, errors.Errorf("column data timeout for %s", target)
-	}
+	// Start a background goroutine to refresh the templates.
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func(ctx context.Context, errs chan<- error) {
+		defer cancel()
 
-	// Background routine to keep the column data refreshed.
-	go func() {
-		for {
-			colData, open := <-ch
-			if !open {
-				return
-			}
-			a.refreshUnlocked(colData)
-			log.WithField("table", a.target).Debug("refreshed schema")
+		w, err := watchers.Get(ctx, target.Database())
+		if err != nil {
+			errs <- err
+			return
 		}
-	}()
+
+		schemaCh, cancelSchema, err := w.Watch(target)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer cancelSchema()
+
+		configCh, cancelConfig := cfgs.Watch(target)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer cancelConfig()
+
+		var configData *tblconf.Config
+		var schemaData []types.ColData
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case configData = <-configCh:
+			case schemaData = <-schemaCh:
+			}
+			if configData != nil && len(schemaData) > 0 {
+				err := a.refreshUnlocked(configData, schemaData)
+				if err != nil {
+					log.WithError(err).WithField("table", target).Warn("could not refresh table metadata")
+				}
+				// Send the first error (or nil) to the channel, then
+				// close it. Shut down if we get an error at the outset.
+				if errs != nil {
+					errs <- err
+					close(errs)
+					errs = nil
+					if err != nil {
+						return
+					}
+				}
+			}
+		}
+	}(ctx, errs)
+
+	// Wait for the first loop of the refresh goroutine above.
+	if err := <-errs; err != nil {
+		return nil, nil, err
+	}
 
 	return a, cancel, nil
 }
@@ -312,29 +339,29 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 }
 
 // refreshUnlocked updates the apply with new column information.
-func (a *apply) refreshUnlocked(colData []types.ColData) error {
+func (a *apply) refreshUnlocked(configData *tblconf.Config, schemaData []types.ColData) error {
 	// We want to verify that the cas and deadline columns actually
 	// exist in the incoming column data.
-	allColNames := make(map[ident.Ident]struct{}, len(colData))
-	for _, col := range colData {
+	allColNames := make(map[ident.Ident]struct{}, len(schemaData))
+	for _, col := range schemaData {
 		allColNames[col.Name] = struct{}{}
 	}
-	for _, col := range a.casColumns {
+	for _, col := range configData.CASColumns {
 		if _, found := allColNames[col]; !found {
 			return errors.Errorf("cas column name %s not found in table %s", col, a.target)
 		}
 	}
-	for col := range a.deadlines {
+	for col := range configData.Deadlines {
 		if _, found := allColNames[col]; !found {
 			return errors.Errorf("deadline column name %s not found in table %s", col, a.target)
 		}
 	}
 
-	tmpls := newTemplates(a.target, a.casColumns, a.deadlines, colData)
+	tmpls := newTemplates(a.target, configData.CASColumns, configData.Deadlines, schemaData)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.mu.columns = colData
+	a.mu.columns = schemaData
 	a.mu.pks = tmpls.PK
 	a.mu.templates = tmpls
 	return nil

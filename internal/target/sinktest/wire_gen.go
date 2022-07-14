@@ -86,17 +86,15 @@ func NewFixture() (*Fixture, func(), error) {
 		StagingDB: stagingDB,
 		TestDB:    testDB,
 	}
-	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup5 := apply.ProvideFactory(watchers)
-	configs, cleanup6, err := tblconf.ProvideConfigs(context, pool, stagingDB)
+	configs, cleanup4, err := tblconf.ProvideConfigs(context, pool, stagingDB)
 	if err != nil {
-		cleanup5()
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
+	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,

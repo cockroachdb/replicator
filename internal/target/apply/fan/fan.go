@@ -176,8 +176,7 @@ func (f *Fan) bucketForLocked(
 		return found, nil
 	}
 
-	// TODO(bob): Make this configurable?
-	app, err := f.appliers.Get(ctx, table, nil /* cas */, types.Deadlines{})
+	app, err := f.appliers.Get(ctx, table)
 	if err != nil {
 		return nil, err
 	}

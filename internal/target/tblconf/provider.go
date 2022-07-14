@@ -17,7 +17,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -29,7 +29,7 @@ var Set = wire.NewSet(
 // ProvideConfigs constructs a Configs instance, starting a new
 // background goroutine to keep it refreshed.
 func ProvideConfigs(
-	ctx context.Context, pool pgxtype.Querier, targetDB ident.StagingDB,
+	ctx context.Context, pool *pgxpool.Pool, targetDB ident.StagingDB,
 ) (*Configs, func(), error) {
 	target := ident.NewTable(targetDB.Ident(), ident.Public, ident.New("column_config"))
 

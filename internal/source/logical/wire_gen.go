@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 )
 
 // Injectors from injector.go:
@@ -20,29 +21,34 @@ func Start(ctx context.Context, config *Config, dialect Dialect) (*Loop, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	watchers, cleanup2 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup3 := apply.ProvideFactory(watchers)
+	stagingDB, err := ProvideStagingDB(config)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	configs, cleanup2, err := tblconf.ProvideConfigs(ctx, pool, stagingDB)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
 	serialPool := ProvideSerializer(config, pool)
 	querier := ProvideQuerier(pool, serialPool)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     querier,
 	}
-	stagingDB, err := ProvideStagingDB(config)
+	logicalLoop, cleanup5, err := ProvideLoop(ctx, config, dialect, fans, pool, serialPool, stagingDB)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	logicalLoop, cleanup4, err := ProvideLoop(ctx, config, dialect, fans, pool, serialPool, stagingDB)
-	if err != nil {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	return logicalLoop, func() {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

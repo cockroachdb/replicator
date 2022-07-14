@@ -97,9 +97,14 @@ func TestPersistenceRoundTrip(t *testing.T) {
 
 	// Replace the data with an empty configuration, this will wind
 	// up deleting the config rows.
-	a.False((&tblconf.Config{}).IsZero())
 	a.NoError(cfgs.Store(ctx, fixture.Pool, tbl, &tblconf.Config{}))
 	a.NoError(cfgs.Refresh(ctx))
 	a.True(cfgs.Get(tbl).IsZero())
 	a.True(readWatch().IsZero())
+}
+
+func TestZero(t *testing.T) {
+	a := assert.New(t)
+
+	a.True(tblconf.NewConfig().IsZero())
 }

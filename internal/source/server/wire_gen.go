@@ -37,11 +37,18 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup4 := apply.ProvideFactory(watchers)
 	stagingDB := ProvideStagingDB(config)
-	authenticator, cleanup5, err := ProvideAuthenticator(ctx, pool, config, stagingDB)
+	configs, cleanup3, err := tblconf.ProvideConfigs(ctx, pool, stagingDB)
 	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
+	authenticator, cleanup6, err := ProvideAuthenticator(ctx, pool, config, stagingDB)
+	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -51,8 +58,9 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 	metaTable := ProvideMetaTable(stagingDB)
 	stagers := stage.ProvideFactory(pool, stagingDB)
 	targetTable := ProvideTimeTable(stagingDB)
-	timeKeeper, cleanup6, err := timekeeper.ProvideTimeKeeper(ctx, pool, targetTable)
+	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(ctx, pool, targetTable)
 	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -60,8 +68,9 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	resolvers, cleanup7, err := resolve.ProvideFactory(ctx, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	resolvers, cleanup8, err := resolve.ProvideFactory(ctx, appliers, metaTable, pool, stagers, timeKeeper, watchers)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -80,6 +89,7 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 	serveMux := ProvideMux(handler, pool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -89,8 +99,9 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup8 := ProvideServer(listener, serveMux, tlsConfig)
+	server, cleanup9 := ProvideServer(listener, serveMux, tlsConfig)
 	return server, func() {
+		cleanup9()
 		cleanup8()
 		cleanup7()
 		cleanup6()
@@ -133,17 +144,15 @@ func newTestFixture() (*testFixture, func(), error) {
 		StagingDB: stagingDB,
 		TestDB:    testDB,
 	}
-	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup5 := apply.ProvideFactory(watchers)
-	configs, cleanup6, err := tblconf.ProvideConfigs(contextContext, pool, stagingDB)
+	configs, cleanup4, err := tblconf.ProvideConfigs(contextContext, pool, stagingDB)
 	if err != nil {
-		cleanup5()
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
+	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,
