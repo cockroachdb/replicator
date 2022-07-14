@@ -34,7 +34,7 @@ type Applier interface {
 
 // Appliers is a factory for Applier instances.
 type Appliers interface {
-	Get(ctx context.Context, target ident.Table, casColumns []ident.Ident, deadlines Deadlines) (Applier, error)
+	Get(ctx context.Context, target ident.Table) (Applier, error)
 }
 
 // An Authenticator determines if an operation on some schema should be

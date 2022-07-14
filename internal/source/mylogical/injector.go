@@ -17,9 +17,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/google/wire"
 )
 
@@ -28,9 +26,7 @@ import (
 func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	panic(wire.Build(
 		Set,
-		apply.Set,
-		fan.Set,
 		logical.Set,
-		schemawatch.Set,
+		target.Set,
 	))
 }

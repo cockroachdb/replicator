@@ -85,8 +85,15 @@ func NewFixture() (*Fixture, func(), error) {
 		StagingDB: stagingDB,
 		TestDB:    testDB,
 	}
-	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup5 := apply.ProvideFactory(watchers)
+	configs, cleanup4, err := apply.ProvideConfigs(context, pool, stagingDB)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,
@@ -94,8 +101,9 @@ func NewFixture() (*Fixture, func(), error) {
 	metaTable := ProvideMetaTable(stagingDB, testDB)
 	stagers := stage.ProvideFactory(pool, stagingDB)
 	targetTable := ProvideTimestampTable(stagingDB, testDB)
-	timeKeeper, cleanup6, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
+	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
 	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -103,8 +111,9 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	resolvers, cleanup7, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	resolvers, cleanup8, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -115,6 +124,7 @@ func NewFixture() (*Fixture, func(), error) {
 	}
 	watcher, err := ProvideWatcher(context, testDB, watchers)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -127,6 +137,7 @@ func NewFixture() (*Fixture, func(), error) {
 	fixture := &Fixture{
 		BaseFixture: baseFixture,
 		Appliers:    appliers,
+		Configs:     configs,
 		Fans:        fans,
 		Resolvers:   resolvers,
 		Stagers:     stagers,
@@ -136,6 +147,7 @@ func NewFixture() (*Fixture, func(), error) {
 		Watcher:     watcher,
 	}
 	return fixture, func() {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()

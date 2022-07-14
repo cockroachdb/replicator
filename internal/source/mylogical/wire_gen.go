@@ -28,29 +28,34 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	watchers, cleanup2 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup3 := apply.ProvideFactory(watchers)
+	stagingDB, err := logical.ProvideStagingDB(logicalConfig)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	configs, cleanup2, err := apply.ProvideConfigs(ctx, pool, stagingDB)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
 	serialPool := logical.ProvideSerializer(logicalConfig, pool)
 	querier := logical.ProvideQuerier(pool, serialPool)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     querier,
 	}
-	stagingDB, err := logical.ProvideStagingDB(logicalConfig)
+	loop, cleanup5, err := logical.ProvideLoop(ctx, logicalConfig, dialect, fans, pool, serialPool, stagingDB)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	loop, cleanup4, err := logical.ProvideLoop(ctx, logicalConfig, dialect, fans, pool, serialPool, stagingDB)
-	if err != nil {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	return loop, func() {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

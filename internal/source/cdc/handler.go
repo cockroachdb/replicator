@@ -16,9 +16,7 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -30,26 +28,15 @@ import (
 
 // This file contains code repackaged from main.go
 
+// ApplyMode controls the strategy used to stage and/or apply mutations.
+type ApplyMode int
+
 const (
-	// CASParam is the name of a query parameter that will apply a
-	// compare-and-set behavior to processed records. The value of the
-	// parameter should be a comma-separated list of column names.
-	CASParam = "cas"
-
-	// DeadlineColumnParam is the name of a query parameter that names
-	// a column in the incoming data to use in a deadline calculation.
-	DeadlineColumnParam = "dln"
-
-	// DeadlineIntervalParam is the name of a query parameter that
-	// specifies the deadline time, relative to now() on the target
-	// cluster.
-	DeadlineIntervalParam = "dli"
-
-	// ImmediateParam is the name of a query parameter that will place a
-	// request into "immediate" mode.  In this mode, mutations are
-	// written directly to the target table and resolved timestamps are
-	// ignored.
-	ImmediateParam = "immediate"
+	// PreserveTX will preserve transaction boundaries.
+	PreserveTX ApplyMode = iota
+	// IgnoreTX discards transaction boundaries, trading atomicity for
+	// throughput.
+	IgnoreTX
 )
 
 // Handler is an http.Handler for processing webhook requests
@@ -57,6 +44,7 @@ const (
 type Handler struct {
 	Appliers      types.Appliers      // Update tables within TargetDb.
 	Authenticator types.Authenticator // Access checks.
+	Mode          ApplyMode           // Enable immediate mode.
 	Pool          *pgxpool.Pool       // Access to the target cluster.
 	Resolvers     types.Resolvers     // Record resolved timestamps.
 	Stores        types.Stagers       // Record incoming json blobs.
@@ -64,13 +52,10 @@ type Handler struct {
 
 // A request is configured by the various parseURL methods in Handler.
 type request struct {
-	body       io.Reader
-	casColumns []ident.Ident
-	deadlines  types.Deadlines // Nil if no deadlines set.
-	immediate  bool
-	leaf       func(ctx context.Context, req *request) error
-	target     ident.Schematic
-	timestamp  hlc.Time
+	body      io.Reader
+	leaf      func(ctx context.Context, req *request) error
+	target    ident.Schematic
+	timestamp hlc.Time
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -141,38 +126,5 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.body = r.Body
-
-	query := r.URL.Query()
-	if query.Has(CASParam) {
-		for _, raw := range query[CASParam] {
-			req.casColumns = append(req.casColumns, ident.New(raw))
-		}
-	}
-	// Pair-wise parsing of dln and dli query params.
-	if cols, ints := query[DeadlineColumnParam], query[DeadlineIntervalParam]; len(cols)+len(ints) > 0 {
-		if len(cols) != len(ints) {
-			sendErr(errors.Errorf("mismatch in %s and %s counts",
-				DeadlineColumnParam, DeadlineIntervalParam))
-			return
-		}
-		req.deadlines = make(types.Deadlines, len(cols))
-		for i, col := range cols {
-			d, err := time.ParseDuration(ints[i])
-			if err != nil {
-				sendErr(err)
-				return
-			}
-			req.deadlines[ident.New(col)] = d
-		}
-	}
-	if found := query.Get(ImmediateParam); found != "" {
-		var err error
-		req.immediate, err = strconv.ParseBool(found)
-		if err != nil {
-			sendErr(err)
-			return
-		}
-	}
-
 	sendErr(req.leaf(ctx, req))
 }

@@ -262,8 +262,7 @@ func (r *resolve) Flush(ctx context.Context) (hlc.Time, types.FlushDetail, error
 			}
 			stagers = append(stagers, stager)
 
-			// TODO(bob): Support data-driven configuration.
-			applier, err := r.appliers.Get(ctx, table, nil, types.Deadlines{})
+			applier, err := r.appliers.Get(ctx, table)
 			if err != nil {
 				return err
 			}
