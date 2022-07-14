@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
@@ -60,7 +60,7 @@ type Fixture struct {
 	BaseFixture
 
 	Appliers   types.Appliers
-	Configs    *tblconf.Configs
+	Configs    *apply.Configs
 	Fans       *fan.Fans
 	Resolvers  types.Resolvers
 	Stagers    types.Stagers

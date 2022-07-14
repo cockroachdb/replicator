@@ -14,14 +14,13 @@ import (
 	"context"
 	"sync"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
 // factory vends singleton instance of apply.
 type factory struct {
-	configs  *tblconf.Configs
+	configs  *Configs
 	watchers types.Watchers
 	mu       struct {
 		sync.RWMutex

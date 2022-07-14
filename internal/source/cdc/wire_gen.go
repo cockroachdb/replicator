@@ -14,7 +14,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 )
 
@@ -49,7 +48,7 @@ func newTestFixture() (*testFixture, func(), error) {
 		StagingDB: stagingDB,
 		TestDB:    testDB,
 	}
-	configs, cleanup4, err := tblconf.ProvideConfigs(context, pool, stagingDB)
+	configs, cleanup4, err := apply.ProvideConfigs(context, pool, stagingDB)
 	if err != nil {
 		cleanup3()
 		cleanup2()

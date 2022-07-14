@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -372,7 +372,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &tblconf.Config{
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &apply.Config{
 			CASColumns: []ident.Ident{ident.New("bad_column")},
 		}))
 		a.NoError(fixture.Configs.Refresh(ctx))
@@ -386,7 +386,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &tblconf.Config{
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &apply.Config{
 			Deadlines: types.Deadlines{ident.New("bad_column"): time.Second},
 		}))
 		a.NoError(fixture.Configs.Refresh(ctx))
@@ -409,7 +409,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	configData := tblconf.NewConfig()
+	configData := apply.NewConfig()
 	if cas {
 		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
@@ -485,6 +485,52 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		lastTime = expectedTime
 		lastVersion = expectedVersion
 	}
+}
+
+// This tests the renaming configuration feature.
+func TestRenamedColumns(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	// KV payload, but with different column names.
+	type Payload struct {
+		PK  int    `json:"pk_source"`
+		Val string `json:"val_source"`
+	}
+
+	tbl, err := fixture.CreateTable(ctx,
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
+	if !a.NoError(err) {
+		return
+	}
+
+	configData := apply.NewConfig()
+	configData.SourceNames = map[apply.TargetColumn]apply.SourceColumn{
+		ident.New("pk"):  ident.New("pk_source"),
+		ident.New("val"): ident.New("val_source"),
+	}
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Refresh(ctx))
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	if !a.NoError(err) {
+		return
+	}
+
+	p := Payload{PK: 42, Val: "Hello world!"}
+	bytes, err := json.Marshal(p)
+	a.NoError(err)
+
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
 }
 
 // This tests a case in which cdc-sink does not upsert all columns in
@@ -667,7 +713,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	configData := tblconf.NewConfig()
+	configData := apply.NewConfig()
 	if cfg.cas {
 		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}

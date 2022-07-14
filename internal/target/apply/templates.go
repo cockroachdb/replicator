@@ -90,18 +90,18 @@ type templates struct {
 // pre-computations to identify primary keys and to filter out ignored
 // columns.
 func newTemplates(
-	target ident.Table, casNames []ident.Ident, deadlines types.Deadlines, colData []types.ColData,
+	target ident.Table, cfgData *Config, colData []types.ColData,
 ) *templates {
 	// Map cas column names to their order in the comparison tuple.
-	casMap := make(map[ident.Ident]int, len(casNames))
-	for idx, name := range casNames {
+	casMap := make(map[ident.Ident]int, len(cfgData.CASColumns))
+	for idx, name := range cfgData.CASColumns {
 		casMap[name] = idx
 	}
 
 	ret := &templates{
-		Conditions: make([]types.ColData, len(casNames)),
+		Conditions: make([]types.ColData, len(cfgData.CASColumns)),
 		Columns:    append([]types.ColData(nil), colData...),
-		Deadlines:  deadlines,
+		Deadlines:  cfgData.Deadlines,
 		TableName:  target,
 		cache: &templateCache{
 			deletes: lru.New(batches.Size() / 10),
@@ -109,11 +109,12 @@ func newTemplates(
 		},
 	}
 
-	// Filter out the ignored columns and build the list of PK columns.
+	// Filter out the ignored columns, build the list of PK columns,
+	// and apply renames.
 	// https://github.com/golang/go/wiki/SliceTricks#filter-in-place
 	idx := 0
 	for _, col := range ret.Columns {
-		if col.Ignored {
+		if col.Ignored || cfgData.Ignore[col.Name] {
 			continue
 		}
 		ret.Columns[idx] = col

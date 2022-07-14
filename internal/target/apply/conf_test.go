@@ -8,14 +8,15 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package tblconf_test
+package apply_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
@@ -39,20 +40,20 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	watch, cancel := cfgs.Watch(tbl)
 	defer cancel()
 	// Helper to perform a timed read from the watch channel.
-	readWatch := func() *tblconf.Config {
+	readWatch := func() *apply.Config {
 		select {
 		case ret := <-watch:
 			return ret
 		case <-time.After(time.Second):
 			a.Fail("timed out waiting for watch")
-			return &tblconf.Config{}
+			return &apply.Config{}
 		}
 	}
 
 	// We should see data immediately.
 	a.True(readWatch().IsZero())
 
-	cfg := &tblconf.Config{
+	cfg := &apply.Config{
 		CASColumns: []ident.Ident{
 			ident.New("cas1"),
 			ident.New("cas2"),
@@ -69,7 +70,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 			ident.New("ignore1"): true,
 			ident.New("ignore2"): true,
 		},
-		Renames: map[ident.Ident]ident.Ident{
+		SourceNames: map[ident.Ident]ident.Ident{
 			ident.New("rename1"): ident.New("renamed1"),
 			ident.New("rename2"): ident.New("renamed2"),
 		},
@@ -92,12 +93,17 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	found := cfgs.Get(tbl)
 	a.Equal(cfg, found)
 
+	bytes, err := json.Marshal(cfgs.GetAll())
+	if a.NoError(err) {
+		t.Log(string(bytes))
+	}
+
 	// Verify updated data from the watch.
 	a.Equal(cfg, readWatch())
 
 	// Replace the data with an empty configuration, this will wind
 	// up deleting the config rows.
-	a.NoError(cfgs.Store(ctx, fixture.Pool, tbl, &tblconf.Config{}))
+	a.NoError(cfgs.Store(ctx, fixture.Pool, tbl, &apply.Config{}))
 	a.NoError(cfgs.Refresh(ctx))
 	a.True(cfgs.Get(tbl).IsZero())
 	a.True(readWatch().IsZero())
@@ -106,5 +112,5 @@ func TestPersistenceRoundTrip(t *testing.T) {
 func TestZero(t *testing.T) {
 	a := assert.New(t)
 
-	a.True(tblconf.NewConfig().IsZero())
+	a.True(apply.NewConfig().IsZero())
 }

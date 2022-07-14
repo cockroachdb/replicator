@@ -8,8 +8,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-// Package tblconf allows for data-driven configuration of cdc-sink.
-package tblconf
+package apply
 
 import (
 	"context"
@@ -37,11 +36,11 @@ type (
 
 // A Config contains per-target-table configuration.
 type Config struct {
-	CASColumns []SourceColumn                 // The columns for compare-and-set operations.
-	Deadlines  map[SourceColumn]time.Duration // Deadline-based operation.
-	Exprs      map[SourceColumn]string        // Synthetic or replacement SQL expressions.
-	Ignore     map[SourceColumn]bool          // Source column names to ignore.
-	Renames    map[SourceColumn]TargetColumn  // Rename columns in the destination.
+	CASColumns  []TargetColumn                 // The columns for compare-and-set operations.
+	Deadlines   map[TargetColumn]time.Duration // Deadline-based operation.
+	Exprs       map[TargetColumn]string        // Synthetic or replacement SQL expressions.
+	Ignore      map[TargetColumn]bool          // Source column names to ignore.
+	SourceNames map[TargetColumn]SourceColumn  // Look for alternate name in the incoming data.
 }
 
 // configZero is a sentinel value for "no configuration".
@@ -50,10 +49,10 @@ var configZero = NewConfig()
 // NewConfig constructs a Config with all map fields populated.
 func NewConfig() *Config {
 	return &Config{
-		Deadlines: make(types.Deadlines),
-		Exprs:     make(map[SourceColumn]string),
-		Ignore:    make(map[SourceColumn]bool),
-		Renames:   make(map[SourceColumn]TargetColumn),
+		Deadlines:   make(types.Deadlines),
+		Exprs:       make(map[TargetColumn]string),
+		Ignore:      make(map[TargetColumn]bool),
+		SourceNames: make(map[TargetColumn]SourceColumn),
 	}
 }
 
@@ -61,7 +60,7 @@ func NewConfig() *Config {
 func (t *Config) Copy() *Config {
 	ret := NewConfig()
 
-	ret.CASColumns = append([]SourceColumn(nil), t.CASColumns...)
+	ret.CASColumns = append(ret.CASColumns, t.CASColumns...)
 	for k, v := range t.Deadlines {
 		ret.Deadlines[k] = v
 	}
@@ -71,8 +70,8 @@ func (t *Config) Copy() *Config {
 	for k, v := range t.Ignore {
 		ret.Ignore[k] = v
 	}
-	for k, v := range t.Renames {
-		ret.Renames[k] = v
+	for k, v := range t.SourceNames {
+		ret.SourceNames[k] = v
 	}
 
 	return ret
@@ -85,7 +84,7 @@ func (t *Config) IsZero() bool {
 		len(t.Deadlines) == 0 &&
 		len(t.Exprs) == 0 &&
 		len(t.Ignore) == 0 &&
-		len(t.Renames) == 0
+		len(t.SourceNames) == 0
 }
 
 // Configs provides a lookup service for per-destination-table
@@ -123,8 +122,21 @@ func (c *Configs) Get(tbl ident.Table) *Config {
 	return ret
 }
 
+// GetAll returns a deep copy of all known table configurations.
+func (c *Configs) GetAll() map[ident.Table]*Config {
+	c.mu.Lock()
+	data := c.mu.data
+	c.mu.Unlock()
+
+	ret := make(map[ident.Table]*Config, len(data))
+	for k, v := range data {
+		ret[k] = v.Copy()
+	}
+	return ret
+}
+
 const (
-	schema = `
+	confSchema = `
 CREATE TABLE IF NOT EXISTS %[1]s (
   target_db     STRING CHECK ( length(target_db) > 0 ),
   target_schema STRING CHECK ( length(target_schema) > 0 ),
@@ -135,20 +147,20 @@ CREATE TABLE IF NOT EXISTS %[1]s (
   deadline  INTERVAL   NOT NULL DEFAULT 0::INTERVAL,
   expr      STRING     NOT NULL DEFAULT '',
   ignore    BOOL       NOT NULL DEFAULT false,
-  rename    STRING     NOT NULL DEFAULT '',
+  src_name  STRING     NOT NULL DEFAULT '',
 
   PRIMARY KEY (target_db, target_schema, target_table, source_column)
 )
 `
-	deleteTemplate = `
+	deleteConfTemplate = `
 DELETE FROM %[1]s WHERE target_db = $1 AND target_schema = $2 AND target_table = $3`
-	loadAllTemplate = `
+	loadConfTemplate = `
 SELECT target_db, target_schema, target_table, source_column,
-       cas_order, deadline, expr, ignore, rename
+       cas_order, deadline, expr, ignore, src_name
 FROM %[1]s`
-	upsertTemplate = `
+	upsertConfTemplate = `
 UPSERT INTO %[1]s (target_db, target_schema, target_table, source_column,
-  cas_order, deadline, expr, ignore, rename)
+  cas_order, deadline, expr, ignore, src_name)
 VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, $9
 )`
@@ -210,7 +222,7 @@ func (c *Configs) Refresh(ctx context.Context) error {
 			tableData.Ignore[srcColIdent] = true
 		}
 		if rename != "" {
-			tableData.Renames[srcColIdent] = ident.New(rename)
+			tableData.SourceNames[srcColIdent] = ident.New(rename)
 		}
 
 	}
@@ -285,7 +297,7 @@ func (c *Configs) Store(
 	}
 
 	// Nothing else to do.
-	if cfg == nil {
+	if cfg == nil || cfg.IsZero() {
 		return nil
 	}
 
@@ -311,7 +323,7 @@ func (c *Configs) Store(
 			refs[col] = struct{}{}
 		}
 	}
-	for col, val := range cfg.Renames {
+	for col, val := range cfg.SourceNames {
 		if !val.IsEmpty() {
 			refs[col] = struct{}{}
 		}
@@ -330,7 +342,7 @@ func (c *Configs) Store(
 			cfg.Deadlines[col],
 			cfg.Exprs[col],
 			cfg.Ignore[col],
-			cfg.Renames[col].Raw(),
+			cfg.SourceNames[col].Raw(),
 		)
 		if err != nil {
 			return errors.WithStack(err)

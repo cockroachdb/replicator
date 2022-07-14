@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -44,9 +43,10 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
-		columns   []types.ColData
-		pks       []types.ColData
-		templates *templates
+		configData *Config
+		schemaData []types.ColData
+		pks        []types.ColData
+		templates  *templates
 	}
 }
 
@@ -54,7 +54,7 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	target ident.Table, cfgs *tblconf.Configs, watchers types.Watchers,
+	target ident.Table, cfgs *Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
 	labelValues := metrics.TableValues(target)
 	a := &apply{
@@ -92,7 +92,7 @@ func newApply(
 		}
 		defer cancelConfig()
 
-		var configData *tblconf.Config
+		var configData *Config
 		var schemaData []types.ColData
 		for {
 			select {
@@ -154,7 +154,7 @@ func (a *apply) Apply(ctx context.Context, tx pgxtype.Querier, muts []types.Muta
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if len(a.mu.columns) == 0 {
+	if len(a.mu.schemaData) == 0 {
 		return errors.Errorf("no ColumnData available for %s", a.target)
 	}
 
@@ -250,38 +250,45 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		return err
 	}
 
-	allArgs := make([]interface{}, 0, len(a.mu.columns)*len(muts))
+	allArgs := make([]interface{}, 0, len(a.mu.schemaData)*len(muts))
 
 	for i := range muts {
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Data))
 		dec.UseNumber()
 
-		incomingColumnData := make(map[string]interface{})
+		incomingColumnData := make(map[ident.Ident]interface{})
 		if err := dec.Decode(&incomingColumnData); err != nil {
 			return errors.WithStack(err)
 		}
 
 		// The values to pass to the database.
-		args := make([]interface{}, 0, len(a.mu.columns))
+		args := make([]interface{}, 0, len(a.mu.schemaData))
 		// Track the columns that we expect to see and that are seen in
 		// the incoming payload. This improves the error returned when
 		// there are unexpected columns.
-		knownColumnsInPayload := make(map[string]struct{}, len(a.mu.columns))
+		knownColumnsInPayload := make(map[ident.Ident]struct{}, len(a.mu.schemaData))
 
-		for _, col := range a.mu.columns {
-			rawColName := col.Name.Raw()
-			decoded, presentInPayload := incomingColumnData[rawColName]
+		for _, col := range a.mu.schemaData {
+			// Determine which key to look for in the mutation payload.
+			// If there's no explicit configuration, use the target
+			// column's name.
+			sourceColName := a.mu.configData.SourceNames[col.Name]
+			if sourceColName.IsEmpty() {
+				sourceColName = col.Name
+			}
+			decoded, presentInPayload := incomingColumnData[sourceColName]
 			// Keep track of columns in the incoming payload that match
 			// columns that we expect to see in the target database.
 			if presentInPayload {
-				knownColumnsInPayload[rawColName] = struct{}{}
+				knownColumnsInPayload[sourceColName] = struct{}{}
 			}
 			// Ignored will be true for columns in the target database
 			// that we know about, but that we don't actually want to
 			// insert new values for (e.g. computed columns). These
 			// ignored columns could be part of the primary key, or they
-			// could be a regular column.
-			if col.Ignored {
+			// could be a regular column. We also allow the user to
+			// force columns to be ignored (e.g. to drop a column).
+			if col.Ignored || a.mu.configData.Ignore[col.Name] {
 				continue
 			}
 			// We're not going to worry about missing columns in the
@@ -293,7 +300,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 					"schema drift detected in %s: "+
 						"missing PK column %s: "+
 						"key %s@%s",
-					a.target, rawColName,
+					a.target, sourceColName.Raw(),
 					string(muts[i].Key), muts[i].Time)
 			}
 			args = append(args, decoded)
@@ -306,7 +313,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 			var unexpected []string
 			for key := range incomingColumnData {
 				if _, seen := knownColumnsInPayload[key]; !seen {
-					unexpected = append(unexpected, key)
+					unexpected = append(unexpected, key.Raw())
 				}
 			}
 			sort.Strings(unexpected)
@@ -339,7 +346,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 }
 
 // refreshUnlocked updates the apply with new column information.
-func (a *apply) refreshUnlocked(configData *tblconf.Config, schemaData []types.ColData) error {
+func (a *apply) refreshUnlocked(configData *Config, schemaData []types.ColData) error {
 	// We want to verify that the cas and deadline columns actually
 	// exist in the incoming column data.
 	allColNames := make(map[ident.Ident]struct{}, len(schemaData))
@@ -356,12 +363,28 @@ func (a *apply) refreshUnlocked(configData *tblconf.Config, schemaData []types.C
 			return errors.Errorf("deadline column name %s not found in table %s", col, a.target)
 		}
 	}
+	for col := range configData.Exprs {
+		if _, found := allColNames[col]; !found {
+			return errors.Errorf("expression column name %s not found in table %s", col, a.target)
+		}
+	}
 
-	tmpls := newTemplates(a.target, configData.CASColumns, configData.Deadlines, schemaData)
+	// The Ignores field doesn't need validation, since you might want
+	// to mark a column as ignored in order to (eventually) drop it from
+	// the destination database.
+
+	for col := range configData.SourceNames {
+		if _, found := allColNames[col]; !found {
+			return errors.Errorf("renamed column name %s not found in table %s", col, a.target)
+		}
+	}
+
+	tmpls := newTemplates(a.target, configData, schemaData)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.mu.columns = schemaData
+	a.mu.configData = configData
+	a.mu.schemaData = schemaData
 	a.mu.pks = tmpls.PK
 	a.mu.templates = tmpls
 	return nil

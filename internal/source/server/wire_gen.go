@@ -15,7 +15,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"net"
@@ -38,7 +37,7 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	stagingDB := ProvideStagingDB(config)
-	configs, cleanup3, err := tblconf.ProvideConfigs(ctx, pool, stagingDB)
+	configs, cleanup3, err := apply.ProvideConfigs(ctx, pool, stagingDB)
 	if err != nil {
 		cleanup2()
 		cleanup()
@@ -144,7 +143,7 @@ func newTestFixture() (*testFixture, func(), error) {
 		StagingDB: stagingDB,
 		TestDB:    testDB,
 	}
-	configs, cleanup4, err := tblconf.ProvideConfigs(contextContext, pool, stagingDB)
+	configs, cleanup4, err := apply.ProvideConfigs(contextContext, pool, stagingDB)
 	if err != nil {
 		cleanup3()
 		cleanup2()

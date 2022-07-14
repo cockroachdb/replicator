@@ -68,10 +68,9 @@ func TestQueryTemplates(t *testing.T) {
 		ident.New("table"))
 
 	tcs := []struct {
-		name     string
-		cas      []ident.Ident
-		deadline types.Deadlines
-		upsert   string
+		name   string
+		cfg    *Config
+		upsert string
 	}{
 		{
 			name: "base",
@@ -83,7 +82,9 @@ func TestQueryTemplates(t *testing.T) {
 		},
 		{
 			name: "cas",
-			cas:  []ident.Ident{ident.New("val1"), ident.New("val0")},
+			cfg: &Config{
+				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
+			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog") AS (
 VALUES
 ($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB)),
@@ -104,9 +105,11 @@ SELECT * FROM action`,
 		},
 		{
 			name: "deadline",
-			deadline: types.Deadlines{
-				ident.New("val1"): time.Second,
-				ident.New("val0"): time.Hour,
+			cfg: &Config{
+				Deadlines: types.Deadlines{
+					ident.New("val1"): time.Second,
+					ident.New("val0"): time.Hour,
+				},
 			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog") AS (
 VALUES
@@ -118,10 +121,12 @@ SELECT * FROM deadlined`,
 		},
 		{
 			name: "casDeadline",
-			cas:  []ident.Ident{ident.New("val1"), ident.New("val0")},
-			deadline: types.Deadlines{
-				ident.New("val0"): time.Hour,
-				ident.New("val1"): time.Second,
+			cfg: &Config{
+				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
+				Deadlines: types.Deadlines{
+					ident.New("val0"): time.Hour,
+					ident.New("val1"): time.Second,
+				},
 			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog") AS (
 VALUES
@@ -142,6 +147,57 @@ WHERE current."pk0" IS NULL OR
 UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog")
 SELECT * FROM action`,
 		},
+		{
+			name: "ignore",
+			cfg: &Config{
+				Ignore: map[SourceColumn]bool{
+					ident.New("geom"): true,
+					ident.New("geog"): true,
+				},
+			},
+			upsert: `UPSERT INTO "database"."schema"."table" (
+"pk0","pk1","val0","val1"
+) VALUES
+($1::STRING,$2::INT8,$3::STRING,$4::STRING),
+($5::STRING,$6::INT8,$7::STRING,$8::STRING)`,
+		},
+		{
+			// Changing the source names should have no effect on the
+			// SQL that gets generated; we only care about the different
+			// value when looking up values in the incoming mutation.
+			name: "source names",
+			cfg: &Config{
+				SourceNames: map[TargetColumn]SourceColumn{
+					ident.New("val1"):    ident.New("valRenamed"),
+					ident.New("geog"):    ident.New("george"),
+					ident.New("unknown"): ident.New("is ok"),
+				},
+			},
+			upsert: `UPSERT INTO "database"."schema"."table" (
+"pk0","pk1","val0","val1","geom","geog"
+) VALUES
+($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB)),
+($7::STRING,$8::INT8,$9::STRING,$10::STRING,st_geomfromgeojson($11::JSONB),st_geogfromgeojson($12::JSONB))`,
+		},
+		{
+			name: "expr",
+			cfg: &Config{
+				Exprs: map[TargetColumn]string{
+					ident.New("val0"): `'fixed'`,
+					ident.New("val1"): `$0||'foobar'`,
+					ident.New("pk1"):  `$0+$0`,
+				},
+				Ignore: map[TargetColumn]bool{
+					ident.New("geom"): true,
+					ident.New("geog"): true,
+				},
+			},
+			upsert: `UPSERT INTO "database"."schema"."table" (
+"pk0","pk1","val0","val1"
+) VALUES
+($1::STRING,($2+$2)::INT8,'fixed'::STRING,($3||'foobar')::STRING),
+($4::STRING,($5+$5)::INT8,'fixed'::STRING,($6||'foobar')::STRING)`,
+		},
 	}
 
 	// The deletion query should never change based on configuration.
@@ -150,7 +206,10 @@ SELECT * FROM action`,
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			a := assert.New(t)
-			tmpls := newTemplates(tableID, tc.cas, tc.deadline, cols)
+			if tc.cfg == nil {
+				tc.cfg = NewConfig()
+			}
+			tmpls := newTemplates(tableID, tc.cfg, cols)
 
 			s, err := tmpls.delete(2)
 			a.NoError(err)

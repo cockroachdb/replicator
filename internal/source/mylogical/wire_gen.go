@@ -12,7 +12,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/tblconf"
 )
 
 // Injectors from injector.go:
@@ -34,7 +33,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup2, err := tblconf.ProvideConfigs(ctx, pool, stagingDB)
+	configs, cleanup2, err := apply.ProvideConfigs(ctx, pool, stagingDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
