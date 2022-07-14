@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
@@ -45,12 +46,21 @@ import (
 
 // Set is used by Wire.
 var Set = wire.NewSet(
+	ProvideApplyMode,
 	ProvideAuthenticator,
 	ProvideListener,
 	ProvideMux,
 	ProvideServer,
 	ProvideTLSConfig,
 )
+
+// ProvideApplyMode responds to Config.Immediate.
+func ProvideApplyMode(config Config) cdc.ApplyMode {
+	if config.Immediate {
+		return cdc.IgnoreTX
+	}
+	return cdc.PreserveTX
+}
 
 // ProvideAuthenticator is called by Wire to construct a JWT-based
 // authenticator, or a no-op authenticator if Config.DisableAuth has
@@ -86,13 +96,14 @@ func ProvideListener(config Config) (net.Listener, func(), error) {
 
 // ProvideMux is called by Wire to construct the http.ServeMux that
 // routes requests.
-func ProvideMux(handler *cdc.Handler, pool *pgxpool.Pool) *http.ServeMux {
+func ProvideMux(handler *cdc.Handler, pool *pgxpool.Pool, applyConf *apply.Configs) *http.ServeMux {
 	mux := &http.ServeMux{}
 	// The pprof handlers attach themselves to the system-default mux.
 	// The index page also assumes that the handlers are reachable from
 	// this specific prefix. It seems unlikely that this would collide
 	// with an actual database schema.
 	mux.Handle("/debug/pprof/", http.DefaultServeMux)
+	mux.Handle("/_/config/apply", apply.DebugHandler(applyConf))
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
 			log.WithError(err).Warn("health check failed")
@@ -257,10 +268,14 @@ func provideConnectionMode(dbInfo *sinktest.DBInfo, webhook shouldUseWebhook) co
 	return insecure
 }
 
-func provideTestConfig(mode connectionMode) Config {
+// shouldUseImmediate is a test-injection point.
+type shouldUseImmediate bool
+
+func provideTestConfig(mode connectionMode, immediate shouldUseImmediate) Config {
 	return Config{
 		BindAddr: "127.0.0.1:0",
 		// ConnectionString unnecessary; injected by sinktest provider instead.
 		GenerateSelfSigned: mode == secure,
+		Immediate:          bool(immediate),
 	}
 }

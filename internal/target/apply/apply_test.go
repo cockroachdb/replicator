@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
@@ -49,7 +50,7 @@ func TestApply(t *testing.T) {
 		return
 	}
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -301,7 +302,7 @@ func TestAllDataTypes(t *testing.T) {
 				return
 			}
 
-			app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+			app, err := fixture.Appliers.Get(ctx, tbl.Name())
 			if !a.NoError(err) {
 				return
 			}
@@ -370,7 +371,15 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
-		_, err := fixture.Appliers.Get(ctx, tbl.Name(), []ident.Ident{ident.New("bad_column")}, types.Deadlines{})
+
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &apply.Config{
+			CASColumns: []ident.Ident{ident.New("bad_column")},
+		}))
+		changed, err := fixture.Configs.Refresh(ctx)
+		a.True(changed)
+		a.NoError(err)
+
+		_, err = fixture.Appliers.Get(ctx, tbl.Name())
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -378,7 +387,15 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
-		_, err := fixture.Appliers.Get(ctx, tbl.Name(), nil, types.Deadlines{ident.New("bad_column"): 0})
+
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &apply.Config{
+			Deadlines: types.Deadlines{ident.New("bad_column"): time.Second},
+		}))
+		changed, err := fixture.Configs.Refresh(ctx)
+		a.True(changed)
+		a.NoError(err)
+
+		_, err = fixture.Appliers.Get(ctx, tbl.Name())
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -396,15 +413,18 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	var casColumns []ident.Ident
+	configData := apply.NewConfig()
 	if cas {
-		casColumns = []ident.Ident{ident.New("ver")}
+		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
-	deadlines := types.Deadlines{}
 	if deadline {
-		deadlines[ident.New("ts")] = 10 * time.Minute
+		configData.Deadlines[ident.New("ts")] = 10 * time.Minute
 	}
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), casColumns, deadlines)
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	changed, err := fixture.Configs.Refresh(ctx)
+	a.True(changed)
+	a.NoError(err)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -473,6 +493,184 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 }
 
+// Verifies "constant" and substitution params, including cases where
+// the PK is subject to rewriting.
+func TestExpressionColumns(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	// KV payload, but with different column names.
+	type Payload struct {
+		PK    int    `json:"pk"`
+		Val   string `json:"val"`
+		Fixed string `json:"fixed"`
+	}
+
+	tbl, err := fixture.CreateTable(ctx,
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING, fixed STRING)")
+	if !a.NoError(err) {
+		return
+	}
+
+	configData := apply.NewConfig()
+	configData.Exprs = map[apply.TargetColumn]string{
+		ident.New("pk"):    "2 * $0",
+		ident.New("val"):   "$0 || ' world!'",
+		ident.New("fixed"): "'constant'",
+	}
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	changed, err := fixture.Configs.Refresh(ctx)
+	a.True(changed)
+	a.NoError(err)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	if !a.NoError(err) {
+		return
+	}
+
+	p := Payload{PK: 42, Val: "Hello", Fixed: "ignored"}
+	bytes, err := json.Marshal(p)
+	a.NoError(err)
+
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
+
+	count, err := sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	a.NoError(err)
+	a.Equal(1, count)
+
+	var key int
+	var val string
+	var fixed string
+	a.NoError(fixture.Pool.QueryRow(ctx,
+		fmt.Sprintf("SELECT * from %s", tbl)).Scan(&key, &val, &fixed))
+	a.Equal(84, key)
+	a.Equal("Hello world!", val)
+	a.Equal("constant", fixed)
+
+	// Verify that deletes with expressions work.
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Key: []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
+	count, err = sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	a.Equal(0, count)
+	a.NoError(err)
+}
+
+// This tests ignoring a primary key column, an extant db column,
+// and a column which only exists in the incoming payload.
+func TestIgnoredColumns(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	// KV payload, but with different column names.
+	type Payload struct {
+		PK0        int    `json:"pk0"`
+		PKDeleted  int    `json:"pk_deleted"`
+		PK1        int    `json:"pk1"`
+		Val0       string `json:"val0"`
+		ValIgnored string `json:"val_ignored"`
+	}
+
+	tbl, err := fixture.CreateTable(ctx,
+		"CREATE TABLE %s (pk0 INT, pk1 INT, val0 STRING, not_required STRING, PRIMARY KEY (pk0, pk1))")
+	if !a.NoError(err) {
+		return
+	}
+
+	configData := apply.NewConfig()
+	configData.Ignore = map[apply.TargetColumn]bool{
+		ident.New("pk_deleted"):   true,
+		ident.New("val_ignored"):  true,
+		ident.New("not_required"): true,
+	}
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	changed, err := fixture.Configs.Refresh(ctx)
+	a.True(changed)
+	a.NoError(err)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	if !a.NoError(err) {
+		return
+	}
+
+	p := Payload{PK0: 42, PKDeleted: -1, PK1: 43, Val0: "Hello world!", ValIgnored: "Ignored"}
+	bytes, err := json.Marshal(p)
+	a.NoError(err)
+
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.PK0, p.PK1)),
+	}}))
+
+	// Verify deletion.
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Key: []byte(fmt.Sprintf(`[%d, %d]`, p.PK0, p.PK1)),
+	}}))
+}
+
+// This tests the renaming configuration feature.
+func TestRenamedColumns(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	// KV payload, but with different column names.
+	type Payload struct {
+		PK  int    `json:"pk_source"`
+		Val string `json:"val_source"`
+	}
+
+	tbl, err := fixture.CreateTable(ctx,
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
+	if !a.NoError(err) {
+		return
+	}
+
+	configData := apply.NewConfig()
+	configData.SourceNames = map[apply.TargetColumn]apply.SourceColumn{
+		ident.New("pk"):  ident.New("pk_source"),
+		ident.New("val"): ident.New("val_source"),
+	}
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	changed, err := fixture.Configs.Refresh(ctx)
+	a.True(changed)
+	a.NoError(err)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	if !a.NoError(err) {
+		return
+	}
+
+	p := Payload{PK: 42, Val: "Hello world!"}
+	bytes, err := json.Marshal(p)
+	a.NoError(err)
+
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
+}
+
 // This tests a case in which cdc-sink does not upsert all columns in
 // the target table and where multiple updates to the same key are
 // contained in the batch (which can happen in immediate mode). In this
@@ -512,7 +710,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		a.FailNow("the workaround is no longer necessary for this version of CRDB")
 	}
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -569,7 +767,7 @@ func TestVirtualColumns(t *testing.T) {
 		return
 	}
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}
@@ -653,15 +851,18 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	var casColumns []ident.Ident
+	configData := apply.NewConfig()
 	if cfg.cas {
-		casColumns = []ident.Ident{ident.New("ver")}
+		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
-	deadlines := types.Deadlines{}
 	if cfg.deadline {
-		deadlines[ident.New("ts")] = time.Hour
+		configData.Deadlines[ident.New("ts")] = time.Hour
 	}
-	app, err := fixture.Appliers.Get(ctx, tbl.Name(), casColumns, deadlines)
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	changed, err := fixture.Configs.Refresh(ctx)
+	a.True(changed)
+	a.NoError(err)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
 	if !a.NoError(err) {
 		return
 	}

@@ -27,6 +27,7 @@ type Config struct {
 	ConnectionString   string
 	DisableAuth        bool
 	GenerateSelfSigned bool
+	Immediate          bool
 	StagingDB          string
 	TLSCertFile        string
 	TLSPrivateKey      string
@@ -49,6 +50,11 @@ func (c *Config) Bind(flags *pflag.FlagSet) {
 		"disableAuthentication",
 		false,
 		"disable authentication of incoming cdc-sink requests; not recommended for production.")
+	flags.BoolVar(
+		&c.Immediate,
+		"immediate",
+		false,
+		"apply mutations immediately without preserving transaction boundaries")
 	flags.StringVar(
 		&c.StagingDB,
 		"stagingDB",

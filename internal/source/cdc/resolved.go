@@ -96,7 +96,7 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 
 // resolved acts upon a resolved timestamp message.
 func (h *Handler) resolved(ctx context.Context, req *request) error {
-	if req.immediate {
+	if h.Mode == IgnoreTX {
 		return nil
 	}
 	target := req.target.AsSchema()

@@ -36,21 +36,16 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup4 := apply.ProvideFactory(watchers)
 	stagingDB := ProvideStagingDB(config)
-	authenticator, cleanup5, err := ProvideAuthenticator(ctx, pool, config, stagingDB)
+	configs, cleanup3, err := apply.ProvideConfigs(ctx, pool, stagingDB)
 	if err != nil {
-		cleanup4()
-		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	metaTable := ProvideMetaTable(stagingDB)
-	stagers := stage.ProvideFactory(pool, stagingDB)
-	targetTable := ProvideTimeTable(stagingDB)
-	timeKeeper, cleanup6, err := timekeeper.ProvideTimeKeeper(ctx, pool, targetTable)
+	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
+	authenticator, cleanup6, err := ProvideAuthenticator(ctx, pool, config, stagingDB)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -59,8 +54,23 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	resolvers, cleanup7, err := resolve.ProvideFactory(ctx, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	applyMode := ProvideApplyMode(config)
+	metaTable := ProvideMetaTable(stagingDB)
+	stagers := stage.ProvideFactory(pool, stagingDB)
+	targetTable := ProvideTimeTable(stagingDB)
+	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(ctx, pool, targetTable)
 	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	resolvers, cleanup8, err := resolve.ProvideFactory(ctx, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -72,13 +82,15 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 	handler := &cdc.Handler{
 		Appliers:      appliers,
 		Authenticator: authenticator,
+		Mode:          applyMode,
 		Pool:          pool,
 		Resolvers:     resolvers,
 		Stores:        stagers,
 	}
-	serveMux := ProvideMux(handler, pool)
+	serveMux := ProvideMux(handler, pool, configs)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -88,8 +100,9 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup8 := ProvideServer(listener, serveMux, tlsConfig)
+	server, cleanup9 := ProvideServer(listener, serveMux, tlsConfig)
 	return server, func() {
+		cleanup9()
 		cleanup8()
 		cleanup7()
 		cleanup6()
@@ -103,7 +116,7 @@ func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 
 // Injectors from test_fixture.go:
 
-func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func(), error) {
+func newTestFixture(serverShouldUseWebhook shouldUseWebhook, serverShouldUseImmediate shouldUseImmediate) (*testFixture, func(), error) {
 	contextContext, cleanup, err := sinktest.ProvideContext()
 	if err != nil {
 		return nil, nil, err
@@ -132,8 +145,15 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 		StagingDB: stagingDB,
 		TestDB:    testDB,
 	}
-	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup5 := apply.ProvideFactory(watchers)
+	configs, cleanup4, err := apply.ProvideConfigs(contextContext, pool, stagingDB)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,
@@ -141,8 +161,9 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 	metaTable := sinktest.ProvideMetaTable(stagingDB, testDB)
 	stagers := stage.ProvideFactory(pool, stagingDB)
 	targetTable := sinktest.ProvideTimestampTable(stagingDB, testDB)
-	timeKeeper, cleanup6, err := timekeeper.ProvideTimeKeeper(contextContext, pool, targetTable)
+	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(contextContext, pool, targetTable)
 	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -150,8 +171,9 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 		cleanup()
 		return nil, nil, err
 	}
-	resolvers, cleanup7, err := resolve.ProvideFactory(contextContext, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	resolvers, cleanup8, err := resolve.ProvideFactory(contextContext, appliers, metaTable, pool, stagers, timeKeeper, watchers)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -162,6 +184,7 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 	}
 	watcher, err := sinktest.ProvideWatcher(contextContext, testDB, watchers)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -174,6 +197,7 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 	fixture := &sinktest.Fixture{
 		BaseFixture: baseFixture,
 		Appliers:    appliers,
+		Configs:     configs,
 		Fans:        fans,
 		Resolvers:   resolvers,
 		Stagers:     stagers,
@@ -183,19 +207,8 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 		Watcher:     watcher,
 	}
 	serverConnectionMode := provideConnectionMode(dbInfo, serverShouldUseWebhook)
-	config := provideTestConfig(serverConnectionMode)
-	authenticator, cleanup8, err := ProvideAuthenticator(contextContext, pool, config, stagingDB)
-	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	listener, cleanup9, err := ProvideListener(config)
+	config := provideTestConfig(serverConnectionMode, serverShouldUseImmediate)
+	authenticator, cleanup9, err := ProvideAuthenticator(contextContext, pool, config, stagingDB)
 	if err != nil {
 		cleanup8()
 		cleanup7()
@@ -207,15 +220,7 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 		cleanup()
 		return nil, nil, err
 	}
-	handler := &cdc.Handler{
-		Appliers:      appliers,
-		Authenticator: authenticator,
-		Pool:          pool,
-		Resolvers:     resolvers,
-		Stores:        stagers,
-	}
-	serveMux := ProvideMux(handler, pool)
-	tlsConfig, err := ProvideTLSConfig(config)
+	listener, cleanup10, err := ProvideListener(config)
 	if err != nil {
 		cleanup9()
 		cleanup8()
@@ -228,7 +233,31 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup10 := ProvideServer(listener, serveMux, tlsConfig)
+	applyMode := ProvideApplyMode(config)
+	handler := &cdc.Handler{
+		Appliers:      appliers,
+		Authenticator: authenticator,
+		Mode:          applyMode,
+		Pool:          pool,
+		Resolvers:     resolvers,
+		Stores:        stagers,
+	}
+	serveMux := ProvideMux(handler, pool, configs)
+	tlsConfig, err := ProvideTLSConfig(config)
+	if err != nil {
+		cleanup10()
+		cleanup9()
+		cleanup8()
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	server, cleanup11 := ProvideServer(listener, serveMux, tlsConfig)
 	serverTestFixture := &testFixture{
 		Fixture:       fixture,
 		Authenticator: authenticator,
@@ -237,6 +266,7 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook) (*testFixture, func
 		Server:        server,
 	}
 	return serverTestFixture, func() {
+		cleanup11()
 		cleanup10()
 		cleanup9()
 		cleanup8()

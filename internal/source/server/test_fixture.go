@@ -30,7 +30,7 @@ type testFixture struct {
 	Server        *Server
 }
 
-func newTestFixture(shouldUseWebhook) (*testFixture, func(), error) {
+func newTestFixture(shouldUseWebhook, shouldUseImmediate) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,

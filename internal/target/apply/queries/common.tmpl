@@ -9,25 +9,8 @@
 {{- end -}}
 
 {{- /*
-params produces a comma-separated list of substitution params tuples:
-($1, $2, $3), ($4, $5, $6), ...
-*/ -}}
-{{- define "params" -}}
-    {{- range $groupIdx, $pairs := $.Vars -}}
-        {{- if $groupIdx -}},{{- end -}}
-        (
-        {{- range $pairIdx, $pair := $pairs -}}
-            {{- if $pairIdx -}},{{- end -}}
-            ${{- $pair.Index -}}
-        {{- end -}}
-        )
-    {{- end -}}
-{{- end -}}
-
-{{- /*
-exprs is similar to the param templates, save that it adds explicit
-typecasts to each variable produces a comma-separated list of typed
-substitution params: ($1::STRING, $2::INT), (...), (...), ...
+exprs produces a comma-separated list of substitution params tuples with
+adds explicit typecasts: ($1::STRING, $2::INT), (...), (...), ...
 */ -}}
 {{- define "exprs" -}}
     {{- range $groupIdx, $pairs := $.Vars -}}
@@ -35,7 +18,9 @@ substitution params: ($1::STRING, $2::INT), (...), (...), ...
         (
         {{- range $pairIdx, $pair := $pairs -}}
             {{- if $pairIdx -}},{{- end -}}
-            {{- if eq $pair.Column.Type "GEOGRAPHY" -}}
+            {{- if $pair.Expr -}}
+                ({{ $pair.Expr }})::{{ $pair.Column.Type }}
+            {{- else if eq $pair.Column.Type "GEOGRAPHY" -}}
                 st_geogfromgeojson(${{ $pair.Index }}::JSONB)
             {{- else if eq $pair.Column.Type "GEOMETRY" -}}
                 st_geomfromgeojson(${{ $pair.Index }}::JSONB)
