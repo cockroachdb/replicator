@@ -17,11 +17,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/stage"
-	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
+	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/google/wire"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -30,12 +26,8 @@ import (
 func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
 	panic(wire.Build(
 		Set,
-		apply.Set,
 		cdc.Set,
-		schemawatch.Set,
-		stage.Set,
-		resolve.Set,
-		timekeeper.Set,
+		target.Set,
 		// Additional bindings to create a production-ready injector.
 		ProvidePool,
 		ProvideStagingDB,

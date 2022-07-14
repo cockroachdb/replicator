@@ -24,7 +24,7 @@ type testFixture struct {
 	Handler *Handler
 }
 
-func newTestFixture() (*testFixture, func(), error) {
+func newTestFixture(mode ApplyMode) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
 		sinktest.TestSet,

@@ -19,7 +19,7 @@ import (
 
 // Injectors from test_fixture.go:
 
-func newTestFixture() (*testFixture, func(), error) {
+func newTestFixture(mode ApplyMode) (*testFixture, func(), error) {
 	context, cleanup, err := sinktest.ProvideContext()
 	if err != nil {
 		return nil, nil, err
@@ -48,8 +48,15 @@ func newTestFixture() (*testFixture, func(), error) {
 		StagingDB: stagingDB,
 		TestDB:    testDB,
 	}
-	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup5 := apply.ProvideFactory(watchers)
+	configs, cleanup4, err := apply.ProvideConfigs(context, pool, stagingDB)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
+	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,
@@ -57,8 +64,9 @@ func newTestFixture() (*testFixture, func(), error) {
 	metaTable := sinktest.ProvideMetaTable(stagingDB, testDB)
 	stagers := stage.ProvideFactory(pool, stagingDB)
 	targetTable := sinktest.ProvideTimestampTable(stagingDB, testDB)
-	timeKeeper, cleanup6, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
+	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
 	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -66,8 +74,9 @@ func newTestFixture() (*testFixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	resolvers, cleanup7, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
+	resolvers, cleanup8, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -78,6 +87,7 @@ func newTestFixture() (*testFixture, func(), error) {
 	}
 	watcher, err := sinktest.ProvideWatcher(context, testDB, watchers)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -90,6 +100,7 @@ func newTestFixture() (*testFixture, func(), error) {
 	fixture := &sinktest.Fixture{
 		BaseFixture: baseFixture,
 		Appliers:    appliers,
+		Configs:     configs,
 		Fans:        fans,
 		Resolvers:   resolvers,
 		Stagers:     stagers,
@@ -102,6 +113,7 @@ func newTestFixture() (*testFixture, func(), error) {
 	handler := &Handler{
 		Appliers:      appliers,
 		Authenticator: authenticator,
+		Mode:          mode,
 		Pool:          pool,
 		Resolvers:     resolvers,
 		Stores:        stagers,
@@ -111,6 +123,7 @@ func newTestFixture() (*testFixture, func(), error) {
 		Handler: handler,
 	}
 	return cdcTestFixture, func() {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()

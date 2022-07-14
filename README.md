@@ -105,22 +105,24 @@ Each staging table has a schema as follows. They are created in a database named
 default.
 
 ```sql
-CREATE TABLE _targetDB_targetSchema_targetTable (
-  nanos INT NOT NULL,
-logical INT NOT NULL,
- key STRING NOT NULL,
-  mut JSONB NOT NULL,
-PRIMARY KEY (nanos, logical, key)
+CREATE TABLE _targetDB_targetSchema_targetTable
+(
+    nanos   INT    NOT NULL,
+    logical INT    NOT NULL,
+    key     STRING NOT NULL,
+    mut     JSONB  NOT NULL,
+    PRIMARY KEY (nanos, logical, key)
 )
 ```
 
 There is also a timestamp-tracking table.
 
 ```sql
-CREATE TABLE _timestamps_ (
-  key STRING NOT NULL PRIMARY KEY,
-  nanos INT8 NOT NULL,
-logical INT8 NOT NULL
+CREATE TABLE _timestamps_
+(
+    key     STRING NOT NULL PRIMARY KEY,
+    nanos   INT8   NOT NULL,
+    logical INT8   NOT NULL
 )
 ```
 
@@ -131,17 +133,15 @@ Usage:
   cdc-sink start [flags]
 
 Flags:
-      --batchSize int            default size for batched operations (default 100)
-      --bindAddr string          the network address to bind to (default ":26258")
-      --conn string              cockroach connection string (default "postgresql://root@localhost:26257/?sslmode=disable")
-      --disableAuthentication    disable authentication of incoming cdc-sink requests; not recommended for production.
-  -h, --help                     help for start
-      --jwtRefresh duration      how often to scan for updated JWT configuration; set to zero to disable (default 1m0s)
-      --resolvedPurge duration   how often to purge unneeded resolved-timestamp entries; set to zero to disable (default 1s)
-      --schemaRefresh duration   how often to scan for schema changes; set to zero to disable (default 1m0s)
-      --tlsCertificate string    a path to a PEM-encoded TLS certificate chain
-      --tlsPrivateKey string     a path to a PEM-encoded TLS private key
-      --tlsSelfSigned            if true, generate a self-signed TLS certificate valid for 'localhost'
+      --bindAddr string         the network address to bind to (default ":26258")
+      --conn string             cockroach connection string (default "postgresql://root@localhost:26257/?sslmode=disable")
+      --disableAuthentication   disable authentication of incoming cdc-sink requests; not recommended for production.
+  -h, --help                    help for start
+      --immediate               apply mutations immediately without preserving transaction boundaries
+      --stagingDB string        a sql database name to store metadata information in (default "_cdc_sink")
+      --tlsCertificate string   a path to a PEM-encoded TLS certificate chain
+      --tlsPrivateKey string    a path to a PEM-encoded TLS private key
+      --tlsSelfSigned           if true, generate a self-signed TLS certificate valid for 'localhost'
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout
@@ -217,18 +217,23 @@ scrape_configs:
       - targets: [ '127.0.0.1:30004' ]
 ```
 
-### Modes
-
-`cdc-sink` supports a number of optional modes for each changefeed. All of these modes can be
-combined in a single changefeed.
-
-#### Immediate
+### Immediate mode
 
 Immediate mode writes incoming mutations to the target schema as soon as they are received, instead
 of waiting for a resolved timestamp. Transaction boundaries from the source database will not be
-preserved, but overall load on the destination database will be reduced.
+preserved, but overall load on the destination database will be reduced. This sacrifices transaction
+atomicity for performance, and may be appropriate in eventually-consistency use cases.
 
-Immediate mode is enabled by adding the `?immediate=true` query parameter to the changefeed URL.
+Immediate mode is enabled by passing the `--immediate` flag.
+
+### Data application behaviors
+
+`cdc-sink` supports a number of behaviors that modify how mutations are applied to the target
+database. These behaviors can be enabled for both cluster-to-cluster and logical-replication uses
+of `cdc-sink`. At present, the configuration is stored in the target CockroachDB cluster in
+the `_cdc_sink.apply_config` table. The configuration table is polled once per minute for changes or
+in response to a `SIGHUP` sent to the`cdc-sink` process. The active apply configuration is available
+from a `/_/config/apply` endpoint.
 
 #### Compare-and-set
 
@@ -237,23 +242,27 @@ time-like fields.
 
 **The use of CAS mode intentionally discards mutations and may cause data inconsistencies.**
 
-To opt into CAS mode for a feed, add a `?cas=<column_name>` query parameter to the changefeed. The
-named field should be of a type for which SQL defines a comparison operation. Common uses would be a
-`version INT` or an `updated_at TIMESTAMP` column. A mutation from the source database will be
-applied only if the CAS column is strictly greater than the value in the destination database.
+Consider a table with a `version INT` column. If `cdc-sink` receives a message to update some row in
+this table, the update will only be applied if there is no pre-existing row in the destination
+table, or if the update's `version` value is strictly greater than the existing row in the
+destination table. That is, updates are applied only if they would increase the `version` column or
+if they would insert a new row.
 
-Consider a table with a `version INT` column that is used by adding a
-`?cas=version` query parameter to the changefeed URL. If `cdc-sink` receives a message to update
-some row in this table, the update will only be applied if there is no pre-existing row in the
-destination table, or if the update's `version` value is strictly greater than the existing row in
-the destination table. That is, updates are applied only if they would increase the `version` column
-or if they would insert a new row.
+To opt into CAS mode for a feed, set the `cas_order` column in the `apply_config` table for one or
+more columns in a table. The `cas_order` column must have unique, contiguous values within any
+target table. The default value of zero indicates that a column is not subject to CAS behavior.
 
-Multiple CAS columns can be specified by repeating the query
-parameter: `?cas=version_major&cas=version_minor&cas=version_patch`. When multiple CAS columns are
-present, they are compared as a tuple. That is, the second column is only compared if the first
-column value is equal between the source and destination clusters. In this multi-column case, the
-following psuedo-sql clause is applied to each incoming update:
+```sql
+UPSERT
+INTO _cdc_sink.apply_config (target_db, target_schema, target_table, target_column, cas_order)
+VALUES ('some_db', 'public', 'my_table', 'major_version', 1),
+    ('some_db', 'public', 'my_table', 'minor_version', 2),
+    ('some_db', 'public', 'my_table', 'patch_version', 3);
+```
+
+When multiple CAS columns are present, they are compared as a tuple. That is, the second column is
+only compared if the first column value is equal between the source and destination clusters. In
+this multi-column case, the following psuedo-sql clause is applied to each incoming update:
 
 ```sql
 WHERE existing IS NULL OR (
@@ -261,8 +270,6 @@ WHERE existing IS NULL OR (
   (existing.version_major, existing.version_minor, existing.version_patch)
 )
 ```
-
-All tables in the feed must have all named `cas` columns or the changefeed will fail.
 
 Deletes from the source cluster are always applied.
 
@@ -274,19 +281,80 @@ downtime is expected.
 
 **The use of deadlines intentionally discards mutations and may cause data inconsistencies.**
 
-To opt into deadline mode for a feed, two query parameters must be
-specified: `?dln=<column_name>&dli=<interval>`. The `dln` parameter names a column whose values can
-be coerced to a `TIMESTAMP`. The `dli` parameter specifies some number of seconds, or an interval
-value, such as `1m`.
+To opt into deadline mode for a table, set the `deadline` column in the `apply_config` table for one
+or more columns in a table. The default value of zero indicates that the column is not subject to
+deadline behavior.
 
-Given the configuration `?dln=updated_at&dli=1m`, each incoming update would behave as though it
-were filtered with a clause such as `WHERE incoming.updated_at > now() - '1m'::INTERVAL`.
+```sql
+UPSERT
+INTO _cdc_sink.apply_config (target_db, target_schema, target_table, target_column, deadline)
+VALUES ('some_db', 'public', 'my_table', 'updated_at', '1m');
+```
 
-Multiple deadline columns may be specified by repeating pairs of `dln` and `dli` parameters.
-
-All tables in the feed must have all named `dln` columns.
+Given the above configuration, each incoming update would behave as though it were filtered with a
+clause such as `WHERE incoming.updated_at > now() - '1m'::INTERVAL`.
 
 Deletes from the source cluster are always applied.
+
+#### Ignore columns
+
+By default, `cdc-sink` will reject incoming mutations that have columns which do not map to a column
+in the destination table. This behavior can be selectively disabled by setting the `ignore` column
+in the `apply_config` table.
+
+**The use of ignore mode intentionally discards columns and may cause data inconsistencies.**
+
+```sql
+UPSERT
+INTO _cdc_sink.apply_config (target_db, target_schema, target_table, target_column, ignore)
+VALUES ('some_db', 'public', 'my_table', 'dont_care', true);
+```
+
+Ignore mode is mostly useful when using logical replication modes and performing schema changes.
+
+#### Rename columns
+
+By default, `cdc-sink` uses the column names in a target table when decoding incoming payloads. An
+alternate column name can be provided by setting the `src_name` column in the `apply_config` table.
+
+```sql
+UPSERT
+INTO _cdc_sink.apply_config (target_db, target_schema, target_table, target_column, src_name)
+VALUES ('some_db', 'public', 'my_table', 'column_in_target_cluster', 'column_in_source_data');
+```
+
+Renaming columns is mostly useful when using logical replication modes and performing schema
+changes.
+
+#### Substitute expressions
+
+Substitute expressions allow incoming column data to be transformed with arbitrary SQL expressions
+when being applied to the target table.
+
+**The use of substitute expressions may cause data inconsistencies.**
+
+Consider the following, contrived, case of multiplying a value by two before applying it:
+
+```sql
+UPSERT
+INTO _cdc_sink.apply_config (target_db, target_schema, target_table, target_column, expr)
+VALUES ('some_db', 'public', 'my_table', 'value', '2 * $0');
+```
+
+The substitution string `$0` will expand at runtime to the value of the incoming data. Expressions
+may repeat the `$0` expression. For example `$0 || $0` would concatenate a value with itself.
+
+In some logical-replication cases, it may be desirable to entirely discard the incoming mutation and
+replace the value:
+
+```sql
+UPSERT
+INTO _cdc_sink.apply_config (target_db, target_schema, target_table, target_column, expr)
+VALUES ('some_db', 'public', 'my_table', 'did_migrate', 'true');
+```
+
+In cases where a column exists only in the target database, using a `DEFAULT` for the column is
+preferable to using a substitute expression.
 
 ## PostgreSQL logical replication
 
@@ -356,12 +424,12 @@ To clean up from the above:
 
 ## MySQL/MariaDB Replication
 
-Another possibility is to connect to a MySQL/MariaDB database instance to
-consume a transaction-based replication feed using global transaction identifiers (GTIDs). 
-This is primarily intended for migration use-cases, in which it
-is desirable to have a minimum- or zero-downtime migration from MySQL to CockroachDB. 
-For an overview of MySQL replication with GTDIs, refer to https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html.
-For an overview of MariaDB replication refer to https://mariadb.com/kb/en/replication-overview/
+Another possibility is to connect to a MySQL/MariaDB database instance to consume a
+transaction-based replication feed using global transaction identifiers (GTIDs). This is primarily
+intended for migration use-cases, in which it is desirable to have a minimum- or zero-downtime
+migration from MySQL to CockroachDB. For an overview of MySQL replication with GTDIs, refer
+to https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html. For an overview of MariaDB
+replication refer to https://mariadb.com/kb/en/replication-overview/
 
 ```text
 Usage:
@@ -392,13 +460,17 @@ connects to the source database to receive a replication feed, rather than act a
 webhook.
 
 ### Setup
+
 - The MySQL server should have the following settings:
+
 ```
       --gtid-mode=on
       --enforce-gtid-consistency=on
       --binlog-row-metadata=full
 ```
+
 - If server is MariaDB, it should have the following settings:
+
 ```
       --log-bin
       --server_id=1
@@ -406,11 +478,17 @@ webhook.
       --binlog-format=row
       --binlog-row-metadata=full
 ```
--  Verify the master status, on the MySQL/MariaDB server
+
+- Verify the master status, on the MySQL/MariaDB server
+
 ```
     show master status;
 ```
-- Perform a backup of the database. Note: Starting with MariaDB 10.0.13, mysqldump automatically includes the GTID position as a comment in the backup file if either the --master-data or --dump-slave option is used.
+
+- Perform a backup of the database. Note: Starting with MariaDB 10.0.13, mysqldump automatically
+  includes the GTID position as a comment in the backup file if either the --master-data or
+  --dump-slave option is used.
+
 ```
    mysqldump -p db_name > backup-file.sql
 ```
@@ -435,10 +513,12 @@ SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-
 -- SET GLOBAL gtid_slave_pos='0-1-1';
 ```
 
-- Import the database into Cockroach DB, following the instructions at https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html.
+- Import the database into Cockroach DB, following the instructions
+  at https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html.
 
-- Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`, `--consistentPointKey`, `--defaultGTIDSet` and `--targetDB`. 
-Set `--defaultGTIDSet` to the GTID state shown above.
+- Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`, `--consistentPointKey`
+  , `--defaultGTIDSet` and `--targetDB`. Set `--defaultGTIDSet` to the GTID state shown above.
+
 ## Security Considerations
 
 At a high level, `cdc-sink` accepts network connections to apply arbitrary mutations to the target
@@ -498,8 +578,9 @@ for that provider will need to be inserted into tho `_cdc_sink.jwt_public_keys` 
 The `iss` (issuers) and `jti` (token id) fields will likely be specific to your auth provider, but
 the custom claim must be retained in its entirety.
 
+`cdc-sink make-jwt -a 'database.schema' --claim`:
+
 ```json
-cdc-sink make-jwt -a 'database.schema' --claim
 {
   "iss": "cdc-sink",
   "jti": "d5ffa211-8d54-424b-819a-bc19af9202a5",
@@ -520,20 +601,20 @@ cdc-sink make-jwt -a 'database.schema' --claim
 violated. It may result in missing data or the stream my stop.*
 
 - all the limitations from CDC hold true.
-  - See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
+    - See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
 - schema changes do not work,
-  - in order to perform a schema change
-    1. stop the change feed
-    2. stop cdc-sink
-    3. make the schema changes to both tables
-    4. start cdc-sink
-    5. restart the change feed
+    - in order to perform a schema change
+        1. stop the change feed
+        2. stop cdc-sink
+        3. make the schema changes to both tables
+        4. start cdc-sink
+        5. restart the change feed
 - constraints on the destination table
-  - foreign keys
-    - there is no guarantee that foreign keys between two tables will arrive in the correct
+    - foreign keys
+        - there is no guarantee that foreign keys between two tables will arrive in the correct
           order so please only use them on the source table
-    - different table constraints
-      - anything that has a tighter constraint than the original table may break the streaming
+        - different table constraints
+            - anything that has a tighter constraint than the original table may break the streaming
 - the schema of the destination table must match the primary table exactly
 
 ## Expansions

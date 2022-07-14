@@ -26,15 +26,15 @@ import (
 )
 
 func TestHandler(t *testing.T) {
-	t.Run("deferred", func(t *testing.T) { testHandler(t, false) })
-	t.Run("immediate", func(t *testing.T) { testHandler(t, true) })
+	t.Run("deferred", func(t *testing.T) { testHandler(t, PreserveTX) })
+	t.Run("immediate", func(t *testing.T) { testHandler(t, IgnoreTX) })
 }
 
-func testHandler(t *testing.T, immediate bool) {
+func testHandler(t *testing.T, mode ApplyMode) {
 	t.Helper()
 	a := assert.New(t)
 
-	fixture, cancel, err := newTestFixture()
+	fixture, cancel, err := newTestFixture(mode)
 	if !a.NoError(err) {
 		return
 	}
@@ -52,7 +52,7 @@ func testHandler(t *testing.T, immediate bool) {
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
 	maybeFlush := func(target ident.Schematic) error {
-		if immediate {
+		if mode == IgnoreTX {
 			return nil
 		}
 		resolver, err := h.Resolvers.Get(ctx, target.AsSchema())
@@ -89,8 +89,7 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Stage two lines of data.
 		a.NoError(h.ndjson(ctx, &request{
-			immediate: immediate,
-			target:    tableInfo.Name(),
+			target: tableInfo.Name(),
 			body: strings.NewReader(`
 { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "updated" : "1.0" }
 { "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "updated" : "1.0" }
@@ -99,7 +98,6 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Send the resolved timestamp request.
 		a.NoError(h.resolved(ctx, &request{
-			immediate: immediate,
 			target:    tableInfo.Name(),
 			timestamp: hlc.New(2, 0),
 		}))
@@ -111,8 +109,7 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Now, delete the data.
 		a.NoError(h.ndjson(ctx, &request{
-			target:    tableInfo.Name(),
-			immediate: immediate,
+			target: tableInfo.Name(),
 			body: strings.NewReader(`
 { "after" : null, "key" : [ 42 ], "updated" : "3.0" }
 { "key" : [ 99 ], "updated" : "3.0" }
@@ -120,7 +117,6 @@ func testHandler(t *testing.T, immediate bool) {
 		}))
 
 		a.NoError(h.resolved(ctx, &request{
-			immediate: immediate,
 			target:    tableInfo.Name(),
 			timestamp: hlc.New(5, 0),
 		}))
@@ -139,8 +135,7 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Insert data and verify flushing.
 		a.NoError(h.webhook(ctx, &request{
-			immediate: immediate,
-			target:    schema,
+			target: schema,
 			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "topic" : %[1]s, "updated" : "10.0" },
@@ -150,9 +145,8 @@ func testHandler(t *testing.T, immediate bool) {
 		}))
 
 		a.NoError(h.webhook(ctx, &request{
-			immediate: immediate,
-			target:    schema,
-			body:      strings.NewReader(`{ "resolved" : "20.0" }`),
+			target: schema,
+			body:   strings.NewReader(`{ "resolved" : "20.0" }`),
 		}))
 		a.NoError(maybeFlush(schema))
 
@@ -162,8 +156,7 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Now, delete the data.
 		a.NoError(h.webhook(ctx, &request{
-			immediate: immediate,
-			target:    schema,
+			target: schema,
 			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "key" : [ 42 ], "topic" : %[1]s, "updated" : "30.0" },
@@ -173,9 +166,8 @@ func testHandler(t *testing.T, immediate bool) {
 		}))
 
 		a.NoError(h.webhook(ctx, &request{
-			immediate: immediate,
-			target:    schema,
-			body:      strings.NewReader(`{ "resolved" : "40.0" }`),
+			target: schema,
+			body:   strings.NewReader(`{ "resolved" : "40.0" }`),
 		}))
 		a.NoError(maybeFlush(schema))
 
@@ -188,9 +180,8 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Run("empty-ndjson", func(t *testing.T) {
 		a := assert.New(t)
 		a.NoError(h.ndjson(ctx, &request{
-			immediate: immediate,
-			target:    tableInfo.Name(),
-			body:      strings.NewReader(""),
+			target: tableInfo.Name(),
+			body:   strings.NewReader(""),
 		}))
 	})
 
@@ -198,9 +189,8 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Run("empty-webhook", func(t *testing.T) {
 		a := assert.New(t)
 		a.NoError(h.webhook(ctx, &request{
-			immediate: immediate,
-			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
-			body:      strings.NewReader(""),
+			target: ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
+			body:   strings.NewReader(""),
 		}))
 	})
 
@@ -210,16 +200,14 @@ func testHandler(t *testing.T, immediate bool) {
 		a := assert.New(t)
 
 		a.NoError(h.resolved(ctx, &request{
-			immediate: immediate,
 			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
 			timestamp: hlc.New(50000, 0),
 		}))
 		err := h.resolved(ctx, &request{
-			immediate: immediate,
 			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
 			timestamp: hlc.New(25, 0),
 		})
-		if immediate {
+		if mode == IgnoreTX {
 			// Resolved timestamp tracking is disabled in immediate mode.
 			a.NoError(err)
 		} else if a.Error(err) {

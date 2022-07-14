@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -43,7 +42,7 @@ func TestIntegration(t *testing.T) {
 	t.Run("immediate_webhook", func(t *testing.T) { testIntegration(t, true, true) })
 }
 
-func testIntegration(t *testing.T, immediate bool, webhook shouldUseWebhook) {
+func testIntegration(t *testing.T, immediate shouldUseImmediate, webhook shouldUseWebhook) {
 	a := assert.New(t)
 
 	var stopped <-chan struct{}
@@ -63,7 +62,7 @@ func testIntegration(t *testing.T, immediate bool, webhook shouldUseWebhook) {
 	sourceCtx := sourceFixture.Context
 
 	// The target fixture contains the cdc-sink server.
-	targetFixture, cancel, err := newTestFixture(webhook)
+	targetFixture, cancel, err := newTestFixture(webhook, immediate)
 	if !a.NoError(err) {
 		return
 	}
@@ -110,9 +109,6 @@ func testIntegration(t *testing.T, immediate bool, webhook shouldUseWebhook) {
 	}
 
 	params := make(url.Values)
-	if immediate {
-		params.Set(cdc.ImmediateParam, "true")
-	}
 	// Set up the changefeed.
 	var feedURL url.URL
 	var createStmt string

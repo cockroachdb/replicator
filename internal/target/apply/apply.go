@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +35,7 @@ import (
 
 // apply will upsert mutations and deletions into a target table.
 type apply struct {
-	cancel     context.CancelFunc
-	casColumns []ident.Ident
-	deadlines  types.Deadlines
-	target     ident.Table
+	target ident.Table
 
 	deletes   prometheus.Counter
 	durations prometheus.Observer
@@ -46,9 +44,10 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
-		columns   []types.ColData
-		pks       []types.ColData
-		templates *templates
+		configData *Config
+		schemaData []types.ColData
+		pks        []types.ColData
+		templates  *templates
 	}
 }
 
@@ -56,19 +55,11 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	w types.Watcher, target ident.Table, casColumns []ident.Ident, deadlines types.Deadlines,
+	target ident.Table, cfgs *Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
-	ch, cancel, err := w.Watch(target)
-	if err != nil {
-		return nil, cancel, err
-	}
-
 	labelValues := metrics.TableValues(target)
 	a := &apply{
-		cancel:     cancel,
-		casColumns: casColumns,
-		deadlines:  deadlines,
-		target:     target,
+		target: target,
 
 		deletes:   applyDeletes.WithLabelValues(labelValues...),
 		durations: applyDurations.WithLabelValues(labelValues...),
@@ -76,27 +67,64 @@ func newApply(
 		upserts:   applyUpserts.WithLabelValues(labelValues...),
 	}
 
-	// Wait for the initial column data to be loaded.
-	select {
-	case colData := <-ch:
-		if err := a.refreshUnlocked(colData); err != nil {
-			return nil, cancel, err
-		}
-	case <-time.After(10 * time.Second):
-		return nil, cancel, errors.Errorf("column data timeout for %s", target)
-	}
+	// Start a background goroutine to refresh the templates.
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func(ctx context.Context, errs chan<- error) {
+		defer cancel()
 
-	// Background routine to keep the column data refreshed.
-	go func() {
-		for {
-			colData, open := <-ch
-			if !open {
-				return
-			}
-			a.refreshUnlocked(colData)
-			log.WithField("table", a.target).Debug("refreshed schema")
+		w, err := watchers.Get(ctx, target.Database())
+		if err != nil {
+			errs <- err
+			return
 		}
-	}()
+
+		schemaCh, cancelSchema, err := w.Watch(target)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer cancelSchema()
+
+		configCh, cancelConfig := cfgs.Watch(target)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer cancelConfig()
+
+		var configData *Config
+		var schemaData []types.ColData
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case configData = <-configCh:
+			case schemaData = <-schemaCh:
+			}
+			if configData != nil && len(schemaData) > 0 {
+				err := a.refreshUnlocked(configData, schemaData)
+				if err != nil {
+					log.WithError(err).WithField("table", target).Warn("could not refresh table metadata")
+				}
+				// Send the first error (or nil) to the channel, then
+				// close it. Shut down if we get an error at the outset.
+				if errs != nil {
+					errs <- err
+					close(errs)
+					errs = nil
+					if err != nil {
+						return
+					}
+				}
+			}
+		}
+	}(ctx, errs)
+
+	// Wait for the first loop of the refresh goroutine above.
+	if err := <-errs; err != nil {
+		return nil, nil, err
+	}
 
 	return a, cancel, nil
 }
@@ -127,7 +155,7 @@ func (a *apply) Apply(ctx context.Context, tx pgxtype.Querier, muts []types.Muta
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if len(a.mu.columns) == 0 {
+	if len(a.mu.schemaData) == 0 {
 		return errors.Errorf("no ColumnData available for %s", a.target)
 	}
 
@@ -223,39 +251,56 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		return err
 	}
 
-	allArgs := make([]interface{}, 0, len(a.mu.columns)*len(muts))
+	allArgs := make([]interface{}, 0, len(a.mu.schemaData)*len(muts))
 
 	for i := range muts {
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Data))
 		dec.UseNumber()
 
-		incomingColumnData := make(map[string]interface{})
+		incomingColumnData := make(map[ident.Ident]interface{})
 		if err := dec.Decode(&incomingColumnData); err != nil {
 			return errors.WithStack(err)
 		}
 
 		// The values to pass to the database.
-		args := make([]interface{}, 0, len(a.mu.columns))
+		args := make([]interface{}, 0, len(a.mu.schemaData))
 		// Track the columns that we expect to see and that are seen in
 		// the incoming payload. This improves the error returned when
 		// there are unexpected columns.
-		knownColumnsInPayload := make(map[string]struct{}, len(a.mu.columns))
+		knownColumnsInPayload := make(map[ident.Ident]struct{}, len(a.mu.schemaData))
 
-		for _, col := range a.mu.columns {
-			rawColName := col.Name.Raw()
-			decoded, presentInPayload := incomingColumnData[rawColName]
+		for _, col := range a.mu.schemaData {
+			// Determine which key to look for in the mutation payload.
+			// If there's no explicit configuration, use the target
+			// column's name.
+			sourceCol, renamed := a.mu.configData.SourceNames[col.Name]
+			if !renamed {
+				sourceCol = col.Name
+			}
+			decoded, presentInPayload := incomingColumnData[sourceCol]
 			// Keep track of columns in the incoming payload that match
 			// columns that we expect to see in the target database.
 			if presentInPayload {
-				knownColumnsInPayload[rawColName] = struct{}{}
+				knownColumnsInPayload[sourceCol] = struct{}{}
 			}
 			// Ignored will be true for columns in the target database
 			// that we know about, but that we don't actually want to
 			// insert new values for (e.g. computed columns). These
 			// ignored columns could be part of the primary key, or they
-			// could be a regular column.
-			if col.Ignored {
+			// could be a regular column. We also allow the user to
+			// force columns to be ignored (e.g. to drop a column).
+			if col.Ignored || a.mu.configData.Ignore[col.Name] {
 				continue
+			}
+			// We allow the user to specify an arbitrary expression for
+			// a column value. If there's no $0 substitution token, then
+			// we want to drop the column from the values to be sent
+			// with the query. The templates will bake in the fixed
+			// expression.
+			if expr, ok := a.mu.configData.Exprs[col.Name]; ok {
+				if !strings.Contains(expr, substitutionToken) {
+					continue
+				}
 			}
 			// We're not going to worry about missing columns in the
 			// mutation to be applied unless it's a PK. If other new
@@ -266,7 +311,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 					"schema drift detected in %s: "+
 						"missing PK column %s: "+
 						"key %s@%s",
-					a.target, rawColName,
+					a.target, sourceCol.Raw(),
 					string(muts[i].Key), muts[i].Time)
 			}
 			args = append(args, decoded)
@@ -279,7 +324,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 			var unexpected []string
 			for key := range incomingColumnData {
 				if _, seen := knownColumnsInPayload[key]; !seen {
-					unexpected = append(unexpected, key)
+					unexpected = append(unexpected, key.Raw())
 				}
 			}
 			sort.Strings(unexpected)
@@ -312,29 +357,45 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 }
 
 // refreshUnlocked updates the apply with new column information.
-func (a *apply) refreshUnlocked(colData []types.ColData) error {
+func (a *apply) refreshUnlocked(configData *Config, schemaData []types.ColData) error {
 	// We want to verify that the cas and deadline columns actually
 	// exist in the incoming column data.
-	allColNames := make(map[ident.Ident]struct{}, len(colData))
-	for _, col := range colData {
+	allColNames := make(map[ident.Ident]struct{}, len(schemaData))
+	for _, col := range schemaData {
 		allColNames[col.Name] = struct{}{}
 	}
-	for _, col := range a.casColumns {
+	for _, col := range configData.CASColumns {
 		if _, found := allColNames[col]; !found {
 			return errors.Errorf("cas column name %s not found in table %s", col, a.target)
 		}
 	}
-	for col := range a.deadlines {
+	for col := range configData.Deadlines {
 		if _, found := allColNames[col]; !found {
 			return errors.Errorf("deadline column name %s not found in table %s", col, a.target)
 		}
 	}
+	for col := range configData.Exprs {
+		if _, found := allColNames[col]; !found {
+			return errors.Errorf("expression column name %s not found in table %s", col, a.target)
+		}
+	}
 
-	tmpls := newTemplates(a.target, a.casColumns, a.deadlines, colData)
+	// The Ignores field doesn't need validation, since you might want
+	// to mark a column as ignored in order to (eventually) drop it from
+	// the destination database.
+
+	for col := range configData.SourceNames {
+		if _, found := allColNames[col]; !found {
+			return errors.Errorf("renamed column name %s not found in table %s", col, a.target)
+		}
+	}
+
+	tmpls := newTemplates(a.target, configData, schemaData)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.mu.columns = colData
+	a.mu.configData = configData
+	a.mu.schemaData = schemaData
 	a.mu.pks = tmpls.PK
 	a.mu.templates = tmpls
 	return nil
