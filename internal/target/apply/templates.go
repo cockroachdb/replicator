@@ -74,12 +74,13 @@ type templateCache struct {
 }
 
 type templates struct {
-	Columns    []types.ColData // All non-ignored columns.
-	Conditions []types.ColData // The version-like fields for CAS ops.
-	Deadlines  types.Deadlines // Allow too-old data to just be dropped.
-	PK         []types.ColData // All primary-key columns.
-	TableName  ident.Table     // The target table.
-	cache      *templateCache  // Memoize calls to delete() and upsert().
+	Columns    []types.ColData        // All non-ignored columns.
+	Conditions []types.ColData        // The version-like fields for CAS ops.
+	Deadlines  types.Deadlines        // Allow too-old data to just be dropped.
+	Exprs      map[ident.Ident]string // Value-replacement expressions.
+	PK         []types.ColData        // All primary-key columns.
+	TableName  ident.Table            // The target table.
+	cache      *templateCache         // Memoize calls to delete() and upsert().
 
 	// The variables below here are updated during evaluation.
 
@@ -89,9 +90,7 @@ type templates struct {
 // newTemplates constructs a new templates instance, performing some
 // pre-computations to identify primary keys and to filter out ignored
 // columns.
-func newTemplates(
-	target ident.Table, cfgData *Config, colData []types.ColData,
-) *templates {
+func newTemplates(target ident.Table, cfgData *Config, colData []types.ColData) *templates {
 	// Map cas column names to their order in the comparison tuple.
 	casMap := make(map[ident.Ident]int, len(cfgData.CASColumns))
 	for idx, name := range cfgData.CASColumns {
@@ -102,6 +101,7 @@ func newTemplates(
 		Conditions: make([]types.ColData, len(cfgData.CASColumns)),
 		Columns:    append([]types.ColData(nil), colData...),
 		Deadlines:  cfgData.Deadlines,
+		Exprs:      cfgData.Exprs,
 		TableName:  target,
 		cache: &templateCache{
 			deletes: lru.New(batches.Size() / 10),
@@ -134,7 +134,14 @@ func newTemplates(
 // substitution-parameter index.
 type varPair struct {
 	Column types.ColData
-	Index  int
+	// If non-empty, a user-configured SQL expression for the value.
+	// The Index substitution parameter will have been injected into
+	// the expressed.
+	Expr string
+	// The 1-based SQL substitution parameter index. A zero value
+	// indicates that the varPair has a constant expression which
+	// does not depend on an injected value.
+	Index int
 }
 
 // Vars is a generator function that returns windows of 1-based
@@ -142,13 +149,27 @@ type varPair struct {
 // generate the multi-VALUES ($1,$2, ...), ($55, $56) clauses.
 func (t *templates) Vars() [][]varPair {
 	ret := make([][]varPair, t.RowCount)
+	pairIdx := 1
 	for row := range ret {
 		ret[row] = make([]varPair, len(t.Columns))
 		for colIdx, col := range t.Columns {
-			ret[row][colIdx] = varPair{
+			vp := varPair{
 				Column: col,
-				Index:  row*len(t.Columns) + colIdx + 1,
+				Index:  pairIdx,
 			}
+			pairIdx++
+
+			if pattern, ok := t.Exprs[col.Name]; ok {
+				vp.Expr = strings.ReplaceAll(
+					pattern, substitutionToken, fmt.Sprintf("$%d", vp.Index))
+				// A constant expression doesn't occupy an index slot.
+				if vp.Expr == pattern {
+					vp.Index = 0
+					pairIdx--
+				}
+			}
+
+			ret[row][colIdx] = vp
 		}
 	}
 	return ret

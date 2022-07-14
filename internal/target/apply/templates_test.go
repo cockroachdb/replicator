@@ -67,9 +67,13 @@ func TestQueryTemplates(t *testing.T) {
 		ident.New("schema"),
 		ident.New("table"))
 
+	const typicalDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")IN(($1::STRING,$2::INT8),
+($3::STRING,$4::INT8))`
+
 	tcs := []struct {
 		name   string
 		cfg    *Config
+		delete string
 		upsert string
 	}{
 		{
@@ -180,10 +184,12 @@ SELECT * FROM action`,
 ($7::STRING,$8::INT8,$9::STRING,$10::STRING,st_geomfromgeojson($11::JSONB),st_geogfromgeojson($12::JSONB))`,
 		},
 		{
+			// Verify user-configured expressions, with zero, one, and
+			// multiple uses of the substitution position.
 			name: "expr",
 			cfg: &Config{
 				Exprs: map[TargetColumn]string{
-					ident.New("val0"): `'fixed'`,
+					ident.New("val0"): `'fixed'`, // Doesn't consume a parameter slot.
 					ident.New("val1"): `$0||'foobar'`,
 					ident.New("pk1"):  `$0+$0`,
 				},
@@ -192,16 +198,15 @@ SELECT * FROM action`,
 					ident.New("geog"): true,
 				},
 			},
+			delete: `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")IN(($1::STRING,($2+$2)::INT8),
+($3::STRING,($4+$4)::INT8))`,
 			upsert: `UPSERT INTO "database"."schema"."table" (
 "pk0","pk1","val0","val1"
 ) VALUES
-($1::STRING,($2+$2)::INT8,'fixed'::STRING,($3||'foobar')::STRING),
-($4::STRING,($5+$5)::INT8,'fixed'::STRING,($6||'foobar')::STRING)`,
+($1::STRING,($2+$2)::INT8,('fixed')::STRING,($3||'foobar')::STRING),
+($4::STRING,($5+$5)::INT8,('fixed')::STRING,($6||'foobar')::STRING)`,
 		},
 	}
-
-	// The deletion query should never change based on configuration.
-	const expectedDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")IN(($1,$2),($3,$4))`
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -213,7 +218,11 @@ SELECT * FROM action`,
 
 			s, err := tmpls.delete(2)
 			a.NoError(err)
-			a.Equal(expectedDelete, s)
+			if tc.delete == "" {
+				a.Equal(typicalDelete, s)
+			} else {
+				a.Equal(tc.delete, s)
+			}
 
 			s, err = tmpls.upsert(2)
 			a.NoError(err)

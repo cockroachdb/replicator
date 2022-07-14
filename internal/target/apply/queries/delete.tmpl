@@ -6,6 +6,6 @@ WHERE ("pk0","pk1") IN (($1,$2), (...), ...)
 DELETE FROM {{ .TableName }} WHERE (
     {{- template "names" .PK -}}
 )IN(
-    {{- template "params" . -}}
+    {{- template "exprs" . -}}
 )
 {{- /* Trim whitespace */ -}}

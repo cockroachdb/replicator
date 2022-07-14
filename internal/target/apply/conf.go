@@ -26,6 +26,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// substitutionToken contains the string that we'll use to substitute in
+// the actual parameter index into the generated SQL.
+const substitutionToken = "$0"
+
 // Type aliases to improve readability.
 type (
 	// SourceColumn is the name of a column found in incoming data.

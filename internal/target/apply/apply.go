@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -272,15 +273,15 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 			// Determine which key to look for in the mutation payload.
 			// If there's no explicit configuration, use the target
 			// column's name.
-			sourceColName := a.mu.configData.SourceNames[col.Name]
-			if sourceColName.IsEmpty() {
-				sourceColName = col.Name
+			sourceCol, renamed := a.mu.configData.SourceNames[col.Name]
+			if !renamed {
+				sourceCol = col.Name
 			}
-			decoded, presentInPayload := incomingColumnData[sourceColName]
+			decoded, presentInPayload := incomingColumnData[sourceCol]
 			// Keep track of columns in the incoming payload that match
 			// columns that we expect to see in the target database.
 			if presentInPayload {
-				knownColumnsInPayload[sourceColName] = struct{}{}
+				knownColumnsInPayload[sourceCol] = struct{}{}
 			}
 			// Ignored will be true for columns in the target database
 			// that we know about, but that we don't actually want to
@@ -291,6 +292,16 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 			if col.Ignored || a.mu.configData.Ignore[col.Name] {
 				continue
 			}
+			// We allow the user to specify an arbitrary expression for
+			// a column value. If there's no $0 substitution token, then
+			// we want to drop the column from the values to be sent
+			// with the query. The templates will bake in the fixed
+			// expression.
+			if expr, ok := a.mu.configData.Exprs[col.Name]; ok {
+				if !strings.Contains(expr, substitutionToken) {
+					continue
+				}
+			}
 			// We're not going to worry about missing columns in the
 			// mutation to be applied unless it's a PK. If other new
 			// columns have been added to the target table, the source
@@ -300,7 +311,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 					"schema drift detected in %s: "+
 						"missing PK column %s: "+
 						"key %s@%s",
-					a.target, sourceColName.Raw(),
+					a.target, sourceCol.Raw(),
 					string(muts[i].Key), muts[i].Time)
 			}
 			args = append(args, decoded)

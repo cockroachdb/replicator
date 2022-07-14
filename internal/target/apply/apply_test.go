@@ -487,6 +487,76 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 }
 
+// Verifies "constant" and substitution params, including cases where
+// the PK is subject to rewriting.
+func TestExpressionColumns(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	// KV payload, but with different column names.
+	type Payload struct {
+		PK    int    `json:"pk"`
+		Val   string `json:"val"`
+		Fixed string `json:"fixed"`
+	}
+
+	tbl, err := fixture.CreateTable(ctx,
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING, fixed STRING)")
+	if !a.NoError(err) {
+		return
+	}
+
+	configData := apply.NewConfig()
+	configData.Exprs = map[apply.TargetColumn]string{
+		ident.New("pk"):    "2 * $0",
+		ident.New("val"):   "$0 || ' world!'",
+		ident.New("fixed"): "'constant'",
+	}
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Refresh(ctx))
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	if !a.NoError(err) {
+		return
+	}
+
+	p := Payload{PK: 42, Val: "Hello", Fixed: "ignored"}
+	bytes, err := json.Marshal(p)
+	a.NoError(err)
+
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
+
+	count, err := sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	a.NoError(err)
+	a.Equal(1, count)
+
+	var key int
+	var val string
+	var fixed string
+	a.NoError(fixture.Pool.QueryRow(ctx,
+		fmt.Sprintf("SELECT * from %s", tbl)).Scan(&key, &val, &fixed))
+	a.Equal(84, key)
+	a.Equal("Hello world!", val)
+	a.Equal("constant", fixed)
+
+	// Verify that deletes with expressions work.
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Key: []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
+	count, err = sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	a.Equal(0, count)
+	a.NoError(err)
+}
+
 // This tests the renaming configuration feature.
 func TestRenamedColumns(t *testing.T) {
 	a := assert.New(t)
