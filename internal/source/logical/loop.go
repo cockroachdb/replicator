@@ -45,8 +45,6 @@ func (l *Loop) Stopped() <-chan struct{} {
 type loop struct {
 	// the key used to persist the consistentPoint stamp.
 	consistentPointKey string
-	// Locked on mu.
-	consistentPointUpdated *sync.Cond
 	// The Dialect contains message-processing, specific to a particular
 	// source database.
 	dialect Dialect
@@ -72,13 +70,12 @@ type loop struct {
 	// Used to update the consistentPoint in the target database.
 	targetPool pgxtype.Querier
 
-	mu struct {
-		sync.Mutex
-
-		// This represents a position in the source's transaction log.
-		// It is subject to a mutex, since we receive the notifications
-		// from the Fan in an asynchronous manner.
-		consistentPoint stamp.Stamp
+	// This represents a position in the source's transaction log.
+	// The value in this struct should only be accessed when holding
+	// the condition lock.
+	consistentPoint struct {
+		*sync.Cond
+		stamp stamp.Stamp
 	}
 }
 
@@ -107,9 +104,9 @@ func (l *loop) retrieveConsistentPoint(
 
 // GetConsistentPoint implements State.
 func (l *loop) GetConsistentPoint() stamp.Stamp {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.mu.consistentPoint
+	l.consistentPoint.L.Lock()
+	defer l.consistentPoint.L.Unlock()
+	return l.consistentPoint.stamp
 }
 
 // GetTargetDB implements State.
@@ -160,11 +157,11 @@ func (l *loop) OnCommit(ctx context.Context) error {
 	// want to wait for the pending mutations to be flushed to the
 	// single transaction, and then we'll commit the transaction.
 	if l.serializer != nil {
-		l.mu.Lock()
-		for stamp.Compare(l.mu.consistentPoint, l.openTransaction) < 0 {
-			l.consistentPointUpdated.Wait()
+		l.consistentPoint.L.Lock()
+		for stamp.Compare(l.consistentPoint.stamp, l.openTransaction) < 0 {
+			l.consistentPoint.Wait()
 		}
-		l.mu.Unlock()
+		l.consistentPoint.L.Unlock()
 		// err is checked by the deferred call above.
 		err = l.serializer.Commit(ctx)
 	}
@@ -266,8 +263,8 @@ func (l *loop) run(ctx context.Context) {
 }
 
 func (l *loop) setConsistentPoint(p stamp.Stamp) {
-	l.mu.Lock()
-	l.mu.consistentPoint = p
-	l.mu.Unlock()
-	l.consistentPointUpdated.Broadcast()
+	l.consistentPoint.L.Lock()
+	defer l.consistentPoint.L.Unlock()
+	l.consistentPoint.stamp = p
+	l.consistentPoint.Broadcast()
 }
