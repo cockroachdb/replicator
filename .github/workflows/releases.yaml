@@ -16,7 +16,83 @@ on:
   # PR's will trigger an image build, but the push action is disabled.
   pull_request:
 
+# Keep in sync with other yaml files.
+env:
+  GO_VERSION: 1.17
+
 jobs:
+  binaries:
+    name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: windows
+            arch: amd64
+            ext: .exe
+          - os: windows
+            arch: arm64
+            ext: .exe
+    env:
+      BUILDNAME: cdc-sink-${{ matrix.os }}-${{ matrix.arch }}
+      OUTPUT: cdc-sink-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Determine paths to cache
+        id: cache
+        run: |
+          echo "::set-output name=go-build::$(go env GOCACHE)"
+          echo "::set-output name=go-mod::$(go env GOMODCACHE)"
+
+      - name: Go Build Cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ${{ steps.cache.outputs.go-build }}
+            ${{ steps.cache.outputs.go-mod }}
+          key: ${{ env.BUILDNAME }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Create version file
+        run: git describe --tags --always --dirty > VERSION.txt
+
+      - name: Build
+        run: >
+          go
+          build
+          -v
+          -ldflags="-s -w -X github.com/cockroachdb/cdc-sink/internal/cmd/version.BuildVersion=$(cat VERSION.txt)"
+          -o $OUTPUT
+          .
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+
+      - name: Upload zip contents
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.BUILDNAME }}
+          path: |
+            ${{ env.OUTPUT }}
+            README.md
+            VERSION.txt
+            licenses/*.txt
+          if-no-files-found: error
+
   docker:
     runs-on: ubuntu-latest
     steps:
