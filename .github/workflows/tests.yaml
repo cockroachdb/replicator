@@ -12,6 +12,7 @@ on:
         required: false
         type: boolean
 
+# Keep in sync with other yaml files.
 env:
   GO_VERSION: 1.17
 
