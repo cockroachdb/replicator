@@ -61,7 +61,7 @@ func ProvideLoop(
 		targetDB:           config.TargetDB,
 		targetPool:         pool,
 	}
-	loop.consistentPointUpdated = sync.NewCond(&loop.mu)
+	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
 
 	if config.ConsistentPointKey != "" {
 		var err error
@@ -75,7 +75,7 @@ func ProvideLoop(
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "could not restore consistentPoint")
 		}
-		loop.mu.consistentPoint, err = dialect.UnmarshalStamp(cp)
+		loop.consistentPoint.stamp, err = dialect.UnmarshalStamp(cp)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "could not restore consistentPoint")
 		}
