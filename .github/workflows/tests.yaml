@@ -78,6 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COVER_OUT: coverage.out
+      JUNIT_OUT: junit-${{ matrix.cockroachdb }}-${{ matrix.integration }}.xml
+      TEST_OUT: go-test-${{ matrix.cockroachdb }}-${{ matrix.integration }}.json
     steps:
       - uses: actions/checkout@v2
 
@@ -113,11 +115,25 @@ jobs:
         working-directory: .github
         run: docker-compose up -d ${{ matrix.integration }}
 
+      # The go test json output will be written into a file that's
+      # processed by a subsequent step into a JUnit.xml file. The test
+      # reports are aggregated later on to produce a nicer summary of
+      # the test output in the GitHub Actions UI.
+      #
+      # Inspired by
+      # https://www.cloudwithchris.com/blog/githubactions-testsummary-go/
       - name: Go Tests
         env:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
           CDC_INTEGRATION: ${{ matrix.integration }}
-        run: go test -v -race -coverpkg=./internal/... -covermode=atomic -coverprofile=${{ env.COVER_OUT }} ./...
+        run: >
+          go test
+          -coverpkg=./internal/...
+          -covermode=atomic
+          -coverprofile=${{ env.COVER_OUT }}
+          -json
+          -race
+          ./... > ${{ env.TEST_OUT }}
 
       - name: Manual Benchmarks
         if: ${{ github.event.inputs.run_bench }}
@@ -136,3 +152,44 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ${{ env.COVER_OUT }}
+
+      - name: Convert test json to JUnit xml
+        if: always()
+        run: >
+          go run github.com/jstemmer/go-junit-report/v2
+          -parser gojson
+          -in ${{ env.TEST_OUT }}
+          -out ${{ env.JUNIT_OUT }}
+          -p cockroachdb=${{ matrix.cockroachdb }}
+          -p integration=${{ matrix.integration }}
+          -package-name ${{ matrix.cockroachdb }}-${{ matrix.integration }}
+
+      # Upload all test reports to a common artifact name, to make them
+      # available to the summarization step. The go test json is
+      # uploaded as a developer convenience.
+      - name: Stash test logs
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-reports
+          path: |
+            ${{ env.JUNIT_OUT }}
+            ${{ env.TEST_OUT }}
+          retention-days: 7
+
+  # This job downloads the JUnit.xml files generated in the integration
+  # job and summarizes them into the GitHub Actions UI.
+  summarize:
+    name: Test summaries
+    runs-on: ubuntu-latest
+    needs: integration
+    if: always()
+    steps:
+      - name: Download reports
+        uses: actions/download-artifact@v3
+        with:
+          name: integration-reports
+      - name: Summarize
+        uses: test-summary/action@v1
+        with:
+          paths: junit-*.xml
