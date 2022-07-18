@@ -1,50 +1,112 @@
-name: Tests
-permissions: read-all
+name: Golang
+permissions:
+  contents: read
 on:
   push:
     branches: [ master ]
     tags: [ 'v*.*.*' ]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - '**/*.go'
   pull_request:
-  workflow_dispatch: # Allow manual runs to kick off benchmarks
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - '**/*.go'
+  workflow_dispatch:
     inputs:
-      run_bench:
-        description: Run benchmarks
-        required: false
+      build_binaries:
+        description: 'Build distributable binaries'
         type: boolean
-
-# Keep in sync with other yaml files.
-env:
-  GO_VERSION: 1.17
+        required: false
 
 jobs:
+  # Binaries will build cdc-sink for a variety of common platforms. This
+  # job only runs on pushes to a target branch or tag or in response to
+  # a manual run that requests binaries.
+  binaries:
+    name: Binaries
+    if: ${{ github.event_name == 'push' || inputs.build_binaries }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: windows
+            arch: amd64
+            ext: .exe
+          - os: windows
+            arch: arm64
+            ext: .exe
+    env:
+      BUILDNAME: cdc-sink-${{ matrix.os }}-${{ matrix.arch }}
+      OUTPUT: cdc-sink-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+    steps:
+      - uses: actions/checkout@v2
+
+      # Use separate build caches for each target platform.
+      - name: Write cache key
+        run: echo '${{ github.job }} ${{ toJSON(matrix) }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+          cache-dependency-path: CACHE_KEY
+
+      - name: Create version file
+        run: git describe --tags --always --dirty > VERSION.txt
+
+      - name: Build
+        run: >
+          go
+          build
+          -v
+          -ldflags="-s -w -X github.com/cockroachdb/cdc-sink/internal/cmd/version.BuildVersion=$(cat VERSION.txt)"
+          -o $OUTPUT
+          .
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+
+      - name: Upload zip contents
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.BUILDNAME }}
+          path: |
+            ${{ env.OUTPUT }}
+            README.md
+            VERSION.txt
+            licenses/*.txt
+          if-no-files-found: error
+
+  # Static code-quality checks.
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
 
+      # Just cache based on job and go.sum contents.
+      - name: Write cache key
+        run: echo '${{ github.job }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
+
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v3
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Determine paths to cache
-        id: cache
-        run: |
-          echo "::set-output name=go-build::$(go env GOCACHE)"
-          echo "::set-output name=go-mod::$(go env GOMODCACHE)"
-
-      - name: Go Build Cache
-        uses: actions/cache@v2
-        with:
-          path: |
-            ${{ steps.cache.outputs.go-build }}
-            ${{ steps.cache.outputs.go-mod }}
-          key: ${{ runner.os }}-quality-${{ hashFiles('**/go.sum') }}
-
-      # This action should, in general, be a no-op, given the cache above.
-      - name: Download all deps
-        run: go mod download
+          go-version-file: 'go.mod'
+          cache: true
+          cache-dependency-path: CACHE_KEY
 
       - name: crlfmt returns no deltas
         if: ${{ always() }}
@@ -61,8 +123,10 @@ jobs:
         if: ${{ always() }}
         run: go run honnef.co/go/tools/cmd/staticcheck -checks all ./...
 
-  integration:
-    name: Integration Tests crdb-${{ matrix.cockroachdb }} ${{ matrix.integration }}
+  # Integration matrix tests for all supported CRDB and source DBs.
+  tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -76,7 +140,6 @@ jobs:
           - "postgresql-v12"
           - "postgresql-v13"
           - "postgresql-v14"
-    runs-on: ubuntu-latest
     env:
       COVER_OUT: coverage-${{ matrix.cockroachdb }}-${{ matrix.integration }}.out
       JUNIT_OUT: junit-${{ matrix.cockroachdb }}-${{ matrix.integration }}.xml
@@ -84,28 +147,16 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      # Just cache based on job and go.sum contents.
+      - name: Write cache key
+        run: echo '${{ github.job }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
+
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v3
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Determine paths to cache
-        id: cache
-        run: |
-          echo "::set-output name=go-build::$(go env GOCACHE)"
-          echo "::set-output name=go-mod::$(go env GOMODCACHE)"
-
-      - name: Go Build Cache
-        uses: actions/cache@v2
-        with:
-          path: |
-            ${{ steps.cache.outputs.go-build }}
-            ${{ steps.cache.outputs.go-mod }}
-          key: ${{ runner.os }}-integration-${{ hashFiles('**/go.sum') }}
-
-      # This action should, in general, be a no-op, given the cache above.
-      - name: Download all deps
-        run: go mod download
+          go-version-file: 'go.mod'
+          cache: true
+          cache-dependency-path: CACHE_KEY
 
       - name: Start CockroachDB
         working-directory: .github
@@ -135,13 +186,6 @@ jobs:
           -json
           -race
           ./... > ${{ env.TEST_OUT }}
-
-      - name: Manual Benchmarks
-        if: ${{ github.event.inputs.run_bench }}
-        env:
-          COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
-          CDC_INTEGRATION: ${{ matrix.integration }}
-        run: go test -v -benchtime 10s -bench . ./...
 
       - name: Stop databases
         if: ${{ always() }}
@@ -181,10 +225,10 @@ jobs:
 
   # This job downloads the test log files generated in the integration
   # job and summarizes them into the GitHub Actions UI.
-  summarize:
+  summarize-tests:
     name: Test summaries
     runs-on: ubuntu-latest
-    needs: integration
+    needs: tests
     if: always()
     steps:
       - name: Download reports
