@@ -81,8 +81,26 @@ type loop struct {
 
 var standbyTimeout = 5 * time.Second
 
+// retrieveConsistentPoint will return the latest consistent-point
+// stamp, or nil if consistentPointKey is unset.
+func (l *loop) retrieveConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
+	if l.consistentPointKey == "" {
+		return nil, nil
+	}
+	data, err := l.memo.Get(ctx, l.targetPool, l.consistentPointKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return l.dialect.UnmarshalStamp(data)
+}
+
+// saveConsistentPoint will commit the latest consistent-point stamp
+// to the memo table, if the consistentPointKey is set.
 func (l *loop) saveConsistentPoint(ctx context.Context) error {
-	if l.memo == nil {
+	if l.consistentPointKey == "" {
 		return nil
 	}
 	m, err := l.GetConsistentPoint().MarshalText()
@@ -91,15 +109,6 @@ func (l *loop) saveConsistentPoint(ctx context.Context) error {
 	}
 	log.Infof("Saving checkpoint %s", string(m))
 	return l.memo.Put(ctx, l.targetPool, l.consistentPointKey, m)
-}
-
-func (l *loop) retrieveConsistentPoint(
-	ctx context.Context, memo types.Memo, sourceID string, defaultValue []byte,
-) ([]byte, error) {
-	if memo == nil {
-		return []byte(""), nil
-	}
-	return memo.Get(ctx, l.targetPool, sourceID, defaultValue)
 }
 
 // GetConsistentPoint implements State.
