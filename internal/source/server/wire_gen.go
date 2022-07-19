@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
+	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
@@ -158,6 +159,16 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook, serverShouldUseImme
 		Appliers: appliers,
 		Pool:     pool,
 	}
+	memoMemo, err := memo.ProvideMemo(contextContext, pool, stagingDB)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	metaTable := sinktest.ProvideMetaTable(stagingDB, testDB)
 	stagers := stage.ProvideFactory(pool, stagingDB)
 	targetTable := sinktest.ProvideTimestampTable(stagingDB, testDB)
@@ -199,6 +210,7 @@ func newTestFixture(serverShouldUseWebhook shouldUseWebhook, serverShouldUseImme
 		Appliers:    appliers,
 		Configs:     configs,
 		Fans:        fans,
+		Memo:        memoMemo,
 		Resolvers:   resolvers,
 		Stagers:     stagers,
 		TimeKeeper:  timeKeeper,

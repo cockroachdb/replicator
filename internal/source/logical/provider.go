@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/memo"
 	"github.com/cockroachdb/cdc-sink/internal/util/serial"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
@@ -43,17 +43,18 @@ func ProvideLoop(
 	config *Config,
 	dialect Dialect,
 	fans *fan.Fans,
+	memo types.Memo,
 	pool *pgxpool.Pool,
 	serializer *serial.Pool,
-	stagingDB ident.StagingDB,
 ) (*Loop, func(), error) {
 	if config.ChaosProb > 0 {
 		dialect = WithChaos(dialect, config.ChaosProb)
 	}
-
+	var err error
 	loop := &loop{
 		consistentPointKey: config.ConsistentPointKey,
 		dialect:            dialect,
+		memo:               memo,
 		retryDelay:         config.RetryDelay,
 		serializer:         serializer,
 		standbyDeadline:    time.Now().Add(standbyTimeout),
@@ -62,23 +63,9 @@ func ProvideLoop(
 		targetPool:         pool,
 	}
 	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
-
-	if config.ConsistentPointKey != "" {
-		var err error
-		loop.memo, err = memo.New(ctx, pool, ident.NewTable(stagingDB.Ident(), ident.Public, ident.New("memo")))
-		if err != nil {
-			return nil, nil, errors.Wrap(err, "could not create memo table")
-		}
-		cp, err := loop.retrieveConsistentPoint(ctx, loop.memo,
-			config.ConsistentPointKey,
-			[]byte(config.DefaultConsistentPoint))
-		if err != nil {
-			return nil, nil, errors.Wrap(err, "could not restore consistentPoint")
-		}
-		loop.consistentPoint.stamp, err = dialect.UnmarshalStamp(cp)
-		if err != nil {
-			return nil, nil, errors.Wrap(err, "could not restore consistentPoint")
-		}
+	loop.consistentPoint.stamp, err = loop.retrieveConsistentPoint(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	applyShards := 16
@@ -87,7 +74,6 @@ func ProvideLoop(
 	}
 
 	var cancelFan func()
-	var err error
 	loop.fan, cancelFan, err = fans.New(
 		config.ApplyTimeout,
 		loop.setConsistentPoint,

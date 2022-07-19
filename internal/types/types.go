@@ -71,8 +71,8 @@ type Leases interface {
 // A Memo is a key store that persists a value associated to a key
 type Memo interface {
 	// Get retrieves the value associate to the given key.
-	// If the value is not found, it returns the given default value.
-	Get(ctx context.Context, tx pgxtype.Querier, key string, def []byte) ([]byte, error)
+	// If the value is not found, a nil slice is returned.
+	Get(ctx context.Context, tx pgxtype.Querier, key string) ([]byte, error)
 	// Put stores a value associated to the key.
 	Put(ctx context.Context, tx pgxtype.Querier, key string, value []byte) error
 }

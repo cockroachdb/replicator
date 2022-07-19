@@ -21,8 +21,8 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/memo"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -58,7 +58,7 @@ func testMYLogical(t *testing.T, immediate bool) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -113,7 +113,7 @@ func testMYLogical(t *testing.T, immediate bool) {
 		return
 	}
 
-	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.StagingDB.Ident())
+	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.Memo)
 	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
@@ -320,7 +320,7 @@ func TestDataTypes(t *testing.T) {
 	}
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -357,7 +357,7 @@ func TestDataTypes(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
-	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.StagingDB.Ident())
+	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.Memo)
 	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
@@ -532,7 +532,7 @@ func initReplication(
 	flavor string,
 	myPool *client.Pool,
 	crdbPool pgxtype.Querier,
-	stagingDB ident.Ident,
+	memo types.Memo,
 ) (string, error) {
 	var gtidSet string
 	switch flavor {
@@ -562,15 +562,7 @@ func initReplication(
 		}
 	}
 
-	tbl := ident.NewTable(stagingDB, ident.Public, ident.New("memo"))
-	cp, err := memo.New(ctx, crdbPool, tbl)
-	if err != nil {
-		return "", err
-	}
 	log.Infof("gtidSet: %s", gtidSet)
-	err = cp.Put(ctx, crdbPool, clientID, []byte(gtidSet))
-	if err != nil {
-		return "", err
-	}
-	return gtidSet, nil
+	err := memo.Put(ctx, crdbPool, clientID, []byte(gtidSet))
+	return gtidSet, err
 }

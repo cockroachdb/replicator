@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
+	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 )
 
@@ -46,7 +47,15 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		Appliers: appliers,
 		Pool:     querier,
 	}
-	loop, cleanup5, err := logical.ProvideLoop(ctx, logicalConfig, dialect, fans, pool, serialPool, stagingDB)
+	memoMemo, err := memo.ProvideMemo(ctx, pool, stagingDB)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	loop, cleanup5, err := logical.ProvideLoop(ctx, logicalConfig, dialect, fans, memoMemo, pool, serialPool)
 	if err != nil {
 		cleanup4()
 		cleanup3()

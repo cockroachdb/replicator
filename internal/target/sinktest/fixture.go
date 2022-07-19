@@ -62,6 +62,7 @@ type Fixture struct {
 	Appliers   types.Appliers
 	Configs    *apply.Configs
 	Fans       *fan.Fans
+	Memo       types.Memo
 	Resolvers  types.Resolvers
 	Stagers    types.Stagers
 	TimeKeeper types.TimeKeeper
