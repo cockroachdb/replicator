@@ -57,7 +57,8 @@ your own risk and Cockroach Labs makes no guarantees or warranties about its ope
 4. Set the cluster setting of the source cluster to enable range feeds:
    `SET CLUSTER SETTING kv.rangefeed.enabled = true`
 5. Once it starts up, enable a cdc feed from the source cluster
-    - `CREATE CHANGEFEED FOR TABLE [source_table] INTO 'http://[cdc-sink-host:port]/target_database/target_schema' WITH updated,resolved`
+    - `CREATE CHANGEFEED FOR TABLE [source_table]`
+      `INTO 'http://[cdc-sink-host:port]/target_database/target_schema' WITH updated,resolved`
     - The `target_database` path element is the name passed to the `CREATE DATABASE` command.
     - The `target_schema` element is the name of
       the [user-defined schema](https://www.cockroachlabs.com/docs/stable/create-schema.html) in the
