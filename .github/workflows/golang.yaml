@@ -193,7 +193,7 @@ jobs:
         run: docker-compose down
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v2
+        uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ${{ env.COVER_OUT }}
