@@ -24,13 +24,15 @@ import (
 )
 
 func TestLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testLogicalSmoke(t, false, false) })
-	t.Run("consistent-chaos", func(t *testing.T) { testLogicalSmoke(t, false, true) })
-	t.Run("immediate", func(t *testing.T) { testLogicalSmoke(t, true, false) })
-	t.Run("immediate-chaos", func(t *testing.T) { testLogicalSmoke(t, true, true) })
+	t.Run("consistent", func(t *testing.T) { testLogicalSmoke(t, false, false, false) })
+	t.Run("consistent-backfill", func(t *testing.T) { testLogicalSmoke(t, true, false, false) })
+	t.Run("consistent-chaos", func(t *testing.T) { testLogicalSmoke(t, false, false, true) })
+	t.Run("consistent-chaos-backfill", func(t *testing.T) { testLogicalSmoke(t, true, false, true) })
+	t.Run("immediate", func(t *testing.T) { testLogicalSmoke(t, false, true, false) })
+	t.Run("immediate-chaos", func(t *testing.T) { testLogicalSmoke(t, false, true, true) })
 }
 
-func testLogicalSmoke(t *testing.T, immediate, withChaos bool) {
+func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -69,12 +71,15 @@ func testLogicalSmoke(t *testing.T, immediate, withChaos bool) {
 	}
 
 	cfg := &logical.Config{
-		ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-		Immediate:    immediate,
-		RetryDelay:   time.Nanosecond,
-		StagingDB:    fixture.StagingDB.Ident(),
-		TargetConn:   pool.Config().ConnString(),
-		TargetDB:     dbName,
+		AllowBackfill:      allowBackfill,
+		ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
+		ConsistentPointKey: "generator",
+		Immediate:          immediate,
+		RetryDelay:         time.Nanosecond,
+		StagingDB:          fixture.StagingDB.Ident(),
+		StandbyTimeout:     5 * time.Millisecond,
+		TargetConn:         pool.Config().ConnString(),
+		TargetDB:           dbName,
 	}
 
 	loop, cancelLoop, err := logical.Start(ctx, cfg, dialect)

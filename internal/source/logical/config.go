@@ -27,6 +27,9 @@ const (
 
 // Config defines the core configuration required by logical.Loop.
 type Config struct {
+	// AllowBackfill enables the use of a non-transaction,
+	// high-throughput mode for backfilling data sources.
+	AllowBackfill bool
 	// The maximum length of time to wait for an incoming transaction
 	// to settle (i.e. to detect stalls in the target database).
 	ApplyTimeout time.Duration
@@ -43,12 +46,17 @@ type Config struct {
 	// The default Consistent Point to use for replication.
 	// Consistent Point persisted in the target database will be used, if available.
 	DefaultConsistentPoint string
+	// The number of concurrent connections to use when writing data in
+	// fan mode.
+	FanShards int
 	// Place the configuration into immediate mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool
 	// The amount of time to sleep between replication-loop retries.
 	// If zero, a default value will be used.
 	RetryDelay time.Duration
+	// How often to commit the latest consistent point.
+	StandbyTimeout time.Duration
 	// The name of a SQL database in the target cluster to store
 	// metadata in.
 	StagingDB ident.Ident
@@ -66,6 +74,8 @@ type Config struct {
 
 // Bind adds flags to the set.
 func (c *Config) Bind(f *pflag.FlagSet) {
+	f.BoolVar(&c.AllowBackfill, "allowBackfill", false,
+		"allow the temporary use of immediate mode when backfilling data")
 	f.DurationVar(&c.ApplyTimeout, "applyTimeout", 30*time.Second,
 		"the maximum amount of time to wait for an update to be applied")
 	f.IntVar(&c.BytesInFlight, "bytesInFlight", 10*1024*1024,
@@ -73,9 +83,13 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	// ConsistentPointKey used only by mylogical.
 	// DefaultConsistentPoint used only by mylogical.
 	f.BoolVar(&c.Immediate, "immediate", false, "apply data without waiting for transaction boundaries")
+	f.IntVar(&c.FanShards, "fanShards", 16,
+		"the number of concurrent connections to use when writing data in fan mode")
 	f.DurationVar(&c.RetryDelay, "retryDelay", 10*time.Second,
 		"the amount of time to sleep between replication retries")
 	f.StringVar(&c.stagingDB, "stagingDB", "_cdc_sink", "a SQL database to store metadata in")
+	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", 5*time.Second,
+		"how often to commit the consistent point")
 	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
 	f.StringVar(&c.targetDB, "targetDB", "", "the SQL database in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")

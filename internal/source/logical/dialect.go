@@ -19,6 +19,26 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 )
 
+// Backfiller is an optional capability interface for Dialect
+// implementations. It allows the Dialect to temporarily switch the
+// logical replication loop into a high-throughput mode at the cost of
+// not preserving transactional boundaries.
+type Backfiller interface {
+	// BackfillInto represents a potentially-fragile source of
+	// logical-replication messages that should be applied in a
+	// high-throughput manner. Dialects may choose to delegate to
+	// ReadInto or apply a more efficient pagination-based approach for
+	// retrieving data.
+	//
+	// See also discussion on Dialect.ReadInto.
+	BackfillInto(ctx context.Context, ch chan<- Message, state State) error
+
+	// ShouldBackfill returns true if the state is sufficiently old that
+	// transaction boundaries should be ignored in favor of maximizing
+	// throughput during the back-fill.
+	ShouldBackfill(state State) bool
+}
+
 // Dialect encapsulates the source-specific implementation details.
 type Dialect interface {
 	// ReadInto represents a potentially-fragile source of
@@ -29,14 +49,15 @@ type Dialect interface {
 	// called again to restart the replication feed from the most recent
 	// consistent point.
 	//
-	// The "from" argument is the last consistent point that was
+	// The state argument provides the last consistent point that was
 	// processed by the stream. This can be used to verify successful
 	// resynchronization with the source database.
 	ReadInto(ctx context.Context, ch chan<- Message, state State) error
 
 	// Process decodes the logical replication messages, to call the
-	// various OnEvent methods. If this method returns an error, the
-	// entire replication loop will be restarted.
+	// various Events methods. Implementations of Process should exit
+	// gracefully when the channel is closed. If this method returns an
+	// error, the entire replication loop will be restarted.
 	Process(ctx context.Context, ch <-chan Message, events Events) error
 
 	// UnmarshalStamp decodes a stamp in string format to a stamp.Stamp.
@@ -71,6 +92,11 @@ type Events interface {
 	// message is encountered, to ensure that all internal state has
 	// been resynchronized.
 	OnRollback(ctx context.Context, msg Message) error
+
+	// stop is called after any attempt to run a replication loop.
+	// Implementations should block until any pending mutations have
+	// been committed.
+	stop()
 }
 
 // State provides information about a replication loop.
@@ -80,6 +106,9 @@ type State interface {
 	GetConsistentPoint() stamp.Stamp
 	// GetTargetDB returns the target database name.
 	GetTargetDB() ident.Ident
+
+	// setConsistentPoint is called from implementations of Events.
+	setConsistentPoint(stamp.Stamp)
 }
 
 // OffsetStamp is a Stamp which can represent itself as an absolute

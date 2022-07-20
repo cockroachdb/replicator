@@ -103,3 +103,11 @@ func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
 	}
 	return e.delegate.OnRollback(ctx, msg)
 }
+
+func (e *chaosEvents) stop() {
+	e.delegate.stop()
+}
+
+func (e *chaosEvents) setConsistentPoint(s stamp.Stamp) {
+	e.delegate.setConsistentPoint(s)
+}

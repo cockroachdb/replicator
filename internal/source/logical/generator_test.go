@@ -62,7 +62,10 @@ type generatorDialect struct {
 	}
 }
 
-var _ logical.Dialect = (*generatorDialect)(nil)
+var (
+	_ logical.Backfiller = (*generatorDialect)(nil)
+	_ logical.Dialect    = (*generatorDialect)(nil)
+)
 
 func newGenerator(tables []ident.Table) *generatorDialect {
 	return &generatorDialect{
@@ -80,6 +83,13 @@ func (g *generatorDialect) emit(numBatches int) {
 	default:
 		panic("work request channel is full")
 	}
+}
+
+// BackfillInto delegates to ReadInto.
+func (g *generatorDialect) BackfillInto(
+	ctx context.Context, ch chan<- logical.Message, state logical.State,
+) error {
+	return g.ReadInto(ctx, ch, state)
 }
 
 // ReadInto waits to be woken up by a call to emit, then writes
@@ -140,7 +150,10 @@ func (g *generatorDialect) Process(
 		// Non-blocking read if the context is shut down.
 		var msg fakeMessage
 		select {
-		case m := <-ch:
+		case m, open := <-ch:
+			if !open {
+				return nil
+			}
 			g.processMu.Lock()
 			g.processMu.messages = append(g.processMu.messages, m)
 			g.processMu.Unlock()
@@ -176,6 +189,14 @@ func (g *generatorDialect) Process(
 			return err
 		}
 	}
+}
+
+// ShouldBackfill returns true half of the time.
+func (g *generatorDialect) ShouldBackfill(state logical.State) bool {
+	if msg, ok := state.GetConsistentPoint().(fakeMessage); ok {
+		return int(msg)%2 == 0
+	}
+	return true
 }
 
 func (g *generatorDialect) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
