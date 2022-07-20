@@ -1,6 +1,7 @@
 # cdc-sink
 
-This tool lets one CockroachDB cluster ingest CDC feeds from one or more CockroachDB clusters.
+This tool lets one CockroachDB cluster ingest CDC feeds from another CockroachDB cluster or
+ingest replication feeds from other databases.
 
 For more information on CDC, please
 see: <https://www.cockroachlabs.com/docs/stable/stream-data-out-of-cockroachdb-using-changefeeds.html>
@@ -173,7 +174,7 @@ cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
 
 # create staging database for cdc-sink
 cockroach sql --port 30002 --insecure -e "CREATE DATABASE _cdc_sink"
-# cdc-sink started as a background task. Remove the tls flag for CocrkoachDB <= v21.1
+# cdc-sink started as a background task. Remove the tls flag for CockroachDB <= v21.1
 cdc-sink start --bindAddr :30004 --tlsSelfSigned --disableAuthentication --conn 'postgresql://root@localhost:30002/?sslmode=disable' &
 
 # start the CDC that will send across the initial data snapshot
@@ -262,7 +263,7 @@ VALUES ('some_db', 'public', 'my_table', 'major_version', 1),
 
 When multiple CAS columns are present, they are compared as a tuple. That is, the second column is
 only compared if the first column value is equal between the source and destination clusters. In
-this multi-column case, the following psuedo-sql clause is applied to each incoming update:
+this multi-column case, the following pseudo-sql clause is applied to each incoming update:
 
 ```sql
 WHERE existing IS NULL OR (
@@ -390,7 +391,7 @@ The theory of operation is similar to the standard use case, the only difference
 connects to the source database to receive a replication feed, rather than act as the target for a
 webhook.
 
-### Setup
+### Postgres Replication Setup
 
 - A review of
   PostgreSQL [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
@@ -427,9 +428,11 @@ To clean up from the above:
 Another possibility is to connect to a MySQL/MariaDB database instance to consume a
 transaction-based replication feed using global transaction identifiers (GTIDs). This is primarily
 intended for migration use-cases, in which it is desirable to have a minimum- or zero-downtime
-migration from MySQL to CockroachDB. For an overview of MySQL replication with GTDIs, refer
-to https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html. For an overview of MariaDB
-replication refer to https://mariadb.com/kb/en/replication-overview/
+migration from MySQL to CockroachDB. For an overview of MySQL replication with GTIDs, refer
+to
+[MySQL Replication with Global Transaction Identifiers](https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html).
+For an overview of MariaDB replication refer to
+[MariaDB Replication Overview](https://mariadb.com/kb/en/replication-overview/).
 
 ```text
 Usage:
@@ -459,11 +462,11 @@ The theory of operation is similar to the standard use case, the only difference
 connects to the source database to receive a replication feed, rather than act as the target for a
 webhook.
 
-### Setup
+### MySQL/MariaDB Replication Setup
 
 - The MySQL server should have the following settings:
 
-```
+```text
       --gtid-mode=on
       --enforce-gtid-consistency=on
       --binlog-row-metadata=full
@@ -471,7 +474,7 @@ webhook.
 
 - If server is MariaDB, it should have the following settings:
 
-```
+```text
       --log-bin
       --server_id=1
       --log-basename=master1
@@ -481,7 +484,7 @@ webhook.
 
 - Verify the master status, on the MySQL/MariaDB server
 
-```
+```text
     show master status;
 ```
 
@@ -489,13 +492,13 @@ webhook.
   includes the GTID position as a comment in the backup file if either the --master-data or
   --dump-slave option is used.
 
-```
+```bash
    mysqldump -p db_name > backup-file.sql
 ```
 
 - Note the GTID state at the beginning of the backup, as reported in the backup file. For instance:
 
-```
+```SQL
 -- MySQL:
 --
 -- GTID state at the beginning of the backup
@@ -504,18 +507,17 @@ webhook.
 SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-8';
 ```
 
-```
+```SQL
 -- MariaDB:
 --
 -- GTID to start replication from
 --
 
--- SET GLOBAL gtid_slave_pos='0-1-1';
+SET GLOBAL gtid_slave_pos='0-1-1';
 ```
 
 - Import the database into Cockroach DB, following the instructions
-  at https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html.
-
+  at [Migrate from MySQL](https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html).
 - Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`, `--consistentPointKey`
   , `--defaultGTIDSet` and `--targetDB`. Set `--defaultGTIDSet` to the GTID state shown above.
 
@@ -550,7 +552,7 @@ loadbalancers, so caution should be taken.
 This example uses `OpenSSL`, but the ultimate source of the key materials doesn't matter, as long as
 you have PEM-encoded RSA or EC keys.
 
-```shell
+```bash
 # Generate a EC private key using OpenSSL.
 openssl ecparam -out ec.key -genkey -name prime256v1
 
@@ -601,20 +603,20 @@ the custom claim must be retained in its entirety.
 violated. It may result in missing data or the stream my stop.*
 
 - all the limitations from CDC hold true.
-    - See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
+  - See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
 - schema changes do not work,
-    - in order to perform a schema change
-        1. stop the change feed
-        2. stop cdc-sink
-        3. make the schema changes to both tables
-        4. start cdc-sink
-        5. restart the change feed
+  - in order to perform a schema change
+    1. stop the change feed
+    2. stop cdc-sink
+    3. make the schema changes to both tables
+    4. start cdc-sink
+    5. restart the change feed
 - constraints on the destination table
-    - foreign keys
-        - there is no guarantee that foreign keys between two tables will arrive in the correct
-          order so please only use them on the source table
-        - different table constraints
-            - anything that has a tighter constraint than the original table may break the streaming
+  - foreign keys
+    - there is no guarantee that foreign keys between two tables will arrive in the correct
+      order so please only use them on the source table
+    - different table constraints
+      - anything that has a tighter constraint than the original table may break the streaming
 - the schema of the destination table must match the primary table exactly
 
 ## Expansions
