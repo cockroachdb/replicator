@@ -33,6 +33,11 @@ type Loop struct {
 	loop *loop
 }
 
+// Dialect returns the logical.Dialect in use.
+func (l *Loop) Dialect() Dialect {
+	return l.loop.dialect
+}
+
 // Stopped returns a channel that is closed when the Loop has shut down.
 func (l *Loop) Stopped() <-chan struct{} {
 	return l.loop.stopped

@@ -27,11 +27,28 @@ import (
 
 // Set is used by Wire.
 var Set = wire.NewSet(
+	ProvideFactory,
 	ProvideLoop,
 	ProvidePool,
 	ProvideStagingDB,
 	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
 )
+
+// ProvideFactory returns a utility which can create multiple logical
+// loops.
+func ProvideFactory(
+	appliers types.Appliers, config *Config, fans *fan.Fans, memo types.Memo, pool *pgxpool.Pool,
+) (*Factory, func()) {
+	f := &Factory{
+		appliers: appliers,
+		cfg:      config,
+		fans:     fans,
+		memo:     memo,
+		pool:     pool,
+	}
+	f.mu.loops = make(map[string]*Loop)
+	return f, f.Close
+}
 
 // ProvideLoop is called by Wire to create the replication loop. This
 // function starts a background goroutine, which will be terminated

@@ -95,6 +95,12 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")
 }
 
+// Copy returns a deep copy of the Config.
+func (c *Config) Copy() *Config {
+	ret := *c
+	return &ret
+}
+
 // Preflight ensures that unset configuration options have sane defaults
 // and returns an error if the Config is missing any fields for which a
 // default connot be provided.
