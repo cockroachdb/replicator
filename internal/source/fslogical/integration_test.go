@@ -18,6 +18,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
@@ -33,7 +34,7 @@ func TestSmoke(t *testing.T) {
 	a := assert.New(t)
 
 	// Create a target database.
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := sinktest.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -41,20 +42,25 @@ func TestSmoke(t *testing.T) {
 
 	ctx := fixture.Context
 	// Mangle our DB ident into something the emulator will accept.
-	projectID := strings.ReplaceAll(fixture.TestDB.Ident().Raw(), "_", "-")[1:]
+	projectID := strings.ReplaceAll(fixture.TestDB.Ident().Raw(), "_", "")
 
 	// Create the target schema.
 	destTable, err := fixture.CreateTable(ctx,
-		"CREATE TABLE %s (pk INT PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
+		"CREATE TABLE %s (id STRING PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
 	if !a.NoError(err) {
 		return
 	}
 
-	type Doc struct {
-		PK        int       `json:"pk"`
-		Val       string    `json:"v"`
-		UpdatedAt time.Time `json:"updated_at"`
-	}
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, destTable.Name(), &apply.Config{
+		CASColumns: []ident.Ident{ident.New("updated_at")},
+		SourceNames: map[apply.TargetColumn]apply.SourceColumn{
+			ident.New("id"): ident.New(firestore.DocumentID),
+		},
+	}))
+	changed, err := fixture.Configs.Refresh(ctx)
+	a.True(changed)
+	a.NoError(err)
+
 	now := time.Now().UTC()
 
 	// Create a connection to the emulator, to populate source docs.
@@ -63,28 +69,31 @@ func TestSmoke(t *testing.T) {
 		return
 	}
 	coll := fs.Collection(destTable.Name().Raw())
-	for i := 0; i < 100; i++ {
-		doc, _, err := coll.Add(ctx, Doc{
-			PK:        i + 1,
-			Val:       fmt.Sprintf("value %d", i),
-			UpdatedAt: now,
+	const docCount = 500
+	docIds := make([]string, docCount)
+	for i := range docIds {
+		doc, _, err := coll.Add(ctx, map[string]interface{}{
+			"v":          fmt.Sprintf("value %d", i),
+			"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
 		})
 		if !a.NoError(err) {
 			return
 		}
 		log.Tracef("inserted %s", doc.Path)
+		docIds[i] = doc.ID
 	}
-	time.Sleep(10 * time.Second)
-	loops, cancel, err := Start(ctx, &Config{
+
+	loops, cancel, err := startLoopsFromFixture(fixture, &Config{
 		Config: logical.Config{
-			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
-			AllowBackfill: true,
-			ChaosProb:     0,
-			Immediate:     true,
-			RetryDelay:    time.Nanosecond,
-			StagingDB:     fixture.StagingDB.Ident(),
-			TargetConn:    fixture.Pool.Config().ConnString(),
-			TargetDB:      fixture.TestDB.Ident(),
+			ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
+			AllowBackfill:  true,
+			ChaosProb:      0,
+			Immediate:      true,
+			RetryDelay:     time.Nanosecond,
+			StandbyTimeout: 10 * time.Millisecond,
+			StagingDB:      fixture.StagingDB.Ident(),
+			TargetConn:     fixture.Pool.Config().ConnString(),
+			TargetDB:       fixture.TestDB.Ident(),
 		},
 		ProjectID:         projectID,
 		SourceCollections: []string{coll.ID},
@@ -103,8 +112,26 @@ func TestSmoke(t *testing.T) {
 		if !a.NoError(err) {
 			return
 		}
-		if ct == 100 {
+		if ct == docCount {
 			break
 		}
+	}
+
+	// Update previous documents.
+	for i, docID := range docIds {
+		_, err := coll.Doc(docID).Set(ctx, map[string]interface{}{
+			"v":          fmt.Sprintf("updated %d", i),
+			"updated_at": firestore.ServerTimestamp,
+		})
+		if !a.NoError(err) {
+			return
+		}
+		log.Tracef("updated %s", docID)
+	}
+
+	// Wait for updated values.
+	for {
+
+		time.Sleep(time.Hour)
 	}
 }

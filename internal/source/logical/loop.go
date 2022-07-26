@@ -135,14 +135,14 @@ func (l *loop) run(ctx context.Context) {
 	for {
 		err := l.runOnce(ctx)
 
-		// Clean exit, likely switching modes.
-		if err == nil {
-			continue
-		}
-
 		// If the outer context is done, just return.
 		if ctx.Err() != nil {
 			return
+		}
+
+		// Clean exit, likely switching modes.
+		if err == nil {
+			continue
 		}
 
 		// Otherwise, log the error, and sleep for a bit.

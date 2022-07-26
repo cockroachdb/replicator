@@ -13,6 +13,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 )
 
 // Injectors from injector.go:
@@ -73,6 +74,39 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup6()
 		cleanup5()
 		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}, nil
+}
+
+// Build remaining testable components from a common fixture.
+func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logical.Loop, func(), error) {
+	baseFixture := &fixture.BaseFixture
+	contextContext := baseFixture.Context
+	appliers := fixture.Appliers
+	logicalConfig := ProvideBaseConfig(config)
+	fans := fixture.Fans
+	typesMemo := fixture.Memo
+	pool, cleanup, err := logical.ProvidePool(contextContext, logicalConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	factory, cleanup2 := logical.ProvideFactory(appliers, logicalConfig, fans, typesMemo, pool)
+	client, cleanup3, err := ProvideFireStoreClient(contextContext, config)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	v, err := ProvideLoops(contextContext, config, factory, client)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	return v, func() {
 		cleanup3()
 		cleanup2()
 		cleanup()

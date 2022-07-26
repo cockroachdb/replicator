@@ -18,6 +18,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/google/wire"
 )
 
@@ -30,5 +31,18 @@ func Start(context.Context, *Config) ([]*logical.Loop, func(), error) {
 		ProvideLoops,
 		logical.Set,
 		target.Set,
+	))
+}
+
+// Build remaining testable components from a common fixture.
+func startLoopsFromFixture(*sinktest.Fixture, *Config) ([]*logical.Loop, func(), error) {
+	panic(wire.Build(
+		wire.FieldsOf(new(*sinktest.BaseFixture), "Context"),
+		wire.FieldsOf(new(*sinktest.Fixture),
+			"Appliers", "BaseFixture", "Fans", "Memo"),
+		ProvideBaseConfig,
+		ProvideFireStoreClient,
+		ProvideLoops,
+		logical.Set,
 	))
 }
