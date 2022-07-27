@@ -76,6 +76,10 @@ func (e *chaosEvents) GetTargetDB() ident.Ident {
 	return e.delegate.GetTargetDB()
 }
 
+func (e *chaosEvents) IsBackfill() bool {
+	return e.delegate.IsBackfill()
+}
+
 func (e *chaosEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 	if rand.Float32() < e.prob {
 		return ErrChaos
@@ -102,4 +106,12 @@ func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
 		return ErrChaos
 	}
 	return e.delegate.OnRollback(ctx, msg)
+}
+
+func (e *chaosEvents) stop() {
+	e.delegate.stop()
+}
+
+func (e *chaosEvents) setConsistentPoint(s stamp.Stamp) {
+	e.delegate.setConsistentPoint(s)
 }
