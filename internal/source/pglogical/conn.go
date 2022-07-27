@@ -148,20 +148,22 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	}
 	dialSuccessCount.Inc()
 
-	standbyTimeout := time.Second * 10
+	const standbyTimeout = time.Second * 10
 	standbyDeadline := time.Now().Add(standbyTimeout)
 
 	for ctx.Err() == nil {
 		if time.Now().After(standbyDeadline) {
-			logPos := state.GetConsistentPoint().(lsnStamp).AsLSN()
-			err = pglogrepl.SendStandbyStatusUpdate(ctx, replConn, pglogrepl.StandbyStatusUpdate{
-				WALWritePosition: logPos,
-			})
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			log.WithField("WALWritePosition", logPos).Trace("sent Standby status message")
 			standbyDeadline = time.Now().Add(standbyTimeout)
+			if cp, ok := state.GetConsistentPoint().(lsnStamp); ok {
+				if err := pglogrepl.SendStandbyStatusUpdate(ctx, replConn, pglogrepl.StandbyStatusUpdate{
+					WALWritePosition: cp.AsLSN(),
+				}); err != nil {
+					return errors.WithStack(err)
+				}
+				log.WithField("WALWritePosition", cp.AsLSN()).Trace("sent Standby status message")
+			} else {
+				log.Warn("have yet to reach any consistent point")
+			}
 		}
 
 		// Receive one message, with a timeout. In a low-traffic
