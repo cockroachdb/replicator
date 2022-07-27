@@ -56,6 +56,9 @@ func (f *fanEvents) OnCommit(context.Context) error {
 	if f.stamp == nil {
 		return errors.New("OnCommit called without OnBegin")
 	}
+	if f.fan == nil {
+		return errors.New("stopped")
+	}
 	// The fan will eventually call State.setConsistentPoint.
 	err := f.fan.Mark(f.stamp)
 	f.stamp = nil
@@ -67,6 +70,9 @@ func (f *fanEvents) OnData(ctx context.Context, target ident.Table, muts []types
 	if f.stamp == nil {
 		return errors.New("OnData called without OnBegin")
 	}
+	if f.fan == nil {
+		return errors.New("stopped")
+	}
 	return f.fan.Enqueue(ctx, f.stamp, target, muts)
 }
 
@@ -74,6 +80,9 @@ func (f *fanEvents) OnData(ctx context.Context, target ident.Table, muts []types
 func (f *fanEvents) OnRollback(_ context.Context, msg Message) error {
 	if !IsRollback(msg) {
 		return errors.New("the rollback message must be passed to OnRollback")
+	}
+	if f.fan == nil {
+		return errors.New("stopped")
 	}
 	// Dump any in-flight mutations, but keep the fan running.
 	f.fan.Reset()
