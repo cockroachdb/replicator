@@ -8,13 +8,14 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
+// Package fslogical contains a logical-replication loop for streaming
+// document collections from Google Cloud Firestore.
 package fslogical
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -24,81 +25,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/api/iterator"
 )
 
-type consistentPoint struct {
-	// A timestamp that we have performed a backfill to. This value
-	// will only be present when a backfill is underway.
-	BackfillTime *time.Time `json:"b,omitempty"`
-	// The last document ID read when backfilling.
-	BackfillID *string `json:"i,omitempty"`
-	// A server-generated timestamp; only updated when a backfill has
-	// completed or when we receive new data in streaming mode.
-	StreamTime *time.Time `json:"t,omitempty"`
-}
-
-// AsTime implements the optional logical.TimeStamp interface to aid in
-// metrics reporting.
-func (t consistentPoint) AsTime() time.Time {
-	if t.BackfillTime != nil {
-		return *t.BackfillTime
-	}
-	return *t.StreamTime
-}
-
-// AsID is a convenience method to get the associated backfill document.
-func (t consistentPoint) AsID() string {
-	if t.BackfillID == nil {
-		return ""
-	}
-	return *t.BackfillID
-}
-
-// MarshalText implements stamp.Stamp.
-func (t consistentPoint) MarshalText() (text []byte, err error) {
-	type payload consistentPoint
-	p := payload(t)
-	x, e := json.Marshal(p)
-	return x, e
-}
-
-// Less implements stamp.Stamp.
-func (t consistentPoint) Less(other stamp.Stamp) bool {
-	o := other.(consistentPoint)
-
-	tt := t.AsTime()
-	ot := o.AsTime()
-	if tt.Before(ot) {
-		return true
-	}
-	if tt.After(ot) {
-		return false
-	}
-
-	return strings.Compare(t.AsID(), o.AsID()) < 0
-}
-
-func backfillPoint(id string, ts time.Time) consistentPoint {
-	return consistentPoint{
-		BackfillID:   &id,
-		BackfillTime: &ts,
-	}
-}
-
-func streamPoint(ts time.Time) consistentPoint {
-	return consistentPoint{
-		StreamTime: &ts,
-	}
-}
-
-// UnmarshalText implements TextUnmarshaler.
-func (t *consistentPoint) UnmarshalText(data []byte) error {
-	return json.Unmarshal(data, t)
-}
-
-var _ stamp.Stamp = consistentPoint{}
-
+// Dialect reads data from Google Cloud Firestore.
 type Dialect struct {
 	backfillDone bool
 	coll         *firestore.CollectionRef
@@ -111,20 +40,22 @@ var (
 	_ logical.Dialect    = (*Dialect)(nil)
 )
 
-type backfillDoc struct {
-	doc *firestore.DocumentSnapshot
-}
-type streamDoc struct {
-	doc *firestore.DocumentSnapshot
-}
-type streamStart struct {
-	readTime time.Time
-}
-type streamEnd struct{}
-type streamDelete struct {
-	doc *firestore.DocumentRef
-}
+// These are the Dialect message types.
+type (
+	batchStart struct {
+		cp consistentPoint
+	}
+	batchDelete struct {
+		ref *firestore.DocumentRef
+	}
+	batchDoc struct {
+		doc *firestore.DocumentSnapshot
+	}
+	batchEnd struct{}
+)
 
+// BackfillInto implements logical.Dialect. It uses an ID-based cursor
+// approach to scan documents in their updated-at order.
 func (d *Dialect) BackfillInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
@@ -167,7 +98,6 @@ func (d *Dialect) backfillOnce(
 	lastReadTime *time.Time,
 	lastReadID *string,
 ) (moreWork bool, _ error) {
-	const limit = 2
 
 	// Iterate over the collection by (updated_at, __doc_id__) using
 	// a cursor-like approach so that we can checkpoint along the way.
@@ -175,36 +105,52 @@ func (d *Dialect) backfillOnce(
 		OrderBy(d.cfg.UpdatedAtProperty.Raw(), firestore.Asc).
 		OrderBy(firestore.DocumentID, firestore.Asc).
 		Where(d.cfg.UpdatedAtProperty.Raw(), "<", toExcl).
-		Limit(limit)
+		Limit(d.cfg.BackfillBatch)
 	if *lastReadID == "" {
 		q = q.Where(d.cfg.UpdatedAtProperty.Raw(), ">=", *lastReadTime)
 	} else {
 		q = q.StartAfter(*lastReadTime, *lastReadID)
 	}
-	docs := q.Documents(ctx)
-	defer docs.Stop()
+	// We're going to call GetAll since we're running with a reasonable
+	// limit value.  This allows us to peek at the id of the last
+	// document, so we can compute the eventual consistent point for
+	// this batch of docs.
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	if len(docs) == 0 {
+		return false, nil
+	}
+	lastDoc := docs[len(docs)-1]
+	*lastReadID = lastDoc.Ref.ID
+	*lastReadTime, err = d.docUpdatedAt(lastDoc)
+	if err != nil {
+		return false, err
+	}
+	cp := backfillPoint(*lastReadID, *lastReadTime)
 
-	count := 0
-	for {
-		doc, err := docs.Next()
-		if err == iterator.Done {
-			return count == limit, nil
-		}
-		if err != nil {
-			return false, errors.WithStack(err)
-		}
-		*lastReadID = doc.Ref.ID
-		*lastReadTime, err = d.docUpdatedAt(doc)
-		if err != nil {
-			return false, err
-		}
+	select {
+	case ch <- batchStart{cp}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+
+	for _, doc := range docs {
 		select {
-		case ch <- backfillDoc{doc}:
-			count++
+		case ch <- batchDoc{doc}:
 		case <-ctx.Done():
 			return false, ctx.Err()
 		}
 	}
+
+	select {
+	case ch <- batchEnd{}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+
+	return len(docs) == d.cfg.BackfillBatch, nil
 }
 
 // ShouldBackfill returns true if the backfill process has caught up
@@ -219,8 +165,7 @@ func (d *Dialect) ReadInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	cp := state.GetConsistentPoint().(consistentPoint)
-	// Iterate over the collection by (updated_at, __doc_id__) using
-	// a cursor-like approach so that we can checkpoint along the way.
+	// Stream from the last updated time.
 	q := d.coll.
 		OrderBy(d.cfg.UpdatedAtProperty.Raw(), firestore.Asc).
 		StartAt(cp.AsTime())
@@ -232,9 +177,8 @@ func (d *Dialect) ReadInto(
 			return errors.WithStack(err)
 		}
 
-		// Interruptable send of a new batch.
 		select {
-		case ch <- streamStart{snap.ReadTime}:
+		case ch <- batchStart{streamPoint(snap.ReadTime)}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -244,13 +188,13 @@ func (d *Dialect) ReadInto(
 			case firestore.DocumentAdded,
 				firestore.DocumentModified:
 				select {
-				case ch <- streamDoc{change.Doc}:
+				case ch <- batchDoc{change.Doc}:
 				case <-ctx.Done():
 					return ctx.Err()
 				}
 			case firestore.DocumentRemoved:
 				select {
-				case ch <- streamDelete{change.Doc.Ref}:
+				case ch <- batchDelete{change.Doc.Ref}:
 				case <-ctx.Done():
 					return ctx.Err()
 				}
@@ -258,13 +202,14 @@ func (d *Dialect) ReadInto(
 		}
 
 		select {
-		case ch <- streamEnd{}:
+		case ch <- batchEnd{}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 }
 
+// Process implements logical.Dialect.
 func (d *Dialect) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
@@ -277,36 +222,12 @@ func (d *Dialect) Process(
 		}
 
 		switch t := msg.(type) {
-		case backfillDoc:
-			doc := t.doc
-			docUpdatedAt, err := d.docUpdatedAt(doc)
-			if err != nil {
+		case batchStart:
+			if err := events.OnBegin(ctx, t.cp); err != nil {
 				return err
 			}
 
-			cp := backfillPoint(doc.Ref.ID, docUpdatedAt)
-			mut, err := d.marshalMutation(doc, docUpdatedAt)
-			if err != nil {
-				return err
-			}
-
-			if err := events.OnBegin(ctx, cp); err != nil {
-				return err
-			}
-			if err := events.OnData(ctx, d.cfg.TargetTable, []types.Mutation{mut}); err != nil {
-				return err
-			}
-			if err := events.OnCommit(ctx); err != nil {
-				return err
-			}
-
-		case streamStart:
-			cp := streamPoint(t.readTime)
-			if err := events.OnBegin(ctx, cp); err != nil {
-				return err
-			}
-
-		case streamDoc:
+		case batchDoc:
 			doc := t.doc
 			docUpdatedAt, err := d.docUpdatedAt(doc)
 			if err != nil {
@@ -322,7 +243,7 @@ func (d *Dialect) Process(
 				return err
 			}
 
-		case streamEnd:
+		case batchEnd:
 			if err := events.OnCommit(ctx); err != nil {
 				return err
 			}
@@ -334,7 +255,9 @@ func (d *Dialect) Process(
 	return nil
 }
 
-func (d *Dialect) marshalMutation(doc *firestore.DocumentSnapshot, updatedAt time.Time) (types.Mutation, error) {
+func (d *Dialect) marshalMutation(
+	doc *firestore.DocumentSnapshot, updatedAt time.Time,
+) (types.Mutation, error) {
 	// We want to bake the document id into the values to be
 	// applied, with the assumption that it will be remapped (or
 	// ignored) by the downstream apply rules.

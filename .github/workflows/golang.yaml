@@ -1,6 +1,7 @@
 name: Golang
 permissions:
   contents: read
+  packages: read
 on:
   push:
     branches: [ master ]
@@ -130,18 +131,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cockroachdb: [ v20.2, v21.1, v21.2, v22.1 ]
+        cockroachdb: [ v22.1 ]
         # This matrix component should use the target names listed
         # in the docker-compose.yml file in the parent directory.
         integration:
+          - "firestore"
           - "mysql-v8"
           - "mysql-mariadb-v10"
           - "postgresql-v11"
           - "postgresql-v12"
           - "postgresql-v13"
           - "postgresql-v14"
+        # The cockroachdb value in this include block will collide with
+        # the value from the auto-expanded matrix. The net effect is
+        # that we'll skip integration tests against older versions of
+        # CRDB. These tests are kept around to ensure that the target
+        # package doesn't use any SQL that couldn't be run on older CRDB
+        # versions.
+        include:
+          - cockroachdb: v20.2
+          - cockroachdb: v21.1
+          - cockroachdb: v21.2
     env:
       COVER_OUT: coverage-${{ matrix.cockroachdb }}-${{ matrix.integration }}.out
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8181
       JUNIT_OUT: junit-${{ matrix.cockroachdb }}-${{ matrix.integration }}.xml
       TEST_OUT: go-test-${{ matrix.cockroachdb }}-${{ matrix.integration }}.json
     steps:
@@ -157,6 +170,14 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
           cache-dependency-path: CACHE_KEY
+
+      # Ensure we can grab any private images we need for testing.
+      - name: Log in to GitHub Package Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start CockroachDB
         working-directory: .github

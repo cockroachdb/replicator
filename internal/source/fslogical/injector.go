@@ -27,7 +27,7 @@ import (
 func Start(context.Context, *Config) ([]*logical.Loop, func(), error) {
 	panic(wire.Build(
 		ProvideBaseConfig,
-		ProvideFireStoreClient,
+		ProvideFirestoreClient,
 		ProvideLoops,
 		logical.Set,
 		target.Set,
@@ -41,7 +41,7 @@ func startLoopsFromFixture(*sinktest.Fixture, *Config) ([]*logical.Loop, func(),
 		wire.FieldsOf(new(*sinktest.Fixture),
 			"Appliers", "BaseFixture", "Fans", "Memo"),
 		ProvideBaseConfig,
-		ProvideFireStoreClient,
+		ProvideFirestoreClient,
 		ProvideLoops,
 		logical.Set,
 	))

@@ -20,6 +20,7 @@ import (
 )
 
 type loopConfig struct {
+	BackfillBatch     int
 	SourceCollection  string
 	TargetTable       ident.Table
 	UpdatedAtProperty ident.Ident
@@ -28,7 +29,8 @@ type loopConfig struct {
 // Config adds dialect-specific configuration to the core logical loop.
 type Config struct {
 	logical.Config
-
+	// The number of documents to load at once during a backfill operation.
+	BackfillBatchSize int
 	// A JSON service-account key for the Firestore API.
 	CredentialsFile string
 	// The Firebase project id. Usually inferred from the credentials.
@@ -45,7 +47,8 @@ type Config struct {
 // Bind adds flags to the pflag.FlagSet to populate the Config.
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Config.Bind(f)
-
+	f.IntVar(&c.BackfillBatchSize, "backfillBatchSize", 100,
+		"the number of documents to load when backfilling")
 	f.StringVar(&c.CredentialsFile, "credentials", "",
 		"a file containing JSON service credentials.")
 	f.StringVar(&c.ProjectID, "projectID", "",
@@ -64,15 +67,18 @@ func (c *Config) Preflight() error {
 		return err
 	}
 
-	if os.Getenv(emulatorEnv) != "" {
-		return nil
+	if c.BackfillBatchSize < 1 {
+		return errors.New("backfill batch size must be >= 1")
 	}
 
-	if c.CredentialsFile == "" {
-		return errors.New("no credentials file specified")
-	}
-	if _, err := os.Stat(c.CredentialsFile); err != nil {
-		return errors.Errorf("could not stat %s", c.CredentialsFile)
+	// Only require credentials if there's no emulator.
+	if os.Getenv(emulatorEnv) == "" {
+		if c.CredentialsFile == "" {
+			return errors.New("no credentials file specified")
+		}
+		if _, err := os.Stat(c.CredentialsFile); err != nil {
+			return errors.Errorf("could not stat %s", c.CredentialsFile)
+		}
 	}
 
 	// Sanity-check collections vs target tables.
@@ -85,11 +91,13 @@ func (c *Config) Preflight() error {
 		c.TargetTables[i] = ident.NewTable(
 			c.TargetDB, ident.Public, ident.New(c.tablesTemp[i]))
 	}
+	c.tablesTemp = nil
 
 	if c.updatedAtTemp == "" {
 		return errors.New("no updated_at property name given")
 	}
 	c.UpdatedAtProperty = ident.New(c.updatedAtTemp)
+	c.updatedAtTemp = ""
 
 	return nil
 }

@@ -1,0 +1,47 @@
+# Build the Firestore emulator docker image and push it to the GitHub
+# package repository.
+name: Firestore Emulator
+permissions:
+  contents: read
+  packages: write
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - ".github/firestore/**"
+  pull_request:
+    paths:
+      - ".github/firestore/**"
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/firestore-emulator
+
+jobs:
+  # https://docs.github.com/en/actions/publishing-packages/publishing-docker-images#publishing-images-to-github-packages
+  push:
+    name: Push Firestore Emulator to GH Packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+
+      - name: Log in to GitHub Package Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v3
+        with:
+          context: ./.github/firestore
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: ${{ steps.meta.outputs.labels }}

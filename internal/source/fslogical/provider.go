@@ -26,18 +26,14 @@ import (
 // This environment variable is used by the SDK.
 const emulatorEnv = "FIRESTORE_EMULATOR_HOST"
 
-var (
-	// Atomic counter, combined with the process ID, to ensure that all
-	// tests use a distinct project ID value.
-	testRun int32
-)
-
 // ProvideBaseConfig is called by wire to extract the core logical-loop
 // configuration from this package's Config type.
 func ProvideBaseConfig(cfg *Config) *logical.Config {
 	return &cfg.Config
 }
 
+// ProvideLoops is called by wire to construct a logical-replication
+// loop for each configured collection/table pair.
 func ProvideLoops(
 	ctx context.Context, cfg *Config, loops *logical.Factory, fs *firestore.Client,
 ) ([]*logical.Loop, error) {
@@ -47,6 +43,7 @@ func ProvideLoops(
 		ret[i], err = loops.Get(ctx, cfg.SourceCollections[i], &Dialect{
 			coll: fs.Collection(cfg.SourceCollections[i]),
 			cfg: &loopConfig{
+				BackfillBatch:     cfg.BackfillBatchSize,
 				SourceCollection:  cfg.SourceCollections[i],
 				TargetTable:       cfg.TargetTables[i],
 				UpdatedAtProperty: cfg.UpdatedAtProperty,
@@ -60,7 +57,9 @@ func ProvideLoops(
 	return ret, nil
 }
 
-func ProvideFireStoreClient(ctx context.Context, cfg *Config) (*firestore.Client, func(), error) {
+// ProvideFirestoreClient is called by wire. If a local emulator is in
+// use, the cleanup function will delete the test project data.
+func ProvideFirestoreClient(ctx context.Context, cfg *Config) (*firestore.Client, func(), error) {
 	// Project ID is usually baked into the JSON key file.
 	projectID := firestore.DetectProjectID
 	if cfg.ProjectID != "" {

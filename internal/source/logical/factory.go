@@ -50,6 +50,7 @@ func (f *Factory) Close() {
 	f.mu.loops = make(map[string]*Loop)
 }
 
+// Get constructs or retrieves the named Loop.
 func (f *Factory) Get(ctx context.Context, name string, dialect Dialect) (*Loop, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

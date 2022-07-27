@@ -51,7 +51,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		return nil, nil, err
 	}
 	factory, cleanup5 := logical.ProvideFactory(appliers, logicalConfig, fans, memoMemo, pool)
-	client, cleanup6, err := ProvideFireStoreClient(contextContext, config)
+	client, cleanup6, err := ProvideFirestoreClient(contextContext, config)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -93,7 +93,7 @@ func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logica
 		return nil, nil, err
 	}
 	factory, cleanup2 := logical.ProvideFactory(appliers, logicalConfig, fans, typesMemo, pool)
-	client, cleanup3, err := ProvideFireStoreClient(contextContext, config)
+	client, cleanup3, err := ProvideFirestoreClient(contextContext, config)
 	if err != nil {
 		cleanup2()
 		cleanup()

@@ -106,6 +106,9 @@ type State interface {
 	GetConsistentPoint() stamp.Stamp
 	// GetTargetDB returns the target database name.
 	GetTargetDB() ident.Ident
+	// IsBackfill returns true if the data stream is being driven by
+	// a call to Backfiller.BackfillInto.
+	IsBackfill() bool
 
 	// setConsistentPoint is called from implementations of Events.
 	setConsistentPoint(stamp.Stamp)

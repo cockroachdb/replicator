@@ -46,6 +46,9 @@ func (l *Loop) Stopped() <-chan struct{} {
 // loop is not internally synchronized; it assumes that it is being
 // driven by a serial stream of data.
 type loop struct {
+	// True when Backfiller.BackfillInto is executing.
+	backfill bool
+	// The active configuration.
 	config *Config
 	// The Dialect contains message-processing, specific to a particular
 	// source database.
@@ -129,6 +132,11 @@ func (l *loop) GetTargetDB() ident.Ident {
 	return l.config.TargetDB
 }
 
+// IsBackfill implements State.
+func (l *loop) IsBackfill() bool {
+	return l.backfill
+}
+
 // run blocks while the connection is processing messages.
 func (l *loop) run(ctx context.Context) {
 	defer log.Info("replication loop shut down")
@@ -161,7 +169,10 @@ func (l *loop) runOnce(ctx context.Context) error {
 	var backfiller Backfiller
 	if x, ok := l.dialect.(Backfiller); ok && l.config.AllowBackfill && x.ShouldBackfill(l) {
 		backfiller = x
+		l.backfill = true
 		log.Info("using backfill strategy")
+	} else {
+		l.backfill = false
 	}
 
 	// Select the event-handling strategy.

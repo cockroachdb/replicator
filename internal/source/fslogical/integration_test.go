@@ -30,8 +30,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestSmoke(t *testing.T) {
-	log.SetLevel(log.TraceLevel)
 	a := assert.New(t)
+	const docCount = 1000
 
 	// Create a target database.
 	fixture, cancel, err := sinktest.NewFixture()
@@ -69,7 +69,6 @@ func TestSmoke(t *testing.T) {
 		return
 	}
 	coll := fs.Collection(destTable.Name().Raw())
-	const docCount = 500
 	docIds := make([]string, docCount)
 	for i := range docIds {
 		doc, _, err := coll.Add(ctx, map[string]interface{}{
@@ -95,6 +94,7 @@ func TestSmoke(t *testing.T) {
 			TargetConn:     fixture.Pool.Config().ConnString(),
 			TargetDB:       fixture.TestDB.Ident(),
 		},
+		BackfillBatchSize: 10,
 		ProjectID:         projectID,
 		SourceCollections: []string{coll.ID},
 		TargetTables:      []ident.Table{destTable.Name()},
@@ -131,7 +131,15 @@ func TestSmoke(t *testing.T) {
 
 	// Wait for updated values.
 	for {
-
-		time.Sleep(time.Hour)
+		var ct int
+		if !a.NoError(fixture.Pool.QueryRow(ctx,
+			fmt.Sprintf("SELECT count(*) FROM %s WHERE v LIKE 'updated%%'",
+				destTable.Name())).Scan(&ct)) {
+			return
+		}
+		if ct == docCount {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
