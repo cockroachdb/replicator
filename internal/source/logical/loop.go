@@ -45,6 +45,8 @@ func (l *Loop) Stopped() <-chan struct{} {
 type loop struct {
 	// the key used to persist the consistentPoint stamp.
 	consistentPointKey string
+	// default consistentPoint.
+	defaultConsistentPoint string
 	// The Dialect contains message-processing, specific to a particular
 	// source database.
 	dialect Dialect
@@ -92,6 +94,9 @@ func (l *loop) retrieveConsistentPoint(ctx context.Context) (stamp.Stamp, error)
 		return nil, err
 	}
 	if len(data) == 0 {
+		if l.defaultConsistentPoint != "" {
+			return l.dialect.UnmarshalStamp([]byte(l.defaultConsistentPoint))
+		}
 		return nil, nil
 	}
 	return l.dialect.UnmarshalStamp(data)
