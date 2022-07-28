@@ -402,8 +402,10 @@ webhook.
   of tables in the source database is possible.
 - Run `SELECT pg_create_logical_replication_slot('cdc_sink', 'pgoutput');` in the source database.
   The value `cdc_sink` may be changed and should be passed to the `--slotName` flag.
-- Run `SELECT pg_export_snapshot();` to create a consistent point for bulk data export. The value
-  returned from this function can be passed
+- Run `SELECT pg_export_snapshot();` to create a consistent point for bulk data export and leave
+  the source PosgreSQL session open. (Snapshot ids are valid only for the lifetime of the session
+  which created them.)
+  The value returned from this function can be passed
   to [`pg_dump --snapshot <snapshot_id>`](https://www.postgresql.org/docs/current/app-pgdump.html)
   that is subsequently
   [IMPORTed into CockroachDB](https://www.cockroachlabs.com/docs/stable/migrate-from-postgres.html)
