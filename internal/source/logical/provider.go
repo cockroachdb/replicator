@@ -52,15 +52,16 @@ func ProvideLoop(
 	}
 	var err error
 	loop := &loop{
-		consistentPointKey: config.ConsistentPointKey,
-		dialect:            dialect,
-		memo:               memo,
-		retryDelay:         config.RetryDelay,
-		serializer:         serializer,
-		standbyDeadline:    time.Now().Add(standbyTimeout),
-		stopped:            make(chan struct{}),
-		targetDB:           config.TargetDB,
-		targetPool:         pool,
+		consistentPointKey:     config.ConsistentPointKey,
+		defaultConsistentPoint: config.DefaultConsistentPoint,
+		dialect:                dialect,
+		memo:                   memo,
+		retryDelay:             config.RetryDelay,
+		serializer:             serializer,
+		standbyDeadline:        time.Now().Add(standbyTimeout),
+		stopped:                make(chan struct{}),
+		targetDB:               config.TargetDB,
+		targetPool:             pool,
 	}
 	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
 	loop.consistentPoint.stamp, err = loop.retrieveConsistentPoint(ctx)
