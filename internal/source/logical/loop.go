@@ -13,13 +13,13 @@ package logical
 
 import (
 	"context"
+	"encoding"
+	"encoding/json"
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/serial"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
@@ -35,6 +35,11 @@ type Loop struct {
 	loop *loop
 }
 
+// Dialect returns the logical.Dialect in use.
+func (l *Loop) Dialect() Dialect {
+	return l.loop.dialect
+}
+
 // Stopped returns a channel that is closed when the Loop has shut down.
 func (l *Loop) Stopped() <-chan struct{} {
 	return l.loop.stopped
@@ -43,32 +48,21 @@ func (l *Loop) Stopped() <-chan struct{} {
 // loop is not internally synchronized; it assumes that it is being
 // driven by a serial stream of data.
 type loop struct {
-	// the key used to persist the consistentPoint stamp.
-	consistentPointKey string
-	// If the consistentPoint is not found in the target database, use this default.
-	defaultConsistentPoint string
+	// The active configuration.
+	config *Config
 	// The Dialect contains message-processing, specific to a particular
 	// source database.
 	dialect Dialect
-	// The fan manages the fan-out of applying mutations across multiple
-	// SQL connections.
-	fan *fan.Fan
+	// Various strategies for implementing the Events interface.
+	events struct {
+		fan    Events
+		serial Events
+	}
 	// Optional checkpoint saved into the target database
 	memo types.Memo
-	// openTransaction tracks the latest value passed to OnCommit.
-	openTransaction stamp.Stamp
-	// The amount of time to sleep between retries of the replication
-	// loop.
-	retryDelay time.Duration
-	// Allows us to force the concurrent applier logic to concentrate
-	// its work into a single underlying database transaction. This will
-	// be nil when running in the default, concurrent, mode.
-	serializer *serial.Pool
 	// Tracks when it is time to update the consistentPoint.
 	standbyDeadline time.Time
 	stopped         chan struct{}
-	// The SQL database we're going to be writing into.
-	targetDB ident.Ident
 	// Used to update the consistentPoint in the target database.
 	targetPool pgxtype.Querier
 
@@ -81,36 +75,57 @@ type loop struct {
 	}
 }
 
-var standbyTimeout = 5 * time.Second
-
-// retrieveConsistentPoint will return the latest consistent-point
-// stamp, or nil if consistentPointKey is unset.
-func (l *loop) retrieveConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
-	if l.consistentPointKey == "" {
-		return nil, nil
+// loadConsistentPoint will return the latest consistent-point
+// stamp, or Dialect.ZeroStamp if consistentPointKey is unset.
+func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
+	ret := l.dialect.ZeroStamp()
+	if l.config.LoopName == "" {
+		return ret, nil
 	}
-	data, err := l.memo.Get(ctx, l.targetPool, l.consistentPointKey)
+	data, err := l.memo.Get(ctx, l.targetPool, l.config.LoopName)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) == 0 && l.defaultConsistentPoint != "" {
-		data = []byte(l.defaultConsistentPoint)
+	if len(data) == 0 {
+		data = []byte(l.config.DefaultConsistentPoint)
 	}
-	return l.dialect.UnmarshalStamp(data)
+	if len(data) == 0 {
+		return ret, nil
+	}
+	// Support either text or json encodings.
+	if x, ok := ret.(encoding.TextUnmarshaler); ok {
+		return ret, x.UnmarshalText(data)
+	}
+	return ret, json.Unmarshal(data, ret)
 }
 
-// saveConsistentPoint will commit the latest consistent-point stamp
-// to the memo table, if the consistentPointKey is set.
-func (l *loop) saveConsistentPoint(ctx context.Context) error {
-	if l.consistentPointKey == "" {
-		return nil
+// setConsistentPoint is safe to call from any goroutine. It will
+// occasionally persist the consistent point to the memo table.
+func (l *loop) setConsistentPoint(p stamp.Stamp) {
+	l.consistentPoint.L.Lock()
+	defer l.consistentPoint.L.Unlock()
+	l.consistentPoint.stamp = p
+	l.consistentPoint.Broadcast()
+
+	if l.config.LoopName == "" {
+		return
 	}
-	m, err := l.GetConsistentPoint().MarshalText()
+	if time.Now().Before(l.standbyDeadline) {
+		return
+	}
+	data, err := json.Marshal(p)
 	if err != nil {
-		return err
+		log.WithError(err).Warn("could not marshal consistent-point stamp")
+		return
 	}
-	log.Infof("Saving checkpoint %s", string(m))
-	return l.memo.Put(ctx, l.targetPool, l.consistentPointKey, m)
+	if err := l.memo.Put(context.Background(),
+		l.targetPool, l.config.LoopName, data,
+	); err != nil {
+		log.WithError(err).Warn("could not persist consistent-point stamp")
+		return
+	}
+	l.standbyDeadline = time.Now().Add(l.config.StandbyTimeout)
+	log.Tracef("Saved checkpoint %s", data)
 }
 
 // GetConsistentPoint implements State.
@@ -122,160 +137,155 @@ func (l *loop) GetConsistentPoint() stamp.Stamp {
 
 // GetTargetDB implements State.
 func (l *loop) GetTargetDB() ident.Ident {
-	return l.targetDB
-}
-
-// OnBegin implements Events.
-func (l *loop) OnBegin(ctx context.Context, point stamp.Stamp) error {
-	if l.openTransaction != nil {
-		return errors.Errorf("OnBegin already called at %s", l.openTransaction)
-	}
-	l.openTransaction = point
-	if l.serializer == nil {
-		return nil
-	}
-	return l.serializer.Begin(ctx)
-}
-
-// OnCommit implements Events.
-func (l *loop) OnCommit(ctx context.Context) error {
-	if l.openTransaction == nil {
-		return errors.New("OnCommit called without matching OnBegin")
-	}
-
-	var err error
-	defer func() {
-		tx := l.openTransaction
-		l.openTransaction = nil
-		if err != nil {
-			commitFailureCount.Inc()
-		} else {
-			commitSuccessCount.Inc()
-			if x, ok := tx.(TimeStamp); ok {
-				commitTime.Set(float64(x.AsTime().UnixNano()))
-			}
-			if x, ok := tx.(OffsetStamp); ok {
-				commitOffset.Set(float64(x.AsOffset()))
-			}
-		}
-	}()
-
-	if err = l.fan.Mark(l.openTransaction); err != nil {
-		return err
-	}
-
-	// If we're running in serial (as opposed to concurrent) mode, we
-	// want to wait for the pending mutations to be flushed to the
-	// single transaction, and then we'll commit the transaction.
-	if l.serializer != nil {
-		l.consistentPoint.L.Lock()
-		for stamp.Compare(l.consistentPoint.stamp, l.openTransaction) < 0 {
-			l.consistentPoint.Wait()
-		}
-		l.consistentPoint.L.Unlock()
-		// err is checked by the deferred call above.
-		err = l.serializer.Commit(ctx)
-	}
-
-	if time.Now().After(l.standbyDeadline) {
-		err = l.saveConsistentPoint(ctx)
-		if err != nil {
-			return err
-		}
-		l.standbyDeadline = time.Now().Add(standbyTimeout)
-	}
-	return err
-}
-
-// OnData implements Events.
-func (l *loop) OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error {
-	return l.fan.Enqueue(ctx, l.openTransaction, target, muts)
-}
-
-// OnRollback implements Events.
-func (l *loop) OnRollback(_ context.Context, msg Message) error {
-	if !IsRollback(msg) {
-		return errors.New("the rollback message must be passed to OnRollback")
-	}
-	l.reset()
-	return nil
-}
-
-// reset is called before every attempt at running the replication loop.
-func (l *loop) reset() {
-	l.fan.Reset()
-	l.openTransaction = nil
-	if s := l.serializer; s != nil {
-		// Don't really care about the transaction state.
-		_ = s.Rollback(context.Background())
-	}
+	return l.config.TargetDB
 }
 
 // run blocks while the connection is processing messages.
 func (l *loop) run(ctx context.Context) {
 	defer log.Info("replication loop shut down")
 	for {
-		// Ensure that we're in a clear state when recovering.
-		l.reset()
-		group, groupCtx := errgroup.WithContext(ctx)
-
-		// Start a background goroutine to maintain the replication
-		// connection. This source goroutine is set up to be robust; if
-		// there's an error talking to the source database, we send a
-		// rollback message to the consumer and retry the connection.
-		ch := make(chan Message, 16)
-		group.Go(func() error {
-			defer close(ch)
-			for {
-				if err := l.dialect.ReadInto(groupCtx, ch, l); err != nil {
-					log.WithError(err).Error("error from replication source; continuing")
-				}
-				// If the context was canceled, just exit.
-				if err := groupCtx.Err(); err != nil {
-					return nil
-				}
-				// Otherwise, we'll recover by injecting a new rollback
-				// message and then restarting the message stream from
-				// the previous consistent point.
-				select {
-				case ch <- msgRollback:
-					continue
-				case <-groupCtx.Done():
-					return nil
-				}
-			}
-		})
-
-		// This goroutine applies the incoming mutations to the target
-		// database. It is fragile, when it errors, we need to also
-		// restart the source goroutine.
-		group.Go(func() error {
-			err := l.dialect.Process(groupCtx, ch, l)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.WithError(err).Error("error while applying replication messages; stopping")
-			}
-			return err
-		})
-
-		err := group.Wait()
+		err := l.runOnce(ctx)
 
 		// If the outer context is done, just return.
 		if ctx.Err() != nil {
 			return
 		}
 
-		log.WithError(err).Errorf("error in replication loop; retrying in %s", l.retryDelay)
+		// Clean exit, likely switching modes.
+		if err == nil {
+			continue
+		}
+
+		// Otherwise, log the error, and sleep for a bit.
+		log.WithError(err).Errorf("error in replication loop; retrying in %s", l.config.RetryDelay)
 		select {
-		case <-time.After(l.retryDelay):
+		case <-time.After(l.config.RetryDelay):
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (l *loop) setConsistentPoint(p stamp.Stamp) {
-	l.consistentPoint.L.Lock()
-	defer l.consistentPoint.L.Unlock()
-	l.consistentPoint.stamp = p
-	l.consistentPoint.Broadcast()
+// runOnce is called by run.
+func (l *loop) runOnce(ctx context.Context) error {
+	// Determine how to perform the filling.
+	source, events, isBackfilling := l.chooseFillStrategy()
+
+	// Ensure that we're in a clear state when recovering.
+	defer events.stop()
+
+	groupCtx, cancelGroup := context.WithCancel(ctx)
+	defer cancelGroup()
+	group, groupCtx := errgroup.WithContext(groupCtx)
+
+	// Start a background goroutine to maintain the replication
+	// connection. This source goroutine is set up to be robust; if
+	// there's an error talking to the source database, we send a
+	// rollback message to the consumer and retry the connection.
+	ch := make(chan Message, 16)
+	group.Go(func() error {
+		defer close(ch)
+		for groupCtx.Err() == nil {
+			err := source(groupCtx, ch, events)
+
+			// Return if the source closed cleanly (we may switch
+			// from backfill to streaming modes) or if the outer
+			// context is being shut down.
+			if err == nil || errors.Is(err, context.Canceled) {
+				return nil
+			}
+
+			// Otherwise, we'll recover by injecting a new rollback
+			// message and then restarting the message stream from
+			// the previous consistent point.
+			log.WithError(err).Error("error from replication source; continuing")
+			select {
+			case ch <- msgRollback:
+				continue
+			case <-groupCtx.Done():
+				return nil
+			}
+		}
+		return nil
+	})
+
+	// This goroutine applies the incoming mutations to the target
+	// database. It is fragile, when it errors, we need to also
+	// restart the source goroutine.
+	group.Go(func() error {
+		err := l.dialect.Process(groupCtx, ch, events)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.WithError(err).Error("error while applying replication messages; stopping")
+		}
+		return err
+	})
+
+	// If we're in backfill mode, start a goroutine to stop the backfill
+	// process once we've caught up. This routine never errors out, and
+	// we don't need to wait for it below.
+	if isBackfilling {
+		go func() {
+			defer cancelGroup()
+
+			l.consistentPoint.L.Lock()
+			defer l.consistentPoint.L.Unlock()
+			for groupCtx.Err() == nil {
+				ts := l.consistentPoint.stamp.(TimeStamp).AsTime()
+				if time.Since(ts) < l.config.BackfillWindow {
+					log.WithField("ts", ts).Info("backfill has caught up")
+					return
+				}
+				l.consistentPoint.Wait()
+			}
+		}()
+
+		// When the group context has closed, we want to perform a
+		// broadcast on the consistent point, to ensure that the above
+		// goroutine doesn't become blocked on the call to Wait().
+		go func() {
+			<-groupCtx.Done()
+			l.consistentPoint.L.Lock()
+			defer l.consistentPoint.L.Unlock()
+			l.consistentPoint.Broadcast()
+		}()
+	}
+
+	return group.Wait()
+}
+
+type fillFn = func(context.Context, chan<- Message, State) error
+
+// chooseFillStrategy returns the strategy that will be used for
+// generating replication messages.
+func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bool) {
+	choice = l.dialect.ReadInto
+	if l.config.Immediate {
+		events = l.events.fan
+	} else {
+		events = l.events.serial
+	}
+	// Is backfilling enabled by the user?
+	if l.config.BackfillWindow <= 0 {
+		return
+	}
+	// Is the last consistent point sufficiently old to backfill?
+	ts, ok := l.GetConsistentPoint().(TimeStamp)
+	if !ok {
+		return
+	}
+	delta := time.Since(ts.AsTime())
+	if delta < l.config.BackfillWindow {
+		return
+	}
+	events = l.events.fan
+	isBackfill = true
+	// Do we have specific backfilling behavior to call?
+	if back, ok := l.dialect.(Backfiller); ok {
+		choice = back.BackfillInto
+	}
+	log.WithFields(log.Fields{
+		"delta": delta,
+		"ts":    ts,
+	}).Info("using backfill strategy")
+	return
 }

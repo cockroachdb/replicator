@@ -15,9 +15,9 @@ package logical_test
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -26,15 +26,18 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type fakeMessage int
+type fakeMessage struct {
+	Index int       `json:"idx"`
+	TS    time.Time `json:"ts"`
+}
 
-var _ stamp.Stamp = fakeMessage(0)
+var _ stamp.Stamp = (*fakeMessage)(nil)
+
+func (f fakeMessage) AsInt() int        { return f.Index }
+func (f fakeMessage) AsTime() time.Time { return f.TS }
 
 func (f fakeMessage) Less(other stamp.Stamp) bool {
-	return f < other.(fakeMessage)
-}
-func (f fakeMessage) MarshalText() (text []byte, err error) {
-	return []byte(strconv.FormatInt(int64(f), 10)), nil
+	return f.AsInt() < other.(*fakeMessage).AsInt()
 }
 
 // generatorDialect implements logical.Dialect to generate mutations
@@ -62,7 +65,10 @@ type generatorDialect struct {
 	}
 }
 
-var _ logical.Dialect = (*generatorDialect)(nil)
+var (
+	_ logical.Backfiller = (*generatorDialect)(nil)
+	_ logical.Dialect    = (*generatorDialect)(nil)
+)
 
 func newGenerator(tables []ident.Table) *generatorDialect {
 	return &generatorDialect{
@@ -82,6 +88,13 @@ func (g *generatorDialect) emit(numBatches int) {
 	}
 }
 
+// BackfillInto delegates to ReadInto.
+func (g *generatorDialect) BackfillInto(
+	ctx context.Context, ch chan<- logical.Message, state logical.State,
+) error {
+	return g.ReadInto(ctx, ch, state)
+}
+
 // ReadInto waits to be woken up by a call to emit, then writes
 // n-many counter messages into the channel.
 func (g *generatorDialect) ReadInto(
@@ -90,10 +103,10 @@ func (g *generatorDialect) ReadInto(
 	log.Trace("ReadInto starting")
 	defer atomic.AddInt32(&g.atomic.readIntoExits, 1)
 
-	nextBatchNumber := 0
+	var nextBatchNumber int
 	// If we're recovering from a failure condition, reset to a consistent point.
 	if prev := state.GetConsistentPoint(); prev != nil {
-		nextBatchNumber = int(prev.(fakeMessage)) + 1
+		nextBatchNumber = prev.(*fakeMessage).AsInt() + 1
 		log.Tracef("restarting at %d", nextBatchNumber)
 	}
 
@@ -103,11 +116,11 @@ func (g *generatorDialect) ReadInto(
 		g.readIntoMu.Unlock()
 
 		// emit requested number of messages.
-		for nextBatchNumber < requested {
+		for nextBatchNumber <= requested {
 			log.Tracef("sending %d", nextBatchNumber)
 			// Non-blocking send if the ctx is shut down.
 			select {
-			case ch <- fakeMessage(nextBatchNumber):
+			case ch <- fakeMessage{nextBatchNumber, time.Now()}:
 				g.readIntoMu.Lock()
 				g.readIntoMu.lastBatchSent = nextBatchNumber
 				g.readIntoMu.Unlock()
@@ -136,36 +149,29 @@ func (g *generatorDialect) Process(
 	log.Trace("Process starting")
 	defer atomic.AddInt32(&g.atomic.processExits, 1)
 
-	for {
-		// Non-blocking read if the context is shut down.
-		var msg fakeMessage
-		select {
-		case m := <-ch:
-			g.processMu.Lock()
-			g.processMu.messages = append(g.processMu.messages, m)
-			g.processMu.Unlock()
+	for m := range ch {
+		g.processMu.Lock()
+		g.processMu.messages = append(g.processMu.messages, m)
+		g.processMu.Unlock()
 
-			// Ensure that rollbacks result in proper resynchronization.
-			if logical.IsRollback(m) {
-				if err := events.OnRollback(ctx, m); err != nil {
-					return err
-				}
-				continue
+		// Ensure that rollbacks result in proper resynchronization.
+		if logical.IsRollback(m) {
+			if err := events.OnRollback(ctx, m); err != nil {
+				return err
 			}
-			msg = m.(fakeMessage)
-			log.Tracef("received %d", msg)
-		case <-ctx.Done():
-			return ctx.Err()
+			continue
 		}
+		msg := m.(fakeMessage)
+		log.Tracef("received %d", msg.Index)
 
-		if err := events.OnBegin(ctx, msg); err != nil {
+		if err := events.OnBegin(ctx, &msg); err != nil {
 			return err
 		}
 
 		for _, tbl := range g.tables {
 			mut := types.Mutation{
-				Key:  []byte(fmt.Sprintf(`[%d]`, msg)),
-				Data: []byte(fmt.Sprintf(`{"k":%d,"v":"%d"}`, msg, msg)),
+				Key:  []byte(fmt.Sprintf(`[%d]`, msg.Index)),
+				Data: []byte(fmt.Sprintf(`{"k":%d,"v":"%d"}`, msg.Index, msg.Index)),
 			}
 			if err := events.OnData(ctx, tbl, []types.Mutation{mut}); err != nil {
 				return err
@@ -176,9 +182,9 @@ func (g *generatorDialect) Process(
 			return err
 		}
 	}
+	return nil
 }
 
-func (g *generatorDialect) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
-	res, err := strconv.ParseInt(string(stamp), 0, 64)
-	return fakeMessage(res), err
+func (g *generatorDialect) ZeroStamp() stamp.Stamp {
+	return &fakeMessage{}
 }
