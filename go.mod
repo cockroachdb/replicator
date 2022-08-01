@@ -28,7 +28,7 @@ require (
 	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	golang.org/x/tools v0.1.11-0.20220513221640-090b14e8501f
-	honnef.co/go/tools v0.3.2
+	honnef.co/go/tools v0.3.3
 )
 
 require (
