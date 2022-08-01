@@ -47,13 +47,15 @@ func TestMain(m *testing.M) {
 // The probabilities are chosen to make the tests pass within a
 // reasonable timeframe, given the large number of rows that we insert.
 func TestPGLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testPGLogical(t, false, 0) })
-	t.Run("consistent-chaos", func(t *testing.T) { testPGLogical(t, false, 0.0005) })
-	t.Run("immediate", func(t *testing.T) { testPGLogical(t, true, 0) })
-	t.Run("immediate-chaos", func(t *testing.T) { testPGLogical(t, true, 0.0005) })
+	t.Run("consistent", func(t *testing.T) { testPGLogical(t, false, false, 0) })
+	t.Run("consistent-chaos", func(t *testing.T) { testPGLogical(t, false, false, 0.0005) })
+	t.Run("consistent-backfill", func(t *testing.T) { testPGLogical(t, true, false, 0) })
+	t.Run("consistent-backfill-chaos", func(t *testing.T) { testPGLogical(t, true, false, 0.0005) })
+	t.Run("immediate", func(t *testing.T) { testPGLogical(t, false, true, 0) })
+	t.Run("immediate-chaos", func(t *testing.T) { testPGLogical(t, false, true, 0.0005) })
 }
 
-func testPGLogical(t *testing.T, immediate bool, withChaosProb float32) {
+func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb float32) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -109,7 +111,7 @@ func testPGLogical(t *testing.T, immediate bool, withChaosProb float32) {
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	loop, cancelLoop, err := Start(ctx, &Config{
+	cfg := &Config{
 		Config: logical.Config{
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 			ChaosProb:    withChaosProb,
@@ -122,7 +124,11 @@ func testPGLogical(t *testing.T, immediate bool, withChaosProb float32) {
 		Publication: dbName.Raw(),
 		Slot:        dbName.Raw(),
 		SourceConn:  *pgConnString + dbName.Raw(),
-	})
+	}
+	if enableBackfill {
+		cfg.BackfillWindow = time.Minute
+	}
+	loop, cancelLoop, err := Start(ctx, cfg)
 	if !a.NoError(err) {
 		return
 	}

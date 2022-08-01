@@ -16,7 +16,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
@@ -32,19 +31,20 @@ import (
 )
 
 // lsnStamp adapts the LSN offset type to a comparable Stamp value.
-type lsnStamp pglogrepl.LSN
+type lsnStamp struct {
+	LSN    pglogrepl.LSN `json:"lsn"` // The offset within the replication log.
+	TxTime time.Time     `json:"ts"`  // The wall time of the associated transaction.
+}
 
 var (
-	_ stamp.Stamp         = lsnStamp(0)
-	_ logical.OffsetStamp = lsnStamp(0)
+	_ stamp.Stamp         = lsnStamp{}
+	_ logical.OffsetStamp = lsnStamp{}
 )
 
-func (s lsnStamp) AsLSN() pglogrepl.LSN        { return pglogrepl.LSN(s) }
-func (s lsnStamp) AsOffset() uint64            { return uint64(s) }
-func (s lsnStamp) Less(other stamp.Stamp) bool { return s < other.(lsnStamp) }
-func (s lsnStamp) MarshalText() (text []byte, err error) {
-	return []byte(strconv.FormatInt(int64(s), 10)), nil
-}
+func (s lsnStamp) AsLSN() pglogrepl.LSN        { return s.LSN }
+func (s lsnStamp) AsTime() time.Time           { return s.TxTime }
+func (s lsnStamp) AsOffset() uint64            { return uint64(s.LSN) }
+func (s lsnStamp) Less(other stamp.Stamp) bool { return s.LSN < other.(lsnStamp).LSN }
 
 // A conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
@@ -69,15 +69,7 @@ var _ logical.Dialect = (*conn)(nil)
 func (c *conn) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
-	for {
-		// Perform context-aware read.
-		var msg logical.Message
-		select {
-		case msg = <-ch:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
+	for msg := range ch {
 		// Ensure that we resynchronize.
 		if logical.IsRollback(msg) {
 			if err := events.OnRollback(ctx, msg); err != nil {
@@ -95,7 +87,7 @@ func (c *conn) Process(
 			c.onRelation(msg, events.GetTargetDB())
 
 		case *pglogrepl.BeginMessage:
-			err = events.OnBegin(ctx, lsnStamp(msg.FinalLSN))
+			err = events.OnBegin(ctx, lsnStamp{msg.FinalLSN, msg.CommitTime})
 
 		case *pglogrepl.CommitMessage:
 			err = events.OnCommit(ctx)
@@ -119,6 +111,7 @@ func (c *conn) Process(
 			return err
 		}
 	}
+	return nil
 }
 
 // ReadInto implements logical.Dialect, opens a replication connection,
@@ -238,10 +231,9 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	return nil
 }
 
-// UnmarshalStamp decodes a string representation of a Stamp.
-func (c *conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
-	res, err := strconv.ParseInt(string(stamp), 0, 64)
-	return lsnStamp(res), err
+// ZeroStamp implements Dialect.
+func (c *conn) ZeroStamp() stamp.Stamp {
+	return lsnStamp{}
 }
 
 // decodeMutation converts the incoming tuple data into a Mutation.
