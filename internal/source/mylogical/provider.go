@@ -11,8 +11,6 @@
 package mylogical
 
 import (
-	"context"
-
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -34,17 +32,12 @@ func ProvideBaseConfig(config *Config) *logical.Config {
 
 // ProvideDialect is called by Wire to construct this package's
 // logical.Dialect implementation.
-func ProvideDialect(ctx context.Context, config *Config) (logical.Dialect, error) {
+func ProvideDialect(config *Config) (logical.Dialect, error) {
 	if err := config.Preflight(); err != nil {
 		return nil, err
 	}
 
-	flavor, err := getFlavor(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-
-	stamp, err := newStamp(flavor)
+	flavor, err := getFlavor(config)
 	if err != nil {
 		return nil, err
 	}
@@ -59,11 +52,9 @@ func ProvideDialect(ctx context.Context, config *Config) (logical.Dialect, error
 		TLSConfig: config.tlsConfig,
 	}
 	return &conn{
-		columns:            make(map[ident.Table][]types.ColData),
-		consistentPointKey: config.ConsistentPointKey,
-		flavor:             flavor,
-		lastStamp:          stamp,
-		relations:          make(map[uint64]ident.Table),
-		sourceConfig:       cfg,
+		columns:      make(map[ident.Table][]types.ColData),
+		flavor:       flavor,
+		relations:    make(map[uint64]ident.Table),
+		sourceConfig: cfg,
 	}, nil
 }

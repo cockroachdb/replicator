@@ -21,7 +21,7 @@ import (
 // provided configuration.
 func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	logicalConfig := ProvideBaseConfig(config)
-	dialect, err := ProvideDialect(ctx, config)
+	dialect, err := ProvideDialect(config)
 	if err != nil {
 		return nil, nil, err
 	}

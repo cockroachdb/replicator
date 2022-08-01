@@ -130,19 +130,17 @@ func (c *Config) Preflight() error {
 	c.password, _ = u.User.Password()
 	params := u.Query()
 	sslmode := params.Get("sslmode")
-	var tls *tls.Config
 
 	switch sslmode {
 	case "disable":
 		// tls configuration won't be set if we disable sslmode
 	case "require", "verify-ca", "verify-full":
-		tls, err = newClientTLSConfig(params, sslmode == "require", u.Hostname())
+		c.tlsConfig, err = newClientTLSConfig(params, sslmode == "require", u.Hostname())
 		if err != nil {
 			return err
 		}
 	default:
 		return errors.Errorf("invalid sslmode: %q", sslmode)
 	}
-	c.tlsConfig = tls
 	return nil
 }
