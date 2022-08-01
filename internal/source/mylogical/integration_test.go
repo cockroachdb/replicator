@@ -21,20 +21,16 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
-const (
-	clientID = "123456"
-)
+const loopName = "mylogicaltest"
 
 type startStamp int
 
@@ -50,11 +46,12 @@ func TestMain(m *testing.M) {
 	sinktest.IntegrationMain(m, sinktest.MySQLName)
 }
 func TestMYLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testMYLogical(t, false) })
-	t.Run("immediate", func(t *testing.T) { testMYLogical(t, true) })
+	t.Run("backfill", func(t *testing.T) { testMYLogical(t, true, false) })
+	t.Run("consistent", func(t *testing.T) { testMYLogical(t, false, false) })
+	t.Run("immediate", func(t *testing.T) { testMYLogical(t, false, true) })
 }
 
-func testMYLogical(t *testing.T, immediate bool) {
+func testMYLogical(t *testing.T, backfill, immediate bool) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -70,15 +67,19 @@ func testMYLogical(t *testing.T, immediate bool) {
 
 	config := &Config{
 		Config: logical.Config{
-			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:          immediate,
-			RetryDelay:         10 * time.Second,
-			StagingDB:          fixture.StagingDB.Ident(),
-			TargetConn:         crdbPool.Config().ConnString(),
-			TargetDB:           dbName,
-			ConsistentPointKey: clientID,
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:    immediate,
+			RetryDelay:   10 * time.Second,
+			StagingDB:    fixture.StagingDB.Ident(),
+			TargetConn:   crdbPool.Config().ConnString(),
+			TargetDB:     dbName,
+			LoopName:     loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
+		ProcessID:  123456,
+	}
+	if backfill {
+		config.BackfillWindow = time.Minute
 	}
 	err = config.Preflight()
 	if !a.NoError(err) {
@@ -113,7 +114,7 @@ func testMYLogical(t *testing.T, immediate bool) {
 		return
 	}
 
-	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.Memo)
+	gtidSet, err := loadInitialGTIDSet(ctx, flavor, myPool)
 	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
@@ -332,15 +333,16 @@ func TestDataTypes(t *testing.T) {
 
 	config := &Config{
 		Config: logical.Config{
-			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:          false,           // we care about transaction semantics
-			RetryDelay:         10 * time.Second,
-			StagingDB:          fixture.StagingDB.Ident(),
-			TargetConn:         crdbPool.Config().ConnString(),
-			TargetDB:           dbName,
-			ConsistentPointKey: clientID,
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:    false,           // we care about transaction semantics
+			RetryDelay:   10 * time.Second,
+			StagingDB:    fixture.StagingDB.Ident(),
+			TargetConn:   crdbPool.Config().ConnString(),
+			TargetDB:     dbName,
+			LoopName:     loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
+		ProcessID:  123456,
 	}
 	err = config.Preflight()
 	if !a.NoError(err) {
@@ -357,7 +359,7 @@ func TestDataTypes(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
-	gtidSet, err := initReplication(ctx, flavor, myPool, crdbPool, fixture.Memo)
+	gtidSet, err := loadInitialGTIDSet(ctx, flavor, myPool)
 	config.DefaultConsistentPoint = gtidSet
 	if !a.NoError(err) {
 		return
@@ -527,13 +529,9 @@ func setupMYPool(config *Config) (*client.Pool, func(), error) {
 	}, nil
 }
 
-func initReplication(
-	ctx context.Context,
-	flavor string,
-	myPool *client.Pool,
-	crdbPool pgxtype.Querier,
-	memo types.Memo,
-) (string, error) {
+// loadInitialGTIDSet connects to the source database to return a GTID
+// that can be used as a reasonable starting point for replication.
+func loadInitialGTIDSet(ctx context.Context, flavor string, myPool *client.Pool) (string, error) {
 	var gtidSet string
 	switch flavor {
 	case mysql.MySQLFlavor:
@@ -563,6 +561,5 @@ func initReplication(
 	}
 
 	log.Infof("gtidSet: %s", gtidSet)
-	err := memo.Put(ctx, crdbPool, clientID, []byte(gtidSet))
-	return gtidSet, err
+	return gtidSet, nil
 }

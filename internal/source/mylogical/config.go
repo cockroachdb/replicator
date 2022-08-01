@@ -26,21 +26,17 @@ import (
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
 	logical.Config
-	// Connection string for the source db.
-	SourceConn string
 
-	// host is the MySQL/MariaDB server host.
-	host string
-	// password is the MySQL/MariaDB password.
-	password string
-	// port is the MySQL/MariaDB server host.
-	port uint16
-	// processID is the unique ID to identify this process to the master.
-	processID uint32
-	// tlsConfig has the TLS configuration. It can be nil for non-secure transport.
+	SourceConn string // Connection string for the source db.
+	ProcessID  uint32 // A unique ID to identify this process to the master.
+
+	// The fields below are extracted by Preflight.
+
+	host      string
+	password  string
+	port      uint16
 	tlsConfig *tls.Config
-	// user is for MySQL user.
-	user string
+	user      string
 }
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
@@ -48,8 +44,10 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Config.Bind(f)
 	f.StringVar(&c.DefaultConsistentPoint, "defaultGTIDSet", "",
 		"default GTIDSet. Used if no state is persisted")
-	f.StringVar(&c.ConsistentPointKey, "consistentPointKey", "",
-		"unique key used for this process to persist state information")
+	f.Uint32Var(&c.ProcessID, "replicationProcessID", 10,
+		"the replication process id to report to the source database")
+	f.StringVar(&c.LoopName, "loopName", "mylogical",
+		"identify the replication loop in metrics")
 	f.StringVar(&c.SourceConn, "sourceConn", "",
 		"the source database's connection string")
 }
@@ -103,14 +101,9 @@ func (c *Config) Preflight() error {
 	if err := c.Config.Preflight(); err != nil {
 		return err
 	}
-	if c.ConsistentPointKey == "" {
-		return errors.New("no ConsistentPointKey was configured")
+	if c.LoopName == "" {
+		return errors.New("no LoopName was configured")
 	}
-	processID, err := strconv.ParseInt(c.ConsistentPointKey, 10, 32)
-	if err != nil {
-		return errors.New("the ConsistentPointKey must be an integer")
-	}
-	c.processID = uint32(processID)
 
 	if c.SourceConn == "" {
 		return errors.New("no SourceConn was configured")

@@ -43,7 +43,7 @@ func ProvideDialect(config *Config) (logical.Dialect, error) {
 	}
 
 	cfg := replication.BinlogSyncerConfig{
-		ServerID:  config.processID,
+		ServerID:  config.ProcessID,
 		Flavor:    flavor,
 		Host:      config.host,
 		Port:      config.port,
