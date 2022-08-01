@@ -21,10 +21,6 @@ import (
 // provided configuration.
 func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	logicalConfig := ProvideBaseConfig(config)
-	dialect, err := ProvideDialect(config)
-	if err != nil {
-		return nil, nil, err
-	}
 	pool, cleanup, err := logical.ProvidePool(ctx, logicalConfig)
 	if err != nil {
 		return nil, nil, err
@@ -41,11 +37,17 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	}
 	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	serialPool := logical.ProvideSerializer(logicalConfig, pool)
-	querier := logical.ProvideQuerier(pool, serialPool)
+	dialect, err := ProvideDialect(config)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	fans := &fan.Fans{
 		Appliers: appliers,
-		Pool:     querier,
+		Pool:     pool,
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, pool, stagingDB)
 	if err != nil {
@@ -55,7 +57,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loop, cleanup5, err := logical.ProvideLoop(ctx, logicalConfig, dialect, fans, memoMemo, pool, serialPool)
+	loop, cleanup5, err := logical.ProvideLoop(ctx, appliers, logicalConfig, dialect, fans, memoMemo, pool)
 	if err != nil {
 		cleanup4()
 		cleanup3()

@@ -57,8 +57,8 @@ func (d *chaosDialect) Process(ctx context.Context, ch <-chan Message, events Ev
 	return d.delegate.Process(ctx, ch, &chaosEvents{events, d.prob})
 }
 
-func (d *chaosDialect) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
-	return d.delegate.UnmarshalStamp(stamp)
+func (d *chaosDialect) ZeroStamp() stamp.Stamp {
+	return d.delegate.ZeroStamp()
 }
 
 type chaosEvents struct {
@@ -102,4 +102,12 @@ func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
 		return ErrChaos
 	}
 	return e.delegate.OnRollback(ctx, msg)
+}
+
+func (e *chaosEvents) stop() {
+	e.delegate.stop()
+}
+
+func (e *chaosEvents) setConsistentPoint(s stamp.Stamp) {
+	e.delegate.setConsistentPoint(s)
 }
