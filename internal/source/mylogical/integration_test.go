@@ -108,7 +108,7 @@ func testMYLogical(t *testing.T, immediate bool) {
 		return
 	}
 
-	flavor, err := getFlavor(ctx, config)
+	flavor, err := getFlavor(config)
 	if !a.NoError(err) {
 		return
 	}
@@ -353,7 +353,7 @@ func TestDataTypes(t *testing.T) {
 	}
 	defer cancel()
 
-	flavor, err := getFlavor(ctx, config)
+	flavor, err := getFlavor(config)
 	if !a.NoError(err) {
 		return
 	}

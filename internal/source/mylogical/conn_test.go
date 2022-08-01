@@ -22,7 +22,6 @@ import (
 )
 
 func Test_mySqlStamp_Less(t *testing.T) {
-	a := assert.New(t)
 	tests := []struct {
 		name string
 		this string
@@ -53,6 +52,7 @@ func Test_mySqlStamp_Less(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
 			this, err := c.UnmarshalStamp([]byte(tt.this))
 			if !a.NoError(err) {
 				return
@@ -68,7 +68,6 @@ func Test_mySqlStamp_Less(t *testing.T) {
 }
 
 func Test_mariadbStamp_Less(t *testing.T) {
-	a := assert.New(t)
 	tests := []struct {
 		name string
 		this string
@@ -90,6 +89,7 @@ func Test_mariadbStamp_Less(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
 			this, err := c.UnmarshalStamp([]byte(tt.this))
 			if !a.NoError(err) {
 				return
