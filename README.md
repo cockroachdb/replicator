@@ -1,7 +1,7 @@
 # cdc-sink
 
-This tool lets one CockroachDB cluster ingest CDC feeds from another CockroachDB cluster or
-ingest replication feeds from other databases.
+This tool lets one CockroachDB cluster ingest CDC feeds from another CockroachDB cluster or ingest
+replication feeds from other databases.
 
 For more information on CDC, please
 see: <https://www.cockroachlabs.com/docs/stable/stream-data-out-of-cockroachdb-using-changefeeds.html>
@@ -219,6 +219,13 @@ scrape_configs:
       - targets: [ '127.0.0.1:30004' ]
 ```
 
+### Backfill mode
+
+The `--backfillWindow` flag can be used with logical-replication modes to ignore source transaction
+boundaries if the replication lag exceeds a certain threshold or when first populating data into the
+target database. This flag is useful when `cdc-sink` is not expected to be run continuously and will
+need to catch up to the current state in the source database.
+
 ### Immediate mode
 
 Immediate mode writes incoming mutations to the target schema as soon as they are received, instead
@@ -369,18 +376,23 @@ Usage:
   cdc-sink pglogical [flags]
 
 Flags:
-      --applyTimeout duration    the maximum amount of time to wait for an update to be applied (default 30s)
-      --bytesInFlight int        apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
-  -h, --help                     help for pglogical
-      --immediate                apply data without waiting for transaction boundaries
-      --metricsAddr string       a host:port to serve metrics from at /_/varz
-      --publicationName string   the publication within the source database to replicate
-      --retryDelay duration      the amount of time to sleep between replication retries (default 10s)
-      --slotName string          the replication slot in the source database (default "cdc_sink")
-      --sourceConn string        the source database's connection string
-      --targetConn string        the target cluster's connection string
-      --targetDB string          the SQL database in the target cluster to update
-      --targetDBConns int        the maximum pool size to the target cluster (default 1024)
+      --applyTimeout duration     the maximum amount of time to wait for an update to be applied (default 30s)
+      --backfillWindow duration   use a high-throughput, but non-transactional mode if replication is this far behind
+      --bytesInFlight int         apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
+      --fanShards int             the number of concurrent connections to use when writing data in fan mode (default 16)
+  -h, --help                      help for pglogical
+      --immediate                 apply data without waiting for transaction boundaries
+      --loopName string           identify the replication loop in metrics (default "pglogical")
+      --metricsAddr string        a host:port to serve metrics from at /_/varz
+      --publicationName string    the publication within the source database to replicate
+      --retryDelay duration       the amount of time to sleep between replication retries (default 10s)
+      --slotName string           the replication slot in the source database (default "cdc_sink")
+      --sourceConn string         the source database's connection string
+      --stagingDB string          a SQL database to store metadata in (default "_cdc_sink")
+      --standbyTimeout duration   how often to commit the consistent point (default 5s)
+      --targetConn string         the target cluster's connection string
+      --targetDB string           the SQL database in the target cluster to update
+      --targetDBConns int         the maximum pool size to the target cluster (default 1024)
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout
@@ -402,9 +414,9 @@ webhook.
   of tables in the source database is possible.
 - Run `SELECT pg_create_logical_replication_slot('cdc_sink', 'pgoutput');` in the source database.
   The value `cdc_sink` may be changed and should be passed to the `--slotName` flag.
-- Run `SELECT pg_export_snapshot();` to create a consistent point for bulk data export and leave
-  the source PosgreSQL session open. (Snapshot ids are valid only for the lifetime of the session
-  which created them.)
+- Run `SELECT pg_export_snapshot();` to create a consistent point for bulk data export and leave the
+  source PosgreSQL session open. (Snapshot ids are valid only for the lifetime of the session which
+  created them.)
   The value returned from this function can be passed
   to [`pg_dump --snapshot <snapshot_id>`](https://www.postgresql.org/docs/current/app-pgdump.html)
   that is subsequently
@@ -431,10 +443,9 @@ To clean up from the above:
 Another possibility is to connect to a MySQL/MariaDB database instance to consume a
 transaction-based replication feed using global transaction identifiers (GTIDs). This is primarily
 intended for migration use-cases, in which it is desirable to have a minimum- or zero-downtime
-migration from MySQL to CockroachDB. For an overview of MySQL replication with GTIDs, refer
-to
-[MySQL Replication with Global Transaction Identifiers](https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html).
-For an overview of MariaDB replication refer to
+migration from MySQL to CockroachDB. For an overview of MySQL replication with GTIDs, refer to
+[MySQL Replication with Global Transaction Identifiers](https://dev.mysql.com/doc/refman/8.0/en/replication-gtids.html)
+. For an overview of MariaDB replication refer to
 [MariaDB Replication Overview](https://mariadb.com/kb/en/replication-overview/).
 
 ```text
@@ -442,18 +453,22 @@ Usage:
   cdc-sink mylogical [flags]
 
 Flags:
-      --applyTimeout duration       the maximum amount of time to wait for an update to be applied (default 30s)
-      --bytesInFlight int           apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
-      --consistentPointKey string   unique key used for this process to persist state information
-      --defaultGTIDSet string       default GTIDSet. Used if no state is persisted
-  -h, --help                        help for mylogical
-      --immediate                   apply data without waiting for transaction boundaries
-      --metricsAddr string          a host:port to serve metrics from at /_/varz
-      --retryDelay duration         the amount of time to sleep between replication retries (default 10s)
-      --sourceConn string           the source database's connection string
-      --targetConn string           the target cluster's connection string
-      --targetDB string             the SQL database in the target cluster to update
-      --targetDBConns int           the maximum pool size to the target cluster (default 1024)
+      --applyTimeout duration     the maximum amount of time to wait for an update to be applied (default 30s)
+      --backfillWindow duration   use a high-throughput, but non-transactional mode if replication is this far behind
+      --bytesInFlight int         apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
+      --defaultGTIDSet string     default GTIDSet. Used if no state is persisted
+      --fanShards int             the number of concurrent connections to use when writing data in fan mode (default 16)
+  -h, --help                      help for mylogical
+      --immediate                 apply data without waiting for transaction boundaries
+      --loopName string           identify the replication loop in metrics (default "mylogical")
+      --metricsAddr string        a host:port to serve metrics from at /_/varz
+      --retryDelay duration       the amount of time to sleep between replication retries (default 10s)
+      --sourceConn string         the source database's connection string
+      --stagingDB string          a SQL database to store metadata in (default "_cdc_sink")
+      --standbyTimeout duration   how often to commit the consistent point (default 5s)
+      --targetConn string         the target cluster's connection string
+      --targetDB string           the SQL database in the target cluster to update
+      --targetDBConns int         the maximum pool size to the target cluster (default 1024)
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout
@@ -507,7 +522,8 @@ webhook.
 -- GTID state at the beginning of the backup
 --
 
-SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-8';
+SET
+@@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-8';
 ```
 
 ```SQL
@@ -516,12 +532,13 @@ SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '6fa7e6ef-c49a-11ec-950a-0242ac120002:1-
 -- GTID to start replication from
 --
 
-SET GLOBAL gtid_slave_pos='0-1-1';
+SET
+GLOBAL gtid_slave_pos='0-1-1';
 ```
 
 - Import the database into Cockroach DB, following the instructions
   at [Migrate from MySQL](https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html).
-- Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`, `--consistentPointKey`
+- Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`
   , `--defaultGTIDSet` and `--targetDB`. Set `--defaultGTIDSet` to the GTID state shown above.
 
 ## Security Considerations
@@ -606,20 +623,20 @@ the custom claim must be retained in its entirety.
 violated. It may result in missing data or the stream my stop.*
 
 - all the limitations from CDC hold true.
-  - See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
+    - See <https://www.cockroachlabs.com/docs/dev/change-data-capture.html#known-limitations>
 - schema changes do not work,
-  - in order to perform a schema change
-    1. stop the change feed
-    2. stop cdc-sink
-    3. make the schema changes to both tables
-    4. start cdc-sink
-    5. restart the change feed
+    - in order to perform a schema change
+        1. stop the change feed
+        2. stop cdc-sink
+        3. make the schema changes to both tables
+        4. start cdc-sink
+        5. restart the change feed
 - constraints on the destination table
-  - foreign keys
-    - there is no guarantee that foreign keys between two tables will arrive in the correct
-      order so please only use them on the source table
-    - different table constraints
-      - anything that has a tighter constraint than the original table may break the streaming
+    - foreign keys
+        - there is no guarantee that foreign keys between two tables will arrive in the correct
+          order so please only use them on the source table
+        - different table constraints
+            - anything that has a tighter constraint than the original table may break the streaming
 - the schema of the destination table must match the primary table exactly
 
 ## Expansions

@@ -18,7 +18,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/serial"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
 	"github.com/jackc/pgtype/pgxtype"
@@ -28,68 +27,76 @@ import (
 
 // Set is used by Wire.
 var Set = wire.NewSet(
+	ProvideFactory,
 	ProvideLoop,
 	ProvidePool,
-	ProvideQuerier,
-	ProvideSerializer,
 	ProvideStagingDB,
+	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
 )
+
+// ProvideFactory returns a utility which can create multiple logical
+// loops.
+func ProvideFactory(
+	appliers types.Appliers, config *Config, fans *fan.Fans, memo types.Memo, pool *pgxpool.Pool,
+) (*Factory, func()) {
+	f := &Factory{
+		appliers: appliers,
+		cfg:      config,
+		fans:     fans,
+		memo:     memo,
+		pool:     pool,
+	}
+	f.mu.loops = make(map[string]*Loop)
+	return f, f.Close
+}
 
 // ProvideLoop is called by Wire to create the replication loop. This
 // function starts a background goroutine, which will be terminated
 // by the cancel function.
 func ProvideLoop(
 	ctx context.Context,
+	appliers types.Appliers,
 	config *Config,
 	dialect Dialect,
 	fans *fan.Fans,
 	memo types.Memo,
 	pool *pgxpool.Pool,
-	serializer *serial.Pool,
 ) (*Loop, func(), error) {
+	var err error
 	if config.ChaosProb > 0 {
 		dialect = WithChaos(dialect, config.ChaosProb)
 	}
-	var err error
 	loop := &loop{
-		consistentPointKey:     config.ConsistentPointKey,
-		defaultConsistentPoint: config.DefaultConsistentPoint,
-		dialect:                dialect,
-		memo:                   memo,
-		retryDelay:             config.RetryDelay,
-		serializer:             serializer,
-		standbyDeadline:        time.Now().Add(standbyTimeout),
-		stopped:                make(chan struct{}),
-		targetDB:               config.TargetDB,
-		targetPool:             pool,
+		config:          config,
+		dialect:         dialect,
+		memo:            memo,
+		standbyDeadline: time.Now().Add(config.StandbyTimeout),
+		stopped:         make(chan struct{}),
+		targetPool:      pool,
 	}
 	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
-	loop.consistentPoint.stamp, err = loop.retrieveConsistentPoint(ctx)
+	loop.consistentPoint.stamp, err = loop.loadConsistentPoint(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	applyShards := 16
-	if serializer != nil {
-		applyShards = 1
-	}
+	loop.events.fan = (&metricsEvents{Events: &fanEvents{
+		State:  loop,
+		config: config,
+		fans:   fans,
+	}}).withLoopName(config.LoopName)
 
-	var cancelFan func()
-	loop.fan, cancelFan, err = fans.New(
-		config.ApplyTimeout,
-		loop.setConsistentPoint,
-		applyShards,
-		config.BytesInFlight)
-	if err != nil {
-		return nil, nil, err
-	}
+	loop.events.serial = (&metricsEvents{Events: &serialEvents{
+		State:    loop,
+		appliers: appliers,
+		pool:     pool,
+	}}).withLoopName(config.LoopName)
 
 	// The loop runs in a background context so that we have better
 	// control over the lifecycle.
 	loopCtx, cancel := context.WithCancel(context.Background())
 	go func() {
 		loop.run(loopCtx)
-		cancelFan()
 		close(loop.stopped)
 	}()
 
@@ -115,25 +122,6 @@ func ProvidePool(ctx context.Context, config *Config) (*pgxpool.Pool, func(), er
 		cancelMetrics()
 		targetPool.Close()
 	}, errors.Wrap(err, "could not connect to CockroachDB")
-}
-
-// ProvideQuerier is called by Wire. If we're running in serial (i.e.
-// not immediate) mode, the serializer will be use by downstream
-// components.
-func ProvideQuerier(pool *pgxpool.Pool, serializer *serial.Pool) pgxtype.Querier {
-	if serializer == nil {
-		return pool
-	}
-	return serializer
-}
-
-// ProvideSerializer is called by Wire. This function will return nil
-// if the configuration is in immediate mode.
-func ProvideSerializer(config *Config, pool *pgxpool.Pool) *serial.Pool {
-	if config.Immediate {
-		return nil
-	}
-	return &serial.Pool{Pool: pool}
 }
 
 // ProvideStagingDB is called by Wire to retrieve the name of the
