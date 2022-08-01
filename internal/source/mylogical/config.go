@@ -48,8 +48,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Config.Bind(f)
 	f.StringVar(&c.DefaultConsistentPoint, "defaultGTIDSet", "",
 		"default GTIDSet. Used if no state is persisted")
-	f.StringVar(&c.ConsistentPointKey, "consistentPointKey", "",
-		"unique key used for this process to persist state information")
+	f.StringVar(&c.LoopName, "loopName", "mylogical",
+		"identify the replication loop in metrics")
 	f.StringVar(&c.SourceConn, "sourceConn", "",
 		"the source database's connection string")
 }
@@ -103,12 +103,12 @@ func (c *Config) Preflight() error {
 	if err := c.Config.Preflight(); err != nil {
 		return err
 	}
-	if c.ConsistentPointKey == "" {
-		return errors.New("no ConsistentPointKey was configured")
+	if c.LoopName == "" {
+		return errors.New("no LoopName was configured")
 	}
-	processID, err := strconv.ParseInt(c.ConsistentPointKey, 10, 32)
+	processID, err := strconv.ParseInt(c.LoopName, 10, 32)
 	if err != nil {
-		return errors.New("the ConsistentPointKey must be an integer")
+		return errors.New("the LoopName must be an integer")
 	}
 	c.processID = uint32(processID)
 

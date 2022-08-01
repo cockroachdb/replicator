@@ -11,6 +11,10 @@
 package mylogical
 
 import (
+	"encoding/json"
+	"time"
+
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/pkg/errors"
@@ -21,30 +25,31 @@ import (
 type consistentPoint struct {
 	ma *mysql.MariadbGTIDSet
 	my *mysql.MysqlGTIDSet
+	ts time.Time // The approximate wall time of the consistent point.
 }
 
-var _ stamp.Stamp = (*consistentPoint)(nil)
+var _ logical.TimeStamp = (*consistentPoint)(nil)
 
 // newConsistentPoint constructs an empty consistentPoint for the
 // specified flavor.
-func newConsistentPoint(flavor string) (*consistentPoint, error) {
+func newConsistentPoint(flavor string) *consistentPoint {
 	switch flavor {
 	case mysql.MariaDBFlavor:
 		return &consistentPoint{
 			ma: &mysql.MariadbGTIDSet{
 				Sets: make(map[uint32]*mysql.MariadbGTID),
 			},
-		}, nil
+		}
 
 	case mysql.MySQLFlavor:
 		return &consistentPoint{
 			my: &mysql.MysqlGTIDSet{
 				Sets: make(map[string]*mysql.UUIDSet),
 			},
-		}, nil
+		}
 
 	default:
-		return nil, errors.Errorf("Invalid flavor  %s", flavor)
+		panic(errors.Errorf("Invalid flavor %s", flavor))
 	}
 }
 
@@ -58,6 +63,11 @@ func (c *consistentPoint) AsGTIDSet() mysql.GTIDSet {
 	default:
 		return nil
 	}
+}
+
+// AsTime implements logical.TimeStamp.
+func (c *consistentPoint) AsTime() time.Time {
+	return c.ts
 }
 
 // IsZero returns true if the consistentPoint contains no GTID values.
@@ -87,54 +97,94 @@ func (c *consistentPoint) Less(other stamp.Stamp) bool {
 	return oSet.Contain(cSet) && !cSet.Equal(oSet)
 }
 
-func (c *consistentPoint) MarshalText() (text []byte, err error) {
-	return []byte(c.AsGTIDSet().String()), nil
-}
-
 // String is for debugging use only.
 func (c *consistentPoint) String() string {
 	return c.AsGTIDSet().String()
 }
 
-// UnmarshalText decodes GTID Sets expressed as strings.
+// parseFrom decodes GTID Sets expressed as strings. This method returns
+// the receiver.
+//
 // Supports MySQL or MariaDB
 // See https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html
 // and https://mariadb.com/kb/en/gtid/
 // Examples:
 // MySQL: E11FA47-71CA-11E1-9E33-C80AA9429562:1-3:11:47-49
 // MariaDB: 0-1-1
-func (c *consistentPoint) UnmarshalText(text []byte) error {
+func (c *consistentPoint) parseFrom(text string) (*consistentPoint, error) {
 	switch {
 	case c.ma != nil:
-		set, err := mysql.ParseMariadbGTIDSet(string(text))
+		set, err := mysql.ParseMariadbGTIDSet(text)
 		if err != nil {
-			return err
+			return nil, errors.WithStack(err)
 		}
 		c.ma = set.(*mysql.MariadbGTIDSet)
 
 	case c.my != nil:
-		set, err := mysql.ParseMysqlGTIDSet(string(text))
+		set, err := mysql.ParseMysqlGTIDSet(text)
 		if err != nil {
-			return err
+			return nil, errors.WithStack(err)
 		}
 		c.my = set.(*mysql.MysqlGTIDSet)
 
 	default:
-		return errors.New("no flavor configured")
+		return nil, errors.New("no flavor configured")
 	}
-	return nil
+	return c, nil
 }
 
-func (c *consistentPoint) withMariaGTIDSet(set *mysql.MariadbGTID) (*consistentPoint, error) {
+func (c *consistentPoint) withMariaGTIDSet(
+	ts time.Time, set *mysql.MariadbGTID,
+) (*consistentPoint, error) {
 	cloned := c.ma.Clone().(*mysql.MariadbGTIDSet)
 	if err := cloned.AddSet(set); err != nil {
 		return c, err
 	}
-	return &consistentPoint{ma: cloned}, nil
+	return &consistentPoint{ma: cloned, ts: ts}, nil
 }
 
-func (c *consistentPoint) withMysqlGTIDSet(set *mysql.UUIDSet) *consistentPoint {
+func (c *consistentPoint) withMysqlGTIDSet(ts time.Time, set *mysql.UUIDSet) *consistentPoint {
 	cloned := c.my.Clone().(*mysql.MysqlGTIDSet)
 	cloned.AddSet(set)
-	return &consistentPoint{my: cloned}
+	return &consistentPoint{my: cloned, ts: ts}
+}
+
+type consistentPointPayload struct {
+	Flavor string    `json:"flavor"`
+	GTID   string    `json:"gtid"`
+	TS     time.Time `json:"ts"`
+}
+
+func (c *consistentPoint) MarshalJSON() ([]byte, error) {
+	p := consistentPointPayload{TS: c.ts}
+	switch {
+	case c.ma != nil:
+		p.Flavor = mysql.MariaDBFlavor
+		p.GTID = c.ma.String()
+	case c.my != nil:
+		p.Flavor = mysql.MySQLFlavor
+		p.GTID = c.my.String()
+	default:
+		return nil, errors.New("consistentPoint not initialized")
+	}
+	return json.Marshal(p)
+}
+
+func (c *consistentPoint) UnmarshalJSON(data []byte) error {
+	var p consistentPointPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return errors.WithStack(err)
+	}
+	c.ts = p.TS
+	_, err := c.parseFrom(p.GTID)
+	return err
+}
+
+// UnmarshalText supports CLI flags and default values.
+func (c *consistentPoint) UnmarshalText(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	_, err := c.parseFrom(string(data))
+	return err
 }

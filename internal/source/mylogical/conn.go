@@ -22,6 +22,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -134,7 +135,7 @@ func (c *conn) Process(
 			if err != nil {
 				return err
 			}
-			streamCP = streamCP.withMysqlGTIDSet(toAdd)
+			streamCP = streamCP.withMysqlGTIDSet(e.OriginalCommitTime(), toAdd)
 
 		case *replication.MariadbGTIDEvent:
 			// We ignore events that won't have a terminating COMMIT
@@ -143,8 +144,9 @@ func (c *conn) Process(
 			if e.IsStandalone() {
 				continue
 			}
+			ts := time.Unix(int64(ev.Header.Timestamp), 0)
 			var err error
-			streamCP, err = streamCP.withMariaGTIDSet(&e.GTID)
+			streamCP, err = streamCP.withMariaGTIDSet(ts, &e.GTID)
 			if err != nil {
 				return err
 			}
@@ -258,14 +260,9 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	return nil
 }
 
-// UnmarshalStamp implements logical.Dialect. It delegates to
-// consistentPoint.UnmarshalText.
-func (c *conn) UnmarshalStamp(stamp []byte) (stamp.Stamp, error) {
-	cp, err := newConsistentPoint(c.flavor)
-	if err != nil {
-		return nil, err
-	}
-	return cp, cp.UnmarshalText(stamp)
+// ZeroStamp implements logical.Dialect.
+func (c *conn) ZeroStamp() stamp.Stamp {
+	return newConsistentPoint(c.flavor)
 }
 
 func (c *conn) onDataTuple(

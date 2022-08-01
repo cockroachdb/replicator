@@ -33,6 +33,7 @@ type Config struct {
 // Bind adds flags to the set.
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Config.Bind(f)
+	f.StringVar(&c.LoopName, "loopName", "pglogical", "identify the replication loop in metrics")
 	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&c.Publication, "publicationName", "",
