@@ -19,6 +19,20 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 )
 
+// Backfiller is an optional capability interface for Dialect
+// implementations. The BackfillInto method will be called instead
+// of ReadInto when the logical loop has detected a backfill state.
+type Backfiller interface {
+	// BackfillInto represents a potentially-fragile source of
+	// logical-replication messages that should be applied in a
+	// high-throughput manner. Implementations should treat BackfillInto
+	// as a signal to "catch up" with replication and then return once
+	// the backfill process has completed.
+	//
+	// See also discussion on Dialect.ReadInto.
+	BackfillInto(ctx context.Context, ch chan<- Message, state State) error
+}
+
 // Dialect encapsulates the source-specific implementation details.
 type Dialect interface {
 	// ReadInto represents a potentially-fragile source of
@@ -29,18 +43,21 @@ type Dialect interface {
 	// called again to restart the replication feed from the most recent
 	// consistent point.
 	//
-	// The "from" argument is the last consistent point that was
+	// The state argument provides the last consistent point that was
 	// processed by the stream. This can be used to verify successful
 	// resynchronization with the source database.
 	ReadInto(ctx context.Context, ch chan<- Message, state State) error
 
 	// Process decodes the logical replication messages, to call the
-	// various OnEvent methods. If this method returns an error, the
-	// entire replication loop will be restarted.
+	// various Events methods. Implementations of Process should exit
+	// gracefully when the channel is closed, this may represent a
+	// switch from backfilling to a streaming mode. If this method
+	// returns an error, the entire replication loop will be restarted.
 	Process(ctx context.Context, ch <-chan Message, events Events) error
 
-	// UnmarshalStamp decodes a stamp in string format to a stamp.Stamp.
-	UnmarshalStamp([]byte) (stamp.Stamp, error)
+	// ZeroStamp constructs a new, zero-valued stamp that represents
+	// a consistent point at the beginning of the source's history.
+	ZeroStamp() stamp.Stamp
 }
 
 // A Message is specific to a Dialect.
@@ -71,15 +88,24 @@ type Events interface {
 	// message is encountered, to ensure that all internal state has
 	// been resynchronized.
 	OnRollback(ctx context.Context, msg Message) error
+
+	// stop is called after any attempt to run a replication loop.
+	// Implementations should block until any pending mutations have
+	// been committed.
+	stop()
 }
 
 // State provides information about a replication loop.
 type State interface {
 	// GetConsistentPoint returns the most recent consistent point that
-	// has been committed to the target database.
+	// has been committed to the target database or the value returned
+	// from Dialect.ZeroStamp.
 	GetConsistentPoint() stamp.Stamp
 	// GetTargetDB returns the target database name.
 	GetTargetDB() ident.Ident
+
+	// setConsistentPoint is called from implementations of Events.
+	setConsistentPoint(stamp.Stamp)
 }
 
 // OffsetStamp is a Stamp which can represent itself as an absolute
@@ -90,7 +116,7 @@ type OffsetStamp interface {
 }
 
 // TimeStamp is a Stamp which can represent itself as a time.Time. This
-// is used for optional metrics reporting.
+// is used to enable backfill mode and for metrics reporting.
 type TimeStamp interface {
 	stamp.Stamp
 	AsTime() time.Time

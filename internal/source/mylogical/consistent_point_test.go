@@ -47,22 +47,18 @@ func Test_mySqlStamp_Less(t *testing.T) {
 		{"disjoint1", "a31203a1-0f26-425d-be1a-86d23f37d87f:1-13",
 			"a31203a1-0f26-425d-be1a-86d23f37d87f:1-10:12-13,6fa7e6ef-c49a-11ec-950a-0242ac120002:1-20", false},
 	}
-	c := &conn{
-		flavor: mysql.MySQLFlavor,
-	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := assert.New(t)
-			this, err := c.UnmarshalStamp([]byte(tt.this))
+			this, err := newConsistentPoint(mysql.MySQLFlavor).parseFrom(tt.this)
 			if !a.NoError(err) {
 				return
 			}
-			that, err := c.UnmarshalStamp([]byte(tt.that))
+			that, err := newConsistentPoint(mysql.MySQLFlavor).parseFrom(tt.that)
 			if !a.NoError(err) {
 				return
 			}
 			a.Equalf(tt.want, this.Less(that), "%s failed", tt.name)
-
 		})
 	}
 }
@@ -84,17 +80,14 @@ func Test_mariadbStamp_Less(t *testing.T) {
 		{"multi1", "1-1-1,2-2-2", "1-1-2,2-2-2", true},
 		{"multi2", "1-1-1,2-2-2", "1-1-1,2-2-2", false},
 	}
-	c := &conn{
-		flavor: mysql.MariaDBFlavor,
-	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := assert.New(t)
-			this, err := c.UnmarshalStamp([]byte(tt.this))
+			this, err := newConsistentPoint(mysql.MariaDBFlavor).parseFrom(tt.this)
 			if !a.NoError(err) {
 				return
 			}
-			that, err := c.UnmarshalStamp([]byte(tt.that))
+			that, err := newConsistentPoint(mysql.MariaDBFlavor).parseFrom(tt.that)
 			if !a.NoError(err) {
 				return
 			}
