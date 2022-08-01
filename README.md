@@ -219,6 +219,13 @@ scrape_configs:
       - targets: [ '127.0.0.1:30004' ]
 ```
 
+### Backfill mode
+
+The `--backfillWindow` flag can be used with logical-replication modes to ignore source transaction
+boundaries if the replication lag exceeds a certain threshold or when first populating data into the
+target database. This flag is useful when `cdc-sink` is not expected to be run continuously and will
+need to catch up to the current state in the source database.
+
 ### Immediate mode
 
 Immediate mode writes incoming mutations to the target schema as soon as they are received, instead
@@ -389,18 +396,23 @@ Usage:
   cdc-sink pglogical [flags]
 
 Flags:
-      --applyTimeout duration    the maximum amount of time to wait for an update to be applied (default 30s)
-      --bytesInFlight int        apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
-  -h, --help                     help for pglogical
-      --immediate                apply data without waiting for transaction boundaries
-      --metricsAddr string       a host:port to serve metrics from at /_/varz
-      --publicationName string   the publication within the source database to replicate
-      --retryDelay duration      the amount of time to sleep between replication retries (default 10s)
-      --slotName string          the replication slot in the source database (default "cdc_sink")
-      --sourceConn string        the source database's connection string
-      --targetConn string        the target cluster's connection string
-      --targetDB string          the SQL database in the target cluster to update
-      --targetDBConns int        the maximum pool size to the target cluster (default 1024)
+      --applyTimeout duration     the maximum amount of time to wait for an update to be applied (default 30s)
+      --backfillWindow duration   use a high-throughput, but non-transactional mode if replication is this far behind
+      --bytesInFlight int         apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
+      --fanShards int             the number of concurrent connections to use when writing data in fan mode (default 16)
+  -h, --help                      help for pglogical
+      --immediate                 apply data without waiting for transaction boundaries
+      --loopName string           identify the replication loop in metrics (default "pglogical")
+      --metricsAddr string        a host:port to serve metrics from at /_/varz
+      --publicationName string    the publication within the source database to replicate
+      --retryDelay duration       the amount of time to sleep between replication retries (default 10s)
+      --slotName string           the replication slot in the source database (default "cdc_sink")
+      --sourceConn string         the source database's connection string
+      --stagingDB string          a SQL database to store metadata in (default "_cdc_sink")
+      --standbyTimeout duration   how often to commit the consistent point (default 5s)
+      --targetConn string         the target cluster's connection string
+      --targetDB string           the SQL database in the target cluster to update
+      --targetDBConns int         the maximum pool size to the target cluster (default 1024)
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout
@@ -462,18 +474,23 @@ Usage:
   cdc-sink mylogical [flags]
 
 Flags:
-      --applyTimeout duration       the maximum amount of time to wait for an update to be applied (default 30s)
-      --bytesInFlight int           apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
-      --consistentPointKey string   unique key used for this process to persist state information
-      --defaultGTIDSet string       default GTIDSet. Used if no state is persisted
-  -h, --help                        help for mylogical
-      --immediate                   apply data without waiting for transaction boundaries
-      --metricsAddr string          a host:port to serve metrics from at /_/varz
-      --retryDelay duration         the amount of time to sleep between replication retries (default 10s)
-      --sourceConn string           the source database's connection string
-      --targetConn string           the target cluster's connection string
-      --targetDB string             the SQL database in the target cluster to update
-      --targetDBConns int           the maximum pool size to the target cluster (default 1024)
+      --applyTimeout duration         the maximum amount of time to wait for an update to be applied (default 30s)
+      --backfillWindow duration       use a high-throughput, but non-transactional mode if replication is this far behind
+      --bytesInFlight int             apply backpressure when amount of in-flight mutation data reaches this limit (default 10485760)
+      --defaultGTIDSet string         default GTIDSet. Used if no state is persisted
+      --fanShards int                 the number of concurrent connections to use when writing data in fan mode (default 16)
+  -h, --help                          help for mylogical
+      --immediate                     apply data without waiting for transaction boundaries
+      --loopName string               identify the replication loop in metrics (default "mylogical")
+      --metricsAddr string            a host:port to serve metrics from at /_/varz
+      --replicationProcessID uint32   the replication process id to report to the source database (default 10)
+      --retryDelay duration           the amount of time to sleep between replication retries (default 10s)
+      --sourceConn string             the source database's connection string
+      --stagingDB string              a SQL database to store metadata in (default "_cdc_sink")
+      --standbyTimeout duration       how often to commit the consistent point (default 5s)
+      --targetConn string             the target cluster's connection string
+      --targetDB string               the SQL database in the target cluster to update
+      --targetDBConns int             the maximum pool size to the target cluster (default 1024)
 
 Global Flags:
       --logDestination string   write logs to a file, instead of stdout
@@ -541,7 +558,7 @@ SET GLOBAL gtid_slave_pos='0-1-1';
 
 - Import the database into Cockroach DB, following the instructions
   at [Migrate from MySQL](https://www.cockroachlabs.com/docs/stable/migrate-from-mysql.html).
-- Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`, `--consistentPointKey`
+- Run `cdc-sink mylogical` with at least the `--sourceConn`, `--targetConn`
   , `--defaultGTIDSet` and `--targetDB`. Set `--defaultGTIDSet` to the GTID state shown above.
 
 ## Security Considerations
