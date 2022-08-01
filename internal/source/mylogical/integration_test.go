@@ -32,9 +32,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const (
-	clientID = "123456"
-)
+const loopName = "mylogicaltest"
 
 type startStamp int
 
@@ -50,11 +48,12 @@ func TestMain(m *testing.M) {
 	sinktest.IntegrationMain(m, sinktest.MySQLName)
 }
 func TestMYLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testMYLogical(t, false) })
-	t.Run("immediate", func(t *testing.T) { testMYLogical(t, true) })
+	t.Run("backfill", func(t *testing.T) { testMYLogical(t, true, false) })
+	t.Run("consistent", func(t *testing.T) { testMYLogical(t, false, false) })
+	t.Run("immediate", func(t *testing.T) { testMYLogical(t, false, true) })
 }
 
-func testMYLogical(t *testing.T, immediate bool) {
+func testMYLogical(t *testing.T, backfill, immediate bool) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -70,15 +69,19 @@ func testMYLogical(t *testing.T, immediate bool) {
 
 	config := &Config{
 		Config: logical.Config{
-			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:          immediate,
-			RetryDelay:         10 * time.Second,
-			StagingDB:          fixture.StagingDB.Ident(),
-			TargetConn:         crdbPool.Config().ConnString(),
-			TargetDB:           dbName,
-			ConsistentPointKey: clientID,
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:    immediate,
+			RetryDelay:   10 * time.Second,
+			StagingDB:    fixture.StagingDB.Ident(),
+			TargetConn:   crdbPool.Config().ConnString(),
+			TargetDB:     dbName,
+			LoopName:     loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
+		ProcessID:  123456,
+	}
+	if backfill {
+		config.BackfillWindow = time.Minute
 	}
 	err = config.Preflight()
 	if !a.NoError(err) {
@@ -332,15 +335,16 @@ func TestDataTypes(t *testing.T) {
 
 	config := &Config{
 		Config: logical.Config{
-			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:          false,           // we care about transaction semantics
-			RetryDelay:         10 * time.Second,
-			StagingDB:          fixture.StagingDB.Ident(),
-			TargetConn:         crdbPool.Config().ConnString(),
-			TargetDB:           dbName,
-			ConsistentPointKey: clientID,
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:    false,           // we care about transaction semantics
+			RetryDelay:   10 * time.Second,
+			StagingDB:    fixture.StagingDB.Ident(),
+			TargetConn:   crdbPool.Config().ConnString(),
+			TargetDB:     dbName,
+			LoopName:     loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
+		ProcessID:  123456,
 	}
 	err = config.Preflight()
 	if !a.NoError(err) {
@@ -563,6 +567,6 @@ func initReplication(
 	}
 
 	log.Infof("gtidSet: %s", gtidSet)
-	err := memo.Put(ctx, crdbPool, clientID, []byte(gtidSet))
+	err := memo.Put(ctx, crdbPool, loopName, []byte(gtidSet))
 	return gtidSet, err
 }

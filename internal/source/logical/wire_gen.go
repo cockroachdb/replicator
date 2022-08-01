@@ -33,11 +33,9 @@ func Start(ctx context.Context, config *Config, dialect Dialect) (*Loop, func(),
 	}
 	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	serialPool := ProvideSerializer(config, pool)
-	querier := ProvideQuerier(pool, serialPool)
 	fans := &fan.Fans{
 		Appliers: appliers,
-		Pool:     querier,
+		Pool:     pool,
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, pool, stagingDB)
 	if err != nil {
@@ -47,7 +45,7 @@ func Start(ctx context.Context, config *Config, dialect Dialect) (*Loop, func(),
 		cleanup()
 		return nil, nil, err
 	}
-	logicalLoop, cleanup5, err := ProvideLoop(ctx, config, dialect, fans, memoMemo, pool, serialPool)
+	logicalLoop, cleanup5, err := ProvideLoop(ctx, appliers, config, dialect, fans, memoMemo, pool)
 	if err != nil {
 		cleanup4()
 		cleanup3()
