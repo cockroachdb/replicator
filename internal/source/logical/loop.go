@@ -59,6 +59,8 @@ type loop struct {
 		fan    Events
 		serial Events
 	}
+	// Remember that the backfill cycle exited cleanly.
+	finishedBackfill bool
 	// Optional checkpoint saved into the target database
 	memo types.Memo
 	// Tracks when it is time to update the consistentPoint.
@@ -198,7 +200,13 @@ func (l *loop) runOnce(ctx context.Context) error {
 			// Return if the source closed cleanly (we may switch
 			// from backfill to streaming modes) or if the outer
 			// context is being shut down.
-			if err == nil || errors.Is(err, context.Canceled) {
+			if err == nil {
+				if isBackfilling {
+					l.finishedBackfill = true
+				}
+				return nil
+			}
+			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 
@@ -270,6 +278,9 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 		events = l.events.fan
 	} else {
 		events = l.events.serial
+	}
+	if l.finishedBackfill {
+		return
 	}
 	// Is backfilling enabled by the user?
 	if l.config.BackfillWindow <= 0 {

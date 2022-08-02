@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/cmd/fslogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mkjwt"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mylogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/pglogical"
@@ -90,6 +91,7 @@ func main() {
 
 	root.AddCommand(
 		mkjwt.Command(),
+		fslogical.Command(),
 		pglogical.Command(),
 		mylogical.Command(),
 		start.Command(),
