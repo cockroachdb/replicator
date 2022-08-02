@@ -137,6 +137,7 @@ jobs:
         # directory.
         cockroachdb: [ v22.1 ]
         integration:
+          - "firestore"
           - "mysql-v8"
           - "mysql-mariadb-v10"
           - "postgresql-v11"
@@ -155,6 +156,7 @@ jobs:
           - cockroachdb: v21.2
     env:
       COVER_OUT: coverage-${{ matrix.cockroachdb }}-${{ matrix.integration }}.out
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8181
       JUNIT_OUT: junit-${{ matrix.cockroachdb }}-${{ matrix.integration }}.xml
       TEST_OUT: go-test-${{ matrix.cockroachdb }}-${{ matrix.integration }}.json
     steps:

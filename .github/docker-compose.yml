@@ -24,13 +24,18 @@ services:
     image: cockroachdb/cockroach:latest-v22.1
     network_mode: host
     command: start-single-node --insecure --store type=mem,size=2G
+  firestore:
+    image: ghcr.io/cockroachdb/cdc-sink/firestore-emulator:latest
+    # Expose the emulator on port 8181 to avoid conflict with CRDB admin UI.
+    ports:
+      - "8181:8080"
   mysql-v8:
     image: mysql:8-debian
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
       MYSQL_DATABASE: _cdc_sink
-    command: 
+    command:
       --default-authentication-plugin=mysql_native_password
       --gtid-mode=on
       --enforce-gtid-consistency=on

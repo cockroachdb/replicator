@@ -72,14 +72,13 @@ func (f *fanEvents) OnData(ctx context.Context, target ident.Table, muts []types
 
 // OnRollback implements Events and resets the enclosed fan.
 func (f *fanEvents) OnRollback(_ context.Context, msg Message) error {
-	if f.stamp == nil {
-		return errors.New("OnRollback called without OnBegin")
-	}
 	if !IsRollback(msg) {
 		return errors.New("the rollback message must be passed to OnRollback")
 	}
 	// Dump any in-flight mutations, but keep the fan running.
-	f.fan.Reset()
+	if f.fan != nil {
+		f.fan.Reset()
+	}
 	f.stamp = nil
 	return nil
 }
