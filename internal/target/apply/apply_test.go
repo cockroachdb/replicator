@@ -45,7 +45,7 @@ func TestApply(t *testing.T) {
 		Pk1 string `json:"pk1"`
 	}
 	tbl, err := fixture.CreateTable(ctx,
-		"CREATE TABLE %s (pk0 INT, pk1 STRING, PRIMARY KEY (pk0,pk1))")
+		"CREATE TABLE %s (pk0 INT, pk1 STRING, extras JSONB, PRIMARY KEY (pk0,pk1))")
 	if !a.NoError(err) {
 		return
 	}
@@ -129,6 +129,45 @@ func TestApply(t *testing.T) {
 		}); a.Error(err) {
 			a.Contains(err.Error(), "received 3 expect 2")
 		}
+	})
+
+	// Verify that unknown columns can be saved.
+	t.Run("extras", func(t *testing.T) {
+		a := assert.New(t)
+		cfg := fixture.Configs.Get(tbl.Name())
+		cfg.Extras = ident.New("extras")
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), cfg))
+
+		a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{
+			{
+				Data: []byte(`{"pk0":1, "pk1":0, "heretofore":"unseen", "are":"OK"}`),
+				Key:  []byte(`[1, 0]`),
+			},
+			{
+				Data: []byte(`{"pk0":2, "pk1":0, "check":"multiple", "mutations":"work"}`),
+				Key:  []byte(`[2, 0]`),
+			},
+		}))
+
+		var extras map[string]string
+		a.NoError(fixture.Pool.QueryRow(ctx,
+			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
+			1, "0",
+		).Scan(&extras))
+		a.Len(extras, 2)
+		a.Equal(extras["heretofore"], "unseen")
+		a.Equal(extras["are"], "OK")
+
+		extras = nil
+		a.NoError(fixture.Pool.QueryRow(ctx,
+			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
+			2, "0",
+		).Scan(&extras))
+		a.Len(extras, 2)
+		a.Equal(extras["check"], "multiple")
+		a.Equal(extras["mutations"], "work")
+
+		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), nil))
 	})
 }
 
