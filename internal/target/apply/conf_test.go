@@ -66,6 +66,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 			ident.New("expr1"): "1 + $0",
 			ident.New("expr2"): "2 + $0",
 		},
+		Extras: ident.New("extras"),
 		Ignore: map[ident.Ident]bool{
 			ident.New("ignore1"): true,
 			ident.New("ignore2"): true,

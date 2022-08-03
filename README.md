@@ -305,6 +305,26 @@ clause such as `WHERE incoming.updated_at > now() - '1m'::INTERVAL`.
 
 Deletes from the source cluster are always applied.
 
+#### Extras column
+
+By default, `cdc-sink` will reject any incoming data that cannot be mapped onto a column in the
+target table. Users may specify a JSONB column in a target table to receive otherwise-unmapped
+properties. This is useful in logical-replication scenarios where the source data has a variable
+schema (e.g. migrations from document stores). Values in the JSONB column can be extracted in
+subsequent schema-change operations
+using [computed columns](https://www.cockroachlabs.com/docs/stable/jsonb.html#create-a-table-with-a-jsonb-column-and-a-computed-column)
+.
+
+To enable extras mode for a table, set the `extras` column to `true` in the `apply_config` for
+exactly one column in the target table. The name of the extras column should be chosen to avoid any
+conflicts with properties in incoming mutations.
+
+```sql
+UPSERT
+INTO _cdc_sink.apply_config (target_db, target_schema, target_table, target_column, extras)
+VALUES ('some_db', 'public', 'my_table', 'overflow_data', true);
+```
+
 #### Ignore columns
 
 By default, `cdc-sink` will reject incoming mutations that have columns which do not map to a column
