@@ -251,7 +251,13 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		return err
 	}
 
-	allArgs := make([]interface{}, 0, len(a.mu.schemaData)*len(muts))
+	// Allocate a slice for all mutation data. We'll reset the length
+	// once we know how many elements we actually have.
+	allArgs := make([]interface{}, len(a.mu.schemaData)*len(muts))
+	argIdx := 0
+	// We'll remember the current location for any extra arguments
+	// that we see, so we can backtrack to fill in the blank.
+	extrasArgIdx := -1
 
 	for i := range muts {
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Data))
@@ -262,8 +268,6 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 			return errors.WithStack(err)
 		}
 
-		// The values to pass to the database.
-		args := make([]interface{}, 0, len(a.mu.schemaData))
 		// Track the columns that we expect to see and that are seen in
 		// the incoming payload. This improves the error returned when
 		// there are unexpected columns.
@@ -314,32 +318,56 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 					a.target, sourceCol.Raw(),
 					string(muts[i].Key), muts[i].Time)
 			}
-			args = append(args, decoded)
+
+			if col.Name == a.mu.configData.Extras {
+				extrasArgIdx = argIdx
+			}
+			allArgs[argIdx] = decoded
+			argIdx++
 		}
-		allArgs = append(allArgs, args...)
 
 		// Pretend as though we've seen any ignored columns.
 		for col := range a.mu.configData.Ignore {
 			knownColumnsInPayload[col] = struct{}{}
 		}
 
-		// If new columns have been added in the source table, but not
-		// in the destination, we want to error out.
-		if len(incomingColumnData) > len(knownColumnsInPayload) {
-			var unexpected []string
-			for key := range incomingColumnData {
+		// Collect unknown / unmapped columns into the extras blob,
+		// or error out if we have no place to store extras.
+		if extraCount := len(incomingColumnData) - len(knownColumnsInPayload); extraCount > 0 {
+			if a.mu.configData.Extras.IsEmpty() {
+				var unmapped []string
+				for key := range incomingColumnData {
+					if _, seen := knownColumnsInPayload[key]; !seen {
+						unmapped = append(unmapped, key.Raw())
+					}
+				}
+				sort.Strings(unmapped)
+				return errors.Errorf(
+					"schema drift detected in %s: "+
+						"unexpected columns %v: "+
+						"key %s@%s",
+					a.target, unmapped, string(muts[i].Key), muts[i].Time)
+			}
+
+			unmapped := make(map[ident.Ident]interface{}, extraCount)
+			for key, value := range incomingColumnData {
 				if _, seen := knownColumnsInPayload[key]; !seen {
-					unexpected = append(unexpected, key.Raw())
+					unmapped[key] = value
 				}
 			}
-			sort.Strings(unexpected)
-			return errors.Errorf(
-				"schema drift detected in %s: "+
-					"unexpected columns %v: "+
-					"key %s@%s",
-				a.target, unexpected, string(muts[i].Key), muts[i].Time)
+			// Find the location in the args slice to update
+			// with the extra data.
+			if extrasArgIdx < 0 {
+				return errors.Errorf(
+					"extras column %s not found the target schema",
+					a.mu.configData.Extras)
+			}
+			allArgs[extrasArgIdx] = unmapped
 		}
 	}
+
+	// Done accumulating data, trim the slice.
+	allArgs = allArgs[:argIdx]
 
 	for idx, arg := range allArgs {
 		if num, ok := arg.(json.Number); ok {
