@@ -43,6 +43,7 @@ type Config struct {
 	CASColumns  []TargetColumn                 // The columns for compare-and-set operations.
 	Deadlines   map[TargetColumn]time.Duration // Deadline-based operation.
 	Exprs       map[TargetColumn]string        // Synthetic or replacement SQL expressions.
+	Extras      TargetColumn                   // JSONB column to store unmapped values in.
 	Ignore      map[TargetColumn]bool          // Source column names to ignore.
 	SourceNames map[TargetColumn]SourceColumn  // Look for alternate name in the incoming data.
 }
@@ -71,6 +72,7 @@ func (t *Config) Copy() *Config {
 	for k, v := range t.Exprs {
 		ret.Exprs[k] = v
 	}
+	ret.Extras = t.Extras
 	for k, v := range t.Ignore {
 		ret.Ignore[k] = v
 	}
@@ -87,6 +89,7 @@ func (t *Config) IsZero() bool {
 	return len(t.CASColumns) == 0 &&
 		len(t.Deadlines) == 0 &&
 		len(t.Exprs) == 0 &&
+		t.Extras.IsEmpty() &&
 		len(t.Ignore) == 0 &&
 		len(t.SourceNames) == 0
 }
@@ -149,6 +152,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
   cas_order INT        NOT NULL DEFAULT 0 CHECK ( cas_order >= 0 ),
   deadline  INTERVAL   NOT NULL DEFAULT 0::INTERVAL,
   expr      STRING     NOT NULL DEFAULT '',
+  extras    BOOL       NOT NULL DEFAULT false,
   ignore    BOOL       NOT NULL DEFAULT false,
   src_name  STRING     NOT NULL DEFAULT '',
 
@@ -159,13 +163,13 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 DELETE FROM %[1]s WHERE target_db = $1 AND target_schema = $2 AND target_table = $3`
 	loadConfTemplate = `
 SELECT target_db, target_schema, target_table, target_column,
-       cas_order, deadline, expr, ignore, src_name
+       cas_order, deadline, expr, extras, ignore, src_name
 FROM %[1]s`
 	upsertConfTemplate = `
 UPSERT INTO %[1]s (target_db, target_schema, target_table, target_column,
-  cas_order, deadline, expr, ignore, src_name)
+  cas_order, deadline, expr, extras, ignore, src_name)
 VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 )`
 )
 
@@ -187,23 +191,24 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 	nextConfigs := make(map[ident.Table]*tempConfig)
 
 	for rows.Next() {
-		var targetDB, targetSchema, targetTable, sourceColumn string
+		var targetDB, targetSchema, targetTable, targetColumn string
 		var cas int // 1-based index; 0 == regular column
 		var deadline time.Duration
 		var expr string
+		var extras bool
 		var ignore bool
 		var rename string
 
 		err := rows.Scan(
-			&targetDB, &targetSchema, &targetTable, &sourceColumn,
-			&cas, &deadline, &expr, &ignore, &rename)
+			&targetDB, &targetSchema, &targetTable, &targetColumn,
+			&cas, &deadline, &expr, &extras, &ignore, &rename)
 		if err != nil {
 			return false, errors.WithStack(err)
 		}
 
 		targetTableIdent := ident.NewTable(
 			ident.New(targetDB), ident.New(targetSchema), ident.New(targetTable))
-		srcColIdent := ident.New(sourceColumn)
+		targetColIdent := ident.New(targetColumn)
 
 		tableData, found := nextConfigs[targetTableIdent]
 		if !found {
@@ -213,19 +218,27 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 
 		if cas != 0 {
 			// Convert to zero-based.
-			tableData.casMap[cas-1] = srcColIdent
+			tableData.casMap[cas-1] = targetColIdent
 		}
 		if deadline > 0 {
-			tableData.Deadlines[srcColIdent] = deadline
+			tableData.Deadlines[targetColIdent] = deadline
 		}
 		if expr != "" {
-			tableData.Exprs[srcColIdent] = expr
+			tableData.Exprs[targetColIdent] = expr
+		}
+		if extras {
+			if !tableData.Extras.IsEmpty() {
+				return false, errors.Errorf(
+					"column %s already configured as extras column",
+					tableData.Extras)
+			}
+			tableData.Extras = targetColIdent
 		}
 		if ignore {
-			tableData.Ignore[srcColIdent] = true
+			tableData.Ignore[targetColIdent] = true
 		}
 		if rename != "" {
-			tableData.SourceNames[srcColIdent] = ident.New(rename)
+			tableData.SourceNames[targetColIdent] = ident.New(rename)
 		}
 
 	}
@@ -323,6 +336,9 @@ func (c *Configs) Store(
 			refs[col] = struct{}{}
 		}
 	}
+	if !cfg.Extras.IsEmpty() {
+		refs[cfg.Extras] = struct{}{}
+	}
 	for col, val := range cfg.Ignore {
 		if val {
 			refs[col] = struct{}{}
@@ -346,6 +362,7 @@ func (c *Configs) Store(
 			casIdx[col],
 			cfg.Deadlines[col],
 			cfg.Exprs[col],
+			cfg.Extras == col,
 			cfg.Ignore[col],
 			cfg.SourceNames[col].Raw(),
 		); err != nil {
