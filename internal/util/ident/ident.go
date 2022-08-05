@@ -269,3 +269,63 @@ func (t *Table) UnmarshalJSON(data []byte) error {
 	t.table = parts[2]
 	return nil
 }
+
+// A UDT is the name of a user-defined type, such as an enum.
+type UDT struct {
+	db, schema, udt Ident
+}
+
+// NewUDT constructs an identifier for a user-defined type.
+func NewUDT(db, schema, name Ident) UDT {
+	return UDT{db, schema, name}
+}
+
+// AsSchema returns the schema from the UDT.
+func (t UDT) AsSchema() Schema {
+	return NewSchema(t.Database(), t.Schema())
+}
+
+// Database returns the UDT's enclosing database.
+func (t UDT) Database() Ident { return t.db }
+
+// MarshalJSON returns the ident as a three-element array.
+func (t UDT) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string{t.Database().Raw(), t.Schema().Raw(), t.Name().Raw()})
+}
+
+// MarshalText returns the raw, dotted form of the UDT.
+func (t UDT) MarshalText() ([]byte, error) {
+	return []byte(t.Raw()), nil
+}
+
+// Schema returns the UDT's enclosing schema.
+func (t UDT) Schema() Ident { return t.schema }
+
+// Name returns the UDT's leaf name identifier.
+func (t UDT) Name() Ident { return t.udt }
+
+// Raw returns the original, raw value.
+func (t UDT) Raw() string {
+	return fmt.Sprintf("%s.%s.%s", t.Database().Raw(), t.Schema().Raw(), t.Name().Raw())
+}
+
+// String returns the identifier in a manner suitable for constructing a
+// query.
+func (t UDT) String() string {
+	return fmt.Sprintf("%s.%s.%s", t.Database(), t.Schema(), t.Name())
+}
+
+// UnmarshalJSON parses a three-element array.
+func (t *UDT) UnmarshalJSON(data []byte) error {
+	parts := make([]Ident, 0, 3)
+	if err := json.Unmarshal(data, &parts); err != nil {
+		return err
+	}
+	if len(parts) != 3 {
+		return errors.Errorf("expecting 3 parts, had %d", len(parts))
+	}
+	t.db = parts[0]
+	t.schema = parts[1]
+	t.udt = parts[2]
+	return nil
+}

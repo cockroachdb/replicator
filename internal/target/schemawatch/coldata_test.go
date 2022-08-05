@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,65 +38,77 @@ func TestGetColumns(t *testing.T) {
 		tableSchema string
 		primaryKeys []string
 		dataCols    []string
+		check       func(*testing.T, []types.ColData)
 	}
 	testcases := []testcase{
 		{
 			"", // It's legal to create a table with no columns.
 			[]string{"rowid"},
 			nil,
+			nil,
 		},
 		{
 			"a INT",
 			[]string{"rowid"},
 			[]string{"a"},
+			nil,
 		},
 		{
 			"a INT PRIMARY KEY",
 			[]string{"a"},
+			nil,
 			nil,
 		},
 		{
 			"a INT, b INT",
 			[]string{"rowid"},
 			[]string{"a", "b"},
+			nil,
 		},
 		{
 			"a INT, b INT, PRIMARY KEY (a,b)",
 			[]string{"a", "b"},
+			nil,
 			nil,
 		},
 		{
 			"a INT, b INT, PRIMARY KEY (b,a)",
 			[]string{"b", "a"},
 			nil,
+			nil,
 		},
 		{
 			"a INT, b INT, c INT, PRIMARY KEY (b,a,c)",
 			[]string{"b", "a", "c"},
+			nil,
 			nil,
 		},
 		{
 			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c)",
 			[]string{"b", "a", "c"},
 			[]string{"q", "r"},
+			nil,
 		},
 		{
 			"a INT, b INT, r INT, c INT, q INT, PRIMARY KEY (b,a,c) USING HASH WITH BUCKET_COUNT = 8",
 			[]string{"ignored_crdb_internal_a_b_c_shard_8", "b", "a", "c"},
 			[]string{"q", "r"},
+			nil,
 		},
 		// Ensure that computed columns are ignored.
 		{
-			tableSchema: "a INT, b INT, " +
+			"a INT, b INT, " +
 				"c INT AS (a + b) STORED, " +
 				"PRIMARY KEY (a,b)",
-			primaryKeys: []string{"a", "b"},
-			dataCols:    []string{"ignored_c"},
+			[]string{"a", "b"},
+			[]string{"ignored_c"},
+			nil,
 		},
 		// Ensure that the PK constraint may have an arbitrary name.
 		{
 			"a INT, b INT, CONSTRAINT foobar_pk PRIMARY KEY (a,b)",
 			[]string{"a", "b"},
+			nil,
 			nil,
 		},
 		// Check non-interference from secondary index.
@@ -102,24 +116,42 @@ func TestGetColumns(t *testing.T) {
 			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c), INDEX (c,a,b)",
 			[]string{"b", "a", "c"},
 			[]string{"q", "r"},
+			nil,
 		},
 		// Check non-interference from unique secondary index.
 		{
 			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c), UNIQUE INDEX (c,a,b)",
 			[]string{"b", "a", "c"},
 			[]string{"q", "r"},
+			nil,
 		},
 		// Check no-PK, but with a secondary index.
 		{
 			"a INT, b INT, q INT, c INT, r INT, INDEX (c,a,b)",
 			[]string{"rowid"},
 			[]string{"a", "b", "c", "q", "r"},
+			nil,
 		},
 		// Check no-PK, but with a unique secondary index.
 		{
 			"a INT, b INT, q INT, c INT, r INT, UNIQUE INDEX (c,a,b)",
 			[]string{"rowid"},
 			[]string{"a", "b", "c", "q", "r"},
+			nil,
+		},
+		{
+			fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TestDB.Ident()),
+			[]string{"a"},
+			nil,
+			func(t *testing.T, data []types.ColData) {
+				a := assert.New(t)
+				if a.Len(data, 1) {
+					col := data[0]
+					a.Equal(
+						ident.NewUDT(fixture.TestDB.Ident(), ident.Public, ident.New("MyEnum")),
+						col.Type)
+				}
+			},
 		},
 	}
 
@@ -136,6 +168,14 @@ func TestGetColumns(t *testing.T) {
 				dataCols:    []string{"ignored_c", "ignored_d"},
 			},
 		)
+	}
+
+	// Verify user-defined types with mixed-case name.
+	if _, err := fixture.Pool.Exec(ctx, fmt.Sprintf(
+		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
+		fixture.TestDB.Ident()),
+	); !a.NoError(err) {
+		return
 	}
 
 	for i, test := range testcases {
@@ -166,6 +206,9 @@ func TestGetColumns(t *testing.T) {
 			}
 			a.Equal(test.primaryKeys, primaryKeys)
 			a.Equal(test.dataCols, dataCols)
+			if test.check != nil {
+				test.check(t, colData)
+			}
 		})
 	}
 }
