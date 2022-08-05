@@ -158,3 +158,15 @@ func TestTableJson(t *testing.T) {
 	a.NoError(json.Unmarshal(data, &id2))
 	a.Equal(id, id2)
 }
+
+func TestUDTJson(t *testing.T) {
+	a := assert.New(t)
+
+	id := NewUDT(New("db"), New("schema"), New("my_enum"))
+	data, err := json.Marshal(id)
+	a.NoError(err)
+
+	var id2 UDT
+	a.NoError(json.Unmarshal(data, &id2))
+	a.Equal(id, id2)
+}

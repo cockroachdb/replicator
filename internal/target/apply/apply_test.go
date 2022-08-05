@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // This test inserts and deletes rows from a trivial table.
@@ -797,6 +798,44 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		a.NoError(row.Scan(&val))
 		a.Equal("Repeated", val)
 	}
+}
+
+// Verify that user-defined enums with mixed-case identifiers work.
+func TestUTDEnum(t *testing.T) {
+	r := require.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	r.NoError(err)
+	defer cancel()
+
+	ctx := fixture.Context
+
+	type Payload struct {
+		PK  int    `json:"pk"`
+		Val string `json:"val"`
+	}
+
+	_, err = fixture.Pool.Exec(ctx, fmt.Sprintf(
+		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
+		fixture.TestDB.Ident()))
+	r.NoError(err)
+
+	tbl, err := fixture.CreateTable(ctx,
+		fmt.Sprintf(`CREATE TABLE %%s (pk INT PRIMARY KEY, val %s."MyEnum")`,
+			fixture.TestDB.Ident()))
+	r.NoError(err)
+
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	r.NoError(err)
+
+	p := Payload{PK: 42, Val: "bar"}
+	bytes, err := json.Marshal(p)
+	r.NoError(err)
+
+	r.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
 }
 
 // Ensure that if stored computed columns are present, we don't

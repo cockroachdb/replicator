@@ -29,6 +29,10 @@ var (
 	queries embed.FS
 
 	parsed = template.Must(template.New("").Funcs(template.FuncMap{
+		"isUDT": func(x interface{}) bool {
+			_, ok := x.(ident.UDT)
+			return ok
+		},
 		// nl is a hack to force the inclusion of newlines in the output
 		// since we generally use the whitespace-consuming template
 		// syntax.

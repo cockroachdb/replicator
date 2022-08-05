@@ -13,11 +13,13 @@ package schemawatch
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgtype/pgxtype"
+	"github.com/pkg/errors"
 )
 
 func colSliceEqual(a, b []types.ColData) bool {
@@ -89,13 +91,36 @@ func getColumns(
 		foundPrimay := false
 		for rows.Next() {
 			var column types.ColData
-			var name string
-			if err := rows.Scan(&name, &column.Primary, &column.Type, &column.Ignored); err != nil {
+			var rawColType, name string
+			if err := rows.Scan(&name, &column.Primary, &rawColType, &column.Ignored); err != nil {
 				return err
 			}
 			column.Name = ident.New(name)
 			if column.Primary {
 				foundPrimay = true
+			}
+			// If the column type is a user-defined type, e.g. an enum,
+			// then we want to treat it as a proper database ident, and
+			// not a string.  Fortunately, UDTs can be identified
+			// because they have the schema name baked in.  We can't
+			// blindly treat all type names as idents, because the
+			// introspection query returns upcased value (e.g. INT8),
+			// while the actual type name of builtin types are lower
+			// case (e.g. int8). Thus, the SQL expression 1:"INT8" is
+			// invalid, although 1:"int8" would be fine. Baking in a
+			// list of intrinsic datatypes also seems somewhat brittle
+			// as CRDB evolves.
+			if strings.Contains(rawColType, ".") {
+				parts := strings.Split(rawColType, ".")
+				if len(parts) != 2 {
+					return errors.Errorf("cannot parse UDT %s", rawColType)
+				}
+				column.Type = ident.NewUDT(
+					table.Database(),
+					ident.New(parts[0]),
+					ident.New(parts[1]))
+			} else {
+				column.Type = rawColType
 			}
 			columns = append(columns, column)
 		}
