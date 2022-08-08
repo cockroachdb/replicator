@@ -22,6 +22,10 @@ type bucketKey struct {
 	shard int
 }
 
+// Use a fixed seed value when computing hashes so that a mutation for a
+// specific key winds up in the same bucket.
+var commonSeed = maphash.MakeSeed()
+
 // keyFor produces a bucketKey to group mutations together by key.
 // This function assumes that the encoding of the key is stable for
 // any given row.
@@ -31,6 +35,7 @@ func keyFor(table ident.Table, shardCount int, mut types.Mutation) bucketKey {
 	}
 
 	h := maphash.Hash{}
+	h.SetSeed(commonSeed)
 	_, _ = h.Write(mut.Key)
 	shard := int(h.Sum64() % uint64(shardCount))
 	return bucketKey{table, shard}
