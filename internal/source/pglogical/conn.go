@@ -315,7 +315,7 @@ func (c *conn) onDataTuple(
 		return err
 	}
 
-	return events.OnData(ctx, tbl, []types.Mutation{mut})
+	return events.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
 }
 
 // learn updates the source database namespace mappings.

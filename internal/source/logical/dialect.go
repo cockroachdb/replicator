@@ -82,8 +82,10 @@ type Events interface {
 	// OnCommit denotes the end of a transactional black in the underlying
 	// logical feed.
 	OnCommit(ctx context.Context) error
-	// OnData adds data to the transaction block.
-	OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error
+	// OnData adds data to the transaction block. The source is a name
+	// to pass to the user-script, and will generally be the name of a
+	// table, doc-collection, or other named data product.
+	OnData(ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation) error
 	// OnRollback must be called by Dialect.Process when a rollback
 	// message is encountered, to ensure that all internal state has
 	// been resynchronized.

@@ -52,7 +52,7 @@ func (f *fanEvents) OnBegin(_ context.Context, s stamp.Stamp) error {
 }
 
 // OnCommit implements Events.
-func (f *fanEvents) OnCommit(context.Context) error {
+func (f *fanEvents) OnCommit(_ context.Context) error {
 	if f.stamp == nil {
 		return errors.New("OnCommit called without OnBegin")
 	}
@@ -63,7 +63,9 @@ func (f *fanEvents) OnCommit(context.Context) error {
 }
 
 // OnData implements Events and delegates to the enclosed fan.
-func (f *fanEvents) OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error {
+func (f *fanEvents) OnData(
+	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
+) error {
 	if f.stamp == nil {
 		return errors.New("OnData called without OnBegin")
 	}

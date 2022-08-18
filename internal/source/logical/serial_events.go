@@ -62,7 +62,7 @@ func (e *serialEvents) OnCommit(ctx context.Context) error {
 
 // OnData implements Events.
 func (e *serialEvents) OnData(
-	ctx context.Context, target ident.Table, muts []types.Mutation,
+	ctx context.Context, _ ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	app, err := e.appliers.Get(ctx, target)
 	if err != nil {

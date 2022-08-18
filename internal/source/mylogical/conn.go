@@ -325,7 +325,7 @@ func (c *conn) onDataTuple(
 				return err
 			}
 		}
-		err = events.OnData(ctx, tbl, []types.Mutation{mut})
+		err = events.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
 		if err != nil {
 			return err
 		}

@@ -5,6 +5,8 @@ go 1.17
 require (
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20210128092314-b3eff0b87c79
+	github.com/dop251/goja v0.0.0-20220815083517-0c74f9139fd6
+	github.com/evanw/esbuild v0.15.5
 	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/gofrs/uuid v4.2.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.4.2
@@ -38,6 +40,8 @@ require (
 	github.com/cockroachdb/gostdlib v1.13.0 // indirect
 	github.com/cockroachdb/ttycolor v0.0.0-20180709150743-a1d5aaeb377d // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dlclark/regexp2 v1.7.0 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/subcommands v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect

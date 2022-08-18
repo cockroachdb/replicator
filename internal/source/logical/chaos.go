@@ -90,11 +90,13 @@ func (e *chaosEvents) OnCommit(ctx context.Context) error {
 	return e.delegate.OnCommit(ctx)
 }
 
-func (e *chaosEvents) OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error {
+func (e *chaosEvents) OnData(
+	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
+) error {
 	if rand.Float32() < e.prob {
 		return ErrChaos
 	}
-	return e.delegate.OnData(ctx, target, muts)
+	return e.delegate.OnData(ctx, source, target, muts)
 }
 
 func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {

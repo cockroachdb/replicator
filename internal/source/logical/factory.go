@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
+	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
@@ -23,11 +24,12 @@ import (
 // Factory supports uses cases where it is desirable to have multiple,
 // independent logical loops that share common resources.
 type Factory struct {
-	appliers types.Appliers
-	cfg      *Config
-	fans     *fan.Fans
-	memo     types.Memo
-	pool     *pgxpool.Pool
+	appliers   types.Appliers
+	cfg        *Config
+	fans       *fan.Fans
+	memo       types.Memo
+	pool       *pgxpool.Pool
+	userscript *script.UserScript
 
 	mu struct {
 		sync.Mutex
@@ -68,7 +70,8 @@ func (f *Factory) Get(ctx context.Context, name string, dialect Dialect) (*Loop,
 		cfg.LoopName = fmt.Sprintf("%s-%s", cfg.LoopName, name)
 	}
 
-	ret, cancel, err := ProvideLoop(ctx, f.appliers, cfg, dialect, f.fans, f.memo, f.pool)
+	ret, cancel, err := ProvideLoop(ctx, f.appliers, cfg, dialect,
+		f.fans, f.memo, f.pool, f.userscript)
 	if err != nil {
 		return nil, err
 	}

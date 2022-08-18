@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
+	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
@@ -31,20 +32,28 @@ var Set = wire.NewSet(
 	ProvideLoop,
 	ProvidePool,
 	ProvideStagingDB,
+	ProvideUserScriptConfig,
+	ProvideUserScriptTarget,
 	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
 )
 
 // ProvideFactory returns a utility which can create multiple logical
 // loops.
 func ProvideFactory(
-	appliers types.Appliers, config *Config, fans *fan.Fans, memo types.Memo, pool *pgxpool.Pool,
+	appliers types.Appliers,
+	config *Config,
+	fans *fan.Fans,
+	memo types.Memo,
+	pool *pgxpool.Pool,
+	userscript *script.UserScript,
 ) (*Factory, func()) {
 	f := &Factory{
-		appliers: appliers,
-		cfg:      config,
-		fans:     fans,
-		memo:     memo,
-		pool:     pool,
+		appliers:   appliers,
+		cfg:        config,
+		fans:       fans,
+		memo:       memo,
+		pool:       pool,
+		userscript: userscript,
 	}
 	f.mu.loops = make(map[string]*Loop)
 	return f, f.Close
@@ -61,6 +70,7 @@ func ProvideLoop(
 	fans *fan.Fans,
 	memo types.Memo,
 	pool *pgxpool.Pool,
+	userscript *script.UserScript,
 ) (*Loop, func(), error) {
 	var err error
 	if config.ChaosProb > 0 {
@@ -80,17 +90,32 @@ func ProvideLoop(
 		return nil, nil, err
 	}
 
-	loop.events.fan = (&metricsEvents{Events: &fanEvents{
+	loop.events.fan = &fanEvents{
 		State:  loop,
 		config: config,
 		fans:   fans,
-	}}).withLoopName(config.LoopName)
+	}
 
-	loop.events.serial = (&metricsEvents{Events: &serialEvents{
+	loop.events.serial = &serialEvents{
 		State:    loop,
 		appliers: appliers,
 		pool:     pool,
-	}}).withLoopName(config.LoopName)
+	}
+
+	// Apply logic and configurations defined by the user-script.
+	if len(userscript.Sources) > 0 || len(userscript.Targets) > 0 {
+		loop.events.fan = &scriptEvents{
+			Events: loop.events.fan,
+			Script: userscript,
+		}
+		loop.events.serial = &scriptEvents{
+			Events: loop.events.serial,
+			Script: userscript,
+		}
+	}
+
+	loop.events.fan = (&metricsEvents{Events: loop.events.fan}).withLoopName(config.LoopName)
+	loop.events.serial = (&metricsEvents{Events: loop.events.serial}).withLoopName(config.LoopName)
 
 	loop.metrics.backfillStatus = backfillStatus.WithLabelValues(config.LoopName)
 
@@ -133,4 +158,16 @@ func ProvideStagingDB(config *Config) (ident.StagingDB, error) {
 		return ident.StagingDB{}, err
 	}
 	return ident.StagingDB(config.StagingDB), nil
+}
+
+// ProvideUserScriptConfig is called by Wire to extract the user-script
+// configuration.
+func ProvideUserScriptConfig(config *Config) *script.Config {
+	return &config.UserScript
+}
+
+// ProvideUserScriptTarget is called by Wire and returns the public
+// schema of the target database.
+func ProvideUserScriptTarget(config *Config) script.TargetSchema {
+	return script.TargetSchema(ident.NewSchema(config.TargetDB, ident.Public))
 }

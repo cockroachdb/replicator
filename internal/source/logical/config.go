@@ -13,6 +13,7 @@ package logical
 import (
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
@@ -68,6 +69,9 @@ type Config struct {
 	// The number of connections to the target database. If zero, a
 	// default value will be used.
 	TargetDBConns int
+	// Allow users to provide custom logic for routing or manipulating
+	// mutations that are handled by the logical loop.
+	UserScript script.Config
 
 	stagingDB string // Temporary storage for StagingDB.
 	targetDB  string // Temporary storage for TargetDB.
@@ -94,6 +98,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
 	f.StringVar(&c.targetDB, "targetDB", "", "the SQL database in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")
+	c.UserScript.Bind(f)
 }
 
 // Copy returns a deep copy of the Config.
@@ -138,6 +143,9 @@ func (c *Config) Preflight() error {
 	}
 	if c.TargetDBConns == 0 {
 		c.TargetDBConns = defaultTargetDBConns
+	}
+	if err := c.UserScript.Preflight(); err != nil {
+		return err
 	}
 	return nil
 }
