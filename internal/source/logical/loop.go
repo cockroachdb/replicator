@@ -198,7 +198,10 @@ func (l *loop) runOnce(ctx context.Context) error {
 			// Return if the source closed cleanly (we may switch
 			// from backfill to streaming modes) or if the outer
 			// context is being shut down.
-			if err == nil || errors.Is(err, context.Canceled) {
+			if err == nil {
+				return nil
+			}
+			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 
@@ -239,7 +242,10 @@ func (l *loop) runOnce(ctx context.Context) error {
 			for groupCtx.Err() == nil {
 				ts := l.consistentPoint.stamp.(TimeStamp).AsTime()
 				if time.Since(ts) < l.config.BackfillWindow {
-					log.WithField("ts", ts).Info("backfill has caught up")
+					log.WithFields(log.Fields{
+						"loop": l.config.LoopName,
+						"ts":   ts,
+					}).Info("backfill has caught up")
 					return
 				}
 				l.consistentPoint.Wait()
@@ -292,6 +298,7 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 	}
 	log.WithFields(log.Fields{
 		"delta": delta,
+		"loop":  l.config.LoopName,
 		"ts":    ts,
 	}).Info("using backfill strategy")
 	return
