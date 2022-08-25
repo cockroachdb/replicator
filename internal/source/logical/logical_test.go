@@ -17,8 +17,8 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
@@ -73,7 +73,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 		dialect = logical.WithChaos(gen, 0.01)
 	}
 
-	cfg := &logical.Config{
+	cfg := &logical.BaseConfig{
 		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
 		LoopName:       "generator",
 		Immediate:      immediate,
@@ -169,7 +169,7 @@ func TestUserScript(t *testing.T) {
 		r.NoError(err)
 	}
 
-	cfg := &logical.Config{
+	cfg := &logical.BaseConfig{
 		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
 		LoopName:       "generator",
 		Immediate:      false,
@@ -177,7 +177,9 @@ func TestUserScript(t *testing.T) {
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.Config().ConnString(),
 		TargetDB:       dbName,
-		UserScript: script.Config{
+
+		ScriptConfig: script.Config{
+			MainPath: "/main.ts",
 			FS: &fstest.MapFS{
 				"main.ts": &fstest.MapFile{Data: []byte(`
 import * as api from "cdc-sink@v1";
@@ -200,11 +202,7 @@ api.configureTable("t_2", {
     return doc;
   }
 });
-`)},
-			},
-			MainPath: "/main.ts",
-		},
-	}
+`)}}}}
 
 	// Create a generator for the upstream names.
 	gen := newGenerator([]ident.Table{

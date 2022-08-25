@@ -30,10 +30,13 @@ import (
 
 // Dialect reads data from Google Cloud Firestore.
 type Dialect struct {
-	coll *firestore.CollectionRef
-	cfg  *loopConfig
-	fs   *firestore.Client
-	st   *Tombstones
+	backfillBatchSize int
+	docIDProperty     string
+	fs                *firestore.Client
+	query             firestore.Query // The base query build from.
+	sourceCollection  ident.Ident
+	tombstones        *Tombstones
+	updatedAtProperty ident.Ident
 }
 
 var (
@@ -77,7 +80,7 @@ func (d *Dialect) BackfillInto(
 	for {
 		cp, moreWork, err = d.backfillOneBatch(ctx, ch, to, cp)
 		if err != nil {
-			return err
+			return errors.Wrap(err, d.sourceCollection.Raw())
 		}
 		if moreWork {
 			continue
@@ -89,7 +92,7 @@ func (d *Dialect) BackfillInto(
 			to = time.Now()
 			continue
 		}
-		log.Infof("finished backfilling collection %s", d.cfg.SourceCollection)
+		log.Infof("finished backfilling collection %s", d.sourceCollection)
 		return nil
 	}
 }
@@ -99,18 +102,18 @@ func (d *Dialect) BackfillInto(
 // backfill is expected to continue.
 func (d *Dialect) backfillOneBatch(
 	ctx context.Context, ch chan<- logical.Message, now time.Time, cp *consistentPoint,
-) (_ *consistentPoint, moreWork bool, _ error) {
+) (_ *consistentPoint, moreWork bool, err error) {
 
 	// Iterate over the collection by (updated_at, __doc_id__) using
 	// a cursor-like approach so that we can checkpoint along the way.
-	q := d.coll.
-		OrderBy(d.cfg.UpdatedAtProperty.Raw(), firestore.Asc).
+	q := d.query.
+		OrderBy(d.updatedAtProperty.Raw(), firestore.Asc).
 		OrderBy(firestore.DocumentID, firestore.Asc).
-		Where(d.cfg.UpdatedAtProperty.Raw(), "<=", now).
-		Limit(d.cfg.BackfillBatch)
+		Where(d.updatedAtProperty.Raw(), "<=", now).
+		Limit(d.backfillBatchSize)
 	if !cp.IsZero() {
 		if cp.AsID() == "" {
-			q = q.Where(d.cfg.UpdatedAtProperty.Raw(), ">=", cp.AsTime())
+			q = q.Where(d.updatedAtProperty.Raw(), ">=", cp.AsTime())
 		} else {
 			q = q.StartAfter(cp.AsTime(), cp.AsID())
 		}
@@ -144,9 +147,22 @@ func (d *Dialect) backfillOneBatch(
 			return cp, false, ctx.Err()
 		}
 	}
+	log.Tracef("received %d documents from %s", len(docs), d.sourceCollection)
 
 	lastDoc := docs[len(docs)-1]
-	lastReadID := lastDoc.Ref.ID
+
+	// Compute the query-relative document start id. We need to do this
+	// so that sub-collections can be accessed in a consistent way.
+	//
+	// 2022-08-29: One way that does not work is to call
+	// Query.StartAfter() and then use Query.Serialize to hand the
+	// status over to the next backfill cycle.
+	topCollection := lastDoc.Ref.Parent
+	for topCollection.Parent != nil {
+		topCollection = topCollection.Parent.Parent
+	}
+	lastReadID := fmt.Sprintf("documents/%s/%s",
+		topCollection.ID, lastDoc.Ref.Path[len(topCollection.Path)+1:])
 	lastReadTime, err := d.docUpdatedAt(lastDoc)
 	if err != nil {
 		return cp, false, err
@@ -183,8 +199,8 @@ func (d *Dialect) ReadInto(
 ) error {
 	cp, _ := state.GetConsistentPoint().(*consistentPoint)
 	// Stream from the last updated time.
-	q := d.coll.
-		OrderBy(d.cfg.UpdatedAtProperty.Raw(), firestore.Asc).
+	q := d.query.
+		OrderBy(d.updatedAtProperty.Raw(), firestore.Asc).
 		StartAt(cp.AsTime().Truncate(time.Second))
 	snaps := q.Snapshots(ctx)
 
@@ -194,7 +210,7 @@ func (d *Dialect) ReadInto(
 			return errors.WithStack(err)
 		}
 
-		log.Tracef("collection %s: %d events", d.coll.ID, len(snap.Changes))
+		log.Tracef("collection %s: %d events", d.sourceCollection, len(snap.Changes))
 
 		select {
 		case ch <- batchStart{streamPoint(snap.ReadTime)}:
@@ -207,7 +223,7 @@ func (d *Dialect) ReadInto(
 			case firestore.DocumentAdded,
 				firestore.DocumentModified:
 				// Ignore documents that we already know have been deleted.
-				if d.st.IsDeleted(change.Doc.Ref) {
+				if d.tombstones.IsDeleted(change.Doc.Ref) {
 					continue
 				}
 				select {
@@ -217,7 +233,7 @@ func (d *Dialect) ReadInto(
 				}
 
 			case firestore.DocumentRemoved:
-				d.st.NotifyDeleted(change.Doc.Ref)
+				d.tombstones.NotifyDeleted(change.Doc.Ref)
 				select {
 				case ch <- batchDelete{change.Doc.Ref, change.Doc.ReadTime}:
 				case <-ctx.Done():
@@ -276,7 +292,7 @@ func (d *Dialect) Process(
 			// Pass an empty destination table, because we know that
 			// this is configured via a user-script.
 			if err := events.OnData(ctx,
-				d.cfg.SourceCollection, ident.Table{}, []types.Mutation{mut}); err != nil {
+				d.sourceCollection, ident.Table{}, []types.Mutation{mut}); err != nil {
 				return err
 			}
 
@@ -289,7 +305,7 @@ func (d *Dialect) Process(
 			// Pass an empty destination table, because we know that
 			// this is configured via a user-script.
 			if err := events.OnData(ctx,
-				d.cfg.SourceCollection, ident.Table{}, []types.Mutation{mut}); err != nil {
+				d.sourceCollection, ident.Table{}, []types.Mutation{mut}); err != nil {
 				return err
 			}
 
@@ -312,14 +328,14 @@ func (d *Dialect) ZeroStamp() stamp.Stamp {
 
 // docUpdatedAt extracts a timestamp from the document.
 func (d *Dialect) docUpdatedAt(doc *firestore.DocumentSnapshot) (time.Time, error) {
-	val, err := doc.DataAt(d.cfg.UpdatedAtProperty.Raw())
+	val, err := doc.DataAt(d.updatedAtProperty.Raw())
 	if err != nil {
 		return time.Time{}, errors.WithStack(err)
 	}
 	if t, ok := val.(time.Time); ok {
 		return t, nil
 	}
-	return time.Time{}, errors.Errorf("document missing %q property", d.cfg.UpdatedAtProperty.Raw())
+	return time.Time{}, errors.Errorf("document missing %q property", d.updatedAtProperty.Raw())
 }
 
 // marshalDeletion creates a mutation to represent the deletion of the
@@ -341,8 +357,8 @@ func (d *Dialect) marshalMutation(
 ) (types.Mutation, error) {
 	dataMap := doc.Data()
 	// Allow the doc id to be baked into the mutation.
-	if d.cfg.DocIDProperty != "" {
-		dataMap[d.cfg.DocIDProperty] = doc.Ref.ID
+	if d.docIDProperty != "" {
+		dataMap[d.docIDProperty] = doc.Ref.ID
 	}
 	data, err := json.Marshal(dataMap)
 	if err != nil {

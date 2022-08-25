@@ -27,7 +27,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/cmd/pglogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/start"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/version"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/util/logfmt"
 	joonix "github.com/joonix/log"
 	"github.com/pkg/errors"

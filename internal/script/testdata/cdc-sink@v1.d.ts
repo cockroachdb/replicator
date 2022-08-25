@@ -162,9 +162,13 @@ declare module "cdc-sink@v1" {
     };
 
     /**
-     * Set runtime options, specific to the logical replication source.
+     * Set runtime options. This function provides an alternate means of
+     * setting some or all of the CLI flags. For example, this allows
+     * configuration that is common to all (dev, test, staging,
+     * production) environments to be checked into the user-script,
+     * while the few per-environment options are set by CLI flags.
      *
-     * @param doc - runtime options, refer to documentation for details.
+     * @param opts - runtime options, refer to --help for details.
      */
-    function setOptions(doc: Document);
+    function setOptions(opts: { [k: string]: string });
 }

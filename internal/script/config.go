@@ -20,14 +20,18 @@ import (
 
 // Config drives UserScript behavior.
 type Config struct {
-	FS       fs.FS  // A filesystem to load resources fs.
-	MainPath string // A path, relative to FS that holds the entrypoint.
+	FS       fs.FS   // A filesystem to load resources fs.
+	MainPath string  // A path, relative to FS that holds the entrypoint.
+	Options  Options // The target for calls to api.setOptions().
 
 	userscript string // An external filesystem path.
 }
 
 // Bind adds flags to the set.
 func (c *Config) Bind(f *pflag.FlagSet) {
+	if c.Options == nil {
+		c.Options = &FlagOptions{f}
+	}
 	f.StringVar(&c.userscript, "userscript", "",
 		"the path to a configuration script, see userscript subcommand")
 }

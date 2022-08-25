@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package script_test
+package script
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -28,6 +27,19 @@ import (
 
 //go:embed testdata/*
 var testData embed.FS
+
+type mapOptions struct {
+	data map[string]string
+}
+
+func (o *mapOptions) Set(k, v string) error {
+	if o.data == nil {
+		o.data = map[string]string{k: v}
+	} else {
+		o.data[k] = v
+	}
+	return nil
+}
 
 func TestScript(t *testing.T) {
 	a := assert.New(t)
@@ -52,21 +64,18 @@ func TestScript(t *testing.T) {
 
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.Pool))
 
+	var opts mapOptions
+
 	schema := ident.NewSchema(fixture.TestDB.Ident(), ident.Public)
-	s, err := script.ProvideUserScript(
-		fixture.Context,
-		&script.Config{
-			FS:       testData,
-			MainPath: "/testdata/main.ts",
-		},
-		fixture.Configs,
-		fixture.Pool,
-		script.TargetSchema(schema),
-		fixture.Watchers)
+	s, err := newScriptFromFixture(fixture, &Config{
+		FS:       testData,
+		MainPath: "/testdata/main.ts",
+		Options:  &opts,
+	}, TargetSchema(schema))
 	r.NoError(err)
 	a.Len(s.Sources, 2)
 	a.Len(s.Targets, 2)
-	a.Equal(map[string]interface{}{"hello": "world"}, s.Options)
+	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema.Database(), schema.Schema(), ident.New("table1"))
 	tbl2 := ident.NewTable(schema.Database(), schema.Schema(), ident.New("table2"))

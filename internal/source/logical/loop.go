@@ -50,7 +50,7 @@ func (l *Loop) Stopped() <-chan struct{} {
 // driven by a serial stream of data.
 type loop struct {
 	// The active configuration.
-	config *Config
+	config *BaseConfig
 	// The Dialect contains message-processing, specific to a particular
 	// source database.
 	dialect Dialect

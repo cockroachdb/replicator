@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -62,6 +62,11 @@ func testSmoke(t *testing.T, chaosProb float32) {
 		"CREATE TABLE %s (id STRING PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
 	r.NoError(err)
 
+	// Create a table for a collection-group to be synced.
+	subTable, err := fixture.CreateTable(ctx,
+		"CREATE TABLE %s (id STRING PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
+	r.NoError(err)
+
 	now := time.Now().UTC()
 
 	// Create a connection to the emulator, to populate source docs. The
@@ -70,19 +75,27 @@ func testSmoke(t *testing.T, chaosProb float32) {
 	fs, err := firestore.NewClient(ctx, projectID)
 	r.NoError(err)
 	coll := fs.Collection(destTable.Name().Table().Raw())
-	docIds := make([]string, docCount)
-	for i := range docIds {
-		doc, _, err := coll.Add(ctx, map[string]interface{}{
+	docRefs := make([]*firestore.DocumentRef, docCount)
+	subRefs := make([]*firestore.DocumentRef, docCount)
+	for i := range docRefs {
+		docRefs[i], _, err = coll.Add(ctx, map[string]interface{}{
 			"v":          fmt.Sprintf("value %d", i),
 			"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
 		})
 		r.NoError(err)
-		log.Tracef("inserted %s", doc.Path)
-		docIds[i] = doc.ID
+		log.Tracef("inserted %s", docRefs[i].Path)
+
+		// Add sub-collection, to test collection-group queries.
+		subRefs[i], _, err = docRefs[i].Collection("subcollection").
+			Add(ctx, map[string]interface{}{
+				"v":          fmt.Sprintf("value %d", i),
+				"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
+			})
+		r.NoError(err)
 	}
 
 	cfg := &Config{
-		Config: logical.Config{
+		BaseConfig: logical.BaseConfig{
 			ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
 			BackfillWindow: time.Minute,
 			ChaosProb:      chaosProb,
@@ -93,14 +106,16 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			StagingDB:      fixture.StagingDB.Ident(),
 			TargetConn:     fixture.Pool.Config().ConnString(),
 			TargetDB:       fixture.TestDB.Ident(),
-			UserScript: script.Config{
+
+			ScriptConfig: script.Config{
 				MainPath: "/main.ts",
 				FS: &fstest.MapFS{
 					"main.ts": &fstest.MapFile{
 						Data: []byte(fmt.Sprintf(`
 import * as api from "cdc-sink@v1";
-api.configureSource(%s, { target: %s });
-`, destTable.Name().Table(), destTable.Name().Table())),
+api.configureSource(%[1]s, { target: %[1]s });
+api.configureSource("group:subcollection", { target: %[2]s } );
+`, destTable.Name().Table(), subTable.Name().Table())),
 					},
 				},
 			},
@@ -112,14 +127,13 @@ api.configureSource(%s, { target: %s });
 		TombstoneCollectionProperty: ident.New("collection"),
 		UpdatedAtProperty:           ident.New("updated_at"),
 	}
+
 	loops, cancel, err := startLoopsFromFixture(fixture, cfg)
 	r.NoError(err)
 	defer cancel()
-	a.Len(loops, 1)
+	a.Len(loops, 2)
 
-	log.Info("waiting for initial backfill")
-
-	// Wait for backfill.
+	log.Info("waiting for top-level backfill")
 	for {
 		ct, err := destTable.RowCount(ctx)
 		r.NoError(err)
@@ -128,15 +142,34 @@ api.configureSource(%s, { target: %s });
 		}
 	}
 
+	log.Info("waiting for collection-group backfill")
+	for {
+		ct, err := subTable.RowCount(ctx)
+		r.NoError(err)
+		if ct == docCount {
+			break
+		}
+		log.Infof("saw only %d documents in sub-collection", ct)
+		time.Sleep(1000 * time.Millisecond)
+	}
+
 	log.Info("backfill done, sending document updates")
 
 	// Update previous documents in batches. The FS API limits
 	// the maximum transaction batch size.
 	const fsBatchSize = 100
-	r.NoError(batches.Window(fsBatchSize, len(docIds), func(start, end int) error {
+	r.NoError(batches.Window(fsBatchSize, len(docRefs), func(start, end int) error {
 		return fs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-			for i, docID := range docIds[start:end] {
-				if err := tx.Set(coll.Doc(docID), map[string]interface{}{
+			for i, docRef := range docRefs[start:end] {
+				if err := tx.Set(docRef, map[string]interface{}{
+					"v":          fmt.Sprintf("updated %d", i),
+					"updated_at": firestore.ServerTimestamp,
+				}); err != nil {
+					return err
+				}
+			}
+			for i, subRef := range subRefs[start:end] {
+				if err := tx.Set(subRef, map[string]interface{}{
 					"v":          fmt.Sprintf("updated %d", i),
 					"updated_at": firestore.ServerTimestamp,
 				}); err != nil {
@@ -165,15 +198,15 @@ api.configureSource(%s, { target: %s });
 
 	// Write tombstone documents to simulate out-of-band deletion.
 	tombstones := fs.Collection("Tombstones")
-	r.NoError(batches.Window(fsBatchSize, len(docIds), func(start, end int) error {
+	r.NoError(batches.Window(fsBatchSize, len(docRefs), func(start, end int) error {
 		return fs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-			for _, docID := range docIds[start:end] {
+			for _, docRef := range docRefs[start:end] {
 				if err := tx.Create(
 					// The tombstone docid is arbitrary.
-					tombstones.Doc("any"+docID),
+					tombstones.Doc("any"+docRef.ID),
 					map[string]interface{}{
-						"collection": coll.ID,
-						"id":         docID,
+						"collection": docRef.Parent.ID,
+						"id":         docRef.ID,
 						"updated_at": firestore.ServerTimestamp,
 					}); err != nil {
 					return err

@@ -13,7 +13,7 @@ package logical
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
@@ -29,8 +29,7 @@ type scriptEvents struct {
 var _ Events = (*scriptEvents)(nil)
 
 // OnData implements Events and calls any mapping logic provided by the
-// user-script for the given table. If there is no configured behavior
-// for the given source table
+// user-script for the given table.
 func (e *scriptEvents) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {

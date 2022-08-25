@@ -25,7 +25,7 @@ import (
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
-	logical.Config
+	logical.BaseConfig
 
 	SourceConn string // Connection string for the source db.
 	ProcessID  uint32 // A unique ID to identify this process to the master.
@@ -41,7 +41,7 @@ type Config struct {
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
 func (c *Config) Bind(f *pflag.FlagSet) {
-	c.Config.Bind(f)
+	c.BaseConfig.Bind(f)
 	f.StringVar(&c.DefaultConsistentPoint, "defaultGTIDSet", "",
 		"default GTIDSet. Used if no state is persisted")
 	f.Uint32Var(&c.ProcessID, "replicationProcessID", 10,
@@ -98,7 +98,7 @@ func newClientTLSConfig(
 // error if there are missing options for which a default cannot be
 // provided.
 func (c *Config) Preflight() error {
-	if err := c.Config.Preflight(); err != nil {
+	if err := c.BaseConfig.Preflight(); err != nil {
 		return err
 	}
 	if c.LoopName == "" {

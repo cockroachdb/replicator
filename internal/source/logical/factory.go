@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
@@ -25,7 +25,7 @@ import (
 // independent logical loops that share common resources.
 type Factory struct {
 	appliers   types.Appliers
-	cfg        *Config
+	cfg        Config
 	fans       *fan.Fans
 	memo       types.Memo
 	pool       *pgxpool.Pool
@@ -64,13 +64,13 @@ func (f *Factory) Get(ctx context.Context, name string, dialect Dialect) (*Loop,
 	}
 
 	cfg := f.cfg.Copy()
-	if cfg.LoopName == "" {
-		cfg.LoopName = name
+	if baseName := cfg.Base().LoopName; baseName == "" {
+		cfg.Base().LoopName = name
 	} else {
-		cfg.LoopName = fmt.Sprintf("%s-%s", cfg.LoopName, name)
+		cfg.Base().LoopName = fmt.Sprintf("%s-%s", baseName, name)
 	}
 
-	ret, cancel, err := ProvideLoop(ctx, f.appliers, cfg, dialect,
+	ret, cancel, err := ProvideLoop(ctx, f.appliers, cfg.Base(), dialect,
 		f.fans, f.memo, f.pool, f.userscript)
 	if err != nil {
 		return nil, err

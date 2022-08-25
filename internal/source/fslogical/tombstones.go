@@ -102,8 +102,7 @@ func (t *Tombstones) ReadInto(
 	cp, _ := state.GetConsistentPoint().(*consistentPoint)
 	q := t.coll.
 		OrderBy(t.cfg.UpdatedAtProperty.Raw(), firestore.Asc).
-		OrderBy(t.cfg.DocumentIDProperty.Raw(), firestore.Asc).
-		StartAt(cp.AsTime().Truncate(time.Second), cp.AsID())
+		StartAt(cp.AsTime().Truncate(time.Second))
 	snaps := q.Snapshots(ctx)
 
 	for {

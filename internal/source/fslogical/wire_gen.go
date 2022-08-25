@@ -8,12 +8,12 @@ package fslogical
 
 import (
 	"context"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 )
 
@@ -22,12 +22,20 @@ import (
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
 func Start(contextContext context.Context, config *Config) ([]*logical.Loop, func(), error) {
-	logicalConfig := ProvideBaseConfig(config)
-	pool, cleanup, err := logical.ProvidePool(contextContext, logicalConfig)
+	scriptConfig := logical.ProvideUserScriptConfig(config)
+	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingDB, err := logical.ProvideStagingDB(logicalConfig)
+	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pool, cleanup, err := logical.ProvidePool(contextContext, baseConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -51,9 +59,8 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	scriptConfig := logical.ProvideUserScriptConfig(logicalConfig)
-	targetSchema := logical.ProvideUserScriptTarget(logicalConfig)
-	userScript, err := script.ProvideUserScript(contextContext, scriptConfig, configs, pool, targetSchema, watchers)
+	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
+	userScript, err := script.ProvideUserScript(contextContext, configs, loader, pool, targetSchema, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -61,7 +68,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup5 := logical.ProvideFactory(appliers, logicalConfig, fans, memoMemo, pool, userScript)
+	factory, cleanup5 := logical.ProvideFactory(appliers, config, fans, memoMemo, pool, userScript)
 	client, cleanup6, err := ProvideFirestoreClient(contextContext, config)
 	if err != nil {
 		cleanup5()
@@ -107,23 +114,30 @@ func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logica
 	baseFixture := &fixture.BaseFixture
 	contextContext := baseFixture.Context
 	appliers := fixture.Appliers
-	logicalConfig := ProvideBaseConfig(config)
 	fans := fixture.Fans
 	typesMemo := fixture.Memo
-	pool, cleanup, err := logical.ProvidePool(contextContext, logicalConfig)
+	scriptConfig := logical.ProvideUserScriptConfig(config)
+	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	scriptConfig := logical.ProvideUserScriptConfig(logicalConfig)
+	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pool, cleanup, err := logical.ProvidePool(contextContext, baseConfig)
+	if err != nil {
+		return nil, nil, err
+	}
 	configs := fixture.Configs
-	targetSchema := logical.ProvideUserScriptTarget(logicalConfig)
+	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
 	watchers := fixture.Watchers
-	userScript, err := script.ProvideUserScript(contextContext, scriptConfig, configs, pool, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(contextContext, configs, loader, pool, targetSchema, watchers)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup2 := logical.ProvideFactory(appliers, logicalConfig, fans, typesMemo, pool, userScript)
+	factory, cleanup2 := logical.ProvideFactory(appliers, config, fans, typesMemo, pool, userScript)
 	client, cleanup3, err := ProvideFirestoreClient(contextContext, config)
 	if err != nil {
 		cleanup2()

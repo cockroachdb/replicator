@@ -8,12 +8,12 @@ package mylogical
 
 import (
 	"context"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 )
 
 // Injectors from injector.go:
@@ -21,12 +21,20 @@ import (
 // Start creates a MySQL/MariaDB logical replication loop using the
 // provided configuration.
 func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
-	logicalConfig := ProvideBaseConfig(config)
-	pool, cleanup, err := logical.ProvidePool(ctx, logicalConfig)
+	scriptConfig := logical.ProvideUserScriptConfig(config)
+	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingDB, err := logical.ProvideStagingDB(logicalConfig)
+	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pool, cleanup, err := logical.ProvidePool(ctx, baseConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -58,9 +66,8 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	scriptConfig := logical.ProvideUserScriptConfig(logicalConfig)
-	targetSchema := logical.ProvideUserScriptTarget(logicalConfig)
-	userScript, err := script.ProvideUserScript(ctx, scriptConfig, configs, pool, targetSchema, watchers)
+	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
+	userScript, err := script.ProvideUserScript(ctx, configs, loader, pool, targetSchema, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -68,7 +75,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loop, cleanup5, err := logical.ProvideLoop(ctx, appliers, logicalConfig, dialect, fans, memoMemo, pool, userScript)
+	loop, cleanup5, err := logical.ProvideLoop(ctx, appliers, baseConfig, dialect, fans, memoMemo, pool, userScript)
 	if err != nil {
 		cleanup4()
 		cleanup3()

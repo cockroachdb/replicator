@@ -11,25 +11,17 @@
 //go:build wireinject
 // +build wireinject
 
-package mylogical
+package script
 
 import (
-	"context"
-
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/google/wire"
 )
 
-// Start creates a MySQL/MariaDB logical replication loop using the
-// provided configuration.
-func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
+func newScriptFromFixture(*sinktest.Fixture, *Config, TargetSchema) (*UserScript, error) {
 	panic(wire.Build(
-		wire.Bind(new(logical.Config), new(*Config)),
 		Set,
-		logical.Set,
-		script.Set,
-		target.Set,
+		wire.FieldsOf(new(*sinktest.Fixture), "BaseFixture", "Configs", "Watchers"),
+		wire.FieldsOf(new(*sinktest.BaseFixture), "Context", "Pool"),
 	))
 }

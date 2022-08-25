@@ -20,16 +20,9 @@ import (
 	"github.com/spf13/pflag"
 )
 
-type loopConfig struct {
-	BackfillBatch     int
-	DocIDProperty     string
-	SourceCollection  ident.Ident
-	UpdatedAtProperty ident.Ident
-}
-
 // Config adds dialect-specific configuration to the core logical loop.
 type Config struct {
-	logical.Config
+	logical.BaseConfig
 	// The number of documents to load at once during a backfill operation.
 	BackfillBatchSize int
 	// A JSON service-account key for the Firestore API.
@@ -47,16 +40,11 @@ type Config struct {
 	TombstoneCollectionProperty ident.Ident
 	// The name of a document property used for high-water marks.
 	UpdatedAtProperty ident.Ident
-
-	docIDTemp        string
-	tablesTemp       []string
-	tombstoneColTemp string
-	updatedAtTemp    string
 }
 
 // Bind adds flags to the pflag.FlagSet to populate the Config.
 func (c *Config) Bind(f *pflag.FlagSet) {
-	c.Config.Bind(f)
+	c.BaseConfig.Bind(f)
 
 	// Always opt into backfilling, since we never have transactional
 	// boundaries to contend with. Values assigned in Preflight()
@@ -68,27 +56,26 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.StringVar(&c.CredentialsFile, "credentials", "",
 		"a file containing JSON service credentials.")
 	// NB: Keep default value in sync with doc on tombstones.
-	f.StringVar(&c.docIDTemp, "docID", "id",
+	f.Var(ident.NewValue("id", &c.DocumentIDProperty), "docID",
 		"the column name (likely the primary key) to populate with the document id")
 	f.StringVar(&c.LoopName, "loopName", "fslogical",
 		"identifies the logical replication loops in metrics")
 	f.StringVar(&c.ProjectID, "projectID", "",
 		"override the project id contained in the credentials file")
-	f.StringSliceVarP(&c.tablesTemp, "table", "t", nil,
-		"one or more destination table names")
 	f.StringVar(&c.TombstoneCollection, "tombstoneCollection", "",
 		"the name of a collection that contains document Tombstones")
 	// NB: Keep default value in sync with doc on tombstones.
-	f.StringVar(&c.tombstoneColTemp, "tombstoneCollectionProperty", "collection",
+	f.Var(ident.NewValue("collection", &c.TombstoneCollectionProperty),
+		"tombstoneCollectionProperty",
 		"the property name in a tombstone document that contains the original collection name")
 	// NB: Keep default value in sync with doc on tombstones.
-	f.StringVar(&c.updatedAtTemp, "updatedAt", "updated_at",
+	f.Var(ident.NewValue("updated_at", &c.UpdatedAtProperty), "updatedAt",
 		"the name of a document property used for high-water marks")
 }
 
 // Preflight adds additional checks to the base logical.Config.
 func (c *Config) Preflight() error {
-	if err := c.Config.Preflight(); err != nil {
+	if err := c.BaseConfig.Preflight(); err != nil {
 		return err
 	}
 
@@ -110,17 +97,8 @@ func (c *Config) Preflight() error {
 	}
 
 	// Require a property to store the underlying doc id in.
-	if c.docIDTemp != "" {
-		c.DocumentIDProperty = ident.New(c.docIDTemp)
-		c.docIDTemp = ""
-	}
 	if c.DocumentIDProperty.IsEmpty() {
 		return errors.New("no document id property was configured")
-	}
-
-	if c.tombstoneColTemp != "" {
-		c.TombstoneCollectionProperty = ident.New(c.tombstoneColTemp)
-		c.tombstoneColTemp = ""
 	}
 
 	if c.TombstoneCollection != "" {
@@ -129,10 +107,6 @@ func (c *Config) Preflight() error {
 		}
 	}
 
-	if c.updatedAtTemp != "" {
-		c.UpdatedAtProperty = ident.New(c.updatedAtTemp)
-		c.updatedAtTemp = ""
-	}
 	if c.UpdatedAtProperty.IsEmpty() {
 		return errors.New("no updated_at property name given")
 	}

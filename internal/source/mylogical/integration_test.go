@@ -66,7 +66,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	crdbPool := fixture.Pool
 
 	config := &Config{
-		Config: logical.Config{
+		BaseConfig: logical.BaseConfig{
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 			Immediate:    immediate,
 			RetryDelay:   10 * time.Second,
@@ -332,7 +332,7 @@ func TestDataTypes(t *testing.T) {
 	crdbPool := fixture.Pool
 
 	config := &Config{
-		Config: logical.Config{
+		BaseConfig: logical.BaseConfig{
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 			Immediate:    false,           // we care about transaction semantics
 			RetryDelay:   10 * time.Second,

@@ -8,21 +8,30 @@ package logical
 
 import (
 	"context"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 )
 
 // Injectors from injector.go:
 
-func Start(ctx context.Context, config *Config, dialect Dialect) (*Loop, func(), error) {
-	pool, cleanup, err := ProvidePool(ctx, config)
+func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), error) {
+	scriptConfig := ProvideUserScriptConfig(config)
+	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingDB, err := ProvideStagingDB(config)
+	baseConfig, err := ProvideBaseConfig(config, loader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pool, cleanup, err := ProvidePool(ctx, baseConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	stagingDB, err := ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -46,9 +55,8 @@ func Start(ctx context.Context, config *Config, dialect Dialect) (*Loop, func(),
 		cleanup()
 		return nil, nil, err
 	}
-	scriptConfig := ProvideUserScriptConfig(config)
-	targetSchema := ProvideUserScriptTarget(config)
-	userScript, err := script.ProvideUserScript(ctx, scriptConfig, configs, pool, targetSchema, watchers)
+	targetSchema := ProvideUserScriptTarget(baseConfig)
+	userScript, err := script.ProvideUserScript(ctx, configs, loader, pool, targetSchema, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -56,7 +64,7 @@ func Start(ctx context.Context, config *Config, dialect Dialect) (*Loop, func(),
 		cleanup()
 		return nil, nil, err
 	}
-	logicalLoop, cleanup5, err := ProvideLoop(ctx, appliers, config, dialect, fans, memoMemo, pool, userScript)
+	logicalLoop, cleanup5, err := ProvideLoop(ctx, appliers, baseConfig, dialect, fans, memoMemo, pool, userScript)
 	if err != nil {
 		cleanup4()
 		cleanup3()

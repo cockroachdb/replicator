@@ -16,9 +16,9 @@ package fslogical
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/google/wire"
 )
@@ -27,11 +27,12 @@ import (
 // provided configuration.
 func Start(context.Context, *Config) ([]*logical.Loop, func(), error) {
 	panic(wire.Build(
-		ProvideBaseConfig,
+		wire.Bind(new(logical.Config), new(*Config)),
 		ProvideFirestoreClient,
 		ProvideLoops,
 		ProvideTombstones,
 		logical.Set,
+		script.Set,
 		target.Set,
 	))
 }
@@ -39,10 +40,10 @@ func Start(context.Context, *Config) ([]*logical.Loop, func(), error) {
 // Build remaining testable components from a common fixture.
 func startLoopsFromFixture(*sinktest.Fixture, *Config) ([]*logical.Loop, func(), error) {
 	panic(wire.Build(
+		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*sinktest.BaseFixture), "Context"),
 		wire.FieldsOf(new(*sinktest.Fixture),
 			"Appliers", "BaseFixture", "Configs", "Fans", "Memo", "Watchers"),
-		ProvideBaseConfig,
 		ProvideFirestoreClient,
 		ProvideLoops,
 		ProvideTombstones,

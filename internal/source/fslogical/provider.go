@@ -16,27 +16,30 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"cloud.google.com/go/firestore"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/script"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/golang/groupcache/lru"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 )
 
-// This environment variable is used by the SDK.
-const emulatorEnv = "FIRESTORE_EMULATOR_HOST"
+const (
+	// This environment variable is used by the SDK.
+	emulatorEnv = "FIRESTORE_EMULATOR_HOST"
+
+	// GroupPrefix is applied to a source name that should be treated as
+	// a Firestore collection group query. This allows all document
+	// sub-collections with a given name to be queried as though they
+	// were a single collection.
+	GroupPrefix = "group:"
+)
 
 // Set by TestMain to allow documents to be cleared.
 var enableWipe bool
-
-// ProvideBaseConfig is called by wire to extract the core logical-loop
-// configuration from this package's Config type.
-func ProvideBaseConfig(cfg *Config) *logical.Config {
-	return &cfg.Config
-}
 
 // ProvideLoops is called by wire to construct a logical-replication
 // loop for each configured collection/table pair.
@@ -55,18 +58,22 @@ func ProvideLoops(
 	idx := 0
 	ret := make([]*logical.Loop, len(userscript.Sources))
 	for sourceName := range userscript.Sources {
-		// TODO(bob): Collection vs CollectionGroup queries
+		var q firestore.Query
+		if r := sourceName.Raw(); strings.HasPrefix(r, GroupPrefix) {
+			q = fs.CollectionGroup(r[len(GroupPrefix):]).Query
+		} else {
+			q = fs.Collection(r).Query
+		}
+
 		var err error
 		ret[idx], err = loops.Get(ctx, sourceName.Raw(), &Dialect{
-			coll: fs.Collection(sourceName.Raw()),
-			cfg: &loopConfig{
-				BackfillBatch:     cfg.BackfillBatchSize,
-				DocIDProperty:     cfg.DocumentIDProperty.Raw(),
-				SourceCollection:  sourceName,
-				UpdatedAtProperty: cfg.UpdatedAtProperty,
-			},
-			fs: fs,
-			st: st,
+			backfillBatchSize: cfg.BackfillBatchSize,
+			docIDProperty:     cfg.DocumentIDProperty.Raw(),
+			fs:                fs,
+			query:             q,
+			tombstones:        st,
+			sourceCollection:  sourceName,
+			updatedAtProperty: cfg.UpdatedAtProperty,
 		})
 		if err != nil {
 			return nil, nil, err

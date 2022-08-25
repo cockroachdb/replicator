@@ -23,9 +23,9 @@ import (
 // fanEvents is a high-throughput implementation of Events which
 // does not preserve transaction boundaries.
 type fanEvents struct {
-	State            // The underlying loop. Set by provider.
-	config *Config   // The loop's configuration. Set by provider.
-	fans   *fan.Fans // Factory for fan-out behavior. Set by provider.
+	State              // The underlying loop. Set by provider.
+	config *BaseConfig // The loop's configuration. Set by provider.
+	fans   *fan.Fans   // Factory for fan-out behavior. Set by provider.
 
 	fan     *fan.Fan    // Created by OnBegin(), destroyed in stop().
 	stamp   stamp.Stamp // The latest stamp passed into OnBegin().

@@ -29,6 +29,7 @@ import (
 // Command returns the fslogical subcommand.
 func Command() *cobra.Command {
 	cfg := &fslogical.Config{}
+
 	var metricsAddr string
 	cmd := &cobra.Command{
 		Args:  cobra.NoArgs,

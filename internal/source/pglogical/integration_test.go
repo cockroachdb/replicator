@@ -112,7 +112,7 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
-		Config: logical.Config{
+		BaseConfig: logical.BaseConfig{
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 			ChaosProb:    withChaosProb,
 			Immediate:    immediate,
@@ -336,7 +336,7 @@ func TestDataTypes(t *testing.T) {
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	loop, cancelLoop, err := Start(ctx, &Config{
-		Config: logical.Config{
+		BaseConfig: logical.BaseConfig{
 			LoopName:   "pglogicaltest",
 			RetryDelay: time.Nanosecond,
 			StagingDB:  fixture.StagingDB.Ident(),
