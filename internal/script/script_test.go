@@ -73,7 +73,7 @@ func TestScript(t *testing.T) {
 		Options:  &opts,
 	}, TargetSchema(schema))
 	r.NoError(err)
-	a.Len(s.Sources, 2)
+	a.Len(s.Sources, 3)
 	a.Len(s.Targets, 2)
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
@@ -84,7 +84,7 @@ func TestScript(t *testing.T) {
 	if cfg := s.Sources[ident.New("expander")]; a.NotNil(cfg) {
 		a.Equal(tbl1, cfg.DeletesTo)
 		mut := types.Mutation{Data: []byte(`{"msg":true}`)}
-		mapped, err := cfg.Mapper(context.Background(), mut)
+		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
 			if docs := mapped[tbl1]; a.Len(docs, 1) {
 				a.Equal(`{"dest":"table1","msg":true}`, string(docs[0].Data))
@@ -104,7 +104,7 @@ func TestScript(t *testing.T) {
 	if cfg := s.Sources[ident.New("passthrough")]; a.NotNil(cfg) {
 		a.Equal(tblS, cfg.DeletesTo)
 		mut := types.Mutation{Data: []byte(`{"passthrough":true}`)}
-		mapped, err := cfg.Mapper(context.Background(), mut)
+		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
 			tbl := ident.NewTable(schema.Database(), schema.Schema(), ident.New("some_table"))
 			expanded := mapped[tbl]
@@ -112,6 +112,10 @@ func TestScript(t *testing.T) {
 				a.Equal(mut, expanded[0])
 			}
 		}
+	}
+
+	if cfg := s.Sources[ident.New("recursive")]; a.NotNil(cfg) {
+		a.True(cfg.Recurse)
 	}
 
 	tbl := ident.NewTable(fixture.TestDB.Ident(), ident.Public, ident.New("all_features"))

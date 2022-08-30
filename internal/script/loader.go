@@ -28,16 +28,23 @@ import (
 //
 // Look on my Works, ye Mighty, and despair!
 //   { doc } => { "target" : [ { doc }, ... ], "otherTarget" : [ { doc }, ... ], ... }
-type dispatchJS func(map[string]interface{}) (map[string][]map[string]interface{}, error)
+type dispatchJS func(
+	doc map[string]interface{},
+	meta map[string]interface{},
+) (map[string][]map[string]interface{}, error)
 
 // A simple mapping function.
 //   { doc } => { doc }
-type mapJS func(map[string]interface{}) (map[string]interface{}, error)
+type mapJS func(
+	doc map[string]interface{},
+	meta map[string]interface{},
+) (map[string]interface{}, error)
 
 // sourceJS is used in the API binding.
 type sourceJS struct {
 	DeletesTo string     `goja:"deletesTo"`
 	Dispatch  dispatchJS `goja:"dispatch"`
+	Recurse   bool       `goja:"recurse"`
 	Target    string     `goja:"target"`
 }
 

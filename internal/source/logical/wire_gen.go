@@ -18,7 +18,10 @@ import (
 // Injectors from injector.go:
 
 func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), error) {
-	scriptConfig := ProvideUserScriptConfig(config)
+	scriptConfig, err := ProvideUserScriptConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err
@@ -64,8 +67,10 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	logicalLoop, cleanup5, err := ProvideLoop(ctx, appliers, baseConfig, dialect, fans, memoMemo, pool, userScript)
+	factory, cleanup5 := ProvideFactory(appliers, config, fans, memoMemo, pool, userScript)
+	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
 	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

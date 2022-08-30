@@ -22,7 +22,10 @@ import (
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
 func Start(contextContext context.Context, config *Config) ([]*logical.Loop, func(), error) {
-	scriptConfig := logical.ProvideUserScriptConfig(config)
+	scriptConfig, err := logical.ProvideUserScriptConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err
@@ -116,7 +119,10 @@ func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logica
 	appliers := fixture.Appliers
 	fans := fixture.Fans
 	typesMemo := fixture.Memo
-	scriptConfig := logical.ProvideUserScriptConfig(config)
+	scriptConfig, err := logical.ProvideUserScriptConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err

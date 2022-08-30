@@ -20,9 +20,13 @@ import (
 )
 
 // Backfiller is an optional capability interface for Dialect
-// implementations. The BackfillInto method will be called instead
-// of ReadInto when the logical loop has detected a backfill state.
+// implementations. The BackfillInto method will be called instead of
+// ReadInto when the logical loop has detected a backfill state. The
+// primary distincting between BackfillInto and ReadInto is that
+// backfilling is a finite process.
 type Backfiller interface {
+	Dialect
+
 	// BackfillInto represents a potentially-fragile source of
 	// logical-replication messages that should be applied in a
 	// high-throughput manner. Implementations should treat BackfillInto
@@ -76,6 +80,10 @@ func IsRollback(m Message) bool {
 // Events extends State to drive the state of the replication loop.
 type Events interface {
 	State
+	// Backfill will execute a single pass of the given Backfiller in a
+	// blocking fashion. This is useful when sources are discovered
+	// dynamically.
+	Backfill(ctx context.Context, loopName string, backfiller Backfiller, options ...Option) error
 	// OnBegin denotes the beginning of a transactional block in the
 	// underlying logical feed.
 	OnBegin(ctx context.Context, point stamp.Stamp) error

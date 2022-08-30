@@ -23,9 +23,9 @@ import (
 // fanEvents is a high-throughput implementation of Events which
 // does not preserve transaction boundaries.
 type fanEvents struct {
-	State              // The underlying loop. Set by provider.
 	config *BaseConfig // The loop's configuration. Set by provider.
 	fans   *fan.Fans   // Factory for fan-out behavior. Set by provider.
+	loop   *loop       // The underlying loop.
 
 	fan     *fan.Fan    // Created by OnBegin(), destroyed in stop().
 	stamp   stamp.Stamp // The latest stamp passed into OnBegin().
@@ -34,13 +34,26 @@ type fanEvents struct {
 
 var _ Events = (*fanEvents)(nil)
 
+// Backfill implements Events. It delegates to the enclosing loop.
+func (f *fanEvents) Backfill(
+	ctx context.Context, source string, backfiller Backfiller, options ...Option,
+) error {
+	return f.loop.doBackfill(ctx, source, backfiller, options...)
+}
+
+// GetConsistentPoint implements State. It delegates to the loop.
+func (f *fanEvents) GetConsistentPoint() stamp.Stamp { return f.loop.GetConsistentPoint() }
+
+// GetTargetDB implements State. It delegates to the loop.
+func (f *fanEvents) GetTargetDB() ident.Ident { return f.loop.GetTargetDB() }
+
 // OnBegin implements Events.
 func (f *fanEvents) OnBegin(_ context.Context, s stamp.Stamp) error {
 	if f.fan == nil {
 		var err error
 		f.fan, f.stopFan, err = f.fans.New(
 			f.config.ApplyTimeout,
-			f.State.setConsistentPoint,
+			f.loop.setConsistentPoint,
 			f.config.FanShards,
 			f.config.BytesInFlight)
 		if err != nil {
@@ -64,7 +77,7 @@ func (f *fanEvents) OnCommit(_ context.Context) error {
 
 // OnData implements Events and delegates to the enclosed fan.
 func (f *fanEvents) OnData(
-	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
+	ctx context.Context, _ ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	if f.stamp == nil {
 		return errors.New("OnData called without OnBegin")
@@ -84,6 +97,9 @@ func (f *fanEvents) OnRollback(_ context.Context, msg Message) error {
 	f.stamp = nil
 	return nil
 }
+
+// setConsistentPoint implements State. It delegates to the loop.
+func (f *fanEvents) setConsistentPoint(s stamp.Stamp) { f.loop.setConsistentPoint(s) }
 
 // reset implements Events.
 func (f *fanEvents) stop() {

@@ -159,8 +159,6 @@ func TestUserScript(t *testing.T) {
 	tgts := []ident.Table{
 		ident.NewTable(dbName, ident.Public, ident.New("t_1")),
 		ident.NewTable(dbName, ident.Public, ident.New("t_2")),
-		// ident.NewTable(dbName, ident.Public, ident.New("t_3")),
-		// ident.NewTable(dbName, ident.Public, ident.New("t_4")),
 	}
 
 	for _, tgt := range tgts {

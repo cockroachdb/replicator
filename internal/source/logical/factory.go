@@ -12,14 +12,19 @@ package logical
 
 import (
 	"context"
-	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
+
+type loopCancel struct {
+	loop   *Loop
+	cancel func()
+}
 
 // Factory supports uses cases where it is desirable to have multiple,
 // independent logical loops that share common resources.
@@ -33,8 +38,7 @@ type Factory struct {
 
 	mu struct {
 		sync.Mutex
-		cancels []func()
-		loops   map[string]*Loop
+		loops map[string]*loopCancel
 	}
 }
 
@@ -42,40 +46,118 @@ type Factory struct {
 func (f *Factory) Close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, cancel := range f.mu.cancels {
+	for _, hook := range f.mu.loops {
 		// These are just context-cancellations functions that return
 		// immediately, so we need to wait for the loops to stop below.
-		cancel()
+		hook.cancel()
 	}
-	for _, loop := range f.mu.loops {
-		<-loop.Stopped()
+	for _, hook := range f.mu.loops {
+		<-hook.loop.Stopped()
 	}
-	f.mu.cancels = nil
-	f.mu.loops = make(map[string]*Loop)
 }
 
 // Get constructs or retrieves the named Loop.
-func (f *Factory) Get(ctx context.Context, name string, dialect Dialect) (*Loop, error) {
+func (f *Factory) Get(ctx context.Context, dialect Dialect, options ...Option) (*Loop, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	config := f.cfg.Base().Copy()
+	for _, option := range options {
+		option(config)
+	}
+
+	if err := config.Preflight(); err != nil {
+		return nil, err
+	}
+
+	name := config.LoopName
 	if found, ok := f.mu.loops[name]; ok {
-		return found, nil
+		select {
+		case <-found.loop.Stopped():
+			// Re-create the stopped loop.
+		default:
+			return found.loop, nil
+		}
 	}
 
-	cfg := f.cfg.Copy()
-	if baseName := cfg.Base().LoopName; baseName == "" {
-		cfg.Base().LoopName = name
-	} else {
-		cfg.Base().LoopName = fmt.Sprintf("%s-%s", baseName, name)
-	}
-
-	ret, cancel, err := ProvideLoop(ctx, f.appliers, cfg.Base(), dialect,
-		f.fans, f.memo, f.pool, f.userscript)
+	loop, err := f.newLoop(ctx, config, dialect)
 	if err != nil {
 		return nil, err
 	}
-	f.mu.loops[name] = ret
-	f.mu.cancels = append(f.mu.cancels, cancel)
-	return ret, nil
+
+	// The loop runs in a background context so that we have better
+	// control over the lifecycle.
+	loopCtx, cancel := context.WithCancel(context.Background())
+
+	// Add the loop to the memo map and start a goroutine to clean up.
+	hook := &loopCancel{loop, cancel}
+	f.mu.loops[name] = hook
+	go func() {
+		<-loop.Stopped()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		// Only delete the entry that we created.
+		if f.mu.loops[name] == hook {
+			delete(f.mu.loops, name)
+		}
+	}()
+
+	// Start the replication loop.
+	go loop.loop.run(loopCtx)
+
+	return loop, nil
+}
+
+// newLoop constructs a loop, but does not start or memoize it.
+func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Dialect) (*Loop, error) {
+	var err error
+	if config.ChaosProb > 0 {
+		dialect = WithChaos(dialect, config.ChaosProb)
+	}
+	loop := &loop{
+		config:          config,
+		dialect:         dialect,
+		factory:         f,
+		memo:            f.memo,
+		standbyDeadline: time.Now().Add(config.StandbyTimeout),
+		stopped:         make(chan struct{}),
+		targetPool:      f.pool,
+	}
+	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
+	initialPoint, err := loop.loadConsistentPoint(ctx)
+	if err != nil {
+		return nil, err
+	}
+	loop.consistentPoint.stamp = initialPoint
+
+	loop.events.fan = &fanEvents{
+		config: config,
+		fans:   f.fans,
+		loop:   loop,
+	}
+
+	loop.events.serial = &serialEvents{
+		appliers: f.appliers,
+		loop:     loop,
+		pool:     f.pool,
+	}
+
+	// Apply logic and configurations defined by the user-script.
+	if len(f.userscript.Sources) > 0 || len(f.userscript.Targets) > 0 {
+		loop.events.fan = &scriptEvents{
+			Events: loop.events.fan,
+			Script: f.userscript,
+		}
+		loop.events.serial = &scriptEvents{
+			Events: loop.events.serial,
+			Script: f.userscript,
+		}
+	}
+
+	loop.events.fan = (&metricsEvents{Events: loop.events.fan}).withLoopName(config.LoopName)
+	loop.events.serial = (&metricsEvents{Events: loop.events.serial}).withLoopName(config.LoopName)
+
+	loop.metrics.backfillStatus = backfillStatus.WithLabelValues(config.LoopName)
+
+	return &Loop{loop, initialPoint}, nil
 }

@@ -57,28 +57,41 @@ func ProvideLoops(
 
 	idx := 0
 	ret := make([]*logical.Loop, len(userscript.Sources))
-	for sourceName := range userscript.Sources {
+	recurseFilter := make(map[ident.Ident]struct{})
+
+	for sourceName, source := range userscript.Sources {
+		var sourcePath string
 		var q firestore.Query
 		if r := sourceName.Raw(); strings.HasPrefix(r, GroupPrefix) {
-			q = fs.CollectionGroup(r[len(GroupPrefix):]).Query
+			sourcePath = r
+			tail := r[len(GroupPrefix):]
+			q = fs.CollectionGroup(tail).Query
+			recurseFilter[ident.New(tail)] = struct{}{}
 		} else {
-			q = fs.Collection(r).Query
+			coll := fs.Collection(r)
+			sourcePath = coll.Path
+			q = coll.Query
 		}
 
 		var err error
-		ret[idx], err = loops.Get(ctx, sourceName.Raw(), &Dialect{
+		ret[idx], err = loops.Get(ctx, &Dialect{
 			backfillBatchSize: cfg.BackfillBatchSize,
 			docIDProperty:     cfg.DocumentIDProperty.Raw(),
 			fs:                fs,
+			loops:             loops,
 			query:             q,
 			tombstones:        st,
+			recurse:           source.Recurse,
+			recurseFilter:     recurseFilter,
 			sourceCollection:  sourceName,
+			sourcePath:        sourcePath,
 			updatedAtProperty: cfg.UpdatedAtProperty,
-		})
+		}, logical.WithName(sourceName.Raw()))
 		if err != nil {
 			return nil, nil, err
 		}
 		idx++
+		log.Infof("started firestore loop %s", sourceName)
 	}
 
 	return ret, loops.Close, nil
@@ -140,7 +153,7 @@ func ProvideTombstones(
 	ret.source = ident.New(cfg.TombstoneCollection)
 	ret.mu.cache = &lru.Cache{MaxEntries: 1_000_000}
 
-	_, err := loops.Get(ctx, cfg.TombstoneCollection, ret)
+	_, err := loops.Get(ctx, ret, logical.WithName(cfg.TombstoneCollection))
 	return ret, err
 }
 

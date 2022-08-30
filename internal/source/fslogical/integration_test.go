@@ -17,6 +17,7 @@ package fslogical
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -46,7 +47,7 @@ func TestSmoke(t *testing.T) {
 func testSmoke(t *testing.T, chaosProb float32) {
 	a := assert.New(t)
 	r := require.New(t)
-	const docCount = 1000
+	const docCount = 200
 
 	// Create a target database.
 	fixture, cancel, err := sinktest.NewFixture()
@@ -76,6 +77,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 	r.NoError(err)
 	coll := fs.Collection(destTable.Name().Table().Raw())
 	docRefs := make([]*firestore.DocumentRef, docCount)
+	dynRefs := make([]*firestore.DocumentRef, docCount)
 	subRefs := make([]*firestore.DocumentRef, docCount)
 	for i := range docRefs {
 		docRefs[i], _, err = coll.Add(ctx, map[string]interface{}{
@@ -92,6 +94,34 @@ func testSmoke(t *testing.T, chaosProb float32) {
 				"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
 			})
 		r.NoError(err)
+
+		// Add a dynamic sub-collection, to test recursion.
+		dynRefs[i], _, err = subRefs[i].Collection(fmt.Sprintf("dynamic_%d", i)).
+			Add(ctx, map[string]interface{}{
+				"v":          fmt.Sprintf("value %d", i),
+				"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
+			})
+		r.NoError(err)
+	}
+
+	x := map[string]struct{}{}
+	for _, doc := range docRefs {
+		if _, found := x[doc.ID]; found {
+			runtime.Breakpoint()
+		}
+		x[doc.ID] = struct{}{}
+	}
+	for _, doc := range subRefs {
+		if _, found := x[doc.ID]; found {
+			runtime.Breakpoint()
+		}
+		x[doc.ID] = struct{}{}
+	}
+	for _, doc := range dynRefs {
+		if _, found := x[doc.ID]; found {
+			runtime.Breakpoint()
+		}
+		x[doc.ID] = struct{}{}
 	}
 
 	cfg := &Config{
@@ -114,7 +144,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 						Data: []byte(fmt.Sprintf(`
 import * as api from "cdc-sink@v1";
 api.configureSource(%[1]s, { target: %[1]s });
-api.configureSource("group:subcollection", { target: %[2]s } );
+api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 `, destTable.Name().Table(), subTable.Name().Table())),
 					},
 				},
@@ -140,17 +170,21 @@ api.configureSource("group:subcollection", { target: %[2]s } );
 		if ct == docCount {
 			break
 		}
+		log.Infof("saw only %d documents in top level", ct)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	log.Info("waiting for collection-group backfill")
 	for {
 		ct, err := subTable.RowCount(ctx)
 		r.NoError(err)
-		if ct == docCount {
+		// Two times, since we also drop the dynamic sub-collection
+		// elements into the same destination table.
+		if ct == 2*docCount {
 			break
 		}
 		log.Infof("saw only %d documents in sub-collection", ct)
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	log.Info("backfill done, sending document updates")

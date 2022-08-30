@@ -29,13 +29,6 @@ type consistentPoint struct {
 
 var _ stamp.Stamp = (*consistentPoint)(nil)
 
-func backfillPoint(id string, ts time.Time) *consistentPoint {
-	return &consistentPoint{
-		BackfillID: id,
-		Time:       ts,
-	}
-}
-
 func streamPoint(ts time.Time) *consistentPoint {
 	return &consistentPoint{
 		Time: ts,

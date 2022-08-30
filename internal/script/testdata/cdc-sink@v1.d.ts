@@ -70,24 +70,26 @@ declare module "cdc-sink@v1" {
 
 
     /**
-     * A mandatory destination for a configured source: either a mapper
-     * function or the name of a destination table to pass through to.
+     * A mandatory destination for a configured source: either a
+     * dispatch function or the name of a destination table to pass
+     * through to.
      *
      * @see configureSource
      */
     type ConfigureSourceDestination = {
         /**
-         * A function to dispatch documents to zero or more
-         * destination tables. Mappers allow complex input
-         * datastructures (e.g. nested documents or documents with
-         * variable schemas) to be broken up and stored in some number
-         * of tables that are subsequently joined with SQL queries.
+         * A function to dispatch documents to zero or more destination
+         * tables. Dispatchers allow complex input datastructures (e.g.
+         * nested documents or documents with variable schemas) to be
+         * broken up and stored in some number of tables that are
+         * subsequently joined with SQL queries.
          *
          * @param doc - The source document
-         * @returns A mapping of target table names documents. A null
+         * @param meta - Source-specific metadata about the document.
+         * @returns A mapping of target table names to documents. A null
          * value will entirely discard the source document.
          */
-        dispatch: (doc: Document) => Record<Table, Document[]>
+        dispatch: (doc: Document, meta: Document) => Record<Table, Document[]>
 
         /**
          * The destination table to apply deletion operations to. In
@@ -105,11 +107,16 @@ declare module "cdc-sink@v1" {
     };
 
     /**
-     * Reserved for future expansion.
-     *
      * @see configureSource
      */
-    type ConfigureSourceOptions = {}
+    type ConfigureSourceOptions = {
+        /**
+         * Sources which support dynamic sub-collections of data may
+         * set the recurse property. This will cause any sub-documents
+         * to be passed to the source's destination.
+         */
+        recurse: boolean;
+    }
 
     /**
      * Configure a table within the destination database.
@@ -150,9 +157,10 @@ declare module "cdc-sink@v1" {
          * A mapping function which may modify or discard a single
          * mutation to be applied to the target table.
          * @param d - The source document
+         * @param meta - Source-specific metadata about the document.
          * @returns The document to upsert, or null to do nothing.
          */
-        map: (d: Document) => Document;
+        map: (d: Document, meta: Document) => Document;
         /**
          * Columns that may be ignored in the input data. This allows,
          * for example, columns to be dropped from the destination
@@ -166,7 +174,7 @@ declare module "cdc-sink@v1" {
      * setting some or all of the CLI flags. For example, this allows
      * configuration that is common to all (dev, test, staging,
      * production) environments to be checked into the user-script,
-     * while the few per-environment options are set by CLI flags.
+     * while the remaining per-environment options are set by CLI flags.
      *
      * @param opts - runtime options, refer to --help for details.
      */

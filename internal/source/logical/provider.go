@@ -12,8 +12,6 @@ package logical
 
 import (
 	"context"
-	"sync"
-	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
@@ -38,6 +36,18 @@ var Set = wire.NewSet(
 	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
 )
 
+// ProvideBaseConfig is called by wire to extract the BaseConfig from
+// the dialect-specific Config.
+//
+// The script.Loader is referenced here so that any side effects that
+// it has on the config, e.g., api.setOptions(), will be evaluated.
+func ProvideBaseConfig(config Config, _ *script.Loader) (*BaseConfig, error) {
+	if err := config.Preflight(); err != nil {
+		return nil, err
+	}
+	return config.Base(), nil
+}
+
 // ProvideFactory returns a utility which can create multiple logical
 // loops.
 func ProvideFactory(
@@ -56,94 +66,13 @@ func ProvideFactory(
 		pool:       pool,
 		userscript: userscript,
 	}
-	f.mu.loops = make(map[string]*Loop)
+	f.mu.loops = make(map[string]*loopCancel)
 	return f, f.Close
 }
 
-// CLIArgs are
-type CLIArgs []string
-
-// ProvideBaseConfig is called by wire to extract the BaseConfig from
-// the dialect-specific Config.
-//
-// The script.Loader is referenced here so that any side effects that
-// it has on the config, e.g., api.setOptions(), will be evaluated.
-func ProvideBaseConfig(config Config, _ *script.Loader) (*BaseConfig, error) {
-	if err := config.Preflight(); err != nil {
-		return nil, err
-	}
-	return config.Base(), nil
-}
-
-// ProvideLoop is called by Wire to create the replication loop. This
-// function starts a background goroutine, which will be terminated
-// by the cancel function.
-func ProvideLoop(
-	ctx context.Context,
-	appliers types.Appliers,
-	config *BaseConfig,
-	dialect Dialect,
-	fans *fan.Fans,
-	memo types.Memo,
-	pool *pgxpool.Pool,
-	userscript *script.UserScript,
-) (*Loop, func(), error) {
-	var err error
-	if config.ChaosProb > 0 {
-		dialect = WithChaos(dialect, config.ChaosProb)
-	}
-	loop := &loop{
-		config:          config,
-		dialect:         dialect,
-		memo:            memo,
-		standbyDeadline: time.Now().Add(config.StandbyTimeout),
-		stopped:         make(chan struct{}),
-		targetPool:      pool,
-	}
-	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
-	loop.consistentPoint.stamp, err = loop.loadConsistentPoint(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	loop.events.fan = &fanEvents{
-		State:  loop,
-		config: config,
-		fans:   fans,
-	}
-
-	loop.events.serial = &serialEvents{
-		State:    loop,
-		appliers: appliers,
-		pool:     pool,
-	}
-
-	// Apply logic and configurations defined by the user-script.
-	if len(userscript.Sources) > 0 || len(userscript.Targets) > 0 {
-		loop.events.fan = &scriptEvents{
-			Events: loop.events.fan,
-			Script: userscript,
-		}
-		loop.events.serial = &scriptEvents{
-			Events: loop.events.serial,
-			Script: userscript,
-		}
-	}
-
-	loop.events.fan = (&metricsEvents{Events: loop.events.fan}).withLoopName(config.LoopName)
-	loop.events.serial = (&metricsEvents{Events: loop.events.serial}).withLoopName(config.LoopName)
-
-	loop.metrics.backfillStatus = backfillStatus.WithLabelValues(config.LoopName)
-
-	// The loop runs in a background context so that we have better
-	// control over the lifecycle.
-	loopCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		loop.run(loopCtx)
-		close(loop.stopped)
-	}()
-
-	return &Loop{loop}, cancel, nil
+// ProvideLoop is called by Wire to create a singleton replication loop.
+func ProvideLoop(ctx context.Context, factory *Factory, dialect Dialect) (*Loop, error) {
+	return factory.Get(ctx, dialect)
 }
 
 // ProvidePool is called by Wire to create a connection pool that
@@ -171,8 +100,9 @@ func ProvideStagingDB(config *BaseConfig) (ident.StagingDB, error) {
 
 // ProvideUserScriptConfig is called by Wire to extract the user-script
 // configuration.
-func ProvideUserScriptConfig(config Config) *script.Config {
-	return &config.Base().ScriptConfig
+func ProvideUserScriptConfig(config Config) (*script.Config, error) {
+	ret := &config.Base().ScriptConfig
+	return ret, ret.Preflight()
 }
 
 // ProvideUserScriptTarget is called by Wire and returns the public

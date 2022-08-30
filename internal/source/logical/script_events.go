@@ -38,7 +38,7 @@ func (e *scriptEvents) OnData(
 		return e.sendToTarget(ctx, source, target, muts)
 	}
 
-	sourceMapper := cfg.Mapper
+	sourceMapper := cfg.Dispatch
 	if sourceMapper == nil {
 		return e.sendToTarget(ctx, source, target, muts)
 	}

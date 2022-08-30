@@ -21,7 +21,10 @@ import (
 // Start creates a MySQL/MariaDB logical replication loop using the
 // provided configuration.
 func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
-	scriptConfig := logical.ProvideUserScriptConfig(config)
+	scriptConfig, err := logical.ProvideUserScriptConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
 		return nil, nil, err
@@ -46,14 +49,6 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	}
 	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	dialect, err := ProvideDialect(config)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,
@@ -75,8 +70,19 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loop, cleanup5, err := logical.ProvideLoop(ctx, appliers, baseConfig, dialect, fans, memoMemo, pool, userScript)
+	factory, cleanup5 := logical.ProvideFactory(appliers, config, fans, memoMemo, pool, userScript)
+	dialect, err := ProvideDialect(config)
 	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	loop, err := logical.ProvideLoop(ctx, factory, dialect)
+	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

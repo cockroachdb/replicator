@@ -26,17 +26,22 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/api/iterator"
 )
 
 // Dialect reads data from Google Cloud Firestore.
 type Dialect struct {
-	backfillBatchSize int
-	docIDProperty     string
-	fs                *firestore.Client
-	query             firestore.Query // The base query build from.
-	sourceCollection  ident.Ident
-	tombstones        *Tombstones
-	updatedAtProperty ident.Ident
+	backfillBatchSize int                      // Limit backfill query response size.
+	docIDProperty     string                   // Added to mutation properties.
+	fs                *firestore.Client        // Access to Firestore.
+	loops             *logical.Factory         // Support dynamic nested collections.
+	query             firestore.Query          // The base query build from.
+	recurse           bool                     // Scan for dynamic, nested collections.
+	recurseFilter     map[ident.Ident]struct{} // Ignore nested collections with these names.
+	sourceCollection  ident.Ident              // Identifies the loop to the user-script.
+	sourcePath        string                   // The source collection path, for logging.
+	tombstones        *Tombstones              // Filters already-deleted ids.
+	updatedAtProperty ident.Ident              // Order-by property in queries.
 }
 
 var (
@@ -72,6 +77,7 @@ func (d *Dialect) BackfillInto(
 	// interrupted. If we were in the middle of backfilling, then we
 	// also want to pick up from the last document that was processed.
 	cp, _ := state.GetConsistentPoint().(*consistentPoint)
+	log.Tracef("backfilling %s from %s", d.sourcePath, cp)
 
 	var moreWork bool
 	var err error
@@ -80,7 +86,7 @@ func (d *Dialect) BackfillInto(
 	for {
 		cp, moreWork, err = d.backfillOneBatch(ctx, ch, to, cp)
 		if err != nil {
-			return errors.Wrap(err, d.sourceCollection.Raw())
+			return errors.Wrap(err, d.sourcePath)
 		}
 		if moreWork {
 			continue
@@ -92,7 +98,7 @@ func (d *Dialect) BackfillInto(
 			to = time.Now()
 			continue
 		}
-		log.Infof("finished backfilling collection %s", d.sourceCollection)
+		log.Debugf("finished backfilling collection %s", d.sourcePath)
 		return nil
 	}
 }
@@ -134,62 +140,58 @@ func (d *Dialect) backfillOneBatch(
 	if err != nil {
 		return cp, false, errors.WithStack(err)
 	}
+	log.Tracef("received %d documents from %s", len(docs), d.sourcePath)
+
+	// Workaround / BUG? It appears that the StartAfter call above
+	// sometimes returns the last document from the previous backfill
+	// loop. This loop ensures that the effective consistent point
+	// always goes forward in time.
+	for len(docs) > 0 {
+		firstCP, err := d.backfillPoint(docs[0])
+		if err != nil {
+			return cp, false, err
+		}
+		if stamp.Compare(firstCP, cp) > 0 {
+			break
+		}
+		log.Tracef("filtering")
+		docs = docs[1:]
+	}
+
+	// Helper for interruptible send idiom.
+	send := func(msg logical.Message) error {
+		select {
+		case ch <- msg:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	// If we have read through the end of all documents in the
 	// collection, we want the consistent-point to jump forward in time
 	// to the server read-time.
 	if len(docs) == 0 {
 		cp = streamPoint(snap.ReadTime)
-		select {
-		case ch <- backfillEnd{cp}:
-			return cp, false, nil
-		case <-ctx.Done():
-			return cp, false, ctx.Err()
-		}
+		return cp, false, send(backfillEnd{cp})
 	}
-	log.Tracef("received %d documents from %s", len(docs), d.sourceCollection)
 
+	// Move the proposed consistent point to the last document.
 	lastDoc := docs[len(docs)-1]
-
-	// Compute the query-relative document start id. We need to do this
-	// so that sub-collections can be accessed in a consistent way.
-	//
-	// 2022-08-29: One way that does not work is to call
-	// Query.StartAfter() and then use Query.Serialize to hand the
-	// status over to the next backfill cycle.
-	topCollection := lastDoc.Ref.Parent
-	for topCollection.Parent != nil {
-		topCollection = topCollection.Parent.Parent
-	}
-	lastReadID := fmt.Sprintf("documents/%s/%s",
-		topCollection.ID, lastDoc.Ref.Path[len(topCollection.Path)+1:])
-	lastReadTime, err := d.docUpdatedAt(lastDoc)
-	if err != nil {
+	if cp, err = d.backfillPoint(lastDoc); err != nil {
 		return cp, false, err
 	}
-	cp = backfillPoint(lastReadID, lastReadTime)
 
-	select {
-	case ch <- batchStart{cp}:
-	case <-ctx.Done():
-		return cp, false, ctx.Err()
+	// Send a batch of messages downstream.  We use a non-blocking idiom
+	if err := send(batchStart{cp}); err != nil {
+		return cp, false, err
 	}
-
 	for _, doc := range docs {
-		select {
-		case ch <- batchDoc{doc}:
-		case <-ctx.Done():
-			return cp, false, ctx.Err()
+		if err := send(batchDoc{doc}); err != nil {
+			return cp, false, err
 		}
 	}
-
-	select {
-	case ch <- batchEnd{}:
-	case <-ctx.Done():
-		return cp, false, ctx.Err()
-	}
-
-	return cp, true, nil
+	return cp, true, send(batchEnd{})
 }
 
 // ReadInto implements logical.Dialect and subscribes to streaming
@@ -203,19 +205,28 @@ func (d *Dialect) ReadInto(
 		OrderBy(d.updatedAtProperty.Raw(), firestore.Asc).
 		StartAt(cp.AsTime().Truncate(time.Second))
 	snaps := q.Snapshots(ctx)
+	defer snaps.Stop()
+
+	// Helper for interruptible send.
+	send := func(msg logical.Message) error {
+		select {
+		case ch <- msg:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	for {
+		log.Tracef("getting snapshot for %s", d.sourcePath)
 		snap, err := snaps.Next()
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		log.Tracef("collection %s: %d events", d.sourcePath, len(snap.Changes))
 
-		log.Tracef("collection %s: %d events", d.sourceCollection, len(snap.Changes))
-
-		select {
-		case ch <- batchStart{streamPoint(snap.ReadTime)}:
-		case <-ctx.Done():
-			return ctx.Err()
+		if err := send(batchStart{streamPoint(snap.ReadTime)}); err != nil {
+			return err
 		}
 
 		for _, change := range snap.Changes {
@@ -226,26 +237,20 @@ func (d *Dialect) ReadInto(
 				if d.tombstones.IsDeleted(change.Doc.Ref) {
 					continue
 				}
-				select {
-				case ch <- batchDoc{change.Doc}:
-				case <-ctx.Done():
-					return ctx.Err()
+				if err := send(batchDoc{change.Doc}); err != nil {
+					return err
 				}
 
 			case firestore.DocumentRemoved:
 				d.tombstones.NotifyDeleted(change.Doc.Ref)
-				select {
-				case ch <- batchDelete{change.Doc.Ref, change.Doc.ReadTime}:
-				case <-ctx.Done():
-					return ctx.Err()
+				if err := send(batchDelete{change.Doc.Ref, change.Doc.ReadTime}); err != nil {
+					return err
 				}
 			}
 		}
 
-		select {
-		case ch <- batchEnd{}:
-		case <-ctx.Done():
-			return ctx.Err()
+		if err := send(batchEnd{}); err != nil {
+			return err
 		}
 	}
 }
@@ -296,6 +301,12 @@ func (d *Dialect) Process(
 				return err
 			}
 
+			if d.recurse {
+				if err := d.doRecurse(ctx, doc.Ref, events); err != nil {
+					return err
+				}
+			}
+
 		case batchDelete:
 			mut, err := marshalDeletion(t.ref, t.ts)
 			if err != nil {
@@ -324,6 +335,30 @@ func (d *Dialect) Process(
 // ZeroStamp implements logical.Dialect.
 func (d *Dialect) ZeroStamp() stamp.Stamp {
 	return &consistentPoint{}
+}
+
+// Compute the query-relative document start id. We need to do this so
+// that sub-collections can be accessed in a consistent way.
+//
+// 2022-08-29: One way that does not work is to call Query.StartAfter()
+// and then use Query.Serialize to hand the status over to the next
+// backfill cycle.
+func (d *Dialect) backfillPoint(doc *firestore.DocumentSnapshot) (*consistentPoint, error) {
+	topCollection := doc.Ref.Parent
+	for topCollection.Parent != nil {
+		// collection -> parent doc -> parent collection
+		topCollection = topCollection.Parent.Parent
+	}
+	relativePath := fmt.Sprintf("documents/%s/%s",
+		topCollection.ID, doc.Ref.Path[len(topCollection.Path)+1:])
+	updateTime, err := d.docUpdatedAt(doc)
+	if err != nil {
+		return nil, err
+	}
+	return &consistentPoint{
+		BackfillID: relativePath,
+		Time:       updateTime,
+	}, nil
 }
 
 // docUpdatedAt extracts a timestamp from the document.
@@ -370,9 +405,50 @@ func (d *Dialect) marshalMutation(
 		return types.Mutation{}, errors.WithStack(err)
 	}
 
+	// The timestamps are converted to values that are easy to wrap
+	// a JS Date around in the user script.
+	// https://pkg.go.dev/github.com/dop251/goja#hdr-Handling_of_time_Time
+	meta := map[string]interface{}{
+		"createTime": doc.CreateTime.UnixNano() / 1e6,
+		"id":         doc.Ref.ID,
+		"path":       doc.Ref.Path,
+		"readTime":   doc.ReadTime.UnixNano() / 1e6,
+		"updateTime": doc.UpdateTime.UnixNano() / 1e6,
+	}
+
 	return types.Mutation{
 		Data: data,
 		Key:  key,
 		Time: hlc.New(updatedAt.UnixNano(), 0),
+		Meta: meta,
 	}, nil
+}
+
+// doRecurse, if configured, will load dynamic sub-collections of
+// the given document.
+func (d *Dialect) doRecurse(
+	ctx context.Context, doc *firestore.DocumentRef, events logical.Events,
+) error {
+	it := doc.Collections(ctx)
+	for {
+		coll, err := it.Next()
+		if err == iterator.Done {
+			return nil
+		}
+		if err != nil {
+			return errors.Wrapf(err, "loading dynamic collections of %s", doc.Path)
+		}
+
+		if _, skip := d.recurseFilter[ident.New(coll.ID)]; skip {
+			continue
+		}
+
+		fork := *d
+		fork.query = coll.Query
+		fork.sourcePath = coll.Path
+
+		if err := events.Backfill(ctx, coll.Path, &fork); err != nil {
+			return errors.WithMessage(err, coll.Path)
+		}
+	}
 }

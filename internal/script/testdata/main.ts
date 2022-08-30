@@ -15,19 +15,28 @@ import externalData from "./data.txt"; // Can import additional files from disk.
 // import * as something from "https://some.cdn/package@1" is viable
 
 api.configureSource("expander", {
-    dispatch: doc => ({
-        "table1": [{dest: "table1", msg: doc.msg}],
-        "table2": [
-            {dest: "table2", msg: doc.msg, idx: 0},
-            {dest: "table2", msg: doc.msg, idx: 1}
-        ],
-    }),
+    dispatch: (doc, meta) => {
+        console.log(JSON.stringify(doc), JSON.stringify(meta));
+
+        return {
+            "table1": [{dest: "table1", msg: doc.msg}],
+            "table2": [
+                {dest: "table2", msg: doc.msg, idx: 0},
+                {dest: "table2", msg: doc.msg, idx: 1}
+            ],
+        };
+    },
     deletesTo: "table1"
 });
 
 api.configureSource("passthrough", {
     target: "some_table"
 });
+
+api.configureSource("recursive", {
+    target: "top_level",
+    recurse: true,
+})
 
 api.configureTable("all_features", {
     // Compare-and-set operations.

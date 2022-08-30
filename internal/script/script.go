@@ -57,7 +57,8 @@ type Source struct {
 	// The table to apply incoming deletes to; this assumes that the
 	// target schema is using FK's with ON DELETE CASCADE.
 	DeletesTo ident.Table
-	Mapper    Dispatch
+	Dispatch  Dispatch
+	Recurse   bool
 }
 
 // A Target holds user-provided configuration options
@@ -83,7 +84,7 @@ type UserScript struct {
 // creates the public facade around JS callbacks.
 func (s *UserScript) bind(loader *Loader) error {
 	for sourceName, bag := range loader.sources {
-		src := &Source{}
+		src := &Source{Recurse: bag.Recurse}
 		s.Sources[ident.New(sourceName)] = src
 
 		switch {
@@ -92,12 +93,12 @@ func (s *UserScript) bind(loader *Loader) error {
 				src.DeletesTo = ident.NewTable(
 					s.target.Database(), s.target.Schema(), ident.New(bag.DeletesTo))
 			}
-			src.Mapper = s.bindDispatch(sourceName, bag.Dispatch)
+			src.Dispatch = s.bindDispatch(sourceName, bag.Dispatch)
 
 		case bag.Target != "":
 			dest := ident.NewTable(s.target.Database(), s.target.Schema(), ident.New(bag.Target))
 			src.DeletesTo = dest
-			src.Mapper = dispatchTo(dest)
+			src.Dispatch = dispatchTo(dest)
 
 		default:
 			return errors.Errorf("configureSource(%q): dispatch or target required", sourceName)
@@ -150,7 +151,11 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 
 		var dispatches map[string][]map[string]interface{}
 		if err := s.execJS(ctx, func() (err error) {
-			dispatches, err = dispatch(data)
+			meta := mut.Meta
+			if meta == nil {
+				meta = make(map[string]interface{})
+			}
+			dispatches, err = dispatch(data, meta)
 			return err
 		}); err != nil {
 			return nil, err
@@ -219,7 +224,11 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 
 		var mapped map[string]interface{}
 		if err := s.execJS(ctx, func() (err error) {
-			mapped, err = mapper(data)
+			meta := mut.Meta
+			if meta == nil {
+				meta = make(map[string]interface{})
+			}
+			mapped, err = mapper(data, meta)
 			return err
 		}); err != nil {
 			return mut, false, err

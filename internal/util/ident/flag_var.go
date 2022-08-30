@@ -13,7 +13,8 @@ package ident
 // Value allows Idents to be used with the spf13 flags package.
 type Value Ident
 
-// NewValue wraps the given Ident so that it can be used with the spf13 flags package.
+// NewValue wraps the given Ident so that it can be used with the spf13
+// flags package.
 func NewValue(value string, id *Ident) *Value {
 	*id = New(value)
 	return (*Value)(id)
@@ -22,6 +23,7 @@ func NewValue(value string, id *Ident) *Value {
 // Set implements Value.
 func (v *Value) Set(s string) error { *(*Ident)(v) = New(s); return nil }
 
+// String returns the raw value of the underlying Ident.
 func (v *Value) String() string { return (*Ident)(v).Raw() }
 
 // Type implements Value.

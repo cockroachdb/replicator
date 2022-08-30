@@ -11,6 +11,7 @@
 package logical
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -29,7 +30,6 @@ const (
 // Config is implemented by dialects.
 type Config interface {
 	Base() *BaseConfig
-	Copy() Config
 	Preflight() error
 }
 
@@ -115,7 +115,7 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 }
 
 // Copy returns a deep copy of the Config.
-func (c *BaseConfig) Copy() Config {
+func (c *BaseConfig) Copy() *BaseConfig {
 	ret := *c
 	return &ret
 }
@@ -156,4 +156,19 @@ func (c *BaseConfig) Preflight() error {
 		c.TargetDBConns = defaultTargetDBConns
 	}
 	return nil
+}
+
+// An Option can be provided to Factory.Get() to provide any final
+// adjustments to the per-Loop BaseConfig.
+type Option func(cfg *BaseConfig)
+
+// WithName appends the given name to the configuration's loop name.
+func WithName(name string) Option {
+	return func(cfg *BaseConfig) {
+		if cfg.LoopName == "" {
+			cfg.LoopName = name
+		} else {
+			cfg.LoopName = fmt.Sprintf("%s-%s", cfg.LoopName, name)
+		}
+	}
 }
