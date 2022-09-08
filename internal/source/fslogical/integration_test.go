@@ -155,6 +155,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 		ProjectID:                   projectID,
 		TombstoneCollection:         "Tombstones",
 		TombstoneCollectionProperty: ident.New("collection"),
+		TombstoneIgnoreUnmapped:     true,
 		UpdatedAtProperty:           ident.New("updated_at"),
 	}
 
@@ -230,8 +231,17 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 
 	log.Info("saw updates, writing tombstones")
 
-	// Write tombstone documents to simulate out-of-band deletion.
 	tombstones := fs.Collection("Tombstones")
+
+	// Write an unmappable tombstone document to verify ignore-unknown behavior.
+	_, _, err = tombstones.Add(ctx, map[string]interface{}{
+		"collection": "does-not-exist",
+		"id":         "xyzzy",
+		"updated_at": firestore.ServerTimestamp,
+	})
+	r.NoError(err)
+
+	// Write tombstone documents to simulate out-of-band deletion.
 	r.NoError(batches.Window(fsBatchSize, len(docRefs), func(start, end int) error {
 		return fs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 			for _, docRef := range docRefs[start:end] {

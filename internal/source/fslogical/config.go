@@ -38,6 +38,10 @@ type Config struct {
 	// The name of the document property within TombstoneCollection
 	// that stores the name of the
 	TombstoneCollectionProperty ident.Ident
+	// By default, the tombstone mapper will reject any tombstone
+	// documents that cannot be mapped onto a target table. Setting this
+	// property to true will ignore unmapped tombstones.
+	TombstoneIgnoreUnmapped bool
 	// The name of a document property used for high-water marks.
 	UpdatedAtProperty ident.Ident
 }
@@ -68,6 +72,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.Var(ident.NewValue("collection", &c.TombstoneCollectionProperty),
 		"tombstoneCollectionProperty",
 		"the property name in a tombstone document that contains the original collection name")
+	f.BoolVar(&c.TombstoneIgnoreUnmapped, "tombstoneIgnoreUnmapped", false,
+		"skip, rather than reject, any tombstone documents that do not map to a target table")
 	// NB: Keep default value in sync with doc on tombstones.
 	f.Var(ident.NewValue("updated_at", &c.UpdatedAtProperty), "updatedAt",
 		"the name of a document property used for high-water marks")

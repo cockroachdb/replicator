@@ -187,6 +187,13 @@ func (t *Tombstones) Process(
 		for _, elt := range evt.elts {
 			tbl, ok := t.deletesTo[ident.New(elt.collection)]
 			if !ok {
+				if t.cfg.TombstoneIgnoreUnmapped {
+					log.WithFields(log.Fields{
+						"id":         elt.docID,
+						"collection": elt.collection,
+					}).Trace("ignoring unmapped tombstone document")
+					continue
+				}
 				return errors.Errorf("no target table configured for tombstone in collection %s", elt.collection)
 			}
 

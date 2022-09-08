@@ -27,9 +27,13 @@ const (
 	defaultBytesInFlight = 10 * 1024 * 1024
 )
 
-// Config is implemented by dialects.
+// Config is implemented by dialects. This interface exists to allow coordination of
+// error-checking in the Preflight method.
 type Config interface {
+	// Base returns the configuration.
 	Base() *BaseConfig
+	// Preflight validates the Config. Dialect implementations should
+	// delegate to the BaseConfig's Preflight method.
 	Preflight() error
 }
 
