@@ -128,7 +128,7 @@ func TestScript(t *testing.T) {
 			},
 			Exprs: map[apply.TargetColumn]string{
 				ident.New("expr0"): "fnv32($0::BYTES)",
-				ident.New("expr1"): "true",
+				ident.New("expr1"): "Hello Library!",
 			},
 			Extras: ident.New("overflow_column"),
 			Ignore: map[apply.TargetColumn]bool{

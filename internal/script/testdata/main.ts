@@ -12,6 +12,7 @@
 
 import * as api from "cdc-sink@v1"; // Well-known module name
 import externalData from "./data.txt"; // Can import additional files from disk.
+import * as lib from "./lib"; // Verify additional code imports.
 // import * as something from "https://some.cdn/package@1" is viable
 
 api.configureSource("expander", {
@@ -49,7 +50,7 @@ api.configureTable("all_features", {
     // Provide alternate SQL expressions to (possibly filtered) data.
     exprs: {
         "expr0": "fnv32($0::BYTES)",
-        "expr1": "true"
+        "expr1": lib.libraryFn(),
     },
     // Place unmapped data into JSONB column.
     extras: "overflow_column",

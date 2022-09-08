@@ -57,14 +57,19 @@ type Source struct {
 	// The table to apply incoming deletes to; this assumes that the
 	// target schema is using FK's with ON DELETE CASCADE.
 	DeletesTo ident.Table
-	Dispatch  Dispatch
-	Recurse   bool
+	// A user-provided function that routes mutations to zero or more
+	// tables.
+	Dispatch Dispatch
+	// Enable recursion in sources which support nested sources.
+	Recurse bool
 }
 
 // A Target holds user-provided configuration options
 // for a target table.
 type Target struct {
 	apply.Config
+	// A user-provided function to modify or filter mutations bound for
+	// the target table.
 	Map Map
 }
 
@@ -83,10 +88,15 @@ type UserScript struct {
 // bind validates the user configuration against the target schema and
 // creates the public facade around JS callbacks.
 func (s *UserScript) bind(loader *Loader) error {
+	// Evaluate calls to api.configureSource(). We implement a
+	// last-one-wins approach if there are multiple calls for the same
+	// source name.
 	for sourceName, bag := range loader.sources {
 		src := &Source{Recurse: bag.Recurse}
 		s.Sources[ident.New(sourceName)] = src
 
+		// The user has the option to provide either a dispatch function
+		// or the name of a table.
 		switch {
 		case bag.Dispatch != nil:
 			if bag.DeletesTo != "" {
@@ -105,6 +115,8 @@ func (s *UserScript) bind(loader *Loader) error {
 		}
 	}
 
+	// Evaluate calls to api.configureTarget(). As above, we implement a
+	// a last-one-wins approach.
 	for tableName, bag := range loader.targets {
 		table := ident.NewTable(s.target.Database(), s.target.Schema(), tableName)
 		tgt := &Target{Config: *apply.NewConfig()}
@@ -144,11 +156,13 @@ func (s *UserScript) bind(loader *Loader) error {
 // bindDispatch exports a user-provided function as a Dispatch.
 func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 	return func(ctx context.Context, mut types.Mutation) (map[ident.Table][]types.Mutation, error) {
+		// Unmarshal the mutation's data as a generic map.
 		data := make(map[string]interface{})
 		if err := json.Unmarshal(mut.Data, &data); err != nil {
 			return nil, errors.WithStack(err)
 		}
 
+		// Execute the user function to route the mutation.
 		var dispatches map[string][]map[string]interface{}
 		if err := s.execJS(ctx, func() (err error) {
 			meta := mut.Meta
@@ -161,7 +175,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 			return nil, err
 		}
 
-		// Filtered out, return an empty map.
+		// If nothing returned, return an empty map.
 		if len(dispatches) == 0 {
 			return map[ident.Table][]types.Mutation{}, nil
 		}
@@ -179,7 +193,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 						"dispatch function %s returned unknown table %s", fnName, tbl)
 				}
 
-				// Extract the revised PK
+				// Extract the revised primary key components.
 				var jsKey []interface{}
 				for _, col := range colData {
 					if col.Primary {
@@ -214,14 +228,16 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 	}
 }
 
-// bindMap exports a user-provided function as a Map.
+// bindMap exports a user-provided function as a Map func.
 func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 	return func(ctx context.Context, mut types.Mutation) (types.Mutation, bool, error) {
+		// Unpack data into generic map.
 		data := make(map[string]interface{})
 		if err := json.Unmarshal(mut.Data, &data); err != nil {
 			return mut, false, errors.WithStack(err)
 		}
 
+		// Execute the user code to return the replacement values.
 		var mapped map[string]interface{}
 		if err := s.execJS(ctx, func() (err error) {
 			meta := mut.Meta
@@ -244,6 +260,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 			return mut, false, errors.WithStack(err)
 		}
 
+		// Refresh the primary-key values in the mutation.
 		colData, ok := s.watcher.Snapshot(s.target)[table]
 		if !ok {
 			return mut, false, errors.Errorf("map missing schema data for %s", table)
@@ -279,9 +296,9 @@ func (s *UserScript) execJS(ctx context.Context, fn func() error) error {
 	s.rtMu.Lock()
 	s.rt.ClearInterrupt()
 	go func() {
-		defer s.rtMu.Unlock()
 		<-ctx.Done()
 		s.rt.Interrupt(ctx.Err())
+		s.rtMu.Unlock()
 	}()
 	return fn()
 }

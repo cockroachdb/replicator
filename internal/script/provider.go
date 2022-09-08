@@ -12,6 +12,7 @@ package script
 
 import (
 	"context"
+	"net/url"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -53,12 +54,12 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 	}
 
 	l := &Loader{
-		fs:      cfg.FS,
-		modules: make(map[string]goja.Value),
-		options: options,
-		rt:      goja.New(),
-		sources: make(map[string]*sourceJS),
-		targets: make(map[ident.Ident]*targetJS),
+		fs:           cfg.FS,
+		options:      options,
+		requireCache: make(map[string]goja.Value),
+		rt:           goja.New(),
+		sources:      make(map[string]*sourceJS),
+		targets:      make(map[ident.Ident]*targetJS),
 	}
 
 	// Use a "goja" tag on struct fields to control name bindings.
@@ -67,6 +68,9 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 
 	// Set up top-level namespace.
 	global := l.rt.GlobalObject()
+	if err := global.Set("__require_cache", l.rt.ToValue(l.requireCache)); err != nil {
+		return nil, err
+	}
 	if err := global.Set("console", console(l.rt)); err != nil {
 		return nil, err
 	}
@@ -76,7 +80,7 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 
 	// Populate an object that represents the API used by scripts.
 	apiModule := l.rt.NewObject()
-	l.modules["cdc-sink@v1"] = apiModule
+	l.requireCache["cdc-sink@v1"] = apiModule
 	if err := apiModule.Set("configureSource", l.configureSource); err != nil {
 		return nil, err
 	}
@@ -88,7 +92,8 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 	}
 
 	// Load the main script into the runtime.
-	if _, err := l.require("file://" + cfg.MainPath); err != nil {
+	main := url.URL{Scheme: "file", Path: cfg.MainPath}
+	if _, err := l.require(main.String()); err != nil {
 		return nil, err
 	}
 

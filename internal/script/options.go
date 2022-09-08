@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// Options is an injection point for a FlagSet that will receive
-// any additional configuration from api.setOptions.
+// Options is an injection point for a value that will receive any
+// additional configuration from api.setOptions.
 type Options interface{ Set(key, value string) error }
 
 // NoOptions always returns an error when invoked.
