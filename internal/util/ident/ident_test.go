@@ -17,6 +17,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestFlagVar(t *testing.T) {
+	a := assert.New(t)
+
+	var id Ident
+	a.True(id.IsEmpty())
+
+	value := NewValue("default", &id)
+	a.Equal(New("default"), id)
+
+	a.NoError(value.Set("different"))
+	a.Equal(New("different"), id)
+}
+
 func TestIdent(t *testing.T) {
 	a := assert.New(t)
 
