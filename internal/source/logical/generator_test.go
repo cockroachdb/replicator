@@ -173,7 +173,7 @@ func (g *generatorDialect) Process(
 				Key:  []byte(fmt.Sprintf(`[%d]`, msg.Index)),
 				Data: []byte(fmt.Sprintf(`{"k":%d,"v":"%d"}`, msg.Index, msg.Index)),
 			}
-			if err := events.OnData(ctx, tbl, []types.Mutation{mut}); err != nil {
+			if err := events.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut}); err != nil {
 				return err
 			}
 		}

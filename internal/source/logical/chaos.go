@@ -27,10 +27,33 @@ var ErrChaos = errors.New("chaos")
 // WithChaos returns a wrapper around a Dialect that will inject errors
 // at various points throughout the execution.
 func WithChaos(delegate Dialect, prob float32) Dialect {
-	return &chaosDialect{
+	ret := &chaosDialect{
 		delegate: delegate,
 		prob:     prob,
 	}
+	if b, ok := delegate.(Backfiller); ok {
+		return &chaosBackfiller{
+			chaosDialect: ret,
+			delegate:     b,
+		}
+	}
+	return ret
+}
+
+// Wrap the optional Backfiller interface.
+type chaosBackfiller struct {
+	*chaosDialect
+	delegate Backfiller
+}
+
+var _ Backfiller = (*chaosBackfiller)(nil)
+var _ Dialect = (*chaosBackfiller)(nil)
+
+func (d *chaosBackfiller) BackfillInto(ctx context.Context, ch chan<- Message, state State) error {
+	if rand.Float32() < d.prob {
+		return ErrChaos
+	}
+	return d.delegate.BackfillInto(ctx, ch, state)
 }
 
 // This could include a *rand.Rand, but as soon as we start calling
@@ -68,6 +91,15 @@ type chaosEvents struct {
 
 var _ Events = (*chaosEvents)(nil)
 
+func (e *chaosEvents) Backfill(
+	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
+) error {
+	if rand.Float32() < e.prob {
+		return ErrChaos
+	}
+	return e.delegate.Backfill(ctx, loopName, backfiller, options...)
+}
+
 func (e *chaosEvents) GetConsistentPoint() stamp.Stamp {
 	return e.delegate.GetConsistentPoint()
 }
@@ -90,11 +122,13 @@ func (e *chaosEvents) OnCommit(ctx context.Context) error {
 	return e.delegate.OnCommit(ctx)
 }
 
-func (e *chaosEvents) OnData(ctx context.Context, target ident.Table, muts []types.Mutation) error {
+func (e *chaosEvents) OnData(
+	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
+) error {
 	if rand.Float32() < e.prob {
 		return ErrChaos
 	}
-	return e.delegate.OnData(ctx, target, muts)
+	return e.delegate.OnData(ctx, source, target, muts)
 }
 
 func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
