@@ -1,0 +1,7 @@
+{
+  "emulators": {
+    "firestore": {
+      "host": "0.0.0.0"
+    }
+  }
+}
