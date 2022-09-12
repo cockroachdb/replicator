@@ -23,25 +23,11 @@ const defaultSize = 100
 
 var batchSize = flag.Int("batchSize", defaultSize, "default size for batched operations")
 
-// Batch is a helper to perform some operation over a large number
-// of values in a batch-oriented fashion. The indexes provided to
-// the callback function are a half-open range [begin , end).
+// Batch is a helper to perform some operation over a large number of
+// values in a batch-oriented fashion. The indexes provided to the
+// callback function are a half-open range [begin , end).
 func Batch(count int, fn func(begin, end int) error) error {
-	consume := Size()
-	idx := 0
-	for {
-		if consume > count {
-			consume = count
-		}
-		if err := fn(idx, idx+consume); err != nil {
-			return err
-		}
-		if consume == count {
-			return nil
-		}
-		idx += consume
-		count -= consume
-	}
+	return Window(Size(), count, fn)
 }
 
 // Size returns the default size for batch operations. Testing code
@@ -53,6 +39,27 @@ func Size() int {
 		return defaultSize
 	}
 	return *x
+}
+
+// Window is a helper to perform some operation over a large number of
+// values in a batch-oriented fashion, using the supplied batch size.
+// The indexes provided to the callback function are a half-open range
+// [begin , end).
+func Window(batchSize, count int, fn func(begin, end int) error) error {
+	idx := 0
+	for {
+		if batchSize > count {
+			batchSize = count
+		}
+		if err := fn(idx, idx+batchSize); err != nil {
+			return err
+		}
+		if batchSize == count {
+			return nil
+		}
+		idx += batchSize
+		count -= batchSize
+	}
 }
 
 // The Release function must be called to return the underlying array
