@@ -16,6 +16,7 @@ package mylogical
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/google/wire"
@@ -25,8 +26,10 @@ import (
 // provided configuration.
 func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	panic(wire.Build(
+		wire.Bind(new(logical.Config), new(*Config)),
 		Set,
 		logical.Set,
+		script.Set,
 		target.Set,
 	))
 }

@@ -8,6 +8,7 @@ package mylogical
 
 import (
 	"context"
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
@@ -20,12 +21,23 @@ import (
 // Start creates a MySQL/MariaDB logical replication loop using the
 // provided configuration.
 func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
-	logicalConfig := ProvideBaseConfig(config)
-	pool, cleanup, err := logical.ProvidePool(ctx, logicalConfig)
+	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingDB, err := logical.ProvideStagingDB(logicalConfig)
+	loader, err := script.ProvideLoader(scriptConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pool, cleanup, err := logical.ProvidePool(ctx, baseConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -37,14 +49,6 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	}
 	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	dialect, err := ProvideDialect(config)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,
@@ -57,8 +61,28 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loop, cleanup5, err := logical.ProvideLoop(ctx, appliers, logicalConfig, dialect, fans, memoMemo, pool)
+	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
+	userScript, err := script.ProvideUserScript(ctx, configs, loader, pool, targetSchema, watchers)
 	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	factory, cleanup5 := logical.ProvideFactory(appliers, config, fans, memoMemo, pool, userScript)
+	dialect, err := ProvideDialect(config)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	loop, err := logical.ProvideLoop(ctx, factory, dialect)
+	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

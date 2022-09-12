@@ -11,8 +11,10 @@
 package logical
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
@@ -25,8 +27,18 @@ const (
 	defaultBytesInFlight = 10 * 1024 * 1024
 )
 
-// Config defines the core configuration required by logical.Loop.
-type Config struct {
+// Config is implemented by dialects. This interface exists to allow coordination of
+// error-checking in the Preflight method.
+type Config interface {
+	// Base returns the configuration.
+	Base() *BaseConfig
+	// Preflight validates the Config. Dialect implementations should
+	// delegate to the BaseConfig's Preflight method.
+	Preflight() error
+}
+
+// BaseConfig defines the core configuration required by logical.Loop.
+type BaseConfig struct {
 	// The maximum length of time to wait for an incoming transaction
 	// to settle (i.e. to detect stalls in the target database).
 	ApplyTimeout time.Duration
@@ -56,6 +68,8 @@ type Config struct {
 	// The amount of time to sleep between replication-loop retries.
 	// If zero, a default value will be used.
 	RetryDelay time.Duration
+	// Userscript configuration.
+	ScriptConfig script.Config
 	// How often to commit the latest consistent point.
 	StandbyTimeout time.Duration
 	// The name of a SQL database in the target cluster to store
@@ -70,8 +84,15 @@ type Config struct {
 	TargetDBConns int
 }
 
+// Base returns the BaseConfig.
+func (c *BaseConfig) Base() *BaseConfig {
+	return c
+}
+
 // Bind adds flags to the set.
-func (c *Config) Bind(f *pflag.FlagSet) {
+func (c *BaseConfig) Bind(f *pflag.FlagSet) {
+	c.ScriptConfig.Bind(f)
+
 	f.DurationVar(&c.ApplyTimeout, "applyTimeout", 30*time.Second,
 		"the maximum amount of time to wait for an update to be applied")
 	f.DurationVar(&c.BackfillWindow, "backfillWindow", 0,
@@ -80,7 +101,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"apply backpressure when amount of in-flight mutation data reaches this limit")
 	// LoopName bound by dialect packages.
 	// DefaultConsistentPoint bound by dialect packages.
-	f.BoolVar(&c.Immediate, "immediate", false, "apply data without waiting for transaction boundaries")
+	f.BoolVar(&c.Immediate, "immediate", false,
+		"apply data without waiting for transaction boundaries")
 	f.IntVar(&c.FanShards, "fanShards", 16,
 		"the number of concurrent connections to use when writing data in fan mode")
 	f.DurationVar(&c.RetryDelay, "retryDelay", 10*time.Second,
@@ -92,11 +114,12 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
 	f.Var(ident.NewValue("", &c.TargetDB), "targetDB",
 		"the SQL database in the target cluster to update")
-	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")
+	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024,
+		"the maximum pool size to the target cluster")
 }
 
 // Copy returns a deep copy of the Config.
-func (c *Config) Copy() *Config {
+func (c *BaseConfig) Copy() *BaseConfig {
 	ret := *c
 	return &ret
 }
@@ -104,7 +127,11 @@ func (c *Config) Copy() *Config {
 // Preflight ensures that unset configuration options have sane defaults
 // and returns an error if the Config is missing any fields for which a
 // default connot be provided.
-func (c *Config) Preflight() error {
+func (c *BaseConfig) Preflight() error {
+	if err := c.ScriptConfig.Preflight(); err != nil {
+		return err
+	}
+
 	if c.ApplyTimeout == 0 {
 		c.ApplyTimeout = defaultApplyTimeout
 	}
@@ -133,4 +160,19 @@ func (c *Config) Preflight() error {
 		c.TargetDBConns = defaultTargetDBConns
 	}
 	return nil
+}
+
+// An Option can be provided to Factory.Get() to provide any final
+// adjustments to the per-Loop BaseConfig.
+type Option func(cfg *BaseConfig)
+
+// WithName appends the given name to the configuration's loop name.
+func WithName(name string) Option {
+	return func(cfg *BaseConfig) {
+		if cfg.LoopName == "" {
+			cfg.LoopName = name
+		} else {
+			cfg.LoopName = fmt.Sprintf("%s-%s", cfg.LoopName, name)
+		}
+	}
 }

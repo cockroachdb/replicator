@@ -33,12 +33,26 @@ import (
 // data source which has well-defined "consistent points", such as
 // write-ahead-log offsets or explicit transaction ids.
 type Loop struct {
-	loop *loop
+	loop         *loop
+	initialPoint stamp.Stamp
 }
 
 // Dialect returns the logical.Dialect in use.
 func (l *Loop) Dialect() Dialect {
 	return l.loop.dialect
+}
+
+// GetConsistentPoint returns current consistent-point stamp.
+func (l *Loop) GetConsistentPoint() stamp.Stamp {
+	return l.loop.GetConsistentPoint()
+}
+
+// GetInitialPoint returns the consistent-point stamp that the
+// replication loop started at. This can be compared to
+// GetConsistentPoint to determine the amount of progress that has been
+// made.
+func (l *Loop) GetInitialPoint() stamp.Stamp {
+	return l.initialPoint
 }
 
 // Stopped returns a channel that is closed when the Loop has shut down.
@@ -50,7 +64,7 @@ func (l *Loop) Stopped() <-chan struct{} {
 // driven by a serial stream of data.
 type loop struct {
 	// The active configuration.
-	config *Config
+	config *BaseConfig
 	// The Dialect contains message-processing, specific to a particular
 	// source database.
 	dialect Dialect
@@ -59,6 +73,8 @@ type loop struct {
 		fan    Events
 		serial Events
 	}
+	// The Factory that created the loop.
+	factory *Factory
 	// Optional checkpoint saved into the target database
 	memo types.Memo
 	// Tracks when it is time to update the consistentPoint.
@@ -105,6 +121,7 @@ func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
 func (l *loop) setConsistentPoint(p stamp.Stamp) {
 	l.consistentPoint.L.Lock()
 	defer l.consistentPoint.L.Unlock()
+	log.Tracef("loop %s new consistent point %s -> %s", l.config.LoopName, l.consistentPoint.stamp, p)
 	l.consistentPoint.stamp = p
 	l.consistentPoint.Broadcast()
 
@@ -114,19 +131,22 @@ func (l *loop) setConsistentPoint(p stamp.Stamp) {
 	if time.Now().Before(l.standbyDeadline) {
 		return
 	}
-	data, err := json.Marshal(p)
-	if err != nil {
-		log.WithError(err).Warn("could not marshal consistent-point stamp")
-		return
-	}
-	if err := l.memo.Put(context.Background(),
-		l.targetPool, l.config.LoopName, data,
-	); err != nil {
-		log.WithError(err).Warn("could not persist consistent-point stamp")
-		return
+	if err := l.storeConsistentPoint(p); err != nil {
+		log.WithError(err).Warn("could not persistent consistent point")
 	}
 	l.standbyDeadline = time.Now().Add(l.config.StandbyTimeout)
-	log.Tracef("Saved checkpoint %s", data)
+	log.Tracef("Saved checkpoint for %s", l.config.LoopName)
+}
+
+// storeConsistentPoint commits the given stamp to the memo table.
+func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return l.memo.Put(context.Background(),
+		l.targetPool, l.config.LoopName, data,
+	)
 }
 
 // GetConsistentPoint implements State.
@@ -143,12 +163,17 @@ func (l *loop) GetTargetDB() ident.Ident {
 
 // run blocks while the connection is processing messages.
 func (l *loop) run(ctx context.Context) {
-	defer log.Info("replication loop shut down")
+	defer log.Debugf("replication loop %q shut down", l.config.LoopName)
+	defer close(l.stopped)
+
 	for {
-		err := l.runOnce(ctx)
+		// Determine how to perform the filling.
+		source, events, isBackfilling := l.chooseFillStrategy()
+		err := l.runOnce(ctx, source, events, isBackfilling)
 
 		// If the outer context is done, just return.
 		if ctx.Err() != nil {
+			log.Tracef("loop %s outer context done", l.config.LoopName)
 			return
 		}
 
@@ -158,7 +183,8 @@ func (l *loop) run(ctx context.Context) {
 		}
 
 		// Otherwise, log the error, and sleep for a bit.
-		log.WithError(err).Errorf("error in replication loop; retrying in %s", l.config.RetryDelay)
+		log.WithError(err).Errorf("error in replication loop %s; retrying in %s",
+			l.config.LoopName, l.config.RetryDelay)
 		select {
 		case <-time.After(l.config.RetryDelay):
 		case <-ctx.Done():
@@ -167,11 +193,10 @@ func (l *loop) run(ctx context.Context) {
 	}
 }
 
-// runOnce is called by run.
-func (l *loop) runOnce(ctx context.Context) error {
-	// Determine how to perform the filling.
-	source, events, isBackfilling := l.chooseFillStrategy()
-
+// runOnce is called by run or by doBackfill.
+func (l *loop) runOnce(
+	ctx context.Context, source fillFn, events Events, isBackfilling bool,
+) error {
 	if isBackfilling {
 		l.metrics.backfillStatus.Set(1)
 	} else {
@@ -198,14 +223,16 @@ func (l *loop) runOnce(ctx context.Context) error {
 			// Return if the source closed cleanly (we may switch
 			// from backfill to streaming modes) or if the outer
 			// context is being shut down.
-			if err == nil || errors.Is(err, context.Canceled) {
+			if err == nil || groupCtx.Err() != nil {
 				return nil
 			}
 
 			// Otherwise, we'll recover by injecting a new rollback
 			// message and then restarting the message stream from
 			// the previous consistent point.
-			log.WithError(err).Error("error from replication source; continuing")
+			log.WithError(err).Errorf(
+				"error from replication source %s; continuing",
+				l.config.LoopName)
 			select {
 			case ch <- msgRollback:
 				continue
@@ -221,9 +248,15 @@ func (l *loop) runOnce(ctx context.Context) error {
 	// restart the source goroutine.
 	group.Go(func() error {
 		err := l.dialect.Process(groupCtx, ch, events)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			log.WithError(err).Error("error while applying replication messages; stopping")
+
+		// As above.
+		if err == nil || groupCtx.Err() != nil {
+			return nil
 		}
+
+		log.WithError(err).Errorf(
+			"error while applying replication messages %s; stopping",
+			l.config.LoopName)
 		return err
 	})
 
@@ -239,7 +272,10 @@ func (l *loop) runOnce(ctx context.Context) error {
 			for groupCtx.Err() == nil {
 				ts := l.consistentPoint.stamp.(TimeStamp).AsTime()
 				if time.Since(ts) < l.config.BackfillWindow {
-					log.WithField("ts", ts).Info("backfill has caught up")
+					log.WithFields(log.Fields{
+						"loop": l.config.LoopName,
+						"ts":   ts,
+					}).Debug("backfill has caught up")
 					return
 				}
 				l.consistentPoint.Wait()
@@ -257,7 +293,14 @@ func (l *loop) runOnce(ctx context.Context) error {
 		}()
 	}
 
-	return group.Wait()
+	groupErr := group.Wait()
+	// Ensure that the latest point has been saved on a clean exit.
+	if groupErr == nil {
+		if err := l.storeConsistentPoint(l.GetConsistentPoint()); err != nil {
+			log.WithError(err).Warnf("could not save consistent point for %s", l.config.LoopName)
+		}
+	}
+	return groupErr
 }
 
 type fillFn = func(context.Context, chan<- Message, State) error
@@ -270,6 +313,11 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 		events = l.events.fan
 	} else {
 		events = l.events.serial
+	}
+	// Is backfilling supported?
+	back, ok := l.dialect.(Backfiller)
+	if !ok {
+		return
 	}
 	// Is backfilling enabled by the user?
 	if l.config.BackfillWindow <= 0 {
@@ -284,15 +332,31 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 	if delta < l.config.BackfillWindow {
 		return
 	}
+	choice = back.BackfillInto
 	events = l.events.fan
 	isBackfill = true
-	// Do we have specific backfilling behavior to call?
-	if back, ok := l.dialect.(Backfiller); ok {
-		choice = back.BackfillInto
-	}
 	log.WithFields(log.Fields{
 		"delta": delta,
+		"loop":  l.config.LoopName,
 		"ts":    ts,
-	}).Info("using backfill strategy")
+	}).Debug("using backfill strategy")
 	return
+}
+
+// doBackfill provides the implementation of Events.Backfill.
+func (l *loop) doBackfill(
+	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
+) error {
+	options = append(options, WithName(loopName))
+	cfg := l.config.Copy()
+	for _, option := range options {
+		option(cfg)
+	}
+
+	filler, err := l.factory.newLoop(ctx, cfg, backfiller)
+	if err != nil {
+		return err
+	}
+
+	return filler.loop.runOnce(ctx, backfiller.BackfillInto, filler.loop.events.fan, true)
 }
