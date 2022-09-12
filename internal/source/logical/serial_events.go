@@ -23,8 +23,8 @@ import (
 
 // serialEvents is a transaction-preserving implementation of Events.
 type serialEvents struct {
-	State
 	appliers types.Appliers
+	loop     *loop
 	pool     *pgxpool.Pool
 
 	stamp stamp.Stamp // the latest value passed to OnCommit.
@@ -32,6 +32,19 @@ type serialEvents struct {
 }
 
 var _ Events = (*serialEvents)(nil)
+
+// Backfill implements Events. It delegates to the enclosing loop.
+func (e *serialEvents) Backfill(
+	ctx context.Context, source string, backfiller Backfiller, options ...Option,
+) error {
+	return e.loop.doBackfill(ctx, source, backfiller, options...)
+}
+
+// GetConsistentPoint implements State. It delegates to the loop.
+func (e *serialEvents) GetConsistentPoint() stamp.Stamp { return e.loop.GetConsistentPoint() }
+
+// GetTargetDB implements State. It delegates to the loop.
+func (e *serialEvents) GetTargetDB() ident.Ident { return e.loop.GetTargetDB() }
 
 // OnBegin implements Events.
 func (e *serialEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
@@ -62,7 +75,7 @@ func (e *serialEvents) OnCommit(ctx context.Context) error {
 
 // OnData implements Events.
 func (e *serialEvents) OnData(
-	ctx context.Context, target ident.Table, muts []types.Mutation,
+	ctx context.Context, _ ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	app, err := e.appliers.Get(ctx, target)
 	if err != nil {
@@ -79,6 +92,9 @@ func (e *serialEvents) OnRollback(_ context.Context, msg Message) error {
 	e.stop()
 	return nil
 }
+
+// setConsistentPoint implements State. It delegates to the loop.
+func (e *serialEvents) setConsistentPoint(s stamp.Stamp) { e.loop.setConsistentPoint(s) }
 
 // reset implements Events.
 func (e *serialEvents) stop() {

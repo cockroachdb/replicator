@@ -24,16 +24,7 @@ import (
 )
 
 // Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideBaseConfig,
-	ProvideDialect,
-)
-
-// ProvideBaseConfig is called by Wire to extract a logical.Config from
-// this package's Config type.
-func ProvideBaseConfig(config *Config) *logical.Config {
-	return &config.Config
-}
+var Set = wire.NewSet(ProvideDialect)
 
 // ProvideDialect is called by Wire to construct this package's
 // logical.Dialect implementation. This provider will perform some

@@ -12,9 +12,8 @@ package logical
 
 import (
 	"context"
-	"sync"
-	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -29,90 +28,57 @@ import (
 var Set = wire.NewSet(
 	ProvideFactory,
 	ProvideLoop,
+	ProvideBaseConfig,
 	ProvidePool,
 	ProvideStagingDB,
+	ProvideUserScriptConfig,
+	ProvideUserScriptTarget,
 	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
 )
+
+// ProvideBaseConfig is called by wire to extract the BaseConfig from
+// the dialect-specific Config.
+//
+// The script.Loader is referenced here so that any side effects that
+// it has on the config, e.g., api.setOptions(), will be evaluated.
+func ProvideBaseConfig(config Config, _ *script.Loader) (*BaseConfig, error) {
+	if err := config.Preflight(); err != nil {
+		return nil, err
+	}
+	return config.Base(), nil
+}
 
 // ProvideFactory returns a utility which can create multiple logical
 // loops.
 func ProvideFactory(
-	appliers types.Appliers, config *Config, fans *fan.Fans, memo types.Memo, pool *pgxpool.Pool,
-) (*Factory, func()) {
-	f := &Factory{
-		appliers: appliers,
-		cfg:      config,
-		fans:     fans,
-		memo:     memo,
-		pool:     pool,
-	}
-	f.mu.loops = make(map[string]*Loop)
-	return f, f.Close
-}
-
-// ProvideLoop is called by Wire to create the replication loop. This
-// function starts a background goroutine, which will be terminated
-// by the cancel function.
-func ProvideLoop(
-	ctx context.Context,
 	appliers types.Appliers,
-	config *Config,
-	dialect Dialect,
+	config Config,
 	fans *fan.Fans,
 	memo types.Memo,
 	pool *pgxpool.Pool,
-) (*Loop, func(), error) {
-	var err error
-	if config.ChaosProb > 0 {
-		dialect = WithChaos(dialect, config.ChaosProb)
+	userscript *script.UserScript,
+) (*Factory, func()) {
+	f := &Factory{
+		appliers:   appliers,
+		cfg:        config,
+		fans:       fans,
+		memo:       memo,
+		pool:       pool,
+		userscript: userscript,
 	}
-	loop := &loop{
-		config:          config,
-		dialect:         dialect,
-		memo:            memo,
-		standbyDeadline: time.Now().Add(config.StandbyTimeout),
-		stopped:         make(chan struct{}),
-		targetPool:      pool,
-	}
-	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
-	loop.consistentPoint.stamp, err = loop.loadConsistentPoint(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
+	f.mu.loops = make(map[string]*loopCancel)
+	return f, f.Close
+}
 
-	loop.events.fan = (&metricsEvents{Events: &fanEvents{
-		State:  loop,
-		config: config,
-		fans:   fans,
-	}}).withLoopName(config.LoopName)
-
-	loop.events.serial = (&metricsEvents{Events: &serialEvents{
-		State:    loop,
-		appliers: appliers,
-		pool:     pool,
-	}}).withLoopName(config.LoopName)
-
-	loop.metrics.backfillStatus = backfillStatus.WithLabelValues(config.LoopName)
-
-	// The loop runs in a background context so that we have better
-	// control over the lifecycle.
-	loopCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		loop.run(loopCtx)
-		close(loop.stopped)
-	}()
-
-	return &Loop{loop}, cancel, nil
+// ProvideLoop is called by Wire to create a singleton replication loop.
+func ProvideLoop(ctx context.Context, factory *Factory, dialect Dialect) (*Loop, error) {
+	return factory.Get(ctx, dialect)
 }
 
 // ProvidePool is called by Wire to create a connection pool that
 // accesses the target cluster. The pool will be closed by the cancel
 // function.
-func ProvidePool(ctx context.Context, config *Config) (*pgxpool.Pool, func(), error) {
-	if err := config.Preflight(); err != nil {
-		return nil, nil, err
-	}
-
+func ProvidePool(ctx context.Context, config *BaseConfig) (*pgxpool.Pool, func(), error) {
 	// Bring up connection to target database.
 	targetCfg, err := stdpool.ParseConfig(config.TargetConn)
 	if err != nil {
@@ -128,9 +94,19 @@ func ProvidePool(ctx context.Context, config *Config) (*pgxpool.Pool, func(), er
 
 // ProvideStagingDB is called by Wire to retrieve the name of the
 // _cdc_sink SQL DATABASE.
-func ProvideStagingDB(config *Config) (ident.StagingDB, error) {
-	if err := config.Preflight(); err != nil {
-		return ident.StagingDB{}, err
-	}
+func ProvideStagingDB(config *BaseConfig) (ident.StagingDB, error) {
 	return ident.StagingDB(config.StagingDB), nil
+}
+
+// ProvideUserScriptConfig is called by Wire to extract the user-script
+// configuration.
+func ProvideUserScriptConfig(config Config) (*script.Config, error) {
+	ret := &config.Base().ScriptConfig
+	return ret, ret.Preflight()
+}
+
+// ProvideUserScriptTarget is called by Wire and returns the public
+// schema of the target database.
+func ProvideUserScriptTarget(config *BaseConfig) script.TargetSchema {
+	return script.TargetSchema(ident.NewSchema(config.TargetDB, ident.Public))
 }
