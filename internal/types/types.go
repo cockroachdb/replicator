@@ -84,6 +84,7 @@ type Mutation struct {
 	Data json.RawMessage // An encoded JSON object: { "key" : "hello" }
 	Key  json.RawMessage // An encoded JSON array: [ "hello" ]
 	Time hlc.Time        // The effective time of the mutation
+	Meta map[string]any  // Dialect-specific data, may be nil
 }
 
 var nullBytes = []byte("null")
