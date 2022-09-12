@@ -68,9 +68,6 @@ type Config struct {
 	// The number of connections to the target database. If zero, a
 	// default value will be used.
 	TargetDBConns int
-
-	stagingDB string // Temporary storage for StagingDB.
-	targetDB  string // Temporary storage for TargetDB.
 }
 
 // Bind adds flags to the set.
@@ -88,11 +85,13 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"the number of concurrent connections to use when writing data in fan mode")
 	f.DurationVar(&c.RetryDelay, "retryDelay", 10*time.Second,
 		"the amount of time to sleep between replication retries")
-	f.StringVar(&c.stagingDB, "stagingDB", "_cdc_sink", "a SQL database to store metadata in")
+	f.Var(ident.NewValue("_cdc_sink", &c.StagingDB), "stagingDB",
+		"a SQL database to store metadata in")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", 5*time.Second,
 		"how often to commit the consistent point")
 	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
-	f.StringVar(&c.targetDB, "targetDB", "", "the SQL database in the target cluster to update")
+	f.Var(ident.NewValue("", &c.TargetDB), "targetDB",
+		"the SQL database in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024, "the maximum pool size to the target cluster")
 }
 
@@ -122,19 +121,13 @@ func (c *Config) Preflight() error {
 		c.RetryDelay = defaultRetryDelay
 	}
 	if c.StagingDB.IsEmpty() {
-		if c.stagingDB == "" {
-			return errors.New("no staging database specified")
-		}
-		c.StagingDB = ident.New(c.stagingDB)
+		return errors.New("no staging database specified")
 	}
 	if c.TargetConn == "" {
 		return errors.New("no target connection string specified")
 	}
 	if c.TargetDB.IsEmpty() {
-		if c.targetDB == "" {
-			return errors.New("no target database specified")
-		}
-		c.TargetDB = ident.New(c.targetDB)
+		return errors.New("no target database specified")
 	}
 	if c.TargetDBConns == 0 {
 		c.TargetDBConns = defaultTargetDBConns
