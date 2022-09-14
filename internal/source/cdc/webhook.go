@@ -90,10 +90,13 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			return err
 		}
 
-		target, _, err := ident.Relative(
-			target.Database(), target.Schema(), payload.Payload[i].Topic)
+		table, qual, err := ident.ParseTable(payload.Payload[i].Topic, target)
 		if err != nil {
 			return err
+		}
+		// Ensure the destination table is in the target schema.
+		if qual != ident.TableOnly {
+			table = ident.NewTable(target.Database(), target.Schema(), table.Table())
 		}
 
 		mut := types.Mutation{
@@ -102,7 +105,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			Time: timestamp,
 		}
 
-		toProcess[target] = append(toProcess[target], mut)
+		toProcess[table] = append(toProcess[table], mut)
 	}
 
 	// Create Store instances up front. The first time a target table is
