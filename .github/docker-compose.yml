@@ -24,6 +24,11 @@ services:
     image: cockroachdb/cockroach:latest-v22.1
     network_mode: host
     command: start-single-node --insecure --store type=mem,size=2G
+  # There is no latest-v22.2 tag available in the unstable repo.
+  cockroachdb-v22.2:
+    image: cockroachdb/cockroach-unstable:v22.2.0-alpha.3
+    network_mode: host
+    command: start-single-node --insecure --store type=mem,size=2G
   mysql-v8:
     image: mysql:8-debian
     platform: linux/x86_64

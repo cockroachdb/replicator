@@ -153,6 +153,7 @@ jobs:
           - cockroachdb: v20.2
           - cockroachdb: v21.1
           - cockroachdb: v21.2
+          - cockroachdb: v22.2 # Note this is currently pinned to alpha.3
     env:
       COVER_OUT: coverage-${{ matrix.cockroachdb }}-${{ matrix.integration }}.out
       JUNIT_OUT: junit-${{ matrix.cockroachdb }}-${{ matrix.integration }}.xml

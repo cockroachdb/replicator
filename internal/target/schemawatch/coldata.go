@@ -112,13 +112,20 @@ func getColumns(
 			// as CRDB evolves.
 			if strings.Contains(rawColType, ".") {
 				parts := strings.Split(rawColType, ".")
-				if len(parts) != 2 {
+				switch len(parts) {
+				case 2: // CRDB <= 22.1
+					column.Type = ident.NewUDT(
+						table.Database(),
+						ident.New(parts[0]),
+						ident.New(parts[1]))
+				case 3: // CRDB >= 22.2
+					column.Type = ident.NewUDT(
+						ident.New(parts[0]),
+						ident.New(parts[1]),
+						ident.New(parts[2]))
+				default:
 					return errors.Errorf("cannot parse UDT %s", rawColType)
 				}
-				column.Type = ident.NewUDT(
-					table.Database(),
-					ident.New(parts[0]),
-					ident.New(parts[1]))
 			} else {
 				column.Type = rawColType
 			}
