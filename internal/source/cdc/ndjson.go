@@ -45,7 +45,13 @@ func (h *Handler) parseNdjsonURL(url *url.URL, req *request) error {
 
 	db := ident.New(match[ndjsonTargetDB])
 	schema := ident.New(match[ndjsonTargetSchema])
-	table, _, err := ident.Relative(db, schema, match[ndjsonTopic])
+	// The topic contains a possibly-qualified table name, but we want
+	// to ensure that we always wind up with a table in the target
+	// schema.
+	table, qual, err := ident.ParseTable(match[ndjsonTopic], ident.NewSchema(db, schema))
+	if qual != ident.TableOnly {
+		table = ident.NewTable(db, schema, table.Table())
+	}
 	if err != nil {
 		return err
 	}

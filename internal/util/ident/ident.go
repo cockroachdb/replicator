@@ -31,8 +31,8 @@ type Ident struct {
 	q, r string
 }
 
-// New returns a quoted SQL identifier. This method will panic if an
-// empty string is passed.
+// New returns a quoted SQL identifier. Prefer using ParseIdent when
+// operating on user-provided input that may already be quoted.
 func New(raw string) Ident {
 	return Ident{`"` + strings.ReplaceAll(raw, `"`, `""`) + `"`, raw}
 }
@@ -49,53 +49,6 @@ type StagingDB Ident
 
 // Ident returns the underying database identifier.
 func (s StagingDB) Ident() Ident { return Ident(s) }
-
-// Qualification is a return value from Relative, indicating how many
-// name parts were present in the initial input.
-type Qualification int
-
-//go:generate go run golang.org/x/tools/cmd/stringer -type=Qualification
-
-// Various levels of table-identifier qualification.
-const (
-	TableOnly Qualification = iota + 1
-	TableAndDatabase
-	FullyQualified
-)
-
-// Relative parses a table name and returns a fully-qualified Table
-// name in the given database and table schema.
-func Relative(db Ident, schema Ident, table string) (Table, Qualification, error) {
-	parts := strings.Split(table, ".")
-	switch len(parts) {
-	case 1:
-		if parts[0] == "" {
-			return Table{}, 0, errors.New("empty table")
-		}
-		return Table{db, schema, New(parts[0])}, 1, nil
-	case 2:
-		if parts[0] == "" {
-			return Table{}, 0, errors.New("empty database")
-		}
-		if parts[1] == "" {
-			return Table{}, 0, errors.New("empty table")
-		}
-		return Table{db, schema, New(parts[1])}, 2, nil
-	case 3:
-		if parts[0] == "" {
-			return Table{}, 0, errors.New("empty database")
-		}
-		if parts[1] == "" {
-			return Table{}, 0, errors.New("empty schema")
-		}
-		if parts[2] == "" {
-			return Table{}, 0, errors.New("empty table")
-		}
-		return Table{db, schema, New(parts[2])}, 3, nil
-	default:
-		return Table{}, 0, errors.Errorf("too many parts in %q", table)
-	}
-}
 
 // IsEmpty returns true if the identifier is empty.
 func (n Ident) IsEmpty() bool {
