@@ -20,9 +20,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// BuildVersion is set by the go linker at build time
-var BuildVersion = "<unknown>"
-
 // Command returns a command to print the build's bill-of-materials.
 func Command() *cobra.Command {
 	return &cobra.Command{
@@ -30,14 +27,18 @@ func Command() *cobra.Command {
 		Short: "print the build's bill-of-materials",
 		Use:   "version",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.WithFields(log.Fields{
-				"build":   BuildVersion,
-				"runtime": runtime.Version(),
-				"arch":    runtime.GOARCH,
-				"os":      runtime.GOOS,
-			}).Info("cdc-sink")
-
 			if bi, ok := debug.ReadBuildInfo(); ok {
+				fields := log.Fields{
+					"build":   bi.Main.Version,
+					"runtime": runtime.Version(),
+					"arch":    runtime.GOARCH,
+					"os":      runtime.GOOS,
+				}
+				for _, setting := range bi.Settings {
+					fields[setting.Key] = setting.Value
+				}
+				log.WithFields(fields).Info("cdc-sink")
+
 				for _, m := range bi.Deps {
 					for m.Replace != nil {
 						m = m.Replace

@@ -72,7 +72,7 @@ jobs:
           go
           build
           -v
-          -ldflags="-s -w -X github.com/cockroachdb/cdc-sink/internal/cmd/version.BuildVersion=$(cat VERSION.txt)"
+          -ldflags="-s -w"
           -o $OUTPUT
           .
         env:
