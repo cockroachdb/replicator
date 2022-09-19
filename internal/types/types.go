@@ -155,7 +155,7 @@ type ColData struct {
 	Name    ident.Ident
 	Primary bool
 	// Type of the column. Dialect might choose to use a string representation or a enum.
-	Type interface{}
+	Type any
 }
 
 // Watcher allows table metadata to be observed.

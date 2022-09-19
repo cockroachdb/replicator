@@ -245,79 +245,79 @@ func TestDataTypes(t *testing.T) {
 		mysql  string
 		size   string
 		crdb   string
-		values []interface{} // We automatically test for NULL below.
+		values []any // We automatically test for NULL below.
 	}{
 		// BIGINT(size)
-		{`bigint`, ``, `bigint`, []interface{}{0, -1, 112358}},
+		{`bigint`, ``, `bigint`, []any{0, -1, 112358}},
 		// BINARY(size)
-		{`binary`, `(128)`, `bytes`, []interface{}{[]byte(shortString)}},
+		{`binary`, `(128)`, `bytes`, []any{[]byte(shortString)}},
 		// BIT(size)
-		{`bit`, `(8)`, `varbit`, []interface{}{10}},
+		{`bit`, `(8)`, `varbit`, []any{10}},
 		// BLOB(size)
-		{`blob`, `(65536)`, `blob`, []interface{}{[]byte(longString)}},
+		{`blob`, `(65536)`, `blob`, []any{[]byte(longString)}},
 		// BOOL
 		// BOOLEAN
 		// Synonyms FOR TINYINT(1). The replication protocol will be encoded as MYSQL_TYPE_TINY.
-		{`bool`, ``, `int`, []interface{}{true, false}},
-		{`boolean`, ``, `int`, []interface{}{true, false}},
+		{`bool`, ``, `int`, []any{true, false}},
+		{`boolean`, ``, `int`, []any{true, false}},
 		// CHAR(size)
-		{`char`, `(128)`, `string`, []interface{}{[]byte(shortString)}},
+		{`char`, `(128)`, `string`, []any{[]byte(shortString)}},
 		// DATE
-		{`date`, ``, `date`, []interface{}{"1000-01-01", "9999-12-31"}},
+		{`date`, ``, `date`, []any{"1000-01-01", "9999-12-31"}},
 		// DATETIME(fsp)
-		{`datetime`, ``, `timestamp`, []interface{}{"1000-01-01 00:00:00", "9999-12-31 23:59:59"}},
+		{`datetime`, ``, `timestamp`, []any{"1000-01-01 00:00:00", "9999-12-31 23:59:59"}},
 		// DEC(size, d)
 		// DECIMAL(size, d)
-		{`dec`, `(11,10)`, `decimal`, []interface{}{math.E, math.Phi, math.Pi}},
-		{`decimal`, `(11,10)`, `decimal`, []interface{}{math.E, math.Phi, math.Pi}},
+		{`dec`, `(11,10)`, `decimal`, []any{math.E, math.Phi, math.Pi}},
+		{`decimal`, `(11,10)`, `decimal`, []any{math.E, math.Phi, math.Pi}},
 		// DOUBLE PRECISION(size, d)
 		// DOUBLE(size, d)
-		{`double precision`, `(11,10)`, `decimal`, []interface{}{math.E, math.Phi, math.Pi}},
-		{`double`, `(11,10)`, `decimal`, []interface{}{math.E, math.Phi, math.Pi}},
+		{`double precision`, `(11,10)`, `decimal`, []any{math.E, math.Phi, math.Pi}},
+		{`double`, `(11,10)`, `decimal`, []any{math.E, math.Phi, math.Pi}},
 		// --------- TODO: ENUM(val1, val2, val3, ...)
 
 		// FLOAT(p)
 		// FLOAT(size, d)
-		{`float`, `(11,10)`, `float`, []interface{}{math.E, math.Phi, math.Pi}},
+		{`float`, `(11,10)`, `float`, []any{math.E, math.Phi, math.Pi}},
 		// INT(size)
 		// INTEGER(size)
-		{`int`, ``, `int`, []interface{}{0, -1, 112358}},
-		{`integer`, `(16)`, `int`, []interface{}{0, -1, 112358}},
+		{`int`, ``, `int`, []any{0, -1, 112358}},
+		{`integer`, `(16)`, `int`, []any{0, -1, 112358}},
 		// JSON
-		{`json`, ``, `json`, []interface{}{`{"hello":"world"}`}},
+		{`json`, ``, `json`, []any{`{"hello":"world"}`}},
 		// LONGBLOB
-		{`longblob`, ``, `blob`, []interface{}{[]byte(longString)}},
+		{`longblob`, ``, `blob`, []any{[]byte(longString)}},
 		// LONGTEXT
-		{`longtext`, ``, `text`, []interface{}{longString}},
+		{`longtext`, ``, `text`, []any{longString}},
 		// MEDIUMBLOB
-		{`mediumblob`, ``, `blob`, []interface{}{[]byte(longString)}},
+		{`mediumblob`, ``, `blob`, []any{[]byte(longString)}},
 		// MEDIUMINT(size)
-		{`mediumint`, ``, `int`, []interface{}{0, -1, 112358}},
+		{`mediumint`, ``, `int`, []any{0, -1, 112358}},
 		// MEDIUMTEXT
-		{`mediumtext`, ``, `text`, []interface{}{longString}},
+		{`mediumtext`, ``, `text`, []any{longString}},
 		// --------- TODO: SET(val1, val2, val3, ...)
 
 		// SMALLINT(size)
-		{`smallint`, ``, `int`, []interface{}{0, -1, 127}},
+		{`smallint`, ``, `int`, []any{0, -1, 127}},
 
 		// TEXT(size)
-		{`text`, ``, `text`, []interface{}{shortString}},
+		{`text`, ``, `text`, []any{shortString}},
 		// TIME(fsp)
-		{`time`, ``, `time`, []interface{}{"16:20:00"}},
+		{`time`, ``, `time`, []any{"16:20:00"}},
 		// TIMESTAMP(fsp)
-		{`timestamp`, ``, `timestamp`, []interface{}{"1970-01-01 00:00:01", "2038-01-19 03:14:07"}},
+		{`timestamp`, ``, `timestamp`, []any{"1970-01-01 00:00:01", "2038-01-19 03:14:07"}},
 		// TINYBLOB
-		{`tinyblob`, ``, `blob`, []interface{}{[]byte(shortString)}},
+		{`tinyblob`, ``, `blob`, []any{[]byte(shortString)}},
 		// TINYINT(size)
-		{`tinyint`, ``, `int`, []interface{}{0, -1, 1}},
+		{`tinyint`, ``, `int`, []any{0, -1, 1}},
 		// TINYTEXT
-		{`tinytext`, ``, `text`, []interface{}{shortString}},
+		{`tinytext`, ``, `text`, []any{shortString}},
 		// VARBINARY(size)
-		{`varbinary`, `(128)`, `bytes`, []interface{}{[]byte(shortString)}},
+		{`varbinary`, `(128)`, `bytes`, []any{[]byte(shortString)}},
 		// VARCHAR(size)
-		{`varchar`, `(128)`, `text`, []interface{}{shortString}},
+		{`varchar`, `(128)`, `text`, []any{shortString}},
 		// YEAR
-		{`year`, ``, `string`, []interface{}{"2022"}},
+		{`year`, ``, `string`, []any{"2022"}},
 	}
 
 	// Create a basic test fixture.
@@ -466,7 +466,7 @@ func myDo(
 
 // myExec is similar in spirit to pgx.Exec.
 func myExec(
-	ctx context.Context, pool *client.Pool, stmt string, args ...interface{},
+	ctx context.Context, pool *client.Pool, stmt string, args ...any,
 ) (*mysql.Result, error) {
 	return myDo(ctx, pool, func(ctx context.Context, conn *client.Conn) (*mysql.Result, error) {
 		return conn.Execute(stmt, args...)

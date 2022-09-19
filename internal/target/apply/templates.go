@@ -29,7 +29,7 @@ var (
 	queries embed.FS
 
 	parsed = template.Must(template.New("").Funcs(template.FuncMap{
-		"isUDT": func(x interface{}) bool {
+		"isUDT": func(x any) bool {
 			_, ok := x.(ident.UDT)
 			return ok
 		},
@@ -44,7 +44,7 @@ var (
 		//   {{ range $name := qualify "foo" $.Columns }}
 		// would return values such as
 		//     foo.PK, foo.Val0, foo.Val1, ....
-		"qualify": func(prefix interface{}, cols []types.ColData) ([]string, error) {
+		"qualify": func(prefix any, cols []types.ColData) ([]string, error) {
 			var id ident.Ident
 			switch t := prefix.(type) {
 			case string:

@@ -38,7 +38,7 @@ func New(raw string) Ident {
 }
 
 // Newf returns a quoted SQL identifier.
-func Newf(format string, args ...interface{}) Ident {
+func Newf(format string, args ...any) Ident {
 	return New(fmt.Sprintf(format, args...))
 }
 

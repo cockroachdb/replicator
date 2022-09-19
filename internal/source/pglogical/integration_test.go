@@ -231,45 +231,45 @@ func TestDataTypes(t *testing.T) {
 
 	tcs := []struct {
 		name   string
-		values []interface{} // We automatically test for NULL below.
+		values []any // We automatically test for NULL below.
 	}{
-		{`bigint`, []interface{}{0, -1, 112358}},
+		{`bigint`, []any{0, -1, 112358}},
 		// bigserial doesn't exist as a reifiable type in pg?
-		{`bit`, []interface{}{"10010101"}},
-		{`bit varying`, []interface{}{"10010101"}},
-		{`boolean`, []interface{}{true, false}},
+		{`bit`, []any{"10010101"}},
+		{`bit varying`, []any{"10010101"}},
+		{`boolean`, []any{true, false}},
 		// box
-		{`bytea`, []interface{}{"", "HELLO WORLD!", []byte(longString)}},
-		{`character`, []interface{}{"", "HELLO WORLD!", longString}},
-		{`character varying`, []interface{}{"", "HELLO WORLD!", longString}},
+		{`bytea`, []any{"", "HELLO WORLD!", []byte(longString)}},
+		{`character`, []any{"", "HELLO WORLD!", longString}},
+		{`character varying`, []any{"", "HELLO WORLD!", longString}},
 		// cidr not implemented: https://github.com/cockroachdb/cockroach/issues/18846
 		// circle
-		{`date`, []interface{}{"2020/02/02", time.Date(2022, 02, 22, 0, 0, 0, 0, time.UTC)}},
-		{`double precision`, []interface{}{0.0, -1.1, 1.1}},
-		{`inet`, []interface{}{"127.0.0.1"}},
-		{`integer`, []interface{}{-1, 0, 112358}},
-		{`interval`, []interface{}{time.Duration(0), time.Hour}},
-		{`json`, []interface{}{"null", `{"hello":"world"}`, fmt.Sprintf(`{"long":%q}`, longString)}},
-		{`jsonb`, []interface{}{"null", `{"hello":"world"}`, fmt.Sprintf(`{"long":%q}`, longString)}},
+		{`date`, []any{"2020/02/02", time.Date(2022, 02, 22, 0, 0, 0, 0, time.UTC)}},
+		{`double precision`, []any{0.0, -1.1, 1.1}},
+		{`inet`, []any{"127.0.0.1"}},
+		{`integer`, []any{-1, 0, 112358}},
+		{`interval`, []any{time.Duration(0), time.Hour}},
+		{`json`, []any{"null", `{"hello":"world"}`, fmt.Sprintf(`{"long":%q}`, longString)}},
+		{`jsonb`, []any{"null", `{"hello":"world"}`, fmt.Sprintf(`{"long":%q}`, longString)}},
 		// line
 		// lseg
 		// macaddr not implemented: https://github.com/cockroachdb/cockroach/issues/45813
 		// money not implemented: https://github.com/cockroachdb/cockroach/issues/41578
-		{`numeric`, []interface{}{"0", 55, 5.56}},
+		{`numeric`, []any{"0", 55, 5.56}},
 		// path
 		// pg_lsn
 		// pg_snapshot
 		// point
 		// polygon
-		{`real`, []interface{}{0.0, -1.1, 1.1}},
-		{`smallint`, []interface{}{0.0, -1, 1}},
-		{`text`, []interface{}{``, `Hello World!`, longString}},
-		{`time`, []interface{}{"16:20"}},
-		{`time with time zone`, []interface{}{"16:20"}},
+		{`real`, []any{0.0, -1.1, 1.1}},
+		{`smallint`, []any{0.0, -1, 1}},
+		{`text`, []any{``, `Hello World!`, longString}},
+		{`time`, []any{"16:20"}},
+		{`time with time zone`, []any{"16:20"}},
 		// tsquery
 		// tsvector
 		// txid_snapshot
-		{`uuid`, []interface{}{uuid.New()}},
+		{`uuid`, []any{uuid.New()}},
 		// xml
 	}
 

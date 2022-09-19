@@ -68,7 +68,7 @@ func TestApply(t *testing.T) {
 			a.NoError(err)
 			adds[i] = types.Mutation{Data: bytes, Key: bytes}
 
-			bytes, err = json.Marshal([]interface{}{p.Pk0, p.Pk1})
+			bytes, err = json.Marshal([]any{p.Pk0, p.Pk1})
 			a.NoError(err)
 			dels[i] = types.Mutation{Key: bytes}
 		}

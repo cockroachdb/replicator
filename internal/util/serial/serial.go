@@ -81,9 +81,7 @@ func (s *Pool) Commit(ctx context.Context) error {
 }
 
 // Exec implements pgxtype.Querier and can only be called after Begin.
-func (s *Pool) Exec(
-	ctx context.Context, sql string, arguments ...interface{},
-) (pgconn.CommandTag, error) {
+func (s *Pool) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -98,9 +96,7 @@ func (s *Pool) Exec(
 // The Rows that are returned from this method must be closed, fully
 // consumed, or encounter an error before other query methods will be
 // allowed to proceed.
-func (s *Pool) Query(
-	ctx context.Context, sql string, optionsAndArgs ...interface{},
-) (pgx.Rows, error) {
+func (s *Pool) Query(ctx context.Context, sql string, optionsAndArgs ...any) (pgx.Rows, error) {
 	s.mu.Lock()
 	// Unlocked by rowsUnlocker if no error.
 	rows, err := s.queryLocked(ctx, sql, optionsAndArgs...)
@@ -115,7 +111,7 @@ func (s *Pool) Query(
 // this as a separate method makes the flow-control in Query() easier to
 // read.
 func (s *Pool) queryLocked(
-	ctx context.Context, sql string, optionsAndArgs ...interface{},
+	ctx context.Context, sql string, optionsAndArgs ...any,
 ) (*rowsUnlocker, error) {
 	tx := s.mu.tx
 	if tx == nil {
@@ -137,7 +133,7 @@ func (s *Pool) queryLocked(
 // QueryRow implements pgxtype.Querier and can only be called after
 // Begin. The Row that is returned must be scanned before any other
 // query methods wil be allowed to proceed.
-func (s *Pool) QueryRow(ctx context.Context, sql string, optionsAndArgs ...interface{}) pgx.Row {
+func (s *Pool) QueryRow(ctx context.Context, sql string, optionsAndArgs ...any) pgx.Row {
 	s.mu.Lock()
 	// Unlocked by rowUnlocker.
 

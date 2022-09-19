@@ -108,7 +108,7 @@ func (a *authenticator) Check(
 		var claims Claims
 		_, err := jwt.ParseWithClaims(token,
 			&claims,
-			func(unvalidated *jwt.Token) (interface{}, error) {
+			func(unvalidated *jwt.Token) (any, error) {
 				return key, nil
 			},
 			jwt.WithValidMethods(validJWTMethods),
