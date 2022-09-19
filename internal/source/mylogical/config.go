@@ -13,8 +13,8 @@ package mylogical
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"io/ioutil"
 	"net/url"
+	"os"
 	"strconv"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
@@ -55,17 +55,17 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 func newClientTLSConfig(
 	params url.Values, insecureSkipVerify bool, serverName string,
 ) (*tls.Config, error) {
-	caPem, err := ioutil.ReadFile(params.Get("sslrootcert"))
+	caPem, err := os.ReadFile(params.Get("sslrootcert"))
 	if err != nil {
 		return nil, err
 	}
 	var certPem, keyPem []byte
 	if params.Get("sslcert") != "" {
-		certPem, err = ioutil.ReadFile(params.Get("sslcert"))
+		certPem, err = os.ReadFile(params.Get("sslcert"))
 		if err != nil {
 			return nil, err
 		}
-		keyPem, err = ioutil.ReadFile(params.Get("sslkey"))
+		keyPem, err = os.ReadFile(params.Get("sslkey"))
 		if err != nil {
 			return nil, err
 		}

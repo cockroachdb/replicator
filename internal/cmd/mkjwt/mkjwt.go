@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 
@@ -104,7 +103,7 @@ killall -HUP cdc-sink
 
 			if out == "" {
 				fmt.Println(token)
-			} else if err := ioutil.WriteFile(out, []byte(token), 0600); err != nil {
+			} else if err := os.WriteFile(out, []byte(token), 0600); err != nil {
 				return err
 			}
 			return nil

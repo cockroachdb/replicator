@@ -1,6 +1,6 @@
 module github.com/cockroachdb/cdc-sink
 
-go 1.17
+go 1.19
 
 require (
 	github.com/cockroachdb/apd v1.1.0
