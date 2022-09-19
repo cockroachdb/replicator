@@ -20,17 +20,18 @@
 // ids that are also stored in the database.
 //
 // A minimally-acceptable token is shown below:
-//   {
-//      "jti": "a25dac04-9f3e-49c1-a068-ee0a2abbd7df",
-//      "https://github.com/cockroachdb/cdc-sink": {
-//        "sch": [
-//          [ "database", "schema" ],
-//          [ "another_database", "*" ],
-//          [ "*", "required_schema" ],
-//          [ "*", "*" ]
-//        ]
-//      }
-//   }
+//
+//	{
+//	   "jti": "a25dac04-9f3e-49c1-a068-ee0a2abbd7df",
+//	   "https://github.com/cockroachdb/cdc-sink": {
+//	     "sch": [
+//	       [ "database", "schema" ],
+//	       [ "another_database", "*" ],
+//	       [ "*", "required_schema" ],
+//	       [ "*", "*" ]
+//	     ]
+//	   }
+//	}
 //
 // As seen above, we use a globally-unique namespace to provide a list
 // of schemas that the caller is allowed to use. Additional fields may

@@ -34,11 +34,11 @@ import (
 // of the enqueued value is still greater than the consistent point.
 //
 // The following Stamp-ordering invariants are maintained:
-//   1) values[0] <= values[1] ...  <= values[n] (softly monotonic)
-//   2) markers[0] < markers[1] ... < markers[n] (strictly monotonic)
-//   3) consistent < values[0]
-//   4) consistent < markers[0]
-//   5) consistent > previousConsistent.
+//  1. values[0] <= values[1] ...  <= values[n] (softly monotonic)
+//  2. markers[0] < markers[1] ... < markers[n] (strictly monotonic)
+//  3. consistent < values[0]
+//  4. consistent < markers[0]
+//  5. consistent > previousConsistent.
 type Queue struct {
 	consistent Stamp
 	markers    list.List // Stamp values. Strictly monotonic.

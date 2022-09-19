@@ -29,11 +29,11 @@ const (
 )
 
 // ParseConfig parses a pgxpool.Config with common defaults.
-//  * application_name=cdc-sink, if unset.
-//  * max connection lifetime is 10 minutes.
-//  * pool min size is set to 1
-//  * pool max size is set to at least 128
-//  * success and latency metrics for creating connections
+//   - application_name=cdc-sink, if unset.
+//   - max connection lifetime is 10 minutes.
+//   - pool min size is set to 1
+//   - pool max size is set to at least 128
+//   - success and latency metrics for creating connections
 func ParseConfig(connectString string) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(connectString)
 	if err != nil {

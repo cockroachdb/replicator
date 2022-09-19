@@ -120,9 +120,9 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 // Singleton executes a callback when the named lease is acquired.
 //
 // The lease will be released in the following circumstances:
-//   * The callback returns nil.
-//   * The lease cannot be renewed before it expires.
-//   * The outer context is canceled.
+//   - The callback returns nil.
+//   - The lease cannot be renewed before it expires.
+//   - The outer context is canceled.
 //
 // If the callback returns a non-nil error, the error will be logged. If
 // the callback returns ErrCancelSingleton, it will not be retried. In
@@ -280,9 +280,11 @@ func (l *leases) acquire(ctx context.Context, name string) (acquired lease, ok b
 }
 
 // SQL template to claim a lease
-//   $1 = name
-//   $2 = caller-assigned expiration
-//   $3 = caller-assigned now(), to ease testing
+//
+//	$1 = name
+//	$2 = caller-assigned expiration
+//	$3 = caller-assigned now(), to ease testing
+//
 // Returns a nonce value if the lease was acquired.
 //
 // If needed, this could be extended to support atomic acquisition of
@@ -335,8 +337,9 @@ func (l *leases) release(ctx context.Context, rel lease) (bool, error) {
 }
 
 // SQL template for the current owner to release a lease.
-//   $1 = name
-//   $2 = nonce previously allocated by the database
+//
+//	$1 = name
+//	$2 = nonce previously allocated by the database
 const releaseTemplate = `DELETE FROM %s WHERE name=$1::STRING AND nonce=$2::UUID`
 
 // tryRelease deletes the lease from the database.
@@ -363,9 +366,10 @@ func (l *leases) renew(ctx context.Context, tgt lease) (renewed lease, ok bool, 
 }
 
 // SQL template to update the expiration time on a lease.
-//   $1 = new expiration time
-//   $2 = name
-//   $3 = nonce
+//
+//	$1 = new expiration time
+//	$2 = name
+//	$3 = nonce
 const renewTemplate = `UPDATE %s SET expires=$1::TIMESTAMP WHERE name=$2::STRING AND nonce=$3::UUID`
 
 // tryRenew updates the lease record in the database. If successful, the
