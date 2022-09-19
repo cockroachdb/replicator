@@ -283,9 +283,9 @@ func (c *conn) onDataTuple(
 	log.Tracef("%s on table %s (#rows: %d)", operation, tbl, len(tuple.Rows))
 	for rowNum, row := range tuple.Rows {
 		var err error
-		var key []interface{}
+		var key []any
 		var mut types.Mutation
-		enc := make(map[string]interface{})
+		enc := make(map[string]any)
 		// on update we only care about the new value.
 		// even rows are skipped since they contain the value before the update
 		if operation == updateMutation && (rowNum%2 == 0) {

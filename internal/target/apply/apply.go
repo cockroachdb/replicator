@@ -198,13 +198,13 @@ func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		return err
 	}
 
-	allArgs := make([]interface{}, 0, len(a.mu.pks)*len(muts))
+	allArgs := make([]any, 0, len(a.mu.pks)*len(muts))
 
 	for i := range muts {
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Key))
 		dec.UseNumber()
 
-		args := make([]interface{}, 0, len(a.mu.pks))
+		args := make([]any, 0, len(a.mu.pks))
 		if err := dec.Decode(&args); err != nil {
 			return errors.WithStack(err)
 		}
@@ -253,7 +253,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 
 	// Allocate a slice for all mutation data. We'll reset the length
 	// once we know how many elements we actually have.
-	allArgs := make([]interface{}, len(a.mu.schemaData)*len(muts))
+	allArgs := make([]any, len(a.mu.schemaData)*len(muts))
 	argIdx := 0
 	// We'll remember the current location for any extra arguments
 	// that we see, so we can backtrack to fill in the blank.
@@ -263,7 +263,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Data))
 		dec.UseNumber()
 
-		incomingColumnData := make(map[ident.Ident]interface{})
+		incomingColumnData := make(map[ident.Ident]any)
 		if err := dec.Decode(&incomingColumnData); err != nil {
 			return errors.WithStack(err)
 		}
@@ -349,7 +349,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 					a.target, unmapped, string(muts[i].Key), muts[i].Time)
 			}
 
-			unmapped := make(map[ident.Ident]interface{}, extraCount)
+			unmapped := make(map[ident.Ident]any, extraCount)
 			for key, value := range incomingColumnData {
 				if _, seen := knownColumnsInPayload[key]; !seen {
 					unmapped[key] = value

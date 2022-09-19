@@ -60,7 +60,7 @@ func (r *rowsUnlocker) RawValues() [][]byte {
 	return r.r.RawValues()
 }
 
-func (r *rowsUnlocker) Scan(dest ...interface{}) error {
+func (r *rowsUnlocker) Scan(dest ...any) error {
 	err := r.r.Scan(dest...)
 	if err != nil {
 		r.unlock()
@@ -68,7 +68,7 @@ func (r *rowsUnlocker) Scan(dest ...interface{}) error {
 	return err
 }
 
-func (r *rowsUnlocker) Values() ([]interface{}, error) {
+func (r *rowsUnlocker) Values() ([]any, error) {
 	ret, err := r.r.Values()
 	if err != nil {
 		r.unlock()

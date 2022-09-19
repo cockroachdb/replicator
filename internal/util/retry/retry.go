@@ -32,7 +32,7 @@ func (m *Marker) Marked() bool { return bool(*m) }
 
 // Execute is a wrapper around Retry that can be used for sql
 // queries that don't have any return values.
-func Execute(ctx context.Context, db pgxtype.Querier, query string, args ...interface{}) error {
+func Execute(ctx context.Context, db pgxtype.Querier, query string, args ...any) error {
 	return Retry(ctx, func(ctx context.Context) error {
 		_, err := db.Exec(ctx, query, args...)
 		return err

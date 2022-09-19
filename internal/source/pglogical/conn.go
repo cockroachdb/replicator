@@ -243,7 +243,7 @@ func (c *conn) decodeMutation(
 ) (types.Mutation, error) {
 	var mut types.Mutation
 	var key []string
-	enc := make(map[string]interface{})
+	enc := make(map[string]any)
 	targetCols, ok := c.columns[tbl]
 	if !ok {
 		return mut, errors.Errorf("no column data for %s", tbl)

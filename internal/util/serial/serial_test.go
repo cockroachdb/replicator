@@ -27,7 +27,7 @@ type fakeRow struct{ err error }
 
 var _ pgx.Row = (*fakeRow)(nil)
 
-func (f *fakeRow) Scan(dest ...interface{}) error { return f.err }
+func (f *fakeRow) Scan(dest ...any) error { return f.err }
 
 type fakeRows struct {
 	err      error
@@ -41,8 +41,8 @@ func (f *fakeRows) CommandTag() pgconn.CommandTag                  { return nil 
 func (f *fakeRows) Err() error                                     { return f.err }
 func (f *fakeRows) FieldDescriptions() []pgproto3.FieldDescription { return nil }
 func (f *fakeRows) RawValues() [][]byte                            { return nil }
-func (f *fakeRows) Scan(...interface{}) error                      { return f.err }
-func (f *fakeRows) Values() ([]interface{}, error)                 { return nil, f.err }
+func (f *fakeRows) Scan(...any) error                              { return f.err }
+func (f *fakeRows) Values() ([]any, error)                         { return nil, f.err }
 
 func (f *fakeRows) Next() bool {
 	if f.rowCount == 0 {

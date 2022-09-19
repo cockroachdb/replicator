@@ -26,7 +26,7 @@ type rowUnlocker struct {
 
 var _ pgx.Row = (*rowUnlocker)(nil)
 
-func (r *rowUnlocker) Scan(dest ...interface{}) error {
+func (r *rowUnlocker) Scan(dest ...any) error {
 	defer r.unlock()
 	if err := r.err; err != nil {
 		return err

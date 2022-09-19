@@ -18,7 +18,7 @@ import "container/heap"
 // A MinMap is not internally synchronized. A MinMap should not be
 // copied once created.
 type MinMap struct {
-	m map[interface{}]*minMapElt
+	m map[any]*minMapElt
 	h minMapHeap
 
 	// Prevent Lock() methods from escaping into API.
@@ -30,12 +30,12 @@ type MinMap struct {
 // NewMinMap constructs an empty MinMap.
 func NewMinMap() *MinMap {
 	return &MinMap{
-		m: make(map[interface{}]*minMapElt),
+		m: make(map[any]*minMapElt),
 	}
 }
 
 // Delete removes the mapping for the specified key, if one is present.
-func (m *MinMap) Delete(key interface{}) {
+func (m *MinMap) Delete(key any) {
 	elt, ok := m.m[key]
 	if !ok {
 		return
@@ -46,7 +46,7 @@ func (m *MinMap) Delete(key interface{}) {
 
 // Get returns the previously set Stamp for the key, or nil if no
 // mapping is present.
-func (m *MinMap) Get(key interface{}) (Stamp, bool) {
+func (m *MinMap) Get(key any) (Stamp, bool) {
 	if found, ok := m.m[key]; ok {
 		return found.Stamp, true
 	}
@@ -69,7 +69,7 @@ func (m *MinMap) Min() Stamp {
 // Put adds or updates an entry in the map. This method returns the
 // minimum Stamp within the map and a boolean flag to indicate if the
 // call to Put changed the minimum value.
-func (m *MinMap) Put(key interface{}, stamp Stamp) (minStamp Stamp, minChanged bool) {
+func (m *MinMap) Put(key any, stamp Stamp) (minStamp Stamp, minChanged bool) {
 	startMin := m.Min()
 	if elt, ok := m.m[key]; ok {
 		// If there's already an entry in the map, update the Stamp
@@ -111,7 +111,7 @@ func (h minMapHeap) Less(i, j int) bool {
 }
 
 // Pop implements heap.Interface.
-func (h *minMapHeap) Pop() interface{} {
+func (h *minMapHeap) Pop() any {
 	idx := len(*h) - 1
 	elt := (*h)[idx]
 	*h = (*h)[:idx]
@@ -119,7 +119,7 @@ func (h *minMapHeap) Pop() interface{} {
 }
 
 // Push implements heap.Interface.
-func (h *minMapHeap) Push(x interface{}) {
+func (h *minMapHeap) Push(x any) {
 	elt := x.(*minMapElt)
 	elt.Index = len(*h)
 	*h = append(*h, elt)

@@ -42,7 +42,7 @@ func (ti TableInfo) DropTable(ctx context.Context) error {
 
 // Exec executes a single SQL statement. The sql string must include
 // a single string substitution marker to receive the table name.
-func (ti TableInfo) Exec(ctx context.Context, sql string, args ...interface{}) error {
+func (ti TableInfo) Exec(ctx context.Context, sql string, args ...any) error {
 	return retry.Execute(ctx, ti.Pool(), fmt.Sprintf(sql, ti.Name()), args...)
 }
 

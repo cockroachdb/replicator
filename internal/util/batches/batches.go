@@ -59,7 +59,7 @@ func Size() int {
 // back to the pool.
 type Release func()
 
-var mutationPool = &sync.Pool{New: func() interface{} {
+var mutationPool = &sync.Pool{New: func() any {
 	x := make([]types.Mutation, 0, Size())
 	return &x
 }}

@@ -61,7 +61,7 @@ type Dialect interface {
 }
 
 // A Message is specific to a Dialect.
-type Message interface{}
+type Message any
 
 // Rollback is a sentinel message that will be injected into the values
 // received by Dialect.Process.
