@@ -113,9 +113,6 @@ type State interface {
 	GetConsistentPoint() stamp.Stamp
 	// GetTargetDB returns the target database name.
 	GetTargetDB() ident.Ident
-
-	// setConsistentPoint is called from implementations of Events.
-	setConsistentPoint(stamp.Stamp)
 }
 
 // OffsetStamp is a Stamp which can represent itself as an absolute

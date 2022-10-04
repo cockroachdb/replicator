@@ -69,7 +69,7 @@ func (e *serialEvents) OnCommit(ctx context.Context) error {
 		return errors.WithStack(err)
 	}
 
-	e.setConsistentPoint(e.stamp)
+	e.loop.setConsistentPoint(e.stamp)
 	return nil
 }
 
@@ -92,9 +92,6 @@ func (e *serialEvents) OnRollback(_ context.Context, msg Message) error {
 	e.stop()
 	return nil
 }
-
-// setConsistentPoint implements State. It delegates to the loop.
-func (e *serialEvents) setConsistentPoint(s stamp.Stamp) { e.loop.setConsistentPoint(s) }
 
 // reset implements Events.
 func (e *serialEvents) stop() {
