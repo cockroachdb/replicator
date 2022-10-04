@@ -98,9 +98,6 @@ func (f *fanEvents) OnRollback(_ context.Context, msg Message) error {
 	return nil
 }
 
-// setConsistentPoint implements State. It delegates to the loop.
-func (f *fanEvents) setConsistentPoint(s stamp.Stamp) { f.loop.setConsistentPoint(s) }
-
 // reset implements Events.
 func (f *fanEvents) stop() {
 	if f.fan != nil {
