@@ -32,9 +32,6 @@ import (
 var RefreshDelay = flag.Duration("schemaRefresh", time.Minute,
 	"how often to scan for schema changes; set to zero to disable")
 
-// dbSchema is a simplified representation of a SQL database's schema.
-type dbSchema map[ident.Table][]types.ColData
-
 // A watcher maintains an internal cache of a database's schema,
 // allowing callers to receive notifications of schema changes.
 type watcher struct {
@@ -46,7 +43,7 @@ type watcher struct {
 	cond sync.Cond // Condition on mu's RLocker.
 	mu   struct {
 		sync.RWMutex
-		data dbSchema
+		data *types.SchemaData
 	}
 
 	sql struct {
@@ -98,6 +95,13 @@ func newWatcher(
 	return w, cancel, nil
 }
 
+// Get implements types.Watcher.
+func (w *watcher) Get() *types.SchemaData {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.mu.data
+}
+
 // Refresh immediately refreshes the watcher's internal cache. This
 // is intended for use by tests.
 func (w *watcher) Refresh(ctx context.Context, tx pgxtype.Querier) error {
@@ -114,17 +118,32 @@ func (w *watcher) Refresh(ctx context.Context, tx pgxtype.Querier) error {
 }
 
 // Snapshot returns the known tables in the given user-defined schema.
-func (w *watcher) Snapshot(in ident.Schema) map[ident.Table][]types.ColData {
+func (w *watcher) Snapshot(in ident.Schema) *types.SchemaData {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	ret := make(dbSchema, len(w.mu.data))
-	for table, cols := range w.mu.data {
+	ret := &types.SchemaData{
+		Columns: make(map[ident.Table][]types.ColData, len(w.mu.data.Columns)),
+		Order:   make([][]ident.Table, 0, len(w.mu.data.Order)),
+	}
+
+	for table, cols := range w.mu.data.Columns {
 		if in.Contains(table) {
 			// https://github.com/golang/go/wiki/SliceTricks#copy
 			out := make([]types.ColData, len(cols))
 			copy(out, cols)
-			ret[table] = out
+			ret.Columns[table] = out
+		}
+	}
+	for _, tables := range w.mu.data.Order {
+		filtered := make([]ident.Table, 0, len(tables))
+		for _, tbl := range tables {
+			if in.Contains(tbl) {
+				filtered = append(filtered, tbl)
+			}
+		}
+		if len(filtered) > 0 {
+			ret.Order = append(ret.Order, filtered)
 		}
 	}
 	return ret
@@ -136,7 +155,7 @@ func (w *watcher) Snapshot(in ident.Schema) map[ident.Table][]types.ColData {
 func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel func(), _ error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	if _, ok := w.mu.data[table]; !ok {
+	if _, ok := w.mu.data.Columns[table]; !ok {
 		return nil, nil, errors.Errorf("unknown table %s", table)
 	}
 
@@ -152,7 +171,7 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 
 		var last []types.ColData
 		for {
-			next, ok := w.mu.data[table]
+			next, ok := w.mu.data.Columns[table]
 			// Respond to context cancellation or dropping the table.
 			if !ok || ctx.Err() != nil {
 				return
@@ -178,8 +197,10 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 
 const tableTemplate = `SELECT schema_name, table_name FROM [SHOW TABLES FROM %s]`
 
-func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (dbSchema, error) {
-	var ret dbSchema
+func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (*types.SchemaData, error) {
+	ret := &types.SchemaData{
+		Columns: make(map[ident.Table][]types.ColData),
+	}
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		rows, err := tx.Query(ctx, w.sql.tables)
 		if err != nil {
@@ -187,7 +208,6 @@ func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (dbSchema, 
 		}
 		defer rows.Close()
 
-		ret = make(dbSchema)
 		for rows.Next() {
 			var schema, table string
 			if err := rows.Scan(&schema, &table); err != nil {
@@ -198,9 +218,12 @@ func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (dbSchema, 
 			if err != nil {
 				return err
 			}
-			ret[tbl] = cols
+			ret.Columns[tbl] = cols
+
 		}
-		return nil
+
+		ret.Order, err = getDependencyOrder(ctx, tx, w.dbName)
+		return err
 	})
 
 	return ret, errors.Wrap(err, w.sql.tables)
