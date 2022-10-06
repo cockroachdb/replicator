@@ -187,7 +187,7 @@ func TestGetColumns(t *testing.T) {
 				return
 			}
 			tableName := ti.Name()
-			colData, ok := fixture.Watcher.Snapshot(tableName.AsSchema())[tableName]
+			colData, ok := fixture.Watcher.Snapshot(tableName.AsSchema()).Columns[tableName]
 			if !a.Truef(ok, "Snapshot() did not return info for %s", tableName) {
 				return
 			}
