@@ -201,7 +201,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 			tblMuts := make([]types.Mutation, len(jsDocs))
 			ret[tbl] = tblMuts
 			for idx, jsDoc := range jsDocs {
-				colData, ok := s.watcher.Snapshot(s.target)[tbl]
+				colData, ok := s.watcher.Snapshot(s.target).Columns[tbl]
 				if !ok {
 					return nil, errors.Errorf(
 						"dispatch function %s returned unknown table %s", fnName, tbl)
@@ -275,7 +275,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		}
 
 		// Refresh the primary-key values in the mutation.
-		colData, ok := s.watcher.Snapshot(s.target)[table]
+		colData, ok := s.watcher.Snapshot(s.target).Columns[table]
 		if !ok {
 			return mut, false, errors.Errorf("map missing schema data for %s", table)
 		}
