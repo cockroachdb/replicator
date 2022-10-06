@@ -250,7 +250,7 @@ func (r *resolve) Flush(ctx context.Context) (hlc.Time, types.FlushDetail, error
 		}).Trace("attempting to drain")
 
 		// Determine the tables to operate on.
-		targetTables := r.watcher.Snapshot(r.target)
+		targetTables := r.watcher.Snapshot(r.target).Columns
 
 		// Set up the per-table helpers.
 		appliers := make([]types.Applier, 0, len(targetTables))

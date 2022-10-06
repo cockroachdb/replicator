@@ -159,19 +159,37 @@ type ColData struct {
 	Type any
 }
 
+// SchemaData holds SQL schema metadata.
+type SchemaData struct {
+	Columns map[ident.Table][]ColData
+
+	// Order is a two-level slice that represents equivalency-groups
+	// with respect to table foreign-key ordering. That is, if all
+	// updates for tables in Order[N] are applied, then updates in
+	// Order[N+1] can then be applied.
+	//
+	// The need for this data can be revisited if CRDB adds support
+	// for deferrable foreign-key constraints:
+	// https://github.com/cockroachdb/cockroach/issues/31632
+	Order [][]ident.Table
+}
+
 // Watcher allows table metadata to be observed.
 //
 // The methods in this type return column data such that primary key
 // columns are returned first, in their declaration order, followed
 // by all other non-pk columns.
 type Watcher interface {
+	// Get returns a snapshot of all tables in the target database.
+	// The returned struct must not be modified.
+	Get() *SchemaData
 	// Refresh will force the Watcher to immediately query the database
 	// for updated schema information. This is intended for testing and
 	// does not need to be called in the general case.
 	Refresh(context.Context, pgxtype.Querier) error
 	// Snapshot returns the tables known to be part of the given
 	// user-defined schema.
-	Snapshot(in ident.Schema) map[ident.Table][]ColData
+	Snapshot(in ident.Schema) *SchemaData
 	// Watch returns a channel that emits updated column data for the
 	// given table.  The channel will be closed if there
 	Watch(table ident.Table) (_ <-chan []ColData, cancel func(), _ error)
