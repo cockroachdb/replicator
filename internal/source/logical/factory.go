@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/pkg/errors"
 )
 
 type loopCancel struct {
@@ -34,6 +35,7 @@ type Factory struct {
 	fans       *fan.Fans
 	memo       types.Memo
 	pool       *pgxpool.Pool
+	watchers   types.Watchers
 	userscript *script.UserScript
 
 	mu struct {
@@ -110,7 +112,10 @@ func (f *Factory) Get(ctx context.Context, dialect Dialect, options ...Option) (
 
 // newLoop constructs a loop, but does not start or memoize it.
 func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Dialect) (*Loop, error) {
-	var err error
+	watcher, err := f.watchers.Get(ctx, config.TargetDB)
+	if err != nil {
+		return nil, err
+	}
 	if config.ChaosProb > 0 {
 		dialect = WithChaos(dialect, config.ChaosProb)
 	}
@@ -140,6 +145,23 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		appliers: f.appliers,
 		loop:     loop,
 		pool:     f.pool,
+	}
+
+	if config.ForeignKeysEnabled {
+		loop.events.fan = &orderedEvents{
+			Events:  loop.events.fan,
+			Watcher: watcher,
+		}
+		loop.events.serial = &orderedEvents{
+			Events:  loop.events.fan,
+			Watcher: watcher,
+		}
+	} else {
+		// Sanity-check that there are no FKs defined.
+		if len(watcher.Get().Order) > 1 {
+			return nil, errors.New("the destination database has tables with foreign keys, " +
+				"but support for FKs is not enabled")
+		}
 	}
 
 	// Apply logic and configurations defined by the user-script.

@@ -56,6 +56,7 @@ func ProvideFactory(
 	fans *fan.Fans,
 	memo types.Memo,
 	pool *pgxpool.Pool,
+	watchers types.Watchers,
 	userscript *script.UserScript,
 ) (*Factory, func()) {
 	f := &Factory{
@@ -64,6 +65,7 @@ func ProvideFactory(
 		fans:       fans,
 		memo:       memo,
 		pool:       pool,
+		watchers:   watchers,
 		userscript: userscript,
 	}
 	f.mu.loops = make(map[string]*loopCancel)

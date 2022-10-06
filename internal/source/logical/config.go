@@ -60,6 +60,8 @@ type BaseConfig struct {
 	// The number of concurrent connections to use when writing data in
 	// fan mode.
 	FanShards int
+	// Support ordering updates to satisfy foreign key constraints.
+	ForeignKeysEnabled bool
 	// Place the configuration into immediate mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool
@@ -105,6 +107,8 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"apply data without waiting for transaction boundaries")
 	f.IntVar(&c.FanShards, "fanShards", 16,
 		"the number of concurrent connections to use when writing data in fan mode")
+	f.BoolVar(&c.ForeignKeysEnabled, "foreignKeys", false,
+		"re-order updates to satisfy foreign key constraints")
 	f.DurationVar(&c.RetryDelay, "retryDelay", 10*time.Second,
 		"the amount of time to sleep between replication retries")
 	f.Var(ident.NewValue("_cdc_sink", &c.StagingDB), "stagingDB",
@@ -140,6 +144,11 @@ func (c *BaseConfig) Preflight() error {
 	}
 	if c.BytesInFlight == 0 {
 		c.BytesInFlight = defaultBytesInFlight
+	}
+	// Make FK+immediate work by making all updates through a single
+	// db connection.
+	if c.ForeignKeysEnabled {
+		c.FanShards = 1
 	}
 	if c.LoopName == "" {
 		return errors.New("replication loops must be named")
