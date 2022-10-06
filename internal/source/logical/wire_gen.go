@@ -67,7 +67,7 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup5 := ProvideFactory(appliers, config, fans, memoMemo, pool, userScript)
+	factory, cleanup5 := ProvideFactory(appliers, config, fans, memoMemo, pool, watchers, userScript)
 	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
 	if err != nil {
 		cleanup5()

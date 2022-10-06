@@ -63,6 +63,13 @@ func testSmoke(t *testing.T, chaosProb float32) {
 		"CREATE TABLE %s (id STRING PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
 	r.NoError(err)
 
+	// Create a child table, to test the case where an update from a
+	// collection gets written to multiple tables with FK relationships.
+	childTable, err := fixture.CreateTable(ctx, fmt.Sprintf(
+		"CREATE TABLE %%s (id STRING PRIMARY KEY REFERENCES %s ON DELETE CASCADE)",
+		destTable))
+	r.NoError(err)
+
 	// Create a table for a collection-group to be synced.
 	subTable, err := fixture.CreateTable(ctx,
 		"CREATE TABLE %s (id STRING PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
@@ -126,16 +133,17 @@ func testSmoke(t *testing.T, chaosProb float32) {
 
 	cfg := &Config{
 		BaseConfig: logical.BaseConfig{
-			ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
-			BackfillWindow: time.Minute,
-			ChaosProb:      chaosProb,
-			Immediate:      true,
-			LoopName:       "fslogicaltest",
-			RetryDelay:     time.Nanosecond,
-			StandbyTimeout: 10 * time.Millisecond,
-			StagingDB:      fixture.StagingDB.Ident(),
-			TargetConn:     fixture.Pool.Config().ConnString(),
-			TargetDB:       fixture.TestDB.Ident(),
+			ApplyTimeout:       2 * time.Minute, // Increase to make using the debugger easier.
+			BackfillWindow:     time.Minute,
+			ChaosProb:          chaosProb,
+			ForeignKeysEnabled: true,
+			Immediate:          false,
+			LoopName:           "fslogicaltest",
+			RetryDelay:         time.Nanosecond,
+			StandbyTimeout:     10 * time.Millisecond,
+			StagingDB:          fixture.StagingDB.Ident(),
+			TargetConn:         fixture.Pool.Config().ConnString(),
+			TargetDB:           fixture.TestDB.Ident(),
 
 			ScriptConfig: script.Config{
 				MainPath: "/main.ts",
@@ -143,9 +151,15 @@ func testSmoke(t *testing.T, chaosProb float32) {
 					"main.ts": &fstest.MapFile{
 						Data: []byte(fmt.Sprintf(`
 import * as api from "cdc-sink@v1";
-api.configureSource(%[1]s, { target: %[1]s });
+api.configureSource(%[1]s, {
+  deletesTo: %[1]s,            // Use ON DELETE CASCADE
+  dispatch: (doc, meta) => ({
+    %[1]s: [ doc ],            // Pass through to main table
+    %[3]s: [ { id: doc.id } ], // Generate an entry in an FK-referring table.
+  })
+});
 api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
-`, destTable.Name().Table(), subTable.Name().Table())),
+`, destTable.Name().Table(), subTable.Name().Table(), childTable.Name().Table())),
 					},
 				},
 			},
@@ -175,6 +189,17 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	log.Info("waiting for child-table backfill")
+	for {
+		ct, err := childTable.RowCount(ctx)
+		r.NoError(err)
+		if ct == docCount {
+			break
+		}
+		log.Infof("saw only %d documents in child table", ct)
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	log.Info("waiting for collection-group backfill")
 	for {
 		ct, err := subTable.RowCount(ctx)
@@ -199,7 +224,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 				if err := tx.Set(docRef, map[string]any{
 					"v":          fmt.Sprintf("updated %d", i),
 					"updated_at": firestore.ServerTimestamp,
-				}); err != nil {
+				}, firestore.MergeAll); err != nil {
 					return err
 				}
 			}
@@ -207,7 +232,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 				if err := tx.Set(subRef, map[string]any{
 					"v":          fmt.Sprintf("updated %d", i),
 					"updated_at": firestore.ServerTimestamp,
-				}); err != nil {
+				}, firestore.MergeAll); err != nil {
 					return err
 				}
 			}
