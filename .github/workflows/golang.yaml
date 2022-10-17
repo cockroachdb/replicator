@@ -258,6 +258,6 @@ jobs:
         with:
           name: integration-reports
       - name: Summarize
-        uses: test-summary/action@v1
+        uses: test-summary/action@v2
         with:
           paths: junit-*.xml
