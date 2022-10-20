@@ -46,8 +46,11 @@ type chaosBackfiller struct {
 	delegate Backfiller
 }
 
-var _ Backfiller = (*chaosBackfiller)(nil)
-var _ Dialect = (*chaosBackfiller)(nil)
+var (
+	_ Backfiller         = (*chaosBackfiller)(nil)
+	_ ConsistentCallback = (*chaosBackfiller)(nil)
+	_ Dialect            = (*chaosBackfiller)(nil)
+)
 
 func (d *chaosBackfiller) BackfillInto(ctx context.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {
@@ -64,7 +67,21 @@ type chaosDialect struct {
 	prob     float32
 }
 
-var _ Dialect = (*chaosDialect)(nil)
+var (
+	_ ConsistentCallback = (*chaosDialect)(nil)
+	_ Dialect            = (*chaosDialect)(nil)
+)
+
+func (d *chaosDialect) OnConsistent(cp stamp.Stamp) error {
+	if real, ok := d.delegate.(ConsistentCallback); ok {
+		// Only return a chaos error if the real dialect can fail out.
+		if rand.Float32() < d.prob {
+			return ErrChaos
+		}
+		return real.OnConsistent(cp)
+	}
+	return nil
+}
 
 func (d *chaosDialect) ReadInto(ctx context.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {

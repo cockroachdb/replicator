@@ -16,10 +16,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
-	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/google/wire"
 )
 
@@ -29,8 +27,6 @@ var Set = wire.NewSet(
 	apply.Set,
 	fan.Set,
 	memo.Set,
-	resolve.Set,
 	schemawatch.Set,
 	stage.Set,
-	timekeeper.Set,
 )

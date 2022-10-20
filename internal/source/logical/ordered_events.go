@@ -48,6 +48,7 @@ type orderedEvents struct {
 // OnBegin implements Events. It will initialize the orderedEvents
 // fields in response to updated schema information.
 func (e *orderedEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
+	e.reset()
 	deps := e.Watcher.Get().Order
 	if !reflect.DeepEqual(deps, e.lastDeps) {
 		e.lastDeps = deps
@@ -67,18 +68,11 @@ func (e *orderedEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 
 // OnCommit implements Events. It will flush any deferred updates.
 func (e *orderedEvents) OnCommit(ctx context.Context) error {
-	if len(e.deferred) > 0 {
-		defer func() {
-			for idx, defs := range e.deferred {
-				e.deferred[idx] = defs[:0:batches.Size()]
-			}
-		}()
-
-		for _, defs := range e.deferred {
-			for _, def := range defs {
-				if err := e.Events.OnData(ctx, def.source, def.target, def.muts); err != nil {
-					return err
-				}
+	defer e.reset()
+	for _, defs := range e.deferred {
+		for _, def := range defs {
+			if err := e.Events.OnData(ctx, def.source, def.target, def.muts); err != nil {
+				return err
 			}
 		}
 	}
@@ -100,4 +94,17 @@ func (e *orderedEvents) OnData(
 	}
 	e.deferred[destLevel-1] = append(e.deferred[destLevel-1], deferredData{muts, source, target})
 	return nil
+}
+
+// OnRollback implements Events. It resets the internal state.
+func (e *orderedEvents) OnRollback(ctx context.Context, msg Message) error {
+	e.reset()
+	return e.Events.OnRollback(ctx, msg)
+}
+
+// reset cleans up the internal state, ready for a call to OnBegin.
+func (e *orderedEvents) reset() {
+	for idx, defs := range e.deferred {
+		e.deferred[idx] = defs[:0:batches.Size()]
+	}
 }

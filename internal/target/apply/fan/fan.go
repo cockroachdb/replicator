@@ -27,7 +27,7 @@ import (
 )
 
 // A ConsistentCallback is passed to Fans.New.
-type ConsistentCallback func(stamp.Stamp)
+type ConsistentCallback func(stamp.Stamp) error
 
 // Fans is a factory for constructing Fan instances.
 type Fans struct {
@@ -40,7 +40,7 @@ func (f *Fans) New(
 	applyTimeout time.Duration, onConsistent ConsistentCallback, shardCount int, bytesInFlight int,
 ) (_ *Fan, cancel func(), _ error) {
 	if onConsistent == nil {
-		onConsistent = func(stamp.Stamp) {}
+		onConsistent = func(stamp.Stamp) error { return nil }
 	}
 
 	ret := &Fan{
@@ -128,8 +128,7 @@ func (f *Fan) Mark(s stamp.Stamp) error {
 	// If there are no active buckets, we treat the mark as being
 	// consistent.
 	if len(f.mu.buckets) == 0 {
-		f.onConsistent(s)
-		return nil
+		return f.onConsistent(s)
 	}
 
 	for _, bucket := range f.mu.buckets {
@@ -225,7 +224,7 @@ func (f *Fan) flushLoop() {
 // Handle notifications from each shard's bucket. When all shards have
 // agreed on a new consistent value, we can report that back to the
 // owner.
-func (f *Fan) onBucketConsistent(b *bucket, consistent stamp.Stamp) {
+func (f *Fan) onBucketConsistent(b *bucket, consistent stamp.Stamp) error {
 	var min stamp.Stamp
 	var changed bool
 
@@ -240,8 +239,9 @@ func (f *Fan) onBucketConsistent(b *bucket, consistent stamp.Stamp) {
 
 	// Perform callback outside critical section.
 	if changed {
-		f.onConsistent(min)
+		return f.onConsistent(min)
 	}
+	return nil
 }
 
 // stop will shut down the flush loop. This method blocks until all

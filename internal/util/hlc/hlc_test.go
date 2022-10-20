@@ -11,6 +11,7 @@
 package hlc
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"testing"
@@ -44,7 +45,7 @@ func TestParse(t *testing.T) {
 		{"1233", false, 0, 0},
 		{".1233", false, 0, 0},
 		{"123.123", false, 123, 123},
-		{"0.0", false, 0, 0},
+		{"0.0000000000", true, 0, 0},
 		{"1586019746136571000.0000000000", true, 1586019746136571000, 0},
 		{"1586019746136571000.0000000001", true, 1586019746136571000, 1},
 		{"9223372036854775807.2147483647", true, math.MaxInt64, math.MaxInt32},
@@ -61,6 +62,10 @@ func TestParse(t *testing.T) {
 				bytes, err := actual.MarshalJSON()
 				a.NoError(err)
 				a.Equal([]byte(fmt.Sprintf("%q", test.testcase)), bytes)
+
+				var unmarshaled Time
+				a.NoError(json.Unmarshal(bytes, &unmarshaled))
+				a.Equal(actual, unmarshaled)
 			} else if !test.expectedPass {
 				a.Error(actualErr)
 			}

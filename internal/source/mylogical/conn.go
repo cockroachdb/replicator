@@ -117,7 +117,7 @@ func (c *conn) Process(
 		case *replication.XIDEvent:
 			// On commit should preserve the GTIDs so we can verify consistency,
 			// and restart the process from the last committed transaction.
-			log.Tracef("Commit")
+			log.Tracef("Tx")
 			if err := events.OnCommit(ctx); err != nil {
 				return err
 			}

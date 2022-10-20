@@ -118,24 +118,31 @@ func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
 
 // setConsistentPoint is safe to call from any goroutine. It will
 // occasionally persist the consistent point to the memo table.
-func (l *loop) setConsistentPoint(p stamp.Stamp) {
+func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 	l.consistentPoint.L.Lock()
 	defer l.consistentPoint.L.Unlock()
+
+	// Notify Dialect instances that have explicit coordination needs
+	// that the consistent point is about to advance.
+	if cb, ok := l.dialect.(ConsistentCallback); ok {
+		if err := cb.OnConsistent(p); err != nil {
+			return errors.Wrap(err, "consistent point not advancing")
+		}
+	}
+
 	log.Tracef("loop %s new consistent point %s -> %s", l.config.LoopName, l.consistentPoint.stamp, p)
 	l.consistentPoint.stamp = p
 	l.consistentPoint.Broadcast()
 
-	if l.config.LoopName == "" {
-		return
-	}
 	if time.Now().Before(l.standbyDeadline) {
-		return
+		return nil
 	}
 	if err := l.storeConsistentPoint(p); err != nil {
-		log.WithError(err).Warn("could not persistent consistent point")
+		return errors.Wrap(err, "could not persistent consistent point")
 	}
 	l.standbyDeadline = time.Now().Add(l.config.StandbyTimeout)
 	log.Tracef("Saved checkpoint for %s", l.config.LoopName)
+	return nil
 }
 
 // storeConsistentPoint commits the given stamp to the memo table.

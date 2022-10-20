@@ -11,8 +11,8 @@
 package stdpool
 
 import (
+	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
@@ -24,6 +24,30 @@ import (
 var (
 	hostLabels = []string{"host"}
 
+	poolAcquireCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pool_acquire_wait_count",
+		Help: "the total number of times we waited to add a connection to the pool",
+	}, hostLabels)
+	poolAcquireDelay = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pool_acquire_wait_seconds",
+		Help: "the total amount of time spent waiting for connection acquisition",
+	}, hostLabels)
+	poolAcquiredCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pool_acquired_connection_count",
+		Help: "the number of in-use database connections",
+	}, hostLabels)
+	poolConstructingCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pool_constructing_connection_count",
+		Help: "the number of database connections that are being constructed",
+	}, hostLabels)
+	poolIdleCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pool_idle_connection_count",
+		Help: "the number of idle database connections",
+	}, hostLabels)
+	poolMaxCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "pool_max_connection_count",
+		Help: "the maximum number of connections in the pool",
+	}, hostLabels)
 	poolDialErrors = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "pool_dial_error_count",
 		Help: "the number of times a network connection could not be established",
@@ -59,73 +83,32 @@ func PublishMetrics(pool *pgxpool.Pool) (cancel func()) {
 			pool.Config().ConnConfig.Host, pool.Config().ConnConfig.Port),
 	}
 
-	// Each call to Stat() triggers quite a bit of coordination overhead
-	// within the pool implementation to count the connections. Given
-	// the unpredictable nature of the callbacks below, we want to
-	// clamp the maximum rate at which Stat() is called to 1 QPS.
-	var lastSample time.Time
-	var lastStat *pgxpool.Stat
-	var statMu sync.Mutex
-	sample := func() *pgxpool.Stat {
-		statMu.Lock()
-		defer statMu.Unlock()
-		if time.Since(lastSample) <= time.Second {
-			return lastStat
+	// Update pool stats gauges at 1 QPS.
+	acquireCount := poolAcquireCount.With(labels)
+	acquireDelay := poolAcquireDelay.With(labels)
+	acquiredCount := poolAcquiredCount.With(labels)
+	constructingCount := poolConstructingCount.With(labels)
+	idleCount := poolIdleCount.With(labels)
+	maxCount := poolMaxCount.With(labels)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			stat := pool.Stat()
+			acquireCount.Set(float64(stat.EmptyAcquireCount()))
+			acquireDelay.Set(stat.AcquireDuration().Seconds())
+			acquiredCount.Set(float64(stat.AcquiredConns()))
+			constructingCount.Set(float64(stat.ConstructingConns()))
+			idleCount.Set(float64(stat.IdleConns()))
+			maxCount.Set(float64(stat.MaxConns()))
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
 		}
+	}()
 
-		lastSample = time.Now()
-		lastStat = pool.Stat()
-		return lastStat
-	}
-
-	collectors := []prometheus.Collector{
-		promauto.NewCounterFunc(prometheus.CounterOpts{
-			Name:        "pool_acquire_wait_count",
-			Help:        "the total number of times we waited to add a connection to the pool",
-			ConstLabels: labels,
-		}, func() float64 {
-			return float64(sample().EmptyAcquireCount())
-		}),
-		promauto.NewCounterFunc(prometheus.CounterOpts{
-			Name:        "pool_acquire_wait_seconds",
-			Help:        "the total amount of time spent waiting for connection acquisition",
-			ConstLabels: labels,
-		}, func() float64 {
-			return sample().AcquireDuration().Seconds()
-		}),
-		promauto.NewGaugeFunc(prometheus.GaugeOpts{
-			Name:        "pool_acquired_connection_count",
-			Help:        "the number of in-use database connections",
-			ConstLabels: labels,
-		}, func() float64 {
-			return float64(sample().AcquiredConns())
-		}),
-		promauto.NewGaugeFunc(prometheus.GaugeOpts{
-			Name:        "pool_constructing_connection_count",
-			Help:        "the number of database connections that are being constructed",
-			ConstLabels: labels,
-		}, func() float64 {
-			return float64(sample().ConstructingConns())
-		}),
-		promauto.NewGaugeFunc(prometheus.GaugeOpts{
-			Name:        "pool_idle_connection_count",
-			Help:        "the number of idle database connections",
-			ConstLabels: labels,
-		}, func() float64 {
-			return float64(sample().IdleConns())
-		}),
-		promauto.NewGaugeFunc(prometheus.GaugeOpts{
-			Name:        "pool_max_connection_count",
-			Help:        "the maximum number of connections in the pool",
-			ConstLabels: labels,
-		}, func() float64 {
-			return float64(sample().MaxConns())
-		}),
-	}
-
-	return func() {
-		for _, c := range collectors {
-			prometheus.DefaultRegisterer.Unregister(c)
-		}
-	}
+	return cancel
 }

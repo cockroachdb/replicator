@@ -17,7 +17,6 @@ package fslogical
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -113,21 +112,12 @@ func testSmoke(t *testing.T, chaosProb float32) {
 
 	x := map[string]struct{}{}
 	for _, doc := range docRefs {
-		if _, found := x[doc.ID]; found {
-			runtime.Breakpoint()
-		}
 		x[doc.ID] = struct{}{}
 	}
 	for _, doc := range subRefs {
-		if _, found := x[doc.ID]; found {
-			runtime.Breakpoint()
-		}
 		x[doc.ID] = struct{}{}
 	}
 	for _, doc := range dynRefs {
-		if _, found := x[doc.ID]; found {
-			runtime.Breakpoint()
-		}
 		x[doc.ID] = struct{}{}
 	}
 
@@ -137,7 +127,6 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			BackfillWindow:     time.Minute,
 			ChaosProb:          chaosProb,
 			ForeignKeysEnabled: true,
-			Immediate:          false,
 			LoopName:           "fslogicaltest",
 			RetryDelay:         time.Nanosecond,
 			StandbyTimeout:     10 * time.Millisecond,

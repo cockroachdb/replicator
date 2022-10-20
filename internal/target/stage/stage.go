@@ -26,29 +26,38 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/jackc/pgconn"
 	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 // stage implements a storage and retrieval mechanism for staging
 // Mutation instances.
 type stage struct {
 	// The staging table that holds the mutations.
-	stage ident.Table
+	stage      ident.Table
+	retireFrom hlc.Time // Makes subsequent calls to Retire() a bit faster.
 
-	drainCount    prometheus.Counter
-	drainDuration prometheus.Observer
-	drainError    prometheus.Counter
-	storeCount    prometheus.Counter
-	storeDuration prometheus.Observer
-	storeError    prometheus.Counter
+	retireDuration prometheus.Observer
+	retireError    prometheus.Counter
+	selectCount    prometheus.Counter
+	selectDuration prometheus.Observer
+	selectError    prometheus.Counter
+	storeCount     prometheus.Counter
+	storeDuration  prometheus.Observer
+	storeError     prometheus.Counter
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
-		drain string // drain rows from the staging table
-		store string // store mutations
+		retire     string // Delete a batch of staged mutations
+		store      string // store mutations
+		sel        string // select all rows in the timeframe from the staging table
+		selPartial string // select limited number of rows from the staging table
 	}
 }
 
@@ -76,51 +85,101 @@ CREATE TABLE IF NOT EXISTS %s (
 
 	labels := metrics.TableValues(target)
 	s := &stage{
-		stage:         table,
-		drainCount:    stageDrainCount.WithLabelValues(labels...),
-		drainDuration: stageDrainDurations.WithLabelValues(labels...),
-		drainError:    stageDrainErrors.WithLabelValues(labels...),
-		storeCount:    stageStoreCount.WithLabelValues(labels...),
-		storeDuration: stageStoreDurations.WithLabelValues(labels...),
-		storeError:    stageStoreErrors.WithLabelValues(labels...),
+		stage:          table,
+		retireDuration: stageRetireDurations.WithLabelValues(labels...),
+		retireError:    stageRetireErrors.WithLabelValues(labels...),
+		selectCount:    stageSelectCount.WithLabelValues(labels...),
+		selectDuration: stageSelectDurations.WithLabelValues(labels...),
+		selectError:    stageSelectErrors.WithLabelValues(labels...),
+		storeCount:     stageStoreCount.WithLabelValues(labels...),
+		storeDuration:  stageStoreDurations.WithLabelValues(labels...),
+		storeError:     stageStoreErrors.WithLabelValues(labels...),
 	}
 
-	s.sql.drain = fmt.Sprintf(drainTemplate, table)
+	s.sql.retire = fmt.Sprintf(retireTemplate, table)
+	s.sql.sel = fmt.Sprintf(selectTemplateAll, table)
+	s.sql.selPartial = fmt.Sprintf(selectTemplatePartial, table)
 	s.sql.store = fmt.Sprintf(putTemplate, table)
 
 	return s, nil
 }
 
-const drainTemplate = `
-WITH d AS (DELETE FROM %s
-WHERE (nanos, logical) BETWEEN ($1, $2) AND ($3, $4)
-RETURNING nanos, logical, key, mut)
-SELECT DISTINCT ON (key) nanos, logical, key, mut FROM d
-ORDER BY key ASC, nanos DESC, logical DESC
-`
+// GetTable returns the table that the stage is storing into.
+func (s *stage) GetTable() ident.Table { return s.stage }
 
-// Drain dequeues mutations between the given timestamps.
-func (s *stage) Drain(
+// ($1, $2) starting resolved timestamp
+// ($3, $4) ending resolved timestamp
+//
+// This query drains all mutations between the given timestamps,
+// returning the latest timestamped value for any given key.
+const selectTemplateAll = `
+SELECT key, nanos, logical, mut
+  FROM %[1]s
+ WHERE (nanos, logical) BETWEEN ($1, $2) AND ($3, $4)
+ ORDER BY nanos, logical`
+
+// ($1, $2) starting resolved timestamp
+// ($3, $4) ending resolved timestamp
+// $5 starting key to skip
+// $6 limit
+//
+// For the kind of very large datasets that we see in a backfill
+// scenario, it's not feasible to deduplicate updates for a given key
+// with in the time range.  We would have to scan forward to all
+// timestamps within the given timestamp range to see if there's a key
+// value to be had. An index over (key, nanos, time) doesn't help,
+// either for key-based pagination, since we now have to read through
+// all keys to identify those with a mutation in the desired window.
+const selectTemplatePartial = `
+SELECT key, nanos, logical, mut
+  FROM %[1]s
+ WHERE (nanos, logical, key) > ($1, $2, $5)
+   AND (nanos, logical) <= ($3, $4) 
+ ORDER BY nanos, logical, key
+ LIMIT $6`
+
+// Select implements types.Stager.
+func (s *stage) Select(
 	ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time,
 ) ([]types.Mutation, error) {
-	var ret []types.Mutation
+	return s.SelectPartial(ctx, tx, prev, next, nil, -1)
+}
+
+// SelectPartial implements types.Stager.
+func (s *stage) SelectPartial(
+	ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time, afterKey []byte, limit int,
+) ([]types.Mutation, error) {
+	if hlc.Compare(prev, next) >= 0 {
+		return nil, errors.Errorf("timestamps out of order: %s >= %s", prev, next)
+	}
+
 	start := time.Now()
+	var ret []types.Mutation
+	if limit > 0 {
+		ret = make([]types.Mutation, 0, limit)
+	}
+
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		rows, err := tx.Query(ctx, s.sql.drain,
-			prev.Nanos(), prev.Logical(), next.Nanos(), next.Logical(),
-		)
+		ret = ret[:0]
+		var rows pgx.Rows
+		var err error
+		if limit <= 0 {
+			rows, err = tx.Query(ctx, s.sql.sel,
+				prev.Nanos(), prev.Logical(), next.Nanos(), next.Logical())
+		} else {
+			rows, err = tx.Query(ctx, s.sql.selPartial,
+				prev.Nanos(), prev.Logical(), next.Nanos(), next.Logical(), string(afterKey), limit)
+		}
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 
-		// Clear any previous loop, but save the backing array.
-		ret = ret[:0]
 		for rows.Next() {
 			var mut types.Mutation
 			var nanos int64
 			var logical int
-			if err := rows.Scan(&nanos, &logical, &mut.Key, &mut.Data); err != nil {
+			if err := rows.Scan(&mut.Key, &nanos, &logical, &mut.Data); err != nil {
 				return err
 			}
 			mut.Time = hlc.New(nanos, logical)
@@ -130,23 +189,35 @@ func (s *stage) Drain(
 	})
 
 	if err != nil {
-		s.drainError.Inc()
-		return nil, errors.Wrapf(err, "drain %s [%s, %s]", s.stage, prev, next)
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
+			// Staging table not found. Most likely cause is a reference
+			// table which was restored via backup for which we haven't
+			// seen any updates.
+			if pgErr.Code == "42P01" {
+				return nil, nil
+			}
+		}
+		s.selectError.Inc()
+		return nil, errors.Wrapf(err, "select %s [%s, %s]", s.stage, prev, next)
+	}
+
+	// Don't bother recording stats about no-op selects.
+	if len(ret) == 0 {
+		return nil, nil
 	}
 
 	d := time.Since(start)
-	s.drainDuration.Observe(d.Seconds())
-	s.drainCount.Add(float64(len(ret)))
+	s.selectDuration.Observe(d.Seconds())
+	s.selectCount.Add(float64(len(ret)))
 	log.WithFields(log.Fields{
 		"count":    len(ret),
 		"duration": d,
+		"next":     next,
+		"prev":     prev,
 		"target":   s.stage,
-	}).Debug("drained mutations")
+	}).Debug("select mutations")
 	return ret, nil
 }
-
-// GetTable returns the table that the stage is storing into.
-func (s *stage) GetTable() ident.Table { return s.stage }
 
 // The extra cast on $4 is because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468
@@ -157,9 +228,28 @@ SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::ST
 // Store stores some number of Mutations into the database.
 func (s *stage) Store(ctx context.Context, db pgxtype.Querier, mutations []types.Mutation) error {
 	start := time.Now()
-	err := batches.Batch(len(mutations), func(begin, end int) error {
-		return s.putOne(ctx, db, mutations[begin:end])
-	})
+
+	// If we're working with a pool, and not a transaction, we'll stage
+	// the data in a concurrent manner.
+	var err error
+	if _, isPool := db.(*pgxpool.Pool); isPool {
+		eg, errCtx := errgroup.WithContext(ctx)
+		err = batches.Batch(len(mutations), func(begin, end int) error {
+			eg.Go(func() error {
+				return s.putOne(errCtx, db, mutations[begin:end])
+			})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		err = eg.Wait()
+	} else {
+		err = batches.Batch(len(mutations), func(begin, end int) error {
+			return s.putOne(ctx, db, mutations[begin:end])
+		})
+	}
+
 	if err != nil {
 		s.storeError.Inc()
 		return err
@@ -196,4 +286,52 @@ func (s *stage) putOne(ctx context.Context, db pgxtype.Querier, mutations []type
 
 	_, err := db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons)
 	return errors.Wrap(err, s.sql.store)
+}
+
+const retireTemplate = `
+WITH d AS (
+     DELETE FROM %s
+      WHERE (nanos, logical) BETWEEN ($1, $2) AND ($3, $4)
+   ORDER BY nanos, logical
+      LIMIT $5
+  RETURNING nanos, logical)
+SELECT last_value(nanos) OVER (), last_value(logical) OVER ()
+  FROM d
+ LIMIT 1`
+
+// Retire deletes staged data up to the given end time.
+func (s *stage) Retire(ctx context.Context, db pgxtype.Querier, end hlc.Time) error {
+	start := time.Now()
+	err := retry.Retry(ctx, func(ctx context.Context) error {
+		for hlc.Compare(s.retireFrom, end) < 0 {
+			var lastNanos int64
+			var lastLogical int
+			err := db.QueryRow(ctx, s.sql.retire,
+				s.retireFrom.Nanos(),
+				s.retireFrom.Logical(),
+				end.Nanos(),
+				end.Logical(),
+				batches.Size(),
+			).Scan(&lastNanos, &lastLogical)
+
+			if errors.Is(err, pgx.ErrNoRows) {
+				break
+			}
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			s.retireFrom = hlc.New(lastNanos, lastLogical)
+		}
+		// If there was nothing to delete, still advance the marker.
+		if hlc.Compare(s.retireFrom, end) < 0 {
+			s.retireFrom = end
+		}
+		return nil
+	})
+	if err == nil {
+		s.retireDuration.Observe(time.Since(start).Seconds())
+	} else {
+		s.retireError.Inc()
+	}
+	return err
 }

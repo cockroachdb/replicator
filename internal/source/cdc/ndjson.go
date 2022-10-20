@@ -108,7 +108,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request) error {
 	// In immediate mode, we want to apply the mutations immediately.
 	// The CDC feed guarantees in-order delivery for individual rows.
 	var flush func() error
-	if h.Mode == IgnoreTX {
+	if h.Config.Immediate {
 		applier, err := h.Appliers.Get(ctx, target)
 		if err != nil {
 			return err

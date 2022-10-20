@@ -61,11 +61,12 @@ func TestFanSmoke(t *testing.T) {
 
 	imm, cancel, err := fixture.Fans.New(
 		2*time.Minute,
-		func(stamp stamp.Stamp) {
+		func(stamp stamp.Stamp) error {
 			consistentUpdated.L.Lock()
 			defer consistentUpdated.L.Unlock()
 			consistentPoint = stamp.(intStamp)
 			consistentUpdated.Broadcast()
+			return nil
 		},
 		16,        // shards
 		1024*1024, // backpressure bytes chosen to force delays
@@ -118,11 +119,12 @@ func TestBucketSaturation(t *testing.T) {
 
 	imm, cancel, err := fixture.Fans.New(
 		2*time.Minute,
-		func(stamp stamp.Stamp) {
+		func(stamp stamp.Stamp) error {
 			consistentUpdated.L.Lock()
 			defer consistentUpdated.L.Unlock()
 			consistentCallbacks++
 			consistentUpdated.Broadcast()
+			return nil
 		},
 		16,        // shards
 		1024*1024, // backpressure bytes chosen to force delays
