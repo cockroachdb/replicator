@@ -18,26 +18,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/reject"
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHandler(t *testing.T) {
-	t.Run("deferred", func(t *testing.T) { testHandler(t, PreserveTX) })
-	t.Run("immediate", func(t *testing.T) { testHandler(t, IgnoreTX) })
+	t.Run("deferred", func(t *testing.T) { testHandler(t, false) })
+	t.Run("immediate", func(t *testing.T) { testHandler(t, true) })
 }
 
-func testHandler(t *testing.T, mode ApplyMode) {
+func testHandler(t *testing.T, immediate bool) {
 	t.Helper()
-	a := assert.New(t)
+	r := require.New(t)
 
-	fixture, cancel, err := newTestFixture(mode)
-	if !a.NoError(err) {
-		return
-	}
+	baseFixture, cancel, err := sinktest.NewFixture()
+	r.NoError(err)
+	defer cancel()
+
+	fixture, cancel, err := newTestFixture(baseFixture, &Config{
+		MetaTableName: ident.New("resolved_timestamps"),
+		BaseConfig: logical.BaseConfig{
+			Immediate:  immediate,
+			LoopName:   "changefeed",
+			StagingDB:  baseFixture.StagingDB.Ident(),
+			TargetConn: baseFixture.Pool.Config().ConnString(),
+			TargetDB:   baseFixture.TestDB.Ident(),
+		},
+	})
+	r.NoError(err)
 	defer cancel()
 
 	ctx := fixture.Context
@@ -45,37 +59,24 @@ func testHandler(t *testing.T, mode ApplyMode) {
 
 	tableInfo, err := fixture.CreateTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
-	maybeFlush := func(target ident.Schematic) error {
-		if mode == IgnoreTX {
+	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
+		if immediate {
 			return nil
 		}
-		resolver, err := h.Resolvers.Get(ctx, target.AsSchema())
+		resolver, err := h.Resolvers.get(ctx, target.AsSchema())
 		if err != nil {
 			return err
 		}
-		for {
-			_, detail, err := resolver.Flush(ctx)
-			if err != nil {
-				return err
-			}
-			// If another process was flushing the same target, wait
-			// until it's done.
-			if detail == types.FlushBlocked {
-				time.Sleep(time.Millisecond)
-				continue
-			}
-			// There may be more work to perform.
-			if detail > 0 {
-				continue
-			}
-			return nil
+		waitFor := &resolvedStamp{CommittedTime: expect}
+		resolver.fastWakeup <- struct{}{}
+		for resolver.loop.GetConsistentPoint().Less(waitFor) && ctx.Err() == nil {
+			time.Sleep(time.Millisecond)
 		}
+		return nil
 	}
 
 	// Validate the "classic" endpoints where files containing
@@ -101,7 +102,7 @@ func testHandler(t *testing.T, mode ApplyMode) {
 			target:    tableInfo.Name(),
 			timestamp: hlc.New(2, 0),
 		}))
-		a.NoError(maybeFlush(tableInfo.Name()))
+		a.NoError(maybeFlush(tableInfo.Name(), hlc.New(2, 0)))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -120,7 +121,7 @@ func testHandler(t *testing.T, mode ApplyMode) {
 			target:    tableInfo.Name(),
 			timestamp: hlc.New(5, 0),
 		}))
-		a.NoError(maybeFlush(tableInfo.Name()))
+		a.NoError(maybeFlush(tableInfo.Name(), hlc.New(5, 0)))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -148,7 +149,7 @@ func testHandler(t *testing.T, mode ApplyMode) {
 			target: schema,
 			body:   strings.NewReader(`{ "resolved" : "20.0" }`),
 		}))
-		a.NoError(maybeFlush(schema))
+		a.NoError(maybeFlush(schema, hlc.New(20, 0)))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -169,7 +170,7 @@ func testHandler(t *testing.T, mode ApplyMode) {
 			target: schema,
 			body:   strings.NewReader(`{ "resolved" : "40.0" }`),
 		}))
-		a.NoError(maybeFlush(schema))
+		a.NoError(maybeFlush(schema, hlc.New(40, 0)))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -192,27 +193,6 @@ func testHandler(t *testing.T, mode ApplyMode) {
 			target: ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
 			body:   strings.NewReader(""),
 		}))
-	})
-
-	// Advance the resolved timestamp for the table to well into the
-	// future and then attempt to roll it back.
-	t.Run("resolved-goes-backwards", func(t *testing.T) {
-		a := assert.New(t)
-
-		a.NoError(h.resolved(ctx, &request{
-			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
-			timestamp: hlc.New(50000, 0),
-		}))
-		err := h.resolved(ctx, &request{
-			target:    ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
-			timestamp: hlc.New(25, 0),
-		})
-		if mode == IgnoreTX {
-			// Resolved timestamp tracking is disabled in immediate mode.
-			a.NoError(err)
-		} else if a.Error(err) {
-			a.Contains(err.Error(), "backwards")
-		}
 	})
 }
 
@@ -241,5 +221,101 @@ func TestRejectedAuth(t *testing.T) {
 			h.ServeHTTP(w, req)
 			a.Equal(tc.code, w.Code)
 		})
+	}
+}
+
+// This test adds a large number of rows, in excess of what can be
+// processed as a single transaction. We want to verify that the code in
+// the backfill path can make progress, even if we can't guarantee
+// fully-transactional behavior. There is a chaotic version of this test
+// to validate the variety of failure modes.
+func TestMassBackfillWithForeignKeys(t *testing.T) {
+	t.Run("normal", func(t *testing.T) { testMassBackfillWithForeignKeys(t, 0) })
+	t.Run("chaos", func(t *testing.T) { testMassBackfillWithForeignKeys(t, 0.01) })
+}
+
+func testMassBackfillWithForeignKeys(t *testing.T, chaosProb float32) {
+	const rowCount = 10_000
+	r := require.New(t)
+
+	baseFixture, cancel, err := sinktest.NewFixture()
+	r.NoError(err)
+	defer cancel()
+
+	fixture, cancel, err := newTestFixture(baseFixture, &Config{
+		BackfillBatchSize: rowCount/10 - 1, // -1 to check for fenceposting.
+		MetaTableName:     ident.New("resolved_timestamps"),
+		BaseConfig: logical.BaseConfig{
+			ApplyTimeout:       time.Second,
+			BackfillWindow:     time.Minute,
+			ChaosProb:          chaosProb,
+			FanShards:          16,
+			ForeignKeysEnabled: true,
+			LoopName:           "changefeed",
+			StagingDB:          baseFixture.StagingDB.Ident(),
+			RetryDelay:         time.Nanosecond,
+			TargetConn:         baseFixture.Pool.Config().ConnString(),
+			TargetDB:           baseFixture.TestDB.Ident(),
+		},
+	})
+	r.NoError(err)
+	defer cancel()
+
+	ctx := fixture.Context
+	h := fixture.Handler
+
+	parent, err := fixture.CreateTable(ctx,
+		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
+	r.NoError(err)
+
+	child, err := fixture.CreateTable(ctx, fmt.Sprintf(
+		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
+		parent.Name()))
+	r.NoError(err)
+
+	grand, err := fixture.CreateTable(ctx, fmt.Sprintf(
+		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
+		child.Name()))
+	r.NoError(err)
+
+	for i := 0; i < rowCount; i += 10 {
+		// Stage data, but stage child data before parent data.
+		for _, tbl := range []ident.Table{child.Name(), parent.Name(), grand.Name()} {
+			r.NoError(h.ndjson(ctx, &request{
+				target: tbl,
+				body: strings.NewReader(fmt.Sprintf(`
+{ "after" : { "pk" : %[1]d, "v" : %[1]d }, "key" : [ %[1]d ], "updated" : "%[1]d.0" }
+{ "after" : { "pk" : %[2]d, "v" : %[2]d }, "key" : [ %[2]d ], "updated" : "%[2]d.0" }
+{ "after" : { "pk" : %[3]d, "v" : %[3]d }, "key" : [ %[3]d ], "updated" : "%[3]d.0" }
+{ "after" : { "pk" : %[4]d, "v" : %[4]d }, "key" : [ %[4]d ], "updated" : "%[4]d.0" }
+{ "after" : { "pk" : %[5]d, "v" : %[5]d }, "key" : [ %[5]d ], "updated" : "%[5]d.0" }
+{ "after" : { "pk" : %[6]d, "v" : %[6]d }, "key" : [ %[6]d ], "updated" : "%[6]d.0" }
+{ "after" : { "pk" : %[7]d, "v" : %[7]d }, "key" : [ %[7]d ], "updated" : "%[7]d.0" }
+{ "after" : { "pk" : %[8]d, "v" : %[8]d }, "key" : [ %[8]d ], "updated" : "%[8]d.0" }
+{ "after" : { "pk" : %[9]d, "v" : %[9]d }, "key" : [ %[9]d ], "updated" : "%[9]d.0" }
+{ "after" : { "pk" : %[10]d, "v" : %[10]d }, "key" : [ %[10]d ], "updated" : "%[10]d.0" }`,
+					i+1, i+2, i+3, i+4, i+5, i+6, i+7, i+8, i+9, i+10)),
+			}))
+		}
+	}
+	log.Info("finished filling data")
+
+	// Send a resolved timestamp that needs to dequeue many rows.
+	r.NoError(h.resolved(ctx, &request{
+		target:    parent.Name(),
+		timestamp: hlc.New(rowCount+1, 0),
+	}))
+
+	// Wait for rows to appear.
+	for _, tbl := range []ident.Table{parent.Name(), child.Name(), grand.Name()} {
+		for {
+			count, err := sinktest.GetRowCount(ctx, fixture.Pool, tbl)
+			r.NoError(err)
+			log.Infof("saw %d of %d rows in %s", count, rowCount, tbl)
+			if count == rowCount {
+				break
+			}
+			time.Sleep(time.Second)
+		}
 	}
 }

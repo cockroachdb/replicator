@@ -16,23 +16,21 @@ package server
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/google/wire"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4/pgxpool"
 )
 
-func NewServer(ctx context.Context, config Config) (*Server, func(), error) {
+func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,
+		logical.Set,
+		script.Set,
 		target.Set,
-		// Additional bindings to create a production-ready injector.
-		ProvidePool,
-		ProvideStagingDB,
-		ProvideMetaTable,
-		ProvideTimeTable,
-		wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
+		wire.Bind(new(logical.Config), new(*Config)),
+		wire.FieldsOf(new(*Config), "CDC"),
 	))
 }

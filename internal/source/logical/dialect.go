@@ -37,6 +37,14 @@ type Backfiller interface {
 	BackfillInto(ctx context.Context, ch chan<- Message, state State) error
 }
 
+// ConsistentCallback is an optional interface that may be implemented
+// by a Dialect.
+type ConsistentCallback interface {
+	// OnConsistent will be called whenever the Dialect's logical loop
+	// has advanced to a new consistent point. This callback will block
+	OnConsistent(cp stamp.Stamp) error
+}
+
 // Dialect encapsulates the source-specific implementation details.
 type Dialect interface {
 	// ReadInto represents a potentially-fragile source of

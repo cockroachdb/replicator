@@ -69,8 +69,7 @@ func (e *serialEvents) OnCommit(ctx context.Context) error {
 		return errors.WithStack(err)
 	}
 
-	e.loop.setConsistentPoint(e.stamp)
-	return nil
+	return e.loop.setConsistentPoint(e.stamp)
 }
 
 // OnData implements Events.

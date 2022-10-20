@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	defaultApplyTimeout  = 30 * time.Second
-	defaultRetryDelay    = 10 * time.Second
-	defaultTargetDBConns = 1024
-	defaultBytesInFlight = 10 * 1024 * 1024
+	defaultApplyTimeout   = 30 * time.Second
+	defaultRetryDelay     = 10 * time.Second
+	defaultStandbyTimeout = 5 * time.Second
+	defaultTargetDBConns  = 1024
+	defaultBytesInFlight  = 10 * 1024 * 1024
 )
 
 // Config is implemented by dialects. This interface exists to allow coordination of
@@ -65,7 +66,7 @@ type BaseConfig struct {
 	// Place the configuration into immediate mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool
-	// If present, uniquely identifies the replication loop.
+	// Uniquely identifies the replication loop.
 	LoopName string
 	// The amount of time to sleep between replication-loop retries.
 	// If zero, a default value will be used.
@@ -77,7 +78,7 @@ type BaseConfig struct {
 	// The name of a SQL database in the target cluster to store
 	// metadata in.
 	StagingDB ident.Ident
-	// Connection string for the target cluster.
+	// Connection string for the target cluster.u
 	TargetConn string
 	// The SQL database in the target cluster to write into.
 	TargetDB ident.Ident
@@ -95,11 +96,11 @@ func (c *BaseConfig) Base() *BaseConfig {
 func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 	c.ScriptConfig.Bind(f)
 
-	f.DurationVar(&c.ApplyTimeout, "applyTimeout", 30*time.Second,
+	f.DurationVar(&c.ApplyTimeout, "applyTimeout", defaultApplyTimeout,
 		"the maximum amount of time to wait for an update to be applied")
 	f.DurationVar(&c.BackfillWindow, "backfillWindow", 0,
 		"use a high-throughput, but non-transactional mode if replication is this far behind")
-	f.IntVar(&c.BytesInFlight, "bytesInFlight", 10*1024*1024,
+	f.IntVar(&c.BytesInFlight, "bytesInFlight", defaultBytesInFlight,
 		"apply backpressure when amount of in-flight mutation data reaches this limit")
 	// LoopName bound by dialect packages.
 	// DefaultConsistentPoint bound by dialect packages.
@@ -109,16 +110,16 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"the number of concurrent connections to use when writing data in fan mode")
 	f.BoolVar(&c.ForeignKeysEnabled, "foreignKeys", false,
 		"re-order updates to satisfy foreign key constraints")
-	f.DurationVar(&c.RetryDelay, "retryDelay", 10*time.Second,
+	f.DurationVar(&c.RetryDelay, "retryDelay", defaultRetryDelay,
 		"the amount of time to sleep between replication retries")
 	f.Var(ident.NewValue("_cdc_sink", &c.StagingDB), "stagingDB",
 		"a SQL database to store metadata in")
-	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", 5*time.Second,
+	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
 		"how often to commit the consistent point")
 	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
 	f.Var(ident.NewValue("", &c.TargetDB), "targetDB",
 		"the SQL database in the target cluster to update")
-	f.IntVar(&c.TargetDBConns, "targetDBConns", 1024,
+	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
 		"the maximum pool size to the target cluster")
 }
 
@@ -145,10 +146,8 @@ func (c *BaseConfig) Preflight() error {
 	if c.BytesInFlight == 0 {
 		c.BytesInFlight = defaultBytesInFlight
 	}
-	// Make FK+immediate work by making all updates through a single
-	// db connection.
-	if c.ForeignKeysEnabled {
-		c.FanShards = 1
+	if c.ForeignKeysEnabled && c.Immediate {
+		return errors.New("foreign-key mode incompatible with immediate mode")
 	}
 	if c.LoopName == "" {
 		return errors.New("replication loops must be named")
@@ -158,6 +157,9 @@ func (c *BaseConfig) Preflight() error {
 	}
 	if c.StagingDB.IsEmpty() {
 		return errors.New("no staging database specified")
+	}
+	if c.StandbyTimeout == 0 {
+		c.StandbyTimeout = defaultStandbyTimeout
 	}
 	if c.TargetConn == "" {
 		return errors.New("no target connection string specified")

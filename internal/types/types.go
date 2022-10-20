@@ -94,44 +94,22 @@ func (m Mutation) IsDelete() bool {
 	return len(m.Data) == 0 || bytes.Equal(m.Data, nullBytes)
 }
 
-// FlushDetail provides additional detail about the outcome of a call
-// to Resolver.Flush.  Values greater than FlushNoWork (zero) indicate
-// the number of mutations that were processed.
-type FlushDetail int
-
-// These constants count down from zero.
-const (
-	// FlushNoWork indicates that the method completed successfully, but
-	// that there were no unresolved timestamps to flush.
-	FlushNoWork FlushDetail = -iota
-	// FlushBlocked indicates that no work was performed because another
-	// process was in the middle of flushing the same target schema.
-	FlushBlocked
-)
-
-// Resolver describes a service which records resolved timestamps from
-// a source cluster and asynchronously resolves them.
-type Resolver interface {
-	// Flush is called by tests to execute a single iteration of the
-	// asynchronous resolver logic. This method returns true if work was
-	// actually performed.
-	Flush(ctx context.Context) (resolved hlc.Time, detail FlushDetail, err error)
-	// Mark records a resolved timestamp. The returned boolean will be
-	// true if the resolved timestamp had not been previously recorded.
-	Mark(ctx context.Context, tx pgxtype.Querier, next hlc.Time) (bool, error)
-}
-
-// Resolvers is a factory for Resolver instances.
-type Resolvers interface {
-	// Get returns the Resolver which manages the given schema.
-	Get(ctx context.Context, target ident.Schema) (Resolver, error)
-}
-
 // Stager describes a service which can durably persist some
 // number of Mutations.
 type Stager interface {
-	// Drain will delete queued mutations. It is not idempotent.
-	Drain(ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time) ([]Mutation, error)
+	// Retire will delete staged mutations whose timestamp is less than
+	// or equal to the given end time. Note that this call may take an
+	// arbitrarily long amount of time to complete and its effects may
+	// not occur within a single database transaction.
+	Retire(ctx context.Context, db pgxtype.Querier, end hlc.Time) error
+
+	// Select will return all queued mutations between the timestamps.
+	Select(ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time) ([]Mutation, error)
+
+	// SelectPartial will return queued mutations between the
+	// timestamps. The after and limit arguments are used together when
+	// backfilling large amounts of data.
+	SelectPartial(ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time, afterKey []byte, limit int) ([]Mutation, error)
 
 	// Store implementations should be idempotent.
 	Store(ctx context.Context, db pgxtype.Querier, muts []Mutation) error
@@ -140,14 +118,6 @@ type Stager interface {
 // Stagers is a factory for Stager instances.
 type Stagers interface {
 	Get(ctx context.Context, target ident.Table) (Stager, error)
-}
-
-// A TimeKeeper maintains a durable map of string keys to timestamps.
-type TimeKeeper interface {
-	// Put stores a new timestamp for the given key, returning the
-	// previous value. If no previous value was present, hlc.Zero() will
-	// be returned.
-	Put(context.Context, pgxtype.Querier, ident.Schema, hlc.Time) (hlc.Time, error)
 }
 
 // ColData hold SQL column metadata.

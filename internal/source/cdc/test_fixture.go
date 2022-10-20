@@ -14,6 +14,8 @@
 package cdc
 
 import (
+	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/google/wire"
@@ -21,14 +23,20 @@ import (
 
 type testFixture struct {
 	*sinktest.Fixture
-	Handler *Handler
+	Handler   *Handler
+	Resolvers *Resolvers
 }
 
-func newTestFixture(mode ApplyMode) (*testFixture, func(), error) {
+func newTestFixture(*sinktest.Fixture, *Config) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
-		sinktest.TestSet,
+		wire.FieldsOf(new(*sinktest.BaseFixture), "Context"),
+		wire.FieldsOf(new(*sinktest.Fixture),
+			"Appliers", "BaseFixture", "Stagers", "Watchers"),
+		logical.Set,
+		script.Set,
 		trust.New, // Is valid to use as a provider.
 		wire.Struct(new(testFixture), "*"),
+		wire.Bind(new(logical.Config), new(*Config)),
 	))
 }

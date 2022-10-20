@@ -25,7 +25,7 @@ func Command() *cobra.Command {
 		Short: "start the server",
 		Use:   "start",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, cancel, err := server.NewServer(cmd.Context(), cfg)
+			s, cancel, err := server.NewServer(cmd.Context(), &cfg)
 			if err != nil {
 				return err
 			}

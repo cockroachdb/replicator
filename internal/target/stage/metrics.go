@@ -17,18 +17,28 @@ import (
 )
 
 var (
-	stageDrainCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "stage_drain_mutations_total",
-		Help: "the number of mutations drained for this table",
-	}, metrics.TableLabels)
-	stageDrainDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "stage_drain_duration_seconds",
-		Help:    "the length of time it took to successfully drain mutations",
+	stageRetireDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "stage_retire_duration_seconds",
+		Help:    "the length of time it took to successfully retire applied mutations",
 		Buckets: metrics.LatencyBuckets,
 	}, metrics.TableLabels)
-	stageDrainErrors = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "stage_drain_errors_total",
-		Help: "the number of times an error was encountered while draining mutations",
+	stageRetireErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_retire_errors_total",
+		Help: "the number of times an error was encountered while retiring mutations",
+	}, metrics.TableLabels)
+
+	stageSelectCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_select_mutations_total",
+		Help: "the number of mutations read for this table",
+	}, metrics.TableLabels)
+	stageSelectDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "stage_select_duration_seconds",
+		Help:    "the length of time it took to successfully select mutations",
+		Buckets: metrics.LatencyBuckets,
+	}, metrics.TableLabels)
+	stageSelectErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_select_errors_total",
+		Help: "the number of times an error was encountered while selecting mutations",
 	}, metrics.TableLabels)
 
 	stageStoreCount = promauto.NewCounterVec(prometheus.CounterOpts{
