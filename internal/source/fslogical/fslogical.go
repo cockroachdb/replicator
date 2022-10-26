@@ -405,15 +405,30 @@ func (d *Dialect) marshalMutation(
 		return types.Mutation{}, errors.WithStack(err)
 	}
 
+	// Create empty slices so that we never pass a null value into JS.
+	parentCollections := make([]string, 0)
+	parentDocIds := make([]string, 0)
+	for parentCollection := doc.Ref.Parent; parentCollection != nil; {
+		parentCollections = append(parentCollections, parentCollection.ID)
+		if parentCollection.Parent != nil {
+			parentDocIds = append(parentDocIds, parentCollection.Parent.ID)
+			parentCollection = parentCollection.Parent.Parent
+		} else {
+			break
+		}
+	}
+
 	// The timestamps are converted to values that are easy to wrap
 	// a JS Date around in the user script.
 	// https://pkg.go.dev/github.com/dop251/goja#hdr-Handling_of_time_Time
 	meta := map[string]any{
-		"createTime": doc.CreateTime.UnixNano() / 1e6,
-		"id":         doc.Ref.ID,
-		"path":       doc.Ref.Path,
-		"readTime":   doc.ReadTime.UnixNano() / 1e6,
-		"updateTime": doc.UpdateTime.UnixNano() / 1e6,
+		"createTime":        doc.CreateTime.UnixNano() / 1e6,
+		"id":                doc.Ref.ID,
+		"parentCollections": parentCollections,
+		"parentDocIds":      parentDocIds,
+		"path":              doc.Ref.Path,
+		"readTime":          doc.ReadTime.UnixNano() / 1e6,
+		"updateTime":        doc.UpdateTime.UnixNano() / 1e6,
 	}
 
 	return types.Mutation{
