@@ -98,14 +98,15 @@ func (f *Fan) Enqueue(
 	ctx context.Context, stamp stamp.Stamp, table ident.Table, muts []types.Mutation,
 ) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	stopped := f.mu.stopFlag
+	f.mu.Unlock()
 
-	if f.mu.stopFlag {
+	if stopped {
 		return errors.New("already stopped")
 	}
 
 	for _, mut := range muts {
-		bucket, err := f.bucketForLocked(ctx, table, mut)
+		bucket, err := f.bucketFor(ctx, table, mut)
 		if err != nil {
 			return err
 		}
@@ -167,9 +168,12 @@ func (f *Fan) Stopped() <-chan struct{} {
 
 // bucketForLocked finds or creates a new shard bucket for applying
 // mutations to the given table.
-func (f *Fan) bucketForLocked(
+func (f *Fan) bucketFor(
 	ctx context.Context, table ident.Table, mut types.Mutation,
 ) (*bucket, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	key := keyFor(table, f.shardCount, mut)
 	if found, ok := f.mu.buckets[key]; ok {
 		return found, nil

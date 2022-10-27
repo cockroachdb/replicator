@@ -108,8 +108,8 @@ func newTemplates(target ident.Table, cfgData *Config, colData []types.ColData) 
 		Exprs:      cfgData.Exprs,
 		TableName:  target,
 		cache: &templateCache{
-			deletes: lru.New(batches.Size() / 10),
-			upserts: lru.New(batches.Size() / 10),
+			deletes: lru.New(batches.Size()),
+			upserts: lru.New(batches.Size()),
 		},
 	}
 
@@ -180,9 +180,11 @@ func (t *templates) Vars() [][]varPair {
 }
 
 func (t *templates) delete(rowCount int) (string, error) {
+	// Fast lookup
 	t.cache.Lock()
-	defer t.cache.Unlock()
-	if found, ok := t.cache.deletes.Get(rowCount); ok {
+	found, ok := t.cache.deletes.Get(rowCount)
+	t.cache.Unlock()
+	if ok {
 		applyTemplateHits.WithLabelValues("delete").Inc()
 		return found.(string), nil
 	}
@@ -197,15 +199,18 @@ func (t *templates) delete(rowCount int) (string, error) {
 	err := deleteTemplate.Execute(&buf, &cpy)
 	ret, err := buf.String(), errors.WithStack(err)
 	if err == nil {
+		t.cache.Lock()
 		t.cache.deletes.Add(rowCount, ret)
+		t.cache.Unlock()
 	}
 	return ret, err
 }
 
 func (t *templates) upsert(rowCount int) (string, error) {
 	t.cache.Lock()
-	defer t.cache.Unlock()
-	if found, ok := t.cache.upserts.Get(rowCount); ok {
+	found, ok := t.cache.upserts.Get(rowCount)
+	t.cache.Unlock()
+	if ok {
 		applyTemplateHits.WithLabelValues("upsert").Inc()
 		return found.(string), nil
 	}
@@ -224,7 +229,9 @@ func (t *templates) upsert(rowCount int) (string, error) {
 	}
 	ret, err := buf.String(), errors.WithStack(err)
 	if err == nil {
+		t.cache.Lock()
 		t.cache.upserts.Add(rowCount, ret)
+		t.cache.Unlock()
 	}
 	return ret, err
 }
