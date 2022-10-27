@@ -136,15 +136,20 @@ func TestBucketSaturation(t *testing.T) {
 
 	// Generate data to be applied, in a separate goroutine.
 	genCtx, cancelGen := context.WithCancel(ctx)
-	genDone := make(chan struct{})
-	go func() {
-		defer close(genDone)
-		_, _ = generateMutations(genCtx, imm, tbl.Name(), math.MaxInt)
-	}()
+	const numGenerators = 16
+	genDone := make([]chan struct{}, numGenerators)
+	for i := range genDone {
+		i := i // Save index.
+		genDone[i] = make(chan struct{})
+		go func() {
+			defer close(genDone[i])
+			_, _ = generateMutations(genCtx, imm, tbl.Name(), math.MaxInt)
+		}()
+	}
 
 	// Ensure that several updates to the consistent point happen.
 	consistentUpdated.L.Lock()
-	for consistentCallbacks < 10 {
+	for consistentCallbacks < 1000 {
 		consistentUpdated.Wait()
 	}
 	consistentUpdated.L.Unlock()
@@ -152,7 +157,9 @@ func TestBucketSaturation(t *testing.T) {
 	// Make sure the generator has stopped using the Fan before
 	// tearing down the rest of the testing context.
 	cancelGen()
-	<-genDone
+	for _, ch := range genDone {
+		<-ch
+	}
 }
 
 func generateMutations(
