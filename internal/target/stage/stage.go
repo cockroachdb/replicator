@@ -54,6 +54,7 @@ type stage struct {
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
+		nextAfter  string // Find a timestamp for which data is available.
 		retire     string // Delete a batch of staged mutations
 		store      string // store mutations
 		sel        string // select all rows in the timeframe from the staging table
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS %s (
 		storeError:     stageStoreErrors.WithLabelValues(labels...),
 	}
 
+	s.sql.nextAfter = fmt.Sprintf(nextAfterTemplate, table)
 	s.sql.retire = fmt.Sprintf(retireTemplate, table)
 	s.sql.sel = fmt.Sprintf(selectTemplateAll, table)
 	s.sql.selPartial = fmt.Sprintf(selectTemplatePartial, table)
@@ -106,6 +108,46 @@ CREATE TABLE IF NOT EXISTS %s (
 
 // GetTable returns the table that the stage is storing into.
 func (s *stage) GetTable() ident.Table { return s.stage }
+
+const nextAfterTemplate = `
+SELECT DISTINCT nanos, logical
+ FROM %[1]s
+WHERE (nanos, logical) > ($1, $2) AND (nanos, logical) <= ($3, $4)
+ORDER BY nanos, logical
+`
+
+// TransactionTimes implements types.Stager and returns timestamps for
+// which data is available in the (before, after] range.
+func (s *stage) TransactionTimes(
+	ctx context.Context, tx pgxtype.Querier, before, after hlc.Time,
+) ([]hlc.Time, error) {
+	var ret []hlc.Time
+	err := retry.Retry(ctx, func(ctx context.Context) error {
+		ret = ret[:0] // Reset if retrying.
+		rows, err := tx.Query(ctx,
+			s.sql.nextAfter,
+			before.Nanos(),
+			before.Logical(),
+			after.Nanos(),
+			after.Logical(),
+		)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		for rows.Next() {
+			var nanos int64
+			var logical int
+			if err := rows.Scan(&nanos, &logical); err != nil {
+				return errors.WithStack(err)
+			}
+			ret = append(ret, hlc.New(nanos, logical))
+		}
+		return errors.WithStack(rows.Err())
+	})
+
+	return ret, err
+}
 
 // ($1, $2) starting resolved timestamp
 // ($3, $4) ending resolved timestamp
@@ -149,8 +191,8 @@ func (s *stage) Select(
 func (s *stage) SelectPartial(
 	ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time, afterKey []byte, limit int,
 ) ([]types.Mutation, error) {
-	if hlc.Compare(prev, next) >= 0 {
-		return nil, errors.Errorf("timestamps out of order: %s >= %s", prev, next)
+	if hlc.Compare(prev, next) > 0 {
+		return nil, errors.Errorf("timestamps out of order: %s > %s", prev, next)
 	}
 
 	start := time.Now()
@@ -311,7 +353,7 @@ func (s *stage) Retire(ctx context.Context, db pgxtype.Querier, end hlc.Time) er
 				s.retireFrom.Logical(),
 				end.Nanos(),
 				end.Logical(),
-				batches.Size(),
+				10000, // XXX make configurable
 			).Scan(&lastNanos, &lastLogical)
 
 			if errors.Is(err, pgx.ErrNoRows) {

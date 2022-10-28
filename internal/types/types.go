@@ -113,6 +113,10 @@ type Stager interface {
 
 	// Store implementations should be idempotent.
 	Store(ctx context.Context, db pgxtype.Querier, muts []Mutation) error
+
+	// TransactionTimes returns  distinct timestamps in the range
+	// (after, before] for which there is data in the associated table.
+	TransactionTimes(ctx context.Context, tx pgxtype.Querier, before, after hlc.Time) ([]hlc.Time, error)
 }
 
 // Stagers is a factory for Stager instances.
