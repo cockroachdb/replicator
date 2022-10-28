@@ -62,9 +62,36 @@ func TestPutAndDrain(t *testing.T) {
 			Time: hlc.New(int64(1000*i)+2, i),
 		}
 	}
+	maxTime := muts[len(muts)-1].Time
+
+	// Check TransactionTimes in empty state.
+	found, err := s.TransactionTimes(ctx, fixture.Pool, hlc.Zero(), maxTime)
+	a.Empty(found)
+	a.NoError(err)
 
 	// Insert.
 	a.NoError(s.Store(ctx, fixture.Pool, muts))
+
+	// We should find all timestamps now.
+	found, err = s.TransactionTimes(ctx, fixture.Pool, hlc.Zero(), maxTime)
+	if a.Len(found, len(muts)) {
+		a.Equal(muts[0].Time, found[0])
+		a.Equal(maxTime, found[len(found)-1])
+	}
+	a.NoError(err)
+
+	// Advance once.
+	found, err = s.TransactionTimes(ctx, fixture.Pool, muts[0].Time, maxTime)
+	if a.Len(found, len(muts)-1) {
+		a.Equal(muts[1].Time, found[0])
+		a.Equal(maxTime, found[len(found)-1])
+	}
+	a.NoError(err)
+
+	// Make sure we don't find the last value.
+	found, err = s.TransactionTimes(ctx, fixture.Pool, maxTime, maxTime)
+	a.Empty(found)
+	a.NoError(err)
 
 	// Sanity-check table.
 	count, err := sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)

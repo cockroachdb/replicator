@@ -87,15 +87,6 @@ func TestResolverDeQueue(t *testing.T) {
 	// Make sure we arrived at the end.
 	a.Equal(hlc.New(rowCount, 0), committed)
 
-	// Verify requeue.
-	tx, err := fixture.Pool.Begin(ctx)
-	r.NoError(err)
-	r.NoError(resolver.requeueInTx(ctx, tx, committed))
-	r.NoError(tx.Commit(ctx))
-	found, err := resolver.dequeueInTx(ctx, fixture.Pool, committed)
-	r.NoError(err)
-	a.Equal(committed, found)
-
 	// Verify empty queue.
 	_, err = resolver.dequeueInTx(ctx, fixture.Pool, committed)
 	a.Equal(errNoWork, err)
@@ -105,9 +96,9 @@ func TestResolverDeQueue(t *testing.T) {
 	heldOpen := hlc.New(rowCount+1, 0)
 	r.NoError(resolver.Mark(ctx, heldOpen))
 	for {
-		tx, err = fixture.Pool.Begin(ctx)
+		tx, err := fixture.Pool.Begin(ctx)
 		r.NoError(err)
-		found, err = resolver.dequeueInTx(ctx, tx, heldOpen)
+		found, err := resolver.dequeueInTx(ctx, tx, heldOpen)
 		// As above, it's possible that we're waiting for async cleanup.
 		if err == errBlocked {
 			_ = tx.Rollback(ctx)

@@ -17,11 +17,15 @@ import (
 	"github.com/spf13/pflag"
 )
 
+const defaultIdealMinBatchSize = 1000
+
 // Config adds CDC-specific configuration to the core logical loop.
 type Config struct {
 	logical.BaseConfig
 
-	BackfillBatchSize int
+	// Coalesce timestamps within a resolved-timestamp window until
+	// at least this many mutations have been collected.
+	IdealMinBatchSize int
 
 	// The name of the resolved_timestamps table.
 	MetaTableName ident.Ident
@@ -37,8 +41,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		panic(err)
 	}
 
-	f.IntVar(&c.BackfillBatchSize, "backfillBatchSize", 1_000,
-		"the number of updates to process per backfill batch")
+	f.IntVar(&c.IdealMinBatchSize, "idealMinBatchSize", defaultIdealMinBatchSize,
+		"try to apply at least this many mutations per resolved-timestamp window")
 	f.Var(ident.NewValue("resolved_timestamps", &c.MetaTableName), "metaTable",
 		"the name of the table in which to store resolved timestamps")
 }
@@ -52,8 +56,8 @@ func (c *Config) Preflight() error {
 		return err
 	}
 
-	if c.BackfillWindow > 0 && c.BackfillBatchSize <= 0 {
-		return errors.New("backfilling enabled, but batch size is 0")
+	if c.IdealMinBatchSize == 0 {
+		c.IdealMinBatchSize = defaultIdealMinBatchSize
 	}
 	if c.MetaTableName.IsEmpty() {
 		return errors.New("no metadata table specified")

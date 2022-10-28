@@ -243,8 +243,7 @@ func testMassBackfillWithForeignKeys(t *testing.T, chaosProb float32) {
 	defer cancel()
 
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
-		BackfillBatchSize: rowCount/10 - 1, // -1 to check for fenceposting.
-		MetaTableName:     ident.New("resolved_timestamps"),
+		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
 			ApplyTimeout:       time.Second,
 			BackfillWindow:     time.Minute,

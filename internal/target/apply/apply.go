@@ -244,6 +244,8 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 	if len(muts) == 0 {
 		return nil
 	}
+	start := time.Now()
+
 	sql, err := a.mu.templates.upsert(len(muts))
 	if err != nil {
 		return err
@@ -381,6 +383,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 	a.upserts.Add(float64(tag.RowsAffected()))
 	log.WithFields(log.Fields{
 		"applied":  tag.RowsAffected(),
+		"duration": time.Since(start),
 		"proposed": len(muts),
 		"target":   a.target,
 	}).Debug("upserted rows")
