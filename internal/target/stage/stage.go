@@ -15,8 +15,12 @@ package stage
 // The code in this file is reworked from sink_table.go.
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"runtime"
 	"strings"
 	"time"
 
@@ -78,7 +82,7 @@ CREATE TABLE IF NOT EXISTS %s (
 	nanos INT NOT NULL,
   logical INT NOT NULL,
 	  key STRING NOT NULL,
-	  mut JSONB NOT NULL,
+	  mut BYTES NOT NULL,
 	PRIMARY KEY (nanos, logical, key)
 )`, table)); err != nil {
 		return nil, err
@@ -224,6 +228,17 @@ func (s *stage) SelectPartial(
 			if err := rows.Scan(&mut.Key, &nanos, &logical, &mut.Data); err != nil {
 				return err
 			}
+			// Check for gzip magic numbers.
+			if len(mut.Data) >= 2 && mut.Data[0] == 0x1f && mut.Data[1] == 0x8b {
+				r, err := gzip.NewReader(bytes.NewReader(mut.Data))
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				mut.Data, err = io.ReadAll(r)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+			}
 			mut.Time = hlc.New(nanos, logical)
 			ret = append(ret, mut)
 		}
@@ -265,7 +280,7 @@ func (s *stage) SelectPartial(
 // https://github.com/cockroachdb/cockroach/issues/23468
 const putTemplate = `
 UPSERT INTO %s (nanos, logical, key, mut)
-SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::STRING[])::JSONB`
+SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[])`
 
 // Store stores some number of Mutations into the database.
 func (s *stage) Store(ctx context.Context, db pgxtype.Querier, mutations []types.Mutation) error {
@@ -312,18 +327,47 @@ func (s *stage) putOne(ctx context.Context, db pgxtype.Querier, mutations []type
 	nanos := make([]int64, len(mutations))
 	logical := make([]int, len(mutations))
 	keys := make([]string, len(mutations))
-	jsons := make([]string, len(mutations))
+	jsons := make([][]byte, len(mutations))
 
-	for i, mut := range mutations {
-		nanos[i] = mut.Time.Nanos()
-		logical[i] = mut.Time.Logical()
-		keys[i] = string(mut.Key)
+	numWorkers := runtime.GOMAXPROCS(0)
+	eg, errCtx := errgroup.WithContext(ctx)
+	for worker := 0; worker < numWorkers; worker++ {
+		worker := worker
+		eg.Go(func() error {
+			for idx := worker; idx < len(jsons); idx += numWorkers {
+				if err := errCtx.Err(); err != nil {
+					return err
+				}
+				mut := mutations[idx]
 
-		if mut.IsDelete() {
-			jsons[i] = "null"
-		} else {
-			jsons[i] = string(mut.Data)
-		}
+				nanos[idx] = mut.Time.Nanos()
+				logical[idx] = mut.Time.Logical()
+				keys[idx] = string(mut.Key)
+
+				if mut.IsDelete() {
+					jsons[idx] = []byte("null")
+				} else {
+					var buf bytes.Buffer
+					w := gzip.NewWriter(&buf)
+					if _, err := w.Write(mut.Data); err != nil {
+						return errors.WithStack(err)
+					}
+					if err := w.Close(); err != nil {
+						return errors.WithStack(err)
+					}
+					if buf.Len() < len(mut.Data) {
+						jsons[idx] = buf.Bytes()
+					} else {
+						jsons[idx] = mut.Data
+					}
+				}
+			}
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return err
 	}
 
 	_, err := db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons)
