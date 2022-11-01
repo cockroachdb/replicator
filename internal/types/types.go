@@ -119,9 +119,31 @@ type Stager interface {
 	TransactionTimes(ctx context.Context, tx pgxtype.Querier, before, after hlc.Time) ([]hlc.Time, error)
 }
 
+// SelectManyCursor is used with Stagers.SelectMany. The After values
+// will be updated by the method, allowing callers to call SelectMany
+// in a loop until fewer than Limit values are returned.
+type SelectManyCursor struct {
+	AfterTime  hlc.Time
+	AfterTable ident.Table
+	AfterKey   json.RawMessage
+	Backfill   bool            // If true, we read all updates for parent tables before children.
+	Targets    [][]ident.Table // The outer slice defines FK groupings.
+	Limit      int
+	Until      hlc.Time
+}
+
 // Stagers is a factory for Stager instances.
 type Stagers interface {
 	Get(ctx context.Context, target ident.Table) (Stager, error)
+
+	// SelectMany performs queries across multiple staging tables, to
+	// more readily support backfilling large amounts of data that may
+	// result from a changefeed's initial_scan.
+	//
+	// This method will update the fields within the cursor so that it
+	// may be called in a loop without the caller needing to worry about
+	// the mechanics of iteration.
+	SelectMany(ctx context.Context, tx pgxtype.Querier, q *SelectManyCursor) (_ map[ident.Table][]Mutation, more bool, _ error)
 }
 
 // ColData hold SQL column metadata.

@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestPutAndDrain will insert and dequeue a batch of Mutations.
@@ -187,6 +188,177 @@ func TestPutAndDrain(t *testing.T) {
 	a.NoError(s.Retire(ctx, fixture.Pool, hlc.Zero()))
 	a.NoError(s.Retire(ctx, fixture.Pool, muts[len(muts)-1].Time))
 	a.NoError(s.Retire(ctx, fixture.Pool, hlc.New(muts[len(muts)-1].Time.Nanos()+1, 0)))
+}
+
+func TestSelectMany(t *testing.T) {
+	const entries = 100
+	const tableCount = 10
+	a := assert.New(t)
+	r := require.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+	a.NotEmpty(fixture.DBInfo.Version())
+
+	// Create some fake table names.
+	targetDB := fixture.TestDB.Ident()
+	tables := make([]ident.Table, tableCount)
+	for idx := range tables {
+		tables[idx] = ident.NewTable(
+			targetDB, ident.Public, ident.New(fmt.Sprintf("target_%d", idx)))
+	}
+	// Set up table groupings, to simulate FK use-cases.
+	tableGroups := [][]ident.Table{
+		{tables[0]},
+		{tables[1], tables[2]},
+		{tables[3], tables[4], tables[5]},
+		{tables[6], tables[7], tables[8], tables[9]},
+	}
+	tableToGroup := make(map[ident.Table]int)
+	for group, tables := range tableGroups {
+		for _, table := range tables {
+			tableToGroup[table] = group
+		}
+	}
+
+	// Each table will have the following data inserted:
+	// * Large batch of entries at t=1
+	// * Individual entries from t=[2*entries, 3*entries]
+	// * Large batch at t=10*entries
+	// * Individual entries at t=[12*entries, 13*entries]
+	muts := make([]types.Mutation, 0, 4*entries)
+	for i := 0; i < entries; i++ {
+		muts = append(muts,
+			// Batch at t=1
+			types.Mutation{
+				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time: hlc.New(1, 0),
+			},
+			// Individual with varying timestamps
+			types.Mutation{
+				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time: hlc.New(int64(2*entries+i), 0),
+			},
+			// Batch at t=10*entries
+			types.Mutation{
+				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time: hlc.New(10*entries, 0),
+			},
+			// More individual entries with varying timestamps
+			types.Mutation{
+				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time: hlc.New(int64(12*entries+i), 0),
+			})
+	}
+	r.Len(muts, 4*entries)
+
+	// Order by time, then lexicographically by key.
+	expectedMutOrder := append([]types.Mutation(nil), muts...)
+	sort.Slice(expectedMutOrder, func(i, j int) bool {
+		iMut := expectedMutOrder[i]
+		jMut := expectedMutOrder[j]
+		if c := hlc.Compare(iMut.Time, jMut.Time); c != 0 {
+			return c < 0
+		}
+		return bytes.Compare(expectedMutOrder[i].Key, expectedMutOrder[j].Key) < 0
+	})
+
+	// Stage some data for each table.
+	for _, table := range tables {
+		stager, err := fixture.Stagers.Get(ctx, table)
+		r.NoError(err)
+		r.NoError(stager.Store(ctx, fixture.Pool, muts))
+	}
+
+	t.Run("transactional", func(t *testing.T) {
+		a := assert.New(t)
+		r := require.New(t)
+
+		q := &types.SelectManyCursor{
+			Targets: [][]ident.Table{
+				{tables[0]},
+				{tables[1], tables[2]},
+				{tables[3], tables[4], tables[5]},
+				{tables[6], tables[7], tables[8], tables[9]},
+			},
+			Limit: entries/2 - 1,           // Validate paging
+			Until: hlc.New(100*entries, 0), // Past any existing time.
+		}
+
+		entriesByTable := make(map[ident.Table][]types.Mutation)
+		for {
+			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
+			r.NoError(err)
+			for tbl, tblMuts := range data {
+				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
+			}
+			if !more {
+				break
+			}
+		}
+		for _, seen := range entriesByTable {
+			if a.Len(seen, len(expectedMutOrder)) {
+				a.Equal(expectedMutOrder, seen)
+			}
+		}
+	})
+
+	// What's different about the backfill case is that we want to
+	// verify that if we see an update for a table in group G, then we
+	// already have all data for group G-1.
+	t.Run("backfill", func(t *testing.T) {
+		a := assert.New(t)
+		r := require.New(t)
+
+		q := &types.SelectManyCursor{
+			Backfill: true,
+			Targets: [][]ident.Table{
+				{tables[0]},
+				{tables[1], tables[2]},
+				{tables[3], tables[4], tables[5]},
+				{tables[6], tables[7], tables[8], tables[9]},
+			},
+			Limit: entries/2 - 1,           // Validate paging
+			Until: hlc.New(100*entries, 0), // Past any existing time.
+		}
+
+		entriesByTable := make(map[ident.Table][]types.Mutation)
+		for {
+			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
+			r.NoError(err)
+			for tbl, tblMuts := range data {
+				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
+			}
+
+			// Check previous groups by induction. We do this in a
+			// separate loop, since we may cross a group boundary within
+			// a page of data.
+			for tbl := range data {
+				if group := tableToGroup[tbl]; group > 1 {
+					for _, tableToCheck := range tableGroups[group-1] {
+						a.Len(entriesByTable[tableToCheck], len(muts))
+					}
+				}
+			}
+			if !more {
+				break
+			}
+		}
+		for _, seen := range entriesByTable {
+			if a.Len(seen, len(expectedMutOrder)) {
+				a.Equal(expectedMutOrder, seen)
+			}
+		}
+	})
 }
 
 func BenchmarkStage(b *testing.B) {

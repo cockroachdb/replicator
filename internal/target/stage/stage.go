@@ -40,6 +40,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func mangleTableName(target ident.Table) string {
+	return strings.Join(
+		[]string{target.Database().Raw(), target.Schema().Raw(), target.Table().Raw()}, "_")
+}
+
 // stage implements a storage and retrieval mechanism for staging
 // Mutation instances.
 type stage struct {
@@ -73,8 +78,7 @@ var _ types.Stager = (*stage)(nil)
 func newStore(
 	ctx context.Context, db pgxtype.Querier, stagingDB ident.Ident, target ident.Table,
 ) (*stage, error) {
-	mangledName := strings.Join(
-		[]string{target.Database().Raw(), target.Schema().Raw(), target.Table().Raw()}, "_")
+	mangledName := mangleTableName(target)
 	table := ident.NewTable(stagingDB, ident.Public, ident.New(mangledName))
 
 	if err := retry.Execute(ctx, db, fmt.Sprintf(`
@@ -397,7 +401,7 @@ func (s *stage) Retire(ctx context.Context, db pgxtype.Querier, end hlc.Time) er
 				s.retireFrom.Logical(),
 				end.Nanos(),
 				end.Logical(),
-				10000, // XXX make configurable
+				10000, // Make configurable?
 			).Scan(&lastNanos, &lastLogical)
 
 			if errors.Is(err, pgx.ErrNoRows) {
