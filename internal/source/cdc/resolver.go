@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,16 +29,36 @@ import (
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 )
 
 // resolvedStamp tracks the progress of applying staged mutations for
 // a given resolved timestamp.  This type has some extra complexity to
 // support backfilling of initial changefeed scans.
+//
+// Here's a state diagram to help:
+//
+//	committed
+//	    |                *---*
+//	    V                V   |
+//	 proposed ---> backfill -*
+//	    |                |
+//	    V                |
+//	committed <----------*
+//
+// Tracking of FK levels and table offsets is only used in backfill mode
+// and is especially relevant to an initial_scan from a changefeed. In
+// this state, we have an arbitrarily large number of mutations to
+// apply, all of which will have the same timestamp.
 type resolvedStamp struct {
+	Backfill      bool            `json:"b,omitempty"`
+	BackfillKey   json.RawMessage `json:"k,omitempty"`
+	BackfillTable ident.Table     `json:"t,omitempty"`
 	// A resolved timestamp that represents a transactionally-consistent
 	// point in the history of the workload.
 	CommittedTime hlc.Time `json:"c,omitempty"`
+	// Iteration is used to provide well-ordered behavior within a
+	// single backfill window.
+	Iteration int `json:"i,omitempty"`
 	// The next resolved timestamp that we want to advance to.
 	ProposedTime hlc.Time `json:"p,omitempty"`
 
@@ -71,11 +90,14 @@ func (s *resolvedStamp) Commit(ctx context.Context) error {
 // Less implements stamp.Stamp.
 func (s *resolvedStamp) Less(other stamp.Stamp) bool {
 	o := other.(*resolvedStamp)
-	return hlc.Compare(s.CommittedTime, o.CommittedTime) < 0
+	if c := hlc.Compare(s.CommittedTime, o.CommittedTime); c != 0 {
+		return c < 0
+	}
+	return s.Iteration < o.Iteration
 }
 
-// NewCommitted returns a new resolvedStamp that represents a committed
-// version of the proposed time.
+// NewCommitted returns a new resolvedStamp that represents the
+// completion of a resolved timestamp.
 func (s *resolvedStamp) NewCommitted() *resolvedStamp {
 	if s.ProposedTime == hlc.Zero() {
 		panic(errors.New("cannot make new committed timestamp without proposed value"))
@@ -86,32 +108,59 @@ func (s *resolvedStamp) NewCommitted() *resolvedStamp {
 	}
 }
 
+// NewCommittedPartial returns a new resolvedStamp that represents
+// partial progress between the original committed time and the proposed
+// time. That is, the sync process has arrived at *a*
+// transactionally-consistent state, but has not yet reached the next
+// resolved timestamp.
+func (s *resolvedStamp) NewCommittedPartial(ts hlc.Time) *resolvedStamp {
+	if s.ProposedTime == hlc.Zero() {
+		panic(errors.New("cannot make new batch timestamp without proposed value"))
+	}
+	if hlc.Compare(ts, s.CommittedTime) <= 0 {
+		panic(errors.Errorf("batch timestamp cannot go backwards: %s vs %s", ts, s.CommittedTime))
+	}
+	if hlc.Compare(ts, s.ProposedTime) >= 0 {
+		panic(errors.Errorf("batch timestamp beyond proposed timestamp: %s vs %s", ts, s.ProposedTime))
+	}
+	return &resolvedStamp{
+		CommittedTime: ts,
+		Tx:            s.Tx,
+		ProposedTime:  s.ProposedTime,
+	}
+}
+
 // NewProposed returns a new resolvedStamp that propagates information
 // into the next loop.
 func (s *resolvedStamp) NewProposed(tx pgx.Tx, proposed hlc.Time) *resolvedStamp {
+	if hlc.Compare(proposed, s.CommittedTime) <= 0 {
+		panic(errors.Errorf("proposed time must advance: %s vs %s", proposed, s.CommittedTime))
+	}
+	if hlc.Compare(proposed, s.ProposedTime) < 0 {
+		panic(errors.Errorf("proposed time cannot go backward: %s vs %s", proposed, s.ProposedTime))
+	}
 	return &resolvedStamp{
+		Backfill:      s.Backfill,
+		BackfillKey:   s.BackfillKey,
+		BackfillTable: s.BackfillTable,
 		CommittedTime: s.CommittedTime,
+		Iteration:     s.Iteration,
 		ProposedTime:  proposed,
 		Tx:            tx,
 	}
 }
 
-// NewSubBatch returns a new resolvedStamp that represents partial progress
-// between the original committed time and the proposed time.
-func (s *resolvedStamp) NewSubBatch(batch *subBatch) *resolvedStamp {
-	if s.ProposedTime == hlc.Zero() {
-		panic(errors.New("cannot make new batch timestamp without proposed value"))
-	}
-	if hlc.Compare(batch.Time, s.CommittedTime) <= 0 {
-		panic(errors.Errorf("batch timestamp cannot go backwards: %s vs %s", batch, s.CommittedTime))
-	}
-	if hlc.Compare(batch.Time, s.ProposedTime) >= 0 {
-		panic(errors.Errorf("batch timestamp beyond proposed timestamp: %s vs %s", batch, s.ProposedTime))
-	}
+// NewBackfill returns a resolvedStamp that represents partial progress
+// within the same [committed, proposed] window.
+func (s *resolvedStamp) NewBackfill(table ident.Table, key json.RawMessage) *resolvedStamp {
 	return &resolvedStamp{
-		CommittedTime: batch.Time,
-		Tx:            s.Tx,
+		Backfill:      true,
+		BackfillTable: table,
+		BackfillKey:   key,
+		CommittedTime: s.CommittedTime,
+		Iteration:     s.Iteration + 1,
 		ProposedTime:  s.ProposedTime,
+		Tx:            s.Tx,
 	}
 }
 
@@ -174,7 +223,9 @@ type resolver struct {
 }
 
 var (
+	_ logical.Backfiller         = (*resolver)(nil)
 	_ logical.ConsistentCallback = (*resolver)(nil)
+	_ logical.Dialect            = (*resolver)(nil)
 )
 
 func newResolver(
@@ -254,6 +305,13 @@ func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
 	return nil
 }
 
+// BackfillInto implements logical.Backfiller.
+func (r *resolver) BackfillInto(
+	ctx context.Context, ch chan<- logical.Message, state logical.State,
+) error {
+	return r.readInto(ctx, ch, state, true)
+}
+
 // ReadInto implements logical.Dialect. It incrementally applies batches
 // of mutations within a resolved timeslice to be committed within a
 // single transaction.
@@ -264,7 +322,12 @@ func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
 func (r *resolver) ReadInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
-	// Resume deletions on restart.
+	return r.readInto(ctx, ch, state, false)
+}
+
+func (r *resolver) readInto(
+	ctx context.Context, ch chan<- logical.Message, state logical.State, backfill bool,
+) error { // Resume deletions on restart.
 	r.retirements <- state.GetConsistentPoint().(*resolvedStamp).CommittedTime
 
 	const minSleep = 10 * time.Millisecond
@@ -287,6 +350,12 @@ func (r *resolver) ReadInto(
 		switch err {
 		case nil:
 			work := prev.NewProposed(tx, nextResolved)
+			// If we're in backfill mode and aren't continuing from a
+			// previous, partial backfill, mark the work to be performed
+			// as a backfill.
+			if backfill && !work.Backfill {
+				work = work.NewBackfill(ident.Table{}, nil)
+			}
 
 			select {
 			case ch <- work:
@@ -402,302 +471,98 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 	return &resolvedStamp{}
 }
 
-// A subBatch represents a single timestamp within a resolved-timestamp
-// range and the tables that have mutations to apply at that timestamp.
-type subBatch struct {
-	Tables []ident.Table // Tables which have mutations at Time
-	Time   hlc.Time      // The timestamp of the mutations to retrieve.
-}
-
-// findSubBatch scans all staging tables to find individual transactions
-// to apply.
-func (r *resolver) findSubBatches(ctx context.Context, rs *resolvedStamp) ([]*subBatch, error) {
-	targetTables := r.watcher.Snapshot(r.target).Columns
-
-	var mu struct {
-		sync.Mutex
-		batches map[hlc.Time]*subBatch
-	}
-	mu.batches = make(map[hlc.Time]*subBatch)
-
-	// Parallel-load the timestamps present in the staging tables.
-	eg, errCtx := errgroup.WithContext(ctx)
-	for table := range targetTables {
-		table := table // Copy loop variable for goroutine.
-		eg.Go(func() error {
-			stage, err := r.stagers.Get(errCtx, table)
-			if err != nil {
-				return err
-			}
-			times, err := stage.TransactionTimes(errCtx, r.pool, rs.CommittedTime, rs.ProposedTime)
-			if err != nil {
-				return err
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			for _, batchTime := range times {
-				if sub, ok := mu.batches[batchTime]; ok {
-					sub.Tables = append(sub.Tables, table)
-				} else {
-					mu.batches[batchTime] = &subBatch{
-						Tables: []ident.Table{table},
-						Time:   batchTime,
-					}
-				}
-			}
-
-			return nil
-		})
-	}
-	if err := eg.Wait(); err != nil {
-		return nil, err
-	}
-
-	ret := make([]*subBatch, 0, len(mu.batches))
-	for _, batch := range mu.batches {
-		ret = append(ret, batch)
-	}
-	return ret, nil
-}
-
-type batchLoader struct {
-	Batch     *subBatch
-	Error     chan error
-	Mutations map[ident.Table]chan types.Mutation
-}
-
-// loadDataForSubBatch retrieves the data to be applied.
-func (r *resolver) loadDataForSubBatches(
-	ctx context.Context, batches []*subBatch, errCh chan<- error,
-) []*batchLoader {
-	const selectLimit = 10_000
-	if len(batches) == 0 {
-		return nil
-	}
-
-	// Ensure that the batches are sorted by time.
-	sort.Slice(batches, func(i, j int) bool {
-		return hlc.Compare(batches[i].Time, batches[j].Time) < 0
-	})
-
-	allTimes := make(map[hlc.Time]*batchLoader)
-	expectedCloseCounts := make(map[ident.Table]int)
-	minTime := batches[0].Time
-	maxTime := batches[len(batches)-1].Time
-	sendErr := func(err error) {
-		select {
-		case errCh <- err:
-		default:
-		}
-	}
-
-	ret := make([]*batchLoader, len(batches))
-	for idx := range ret {
-		data := &batchLoader{
-			Batch:     batches[idx],
-			Error:     make(chan error, 1),
-			Mutations: make(map[ident.Table]chan types.Mutation),
-		}
-		for _, tbl := range data.Batch.Tables {
-			expectedCloseCounts[tbl]++
-			data.Mutations[tbl] = make(chan types.Mutation, 16)
-		}
-		ret[idx] = data
-		allTimes[data.Batch.Time] = data
-	}
-
-	// Start a goroutine per source table to read the mutations between
-	// the min and max times. We're essentially implementing a GROUP BY
-	// timestamp operation, sending the data via a per (table,
-	// timestamp) channel.
-	for table, expected := range expectedCloseCounts {
-		table, expected := table, expected // Copy loop variable for goroutine.
-		go func() {
-			stager, err := r.stagers.Get(ctx, table)
-			if err != nil {
-				sendErr(err)
-				return
-			}
-
-			// We track the last channel data was sent to, as well as
-			// the last key/time so that we can paginate through
-			// excessively large result sets.
-			var lastCh chan types.Mutation
-			var lastKey []byte
-			lastTime := minTime
-
-			for {
-				// Retrieve the current page of data.
-				muts, err := stager.SelectPartial(ctx, r.pool, lastTime, maxTime, lastKey, selectLimit)
-				if err != nil {
-					sendErr(err)
-					return
-				}
-				if len(muts) > 0 {
-					for _, mut := range muts {
-						sendTo := allTimes[mut.Time].Mutations[table]
-						// Close channels as we hop from one group to the next.
-						if sendTo != lastCh {
-							if lastCh != nil {
-								expected--
-								close(lastCh)
-							}
-							lastCh = sendTo
-						}
-
-						select {
-						case sendTo <- mut:
-						case <-ctx.Done():
-							sendErr(ctx.Err())
-							return
-						}
-					}
-					lastKey = muts[len(muts)-1].Key
-					lastTime = muts[len(muts)-1].Time
-				}
-
-				// We know we're done if we didn't read a full page.
-				if len(muts) < selectLimit {
-					break
-				}
-			}
-			// Close the final channel we were sending to.
-			if lastCh != nil {
-				expected--
-				close(lastCh)
-			}
-			// Sanity-check that we didn't drop mutations along the way.
-			if expected != 0 {
-				sendErr(errors.Errorf(
-					"did not close expected number of channels: %d remaining", expected))
-			}
-		}()
-	}
-
-	return ret
-}
-
 func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logical.Events) error {
 	start := time.Now()
-	toApply := make(map[ident.Table][]types.Mutation)
-	var toApplyMu sync.Mutex
-	total := int32(0)
+	targets := r.watcher.Snapshot(r.target).Order
+	total := 0
 
-	flushCount := int32(0)
-	flush := func(rs *resolvedStamp) error {
+	flush := func(toApply map[ident.Table][]types.Mutation) (int, error) {
+		flushCount := 0
 		flushStart := time.Now()
 
 		// Send a command on this transaction to prevent the
 		// idle-in-transaction timeout from kicking in.
 		if _, err := rs.Tx.Exec(ctx, "SELECT 1"); err != nil {
-			return errors.Wrap(err, "could not ping resolved-timestamp transaction")
+			return 0, errors.Wrap(err, "could not ping resolved-timestamp transaction")
 		}
 
 		// Apply the retrieved data.
 		if err := events.OnBegin(ctx, rs); err != nil {
-			return err
+			return 0, err
 		}
-		for table, muts := range toApply {
-			if err := events.OnData(ctx, table.Table(), table, muts); err != nil {
-				return err
+
+		// Push the data in FK-preserving order. If we cross an FK group
+		// boundary in backfilling mode, insert a new resolvedStamp to
+		// ensure that parent tables are flushed before child tables.
+		lastGroup := 0
+		for group, tables := range targets {
+			for _, table := range tables {
+				muts := toApply[table]
+				if len(muts) == 0 {
+					continue
+				}
+
+				if rs.Backfill && group > lastGroup {
+					lastGroup = group
+					// Close previous group.
+					if err := events.OnCommit(ctx); err != nil {
+						return 0, err
+					}
+					// Increment stamp.
+					rs = rs.NewBackfill(rs.BackfillTable, rs.BackfillKey)
+					// Start new group.
+					if err := events.OnBegin(ctx, rs); err != nil {
+						return 0, err
+					}
+				}
+
+				flushCount += len(muts)
+				if err := events.OnData(ctx, table.Table(), table, muts); err != nil {
+					return 0, err
+				}
 			}
 		}
 		// Note that the data isn't necessarily committed to the database
 		// at this point. We need to wait for a call to OnConsistent to
 		// know that the data is safe.
 		if err := events.OnCommit(ctx); err != nil {
-			return err
+			return 0, err
 		}
 		log.WithFields(log.Fields{
 			"count":    flushCount,
 			"duration": time.Since(flushStart),
 			"schema":   r.target,
 		}).Debugf("flushed mutations")
-
-		// Reset the accumulators.
-		toApply = make(map[ident.Table][]types.Mutation, len(toApply))
-		flushCount = 0
-		return nil
+		return flushCount, nil
 	}
 
-	// Determine the timestamps that we'll operate on.
-	subBatches, err := r.findSubBatches(ctx, rs)
-	if err != nil {
-		return err
+	cursor := &types.SelectManyCursor{
+		AfterTime:  rs.CommittedTime,
+		AfterTable: rs.BackfillTable,
+		AfterKey:   rs.BackfillKey,
+		Backfill:   rs.Backfill,
+		Limit:      r.cfg.IdealMinBatchSize,
+		Targets:    targets,
+		Until:      rs.ProposedTime,
 	}
 
-	// Incrementally load the batches of data.
-	errCh := make(chan error, 1)
-	loadCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	loaders := r.loadDataForSubBatches(loadCtx, subBatches, errCh)
-
-	// Each loader is responsible for the table that have mutations at
-	// single timestamp. The mutations for any given table are provided
-	// by a per-table channel. In order to improve SQL round-trip
-	// efficiency, we may coalesce several sub-batches together into a
-	// single SQL transaction, with an ideal minimum size that is set by
-	// configuration.
-	for _, loader := range loaders {
-		// Use goroutines to copy out the data for each table that has
-		// data for a given timestamp.
-		eg, egCtx := errgroup.WithContext(ctx)
-		for tbl, ch := range loader.Mutations {
-			tbl, ch := tbl, ch // Copy loop vars for goroutine.
-			eg.Go(func() error {
-				var muts []types.Mutation
-				// Ensure that if a loader fails to make progress, it can't wedge
-				// the entire load process.
-				stallTimer := time.NewTimer(0)
-				for {
-					if !stallTimer.Stop() {
-						<-stallTimer.C
-					}
-					stallTimer.Reset(time.Second)
-
-					select {
-					case mut, open := <-ch:
-						if open {
-							muts = append(muts, mut)
-							continue
-						}
-						// Success, make data available.
-						atomic.AddInt32(&flushCount, int32(len(muts)))
-						atomic.AddInt32(&total, int32(len(muts)))
-						toApplyMu.Lock()
-						toApply[tbl] = append(toApply[tbl], muts...)
-						toApplyMu.Unlock()
-						return nil
-
-					case <-stallTimer.C:
-						return errors.Errorf("stall detected while reading mutations in %s", tbl)
-
-					case err := <-errCh:
-						return err
-
-					case <-egCtx.Done():
-						return egCtx.Err()
-					}
-				}
-			})
-		}
-
-		if err := eg.Wait(); err != nil {
+	for running := true; running; {
+		toApply, more, err := r.stagers.SelectMany(ctx, r.pool, cursor)
+		if err != nil {
 			return err
 		}
-
-		// If we're read enough data, fire off a transaction.
-		if flushCount >= int32(r.cfg.IdealMinBatchSize) {
-			if err := flush(rs.NewSubBatch(loader.Batch)); err != nil {
-				return err
-			}
+		if more {
+			rs = rs.NewBackfill(cursor.AfterTable, cursor.AfterKey)
+		} else {
+			running = false
+			rs = rs.NewCommitted()
 		}
-	}
 
-	// Flush any remaining data, associated with a committed timestamp.
-	if err := flush(rs.NewCommitted()); err != nil {
-		return err
+		count, err := flush(toApply)
+		if err != nil {
+			return err
+		}
+		total += count
 	}
 	log.WithFields(log.Fields{
 		"count":    total,
@@ -707,6 +572,104 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		"resolved": rs.ProposedTime,
 	}).Debugf("processed resolved timestamp")
 	return nil
+
+	//
+	// // Determine the timestamps that we'll operate on.
+	// subBatches, err := r.findSubBatches(ctx, rs)
+	// if err != nil {
+	// 	return err
+	// }
+	//
+	// // Incrementally load the batches of data.
+	// errCh := make(chan error, 1)
+	// loadCtx, cancel := context.WithCancel(ctx)
+	// defer cancel()
+	// loaders := r.loadDataForSubBatches(loadCtx, subBatches, errCh, rs.Offsets)
+	//
+	// // If backfilling, group the loaders by FK level, so we can insert
+	// // data for parent tables before their child tables.
+	// var loaderGroups [][]*batchLoader
+	// if rs.Backfill {
+	// 	levelData := r.watcher.Snapshot(r.target).Order
+	// 	tablesToLevel := make(map[ident.Table]int)
+	// 	for level, tables := range levelData {
+	// 		for _, table := range tables {
+	// 			tablesToLevel[table] = level
+	// 		}
+	// 	}
+	//
+	// 	loaderGroups = make([][]*batchLoader, len(levelData))
+	// 	for _, loader := range loaders {
+	// 		level := tablesToLevel[loader.Batch.Ta]
+	// 	}
+	// } else {
+	// 	loaderGroups = [][]*batchLoader{loaders}
+	// }
+	//
+	// // Each loader is responsible for the table that have mutations at
+	// // single timestamp. The mutations for any given table are provided
+	// // by a per-table channel. In order to improve SQL round-trip
+	// // efficiency, we may coalesce several sub-batches together into a
+	// // single SQL transaction, with an ideal minimum size that is set by
+	// // configuration.
+	// for _, group := range loaderGroups {
+	// 	for _, loader := range group {
+	// 		// Use goroutines to copy out the data for each table that has
+	// 		// data for a given timestamp.
+	// 		eg, egCtx := errgroup.WithContext(ctx)
+	// 		for tbl, ch := range loader.Mutations {
+	// 			tbl, ch := tbl, ch // Copy loop vars for goroutine.
+	// 			eg.Go(func() error {
+	// 				var muts []types.Mutation
+	// 				// Ensure that if a loader fails to make progress, it can't wedge
+	// 				// the entire load process.
+	// 				stallTimer := time.NewTimer(0)
+	// 				for {
+	// 					if !stallTimer.Stop() {
+	// 						<-stallTimer.C
+	// 					}
+	// 					stallTimer.Reset(time.Second)
+	//
+	// 					select {
+	// 					case mut, open := <-ch:
+	// 						if open {
+	// 							muts = append(muts, mut)
+	// 							continue
+	// 						}
+	// 						// Success, make data available.
+	// 						atomic.AddInt32(&flushCount, int32(len(muts)))
+	// 						atomic.AddInt32(&total, int32(len(muts)))
+	// 						toApplyMu.Lock()
+	// 						toApply[tbl] = append(toApply[tbl], muts...)
+	// 						toApplyMu.Unlock()
+	// 						return nil
+	//
+	// 					case <-stallTimer.C:
+	// 						return errors.Errorf("stall detected while reading mutations in %s", tbl)
+	//
+	// 					case err := <-errCh:
+	// 						return err
+	//
+	// 					case <-egCtx.Done():
+	// 						return egCtx.Err()
+	// 					}
+	// 				}
+	// 			})
+	// 		}
+	//
+	// 		if err := eg.Wait(); err != nil {
+	// 			return err
+	// 		}
+	//
+	// 		// If we're read enough data, fire off a transaction.
+	// 		if flushCount >= int32(r.cfg.IdealMinBatchSize) {
+	// 			if err := flush(rs.NewSubBatch(loader.Batch)); err != nil {
+	// 				return err
+	// 			}
+	// 		}
+	// 	}
+	// }
+
 }
 
 // The FOR UPDATE NOWAIT will quickly fail the query with a 55P03 code
