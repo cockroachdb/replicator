@@ -115,6 +115,11 @@ type Events interface {
 
 // State provides information about a replication loop.
 type State interface {
+	// AwaitConsistentPoint blocks until the consistent point is greater
+	// than or equal to the given stamp or until the context is
+	// cancelled. The consistent point that matches the condition will
+	// be returned.
+	AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error)
 	// GetConsistentPoint returns the most recent consistent point that
 	// has been committed to the target database or the value returned
 	// from Dialect.ZeroStamp.

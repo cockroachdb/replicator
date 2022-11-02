@@ -37,6 +37,12 @@ type Loop struct {
 	initialPoint stamp.Stamp
 }
 
+// AwaitConsistentPoint waits until the consistent point has advanced to
+// the requested value or until the context is cancelled..
+func (l *Loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error) {
+	return l.loop.AwaitConsistentPoint(ctx, point)
+}
+
 // Dialect returns the logical.Dialect in use.
 func (l *Loop) Dialect() Dialect {
 	return l.loop.dialect
@@ -154,6 +160,42 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	return l.memo.Put(context.Background(),
 		l.targetPool, l.config.LoopName, data,
 	)
+}
+
+// AwaitConsistentPoint blocks until the consistent point is greater
+// than or equal to the given stamp or until the context is cancelled.
+// The consistent point that matches the condition will be returned.
+func (l *loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error) {
+	// Fast-path
+	if found := l.GetConsistentPoint(); stamp.Compare(found, point) >= 0 {
+		return found, nil
+	}
+
+	// Use a separate goroutine that is blocked by the sync.Cond.
+	result := make(chan stamp.Stamp, 1)
+	go func() {
+		defer close(result)
+		l.consistentPoint.L.Lock()
+		defer l.consistentPoint.L.Unlock()
+		for {
+			found := l.consistentPoint.stamp
+			if stamp.Compare(found, point) >= 0 {
+				select {
+				case result <- found:
+				case <-ctx.Done():
+				}
+				return
+			}
+			l.consistentPoint.Wait()
+		}
+	}()
+
+	select {
+	case found := <-result:
+		return found, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // GetConsistentPoint implements State.
