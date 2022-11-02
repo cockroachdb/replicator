@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -72,11 +73,10 @@ func (f *factory) getUnlocked(table ident.Table) *stage {
 
 // SelectMany implements types.Stagers.
 func (f *factory) SelectMany(
-	ctx context.Context, tx pgxtype.Querier, q *types.SelectManyCursor,
-) (map[ident.Table][]types.Mutation, bool, error) {
-	start := time.Now()
+	ctx context.Context, tx pgxtype.Querier, q *types.SelectManyCursor, fn types.SelectManyCallback,
+) error {
 	if q.Limit == 0 {
-		return nil, false, errors.New("limit must be set")
+		return errors.New("limit must be set")
 	}
 	// Ensure offset >= start.
 	if hlc.Compare(q.OffsetTime, q.Start) < 0 {
@@ -84,7 +84,6 @@ func (f *factory) SelectMany(
 	}
 
 	// Each table is assigned a numeric id to simplify the queries.
-	offsetTableIdx := -1
 	tablesToIds := make(map[ident.Table]int)
 	idsToTables := make(map[int]ident.Table)
 	var orderedTables []ident.Table
@@ -93,176 +92,195 @@ func (f *factory) SelectMany(
 		for _, table := range tables {
 			id := len(tablesToIds)
 			if _, duplicate := tablesToIds[table]; duplicate {
-				return nil, false, errors.Errorf("duplicate table name: %s", table)
+				return errors.Errorf("duplicate table name: %s", table)
 			}
 			tablesToIds[table] = id
 			idsToTables[id] = table
-			if table == q.OffsetTable {
-				offsetTableIdx = id
-			}
 		}
 	}
 
-	// This is a union-all construct:
-	//   WITH data AS (
-	//     (SELECT ... FROM staging_table)
-	//     UNION ALL
-	//     (SELECT ... FROM another_staging_table)
-	//   )
-	//   SELECT ... FROM data ....
-	var sb strings.Builder
-	sb.WriteString(`WITH
+	// Define the rows variable here, so we don't leak it from the
+	// variety of error code-paths below.
+	var rows pgx.Rows
+	defer func() {
+		if rows != nil {
+			rows.Close()
+		}
+	}()
+
+	for {
+		start := time.Now()
+
+		offsetTableIdx := -1
+		if q.OffsetTable != (ident.Table{}) {
+			offsetTableIdx = tablesToIds[q.OffsetTable]
+		}
+
+		// This is a union-all construct:
+		//   WITH data AS (
+		//     (SELECT ... FROM staging_table)
+		//     UNION ALL
+		//     (SELECT ... FROM another_staging_table)
+		//   )
+		//   SELECT ... FROM data ....
+		//
+		// The generated SQL does vary based on the offset table value,
+		// so we can't easily reuse it across iterations.
+		var sb strings.Builder
+		sb.WriteString(`WITH
 args AS (SELECT $1::INT, $2::INT, $3::INT, $4::INT, $5::INT, $6:::INT, $7::INT, $8::STRING),
 data AS (`)
-	needsUnion := false
-	for _, table := range orderedTables {
-		id := tablesToIds[table]
-		// If we're backfilling, the dominant ordering term is the
-		// table. Any tables that are before the starting table can
-		// simply be elided from the query.
-		if q.Backfill && id < offsetTableIdx {
-			continue
-		}
-		if needsUnion {
-			sb.WriteString(" UNION ALL ")
-		} else {
-			needsUnion = true
-		}
+		needsUnion := false
+		for _, table := range orderedTables {
+			id := tablesToIds[table]
+			// If we're backfilling, the dominant ordering term is the
+			// table. Any tables that are before the starting table can
+			// simply be elided from the query.
+			if q.Backfill && id < offsetTableIdx {
+				continue
+			}
+			if needsUnion {
+				sb.WriteString(" UNION ALL ")
+			} else {
+				needsUnion = true
+			}
 
-		// Mangle the real table name into its staging table name.
-		stagingTable := ident.NewTable(
-			f.stagingDB, ident.Public, ident.New(mangleTableName(table)))
+			// Mangle the real table name into its staging table name.
+			stagingTable := ident.NewTable(
+				f.stagingDB, ident.Public, ident.New(mangleTableName(table)))
 
-		// This ORDER BY should be driven by the index scan, but we
-		// don't want to be subject to any cross-range scan merges.
-		// The WHERE clauses in the sub-queries should line up with
-		// the ORDER BY in the top-level that we use for pagination.
+			// This ORDER BY should be driven by the index scan, but we
+			// don't want to be subject to any cross-range scan merges.
+			// The WHERE clauses in the sub-queries should line up with
+			// the ORDER BY in the top-level that we use for pagination.
+			if q.Backfill {
+				if id == offsetTableIdx {
+					// We're resuming in the middle of reading a table.
+					_, _ = fmt.Fprintf(&sb,
+						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+							"FROM %[2]s "+
+							"WHERE (nanos, logical, key) > ($6, $7, $8) "+
+							"AND (nanos, logical) <= ($3, $4) "+
+							"ORDER BY nanos, logical, key "+
+							"LIMIT $5)",
+						id, stagingTable)
+				} else {
+					// id must be > offsetTableIdx, since we filter out
+					// lesser values above. This means that we haven't
+					// yet read any values from this table, so we want
+					// to start at the beginning time.
+					_, _ = fmt.Fprintf(&sb,
+						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+							"FROM %[2]s "+
+							"WHERE (nanos, logical) >= ($1, $2) "+
+							"AND (nanos, logical) <= ($3, $4) "+
+							"ORDER BY nanos, logical, key "+
+							"LIMIT $5)",
+						id, stagingTable)
+				}
+			} else {
+				// The differences in these cases have to do with the
+				// comparison operators around (nanos,logical) to pick the
+				// correct starting point for the scan.
+				if id == offsetTableIdx {
+					_, _ = fmt.Fprintf(&sb,
+						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+							"FROM %[2]s "+
+							"WHERE ( (nanos, logical, key) > ($6, $7, $8) ) "+
+							"AND (nanos, logical) <= ($3, $4) "+
+							"ORDER BY nanos, logical, key "+
+							"LIMIT $5)",
+						id, stagingTable)
+				} else if id > offsetTableIdx {
+					_, _ = fmt.Fprintf(&sb,
+						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+							"FROM %[2]s "+
+							"WHERE (nanos, logical) >= ($6, $7) "+
+							"AND (nanos, logical) <= ($3, $4) "+
+							"ORDER BY nanos, logical, key "+
+							"LIMIT $5)",
+						id, stagingTable)
+				} else {
+					_, _ = fmt.Fprintf(&sb,
+						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+							"FROM %[2]s "+
+							"WHERE (nanos, logical) > ($6, $7) "+
+							"AND (nanos, logical) <= ($3, $4) "+
+							"ORDER BY nanos, logical, key "+
+							"LIMIT $5)",
+						id, stagingTable)
+				}
+			}
+		}
+		sb.WriteString(`) SELECT t, nanos, logical, key, mut FROM data `)
 		if q.Backfill {
-			if id == offsetTableIdx {
-				// We're resuming in the middle of reading a table.
-				_, _ = fmt.Fprintf(&sb,
-					"(SELECT %[1]d AS t, nanos, logical, key, mut "+
-						"FROM %[2]s "+
-						"WHERE (nanos, logical, key) > ($6, $7, $8) "+
-						"AND (nanos, logical) <= ($3, $4) "+
-						"ORDER BY nanos, logical, key "+
-						"LIMIT $5)",
-					id, stagingTable)
-			} else {
-				// id must be > offsetTableIdx, since we filter out
-				// lesser values above. This means that we haven't
-				// yet read any values from this table, so we want
-				// to start at the beginning time.
-				_, _ = fmt.Fprintf(&sb,
-					"(SELECT %[1]d AS t, nanos, logical, key, mut "+
-						"FROM %[2]s "+
-						"WHERE (nanos, logical) >= ($1, $2) "+
-						"AND (nanos, logical) <= ($3, $4) "+
-						"ORDER BY nanos, logical, key "+
-						"LIMIT $5)",
-					id, stagingTable)
-			}
+			sb.WriteString(`ORDER BY t, nanos, logical, key LIMIT $5`)
 		} else {
-			// The differences in these cases have to do with the
-			// comparison operators around (nanos,logical) to pick the
-			// correct starting point for the scan.
-			if id == offsetTableIdx {
-				_, _ = fmt.Fprintf(&sb,
-					"(SELECT %[1]d AS t, nanos, logical, key, mut "+
-						"FROM %[2]s "+
-						"WHERE ( (nanos, logical, key) > ($6, $7, $8) ) "+
-						"AND (nanos, logical) <= ($3, $4) "+
-						"ORDER BY nanos, logical, key "+
-						"LIMIT $5)",
-					id, stagingTable)
-			} else if id > offsetTableIdx {
-				_, _ = fmt.Fprintf(&sb,
-					"(SELECT %[1]d AS t, nanos, logical, key, mut "+
-						"FROM %[2]s "+
-						"WHERE (nanos, logical) >= ($6, $7) "+
-						"AND (nanos, logical) <= ($3, $4) "+
-						"ORDER BY nanos, logical, key "+
-						"LIMIT $5)",
-					id, stagingTable)
-			} else {
-				_, _ = fmt.Fprintf(&sb,
-					"(SELECT %[1]d AS t, nanos, logical, key, mut "+
-						"FROM %[2]s "+
-						"WHERE (nanos, logical) > ($6, $7) "+
-						"AND (nanos, logical) <= ($3, $4) "+
-						"ORDER BY nanos, logical, key "+
-						"LIMIT $5)",
-					id, stagingTable)
-			}
+			sb.WriteString(`ORDER BY nanos, logical, t, key LIMIT $5`)
 		}
-	}
-	sb.WriteString(`) SELECT t, nanos, logical, key, mut FROM data `)
-	if q.Backfill {
-		sb.WriteString(`ORDER BY t, nanos, logical, key LIMIT $5`)
-	} else {
-		sb.WriteString(`ORDER BY nanos, logical, t, key LIMIT $5`)
-	}
 
-	rows, err := tx.Query(ctx, sb.String(),
-		q.Start.Nanos(),
-		q.Start.Logical(),
-		q.End.Nanos(),
-		q.End.Logical(),
-		q.Limit,
-		q.OffsetTime.Nanos(),
-		q.OffsetTime.Logical(),
-		string(q.OffsetKey),
-	)
-	if err != nil {
-		return nil, false, errors.Wrap(err, sb.String())
-	}
-	defer rows.Close()
-
-	count := 0
-	var lastTable ident.Table
-	var lastMut types.Mutation
-	ret := make(map[ident.Table][]types.Mutation, len(idsToTables))
-	for rows.Next() {
-		count++
-		var mut types.Mutation
-		var tableIdx int
-		var nanos int64
-		var logical int
-		if err := rows.Scan(&tableIdx, &nanos, &logical, &mut.Key, &mut.Data); err != nil {
-			return nil, false, errors.WithStack(err)
+		var err error
+		// Rows closed in defer statement above.
+		rows, err = tx.Query(ctx, sb.String(),
+			q.Start.Nanos(),
+			q.Start.Logical(),
+			q.End.Nanos(),
+			q.End.Logical(),
+			q.Limit,
+			q.OffsetTime.Nanos(),
+			q.OffsetTime.Logical(),
+			string(q.OffsetKey),
+		)
+		if err != nil {
+			return errors.Wrap(err, sb.String())
 		}
-		mut.Time = hlc.New(nanos, logical)
 
-		// Check for gzip magic numbers.
-		if len(mut.Data) >= 2 && mut.Data[0] == 0x1f && mut.Data[1] == 0x8b {
-			r, err := gzip.NewReader(bytes.NewReader(mut.Data))
-			if err != nil {
-				return nil, false, errors.WithStack(err)
+		count := 0
+		var gzReader gzip.Reader
+		var lastMut types.Mutation
+		var lastTable ident.Table
+		for rows.Next() {
+			count++
+			var mut types.Mutation
+			var tableIdx int
+			var nanos int64
+			var logical int
+			if err := rows.Scan(&tableIdx, &nanos, &logical, &mut.Key, &mut.Data); err != nil {
+				return errors.WithStack(err)
 			}
-			mut.Data, err = io.ReadAll(r)
-			if err != nil {
-				return nil, false, errors.WithStack(err)
+			mut.Time = hlc.New(nanos, logical)
+
+			// Check for gzip magic numbers.
+			if len(mut.Data) >= 2 && mut.Data[0] == 0x1f && mut.Data[1] == 0x8b {
+				if err := gzReader.Reset(bytes.NewReader(mut.Data)); err != nil {
+					return errors.WithStack(err)
+				}
+				mut.Data, err = io.ReadAll(&gzReader)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+			}
+
+			lastMut = mut
+			lastTable = idsToTables[tableIdx]
+			if err := fn(ctx, lastTable, mut); err != nil {
+				return err
 			}
 		}
 
-		var ok bool
-		lastTable, ok = idsToTables[tableIdx]
-		if !ok {
-			return nil, false, errors.Errorf("received unexpected table id in query %d", tableIdx)
+		// Only update the cursor if we've successfully read the entire page.
+		q.OffsetKey = lastMut.Key
+		q.OffsetTime = lastMut.Time
+		q.OffsetTable = lastTable
+
+		log.WithFields(log.Fields{
+			"count":    count,
+			"duration": time.Since(start),
+			"targets":  q.Targets,
+		}).Debug("retrieved staged mutations")
+
+		if count < q.Limit {
+			return nil
 		}
-		ret[lastTable] = append(ret[lastTable], mut)
-		lastMut = mut
 	}
-
-	q.OffsetKey = lastMut.Key
-	q.OffsetTime = lastMut.Time
-	q.OffsetTable = lastTable
-
-	log.WithFields(log.Fields{
-		"count":    count,
-		"duration": time.Since(start),
-		"targets":  q.Targets,
-	}).Debug("retrieved staged mutations")
-
-	return ret, count >= q.Limit, nil
 }

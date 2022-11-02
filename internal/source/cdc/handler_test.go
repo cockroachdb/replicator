@@ -224,17 +224,16 @@ func TestRejectedAuth(t *testing.T) {
 	}
 }
 
-// This test adds a large number of rows, in excess of what can be
-// processed as a single transaction. We want to verify that the code in
-// the backfill path can make progress, even if we can't guarantee
-// fully-transactional behavior. There is a chaotic version of this test
-// to validate the variety of failure modes.
-func TestMassBackfillWithForeignKeys(t *testing.T) {
-	t.Run("normal", func(t *testing.T) { testMassBackfillWithForeignKeys(t, 0) })
-	t.Run("chaos", func(t *testing.T) { testMassBackfillWithForeignKeys(t, 0.01) })
+// This test adds a large number of rows that have FK dependencies, in
+// excess of a number that should be processed as a single transaction.
+func TestWithForeignKeys(t *testing.T) {
+	t.Run("normal-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0) })
+	t.Run("normal-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0) })
+	t.Run("chaos-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0.01) })
+	t.Run("chaos-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0.01) })
 }
 
-func testMassBackfillWithForeignKeys(t *testing.T, chaosProb float32) {
+func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb float32) {
 	const rowCount = 10_000
 	r := require.New(t)
 
@@ -242,11 +241,18 @@ func testMassBackfillWithForeignKeys(t *testing.T, chaosProb float32) {
 	r.NoError(err)
 	defer cancel()
 
+	var backfillWindow time.Duration
+	if backfill {
+		backfillWindow = time.Minute
+	}
+
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
-		MetaTableName: ident.New("resolved_timestamps"),
+		IdealFlushBatchSize: 123, // Pick weird batch sizes.
+		SelectBatchSize:     587,
+		MetaTableName:       ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
 			ApplyTimeout:       time.Second,
-			BackfillWindow:     time.Minute,
+			BackfillWindow:     backfillWindow,
 			ChaosProb:          chaosProb,
 			FanShards:          16,
 			ForeignKeysEnabled: true,

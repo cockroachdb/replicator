@@ -338,6 +338,8 @@ func (s *stage) putOne(ctx context.Context, db pgxtype.Querier, mutations []type
 	for worker := 0; worker < numWorkers; worker++ {
 		worker := worker
 		eg.Go(func() error {
+			// We use w.Reset() below
+			var gzWriter gzip.Writer
 			for idx := worker; idx < len(jsons); idx += numWorkers {
 				if err := errCtx.Err(); err != nil {
 					return err
@@ -350,20 +352,21 @@ func (s *stage) putOne(ctx context.Context, db pgxtype.Querier, mutations []type
 
 				if mut.IsDelete() {
 					jsons[idx] = []byte("null")
+					continue
+				}
+
+				var buf bytes.Buffer
+				gzWriter.Reset(&buf)
+				if _, err := gzWriter.Write(mut.Data); err != nil {
+					return errors.WithStack(err)
+				}
+				if err := gzWriter.Close(); err != nil {
+					return errors.WithStack(err)
+				}
+				if buf.Len() < len(mut.Data) {
+					jsons[idx] = buf.Bytes()
 				} else {
-					var buf bytes.Buffer
-					w := gzip.NewWriter(&buf)
-					if _, err := w.Write(mut.Data); err != nil {
-						return errors.WithStack(err)
-					}
-					if err := w.Close(); err != nil {
-						return errors.WithStack(err)
-					}
-					if buf.Len() < len(mut.Data) {
-						jsons[idx] = buf.Bytes()
-					} else {
-						jsons[idx] = mut.Data
-					}
+					jsons[idx] = mut.Data
 				}
 			}
 			return nil

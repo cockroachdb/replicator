@@ -136,11 +136,11 @@ func (s *resolvedStamp) NewProposed(tx pgx.Tx, proposed hlc.Time) *resolvedStamp
 
 }
 
-// NewBackfill returns a resolvedStamp that represents partial progress
+// NewProgress returns a resolvedStamp that represents partial progress
 // within the same [committed, proposed] window.
-func (s *resolvedStamp) NewBackfill(cursor *types.SelectManyCursor) *resolvedStamp {
+func (s *resolvedStamp) NewProgress(cursor *types.SelectManyCursor) *resolvedStamp {
 	ret := &resolvedStamp{
-		Backfill:      true,
+		Backfill:      s.Backfill,
 		CommittedTime: s.CommittedTime,
 		Iteration:     s.Iteration + 1,
 		OffsetKey:     s.OffsetKey,
@@ -150,9 +150,15 @@ func (s *resolvedStamp) NewBackfill(cursor *types.SelectManyCursor) *resolvedSta
 		Tx:            s.Tx,
 	}
 	if cursor != nil {
-		ret.OffsetKey = cursor.OffsetKey
-		ret.OffsetTable = cursor.OffsetTable
 		ret.OffsetTime = cursor.OffsetTime
+
+		// Only Key and Table make sense to retain in a backfill. For
+		// transactional mode, we always want to restart at a specific
+		// timestamp.
+		if s.Backfill {
+			ret.OffsetKey = cursor.OffsetKey
+			ret.OffsetTable = cursor.OffsetTable
+		}
 	}
 	return ret
 }
@@ -343,11 +349,8 @@ func (r *resolver) readInto(
 		switch err {
 		case nil:
 			work := prev.NewProposed(tx, nextResolved)
-			// If we're in backfill mode and aren't continuing from a
-			// previous, partial backfill, mark the work to be performed
-			// as a backfill.
-			if backfill && !work.Backfill {
-				work = work.NewBackfill(nil)
+			if backfill {
+				work.Backfill = true
 			}
 
 			select {
@@ -467,72 +470,11 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logical.Events) error {
 	start := time.Now()
 	targets := r.watcher.Snapshot(r.target).Order
-	total := 0
-
-	flush := func(toApply map[ident.Table][]types.Mutation) (int, error) {
-		flushCount := 0
-		flushStart := time.Now()
-
-		// Send a command on this transaction to prevent the
-		// idle-in-transaction timeout from kicking in.
-		if _, err := rs.Tx.Exec(ctx, "SELECT 1"); err != nil {
-			return 0, errors.Wrap(err, "could not ping resolved-timestamp transaction")
-		}
-
-		// Apply the retrieved data.
-		if err := events.OnBegin(ctx, rs); err != nil {
-			return 0, err
-		}
-
-		// Push the data in FK-preserving order. If we cross an FK group
-		// boundary in backfilling mode, insert a new resolvedStamp to
-		// ensure that parent tables are flushed before child tables.
-		lastGroup := 0
-		for group, tables := range targets {
-			for _, table := range tables {
-				muts := toApply[table]
-				if len(muts) == 0 {
-					continue
-				}
-
-				if rs.Backfill && group > lastGroup {
-					lastGroup = group
-					// Close previous group.
-					if err := events.OnCommit(ctx); err != nil {
-						return 0, err
-					}
-					// Increment stamp.
-					rs = rs.NewBackfill(nil)
-					// Start new group.
-					if err := events.OnBegin(ctx, rs); err != nil {
-						return 0, err
-					}
-				}
-
-				flushCount += len(muts)
-				if err := events.OnData(ctx, table.Table(), table, muts); err != nil {
-					return 0, err
-				}
-			}
-		}
-		// Note that the data isn't necessarily committed to the database
-		// at this point. We need to wait for a call to OnConsistent to
-		// know that the data is safe.
-		if err := events.OnCommit(ctx); err != nil {
-			return 0, err
-		}
-		log.WithFields(log.Fields{
-			"count":    flushCount,
-			"duration": time.Since(flushStart),
-			"schema":   r.target,
-		}).Debugf("flushed mutations")
-		return flushCount, nil
-	}
 
 	cursor := &types.SelectManyCursor{
 		Backfill:    rs.Backfill,
 		End:         rs.ProposedTime,
-		Limit:       r.cfg.IdealMinBatchSize,
+		Limit:       r.cfg.SelectBatchSize,
 		OffsetKey:   rs.OffsetKey,
 		OffsetTable: rs.OffsetTable,
 		OffsetTime:  rs.OffsetTime,
@@ -540,39 +482,132 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		Targets:     targets,
 	}
 
-	for {
-		toApply, more, err := r.stagers.SelectMany(ctx, r.pool, cursor)
-		if err != nil {
+	flush := func(toApply map[ident.Table][]types.Mutation) error {
+		flushStart := time.Now()
+
+		ctx, cancel := context.WithTimeout(ctx, r.cfg.ApplyTimeout)
+		defer cancel()
+
+		// Send a command on this transaction to prevent the
+		// idle-in-transaction timeout from kicking in.
+		if _, err := rs.Tx.Exec(ctx, "SELECT 1"); err != nil {
+			return errors.Wrap(err, "could not ping resolved-timestamp transaction")
+		}
+
+		// Apply the retrieved data.
+		if err := events.OnBegin(ctx, rs); err != nil {
 			return err
 		}
-		count, err := flush(toApply)
-		if err != nil {
+
+		flushCount := 0
+		previousGroupDirty := false
+		for _, tables := range targets {
+			for _, table := range tables {
+				muts := toApply[table]
+				if len(muts) == 0 {
+					continue
+				}
+
+				// When using fan-mode, foreign keys, and we hit a group
+				// edge transition, we need to wait for all in-flight
+				// commits to parent tables before we can continue with
+				// child tables. We'll do this by committing the current
+				// resolvedStamp, waiting for it to be marked as
+				// complete, then starting a new batch with an
+				// incremented iteration number.
+				if rs.Backfill && r.cfg.ForeignKeysEnabled && previousGroupDirty {
+					previousGroupDirty = false
+					if err := events.OnCommit(ctx); err != nil {
+						return err
+					}
+					if _, err := events.AwaitConsistentPoint(ctx, rs); err != nil {
+						return errors.Wrapf(err,
+							"consistent point failed to advance within %s", r.cfg.ApplyTimeout)
+					}
+					rs = rs.NewProgress(nil)
+					if err := events.OnBegin(ctx, rs); err != nil {
+						return err
+					}
+				}
+
+				flushCount += len(muts)
+				previousGroupDirty = true
+				if err := events.OnData(ctx, table.Table(), table, muts); err != nil {
+					return err
+				}
+			}
+		}
+		// Note that the data isn't necessarily committed to the database
+		// at this point. We need to wait for a call to OnConsistent to
+		// know that the data is safe.
+		if err := events.OnCommit(ctx); err != nil {
 			return err
 		}
-		total += count
 
 		// Advance the stamp once the flush has completed. The flush
 		// cycle can add some intermediate checkpoints for FK ordering,
 		// so we don't want to truly advance the ratchet until we know
 		// that everything's been committed.
-		if more {
-			rs = rs.NewBackfill(cursor)
-		} else {
-			break
-		}
+		rs = rs.NewProgress(cursor)
+
+		log.WithFields(log.Fields{
+			"count":    flushCount,
+			"duration": time.Since(flushStart),
+			"schema":   r.target,
+		}).Debugf("flushed mutations")
+		return nil
+	}
+
+	var epoch hlc.Time
+	flushCounter := 0
+	toApply := make(map[ident.Table][]types.Mutation)
+	total := 0
+	if err := r.stagers.SelectMany(ctx, r.pool, cursor,
+		func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+			// Check for flush before accumulating.
+			var needsFlush bool
+			if rs.Backfill {
+				// We're receiving data in table-order. Just read data
+				// and flush it once we hit our soft limit, since we
+				// can resume at any point.
+				needsFlush = flushCounter >= r.cfg.IdealFlushBatchSize
+			} else {
+				// We're receiving data ordered by MVCC timestamp. Flush
+				// data when we see a new epoch after accumulating a
+				// minimum number of mutations. This increases
+				// throughput when there are many single-row
+				// transactions in the source database.
+				needsFlush = flushCounter >= r.cfg.IdealFlushBatchSize &&
+					hlc.Compare(mut.Time, epoch) > 0
+			}
+			if needsFlush {
+				if err := flush(toApply); err != nil {
+					return err
+				}
+				total += flushCounter
+				flushCounter = 0
+				toApply = make(map[ident.Table][]types.Mutation)
+			}
+
+			flushCounter++
+			toApply[tbl] = append(toApply[tbl], mut)
+			epoch = mut.Time
+			return nil
+		}); err != nil {
+		return err
 	}
 
 	// Final flush cycle to commit the final stamp.
 	rs = rs.NewCommitted()
-	if _, err := flush(nil); err != nil {
+	if err := flush(toApply); err != nil {
 		return err
 	}
+	total += flushCounter
 	log.WithFields(log.Fields{
-		"count":    total,
-		"duration": time.Since(start),
-		"schema":   r.target,
-		"from":     rs.CommittedTime,
-		"resolved": rs.ProposedTime,
+		"committed": rs.CommittedTime,
+		"count":     total,
+		"duration":  time.Since(start),
+		"schema":    r.target,
 	}).Debugf("processed resolved timestamp")
 	return nil
 }
