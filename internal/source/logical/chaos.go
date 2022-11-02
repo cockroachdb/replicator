@@ -108,6 +108,14 @@ type chaosEvents struct {
 
 var _ Events = (*chaosEvents)(nil)
 
+// AwaitConsistentPoint implements State. It delegates to the loop and
+// never injects an error.
+func (e *chaosEvents) AwaitConsistentPoint(
+	ctx context.Context, point stamp.Stamp,
+) (stamp.Stamp, error) {
+	return e.delegate.AwaitConsistentPoint(ctx, point)
+}
+
 func (e *chaosEvents) Backfill(
 	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
 ) error {
