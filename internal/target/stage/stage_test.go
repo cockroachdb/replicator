@@ -284,14 +284,14 @@ func TestSelectMany(t *testing.T) {
 		r := require.New(t)
 
 		q := &types.SelectManyCursor{
+			End:   hlc.New(100*entries, 0), // Past any existing time.
+			Limit: entries/2 - 1,           // Validate paging
 			Targets: [][]ident.Table{
 				{tables[0]},
 				{tables[1], tables[2]},
 				{tables[3], tables[4], tables[5]},
 				{tables[6], tables[7], tables[8], tables[9]},
 			},
-			Limit: entries/2 - 1,           // Validate paging
-			Until: hlc.New(100*entries, 0), // Past any existing time.
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
@@ -312,6 +312,41 @@ func TestSelectMany(t *testing.T) {
 		}
 	})
 
+	// Read the middle two tranches of updates.
+	t.Run("transactional-bounded", func(t *testing.T) {
+		a := assert.New(t)
+		r := require.New(t)
+
+		q := &types.SelectManyCursor{
+			Start: hlc.New(2, 0),          // Skip the initial transaction
+			End:   hlc.New(10*entries, 0), // Read the second large batch
+			Limit: entries/2 - 1,          // Validate paging
+			Targets: [][]ident.Table{
+				{tables[0]},
+				{tables[1], tables[2]},
+				{tables[3], tables[4], tables[5]},
+				{tables[6], tables[7], tables[8], tables[9]},
+			},
+		}
+
+		entriesByTable := make(map[ident.Table][]types.Mutation)
+		for {
+			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
+			r.NoError(err)
+			for tbl, tblMuts := range data {
+				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
+			}
+			if !more {
+				break
+			}
+		}
+		for _, seen := range entriesByTable {
+			if a.Len(seen, 2*entries) {
+				a.Equal(expectedMutOrder[entries:3*entries], seen)
+			}
+		}
+	})
+
 	// What's different about the backfill case is that we want to
 	// verify that if we see an update for a table in group G, then we
 	// already have all data for group G-1.
@@ -321,14 +356,14 @@ func TestSelectMany(t *testing.T) {
 
 		q := &types.SelectManyCursor{
 			Backfill: true,
+			End:      hlc.New(100*entries, 0), // Read the second large batch
+			Limit:    entries/2 - 1,           // Validate paging
 			Targets: [][]ident.Table{
 				{tables[0]},
 				{tables[1], tables[2]},
 				{tables[3], tables[4], tables[5]},
 				{tables[6], tables[7], tables[8], tables[9]},
 			},
-			Limit: entries/2 - 1,           // Validate paging
-			Until: hlc.New(100*entries, 0), // Past any existing time.
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
@@ -356,6 +391,53 @@ func TestSelectMany(t *testing.T) {
 		for _, seen := range entriesByTable {
 			if a.Len(seen, len(expectedMutOrder)) {
 				a.Equal(expectedMutOrder, seen)
+			}
+		}
+	})
+
+	// Similar to the backfill test, but we read a subset of the data.
+	t.Run("backfill-bounded", func(t *testing.T) {
+		a := assert.New(t)
+		r := require.New(t)
+
+		q := &types.SelectManyCursor{
+			Start:    hlc.New(2, 0),          // Skip the initial transaction
+			End:      hlc.New(10*entries, 0), // Read the second large batch
+			Backfill: true,
+			Limit:    entries/2 - 1, // Validate paging
+			Targets: [][]ident.Table{
+				{tables[0]},
+				{tables[1], tables[2]},
+				{tables[3], tables[4], tables[5]},
+				{tables[6], tables[7], tables[8], tables[9]},
+			},
+		}
+
+		entriesByTable := make(map[ident.Table][]types.Mutation)
+		for {
+			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
+			r.NoError(err)
+			for tbl, tblMuts := range data {
+				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
+			}
+
+			// Check previous groups by induction. We do this in a
+			// separate loop, since we may cross a group boundary within
+			// a page of data.
+			for tbl := range data {
+				if group := tableToGroup[tbl]; group > 1 {
+					for _, tableToCheck := range tableGroups[group-1] {
+						a.Len(entriesByTable[tableToCheck], 2*entries)
+					}
+				}
+			}
+			if !more {
+				break
+			}
+		}
+		for _, seen := range entriesByTable {
+			if a.Len(seen, 2*entries) {
+				a.Equal(expectedMutOrder[entries:3*entries], seen)
 			}
 		}
 	})

@@ -123,13 +123,14 @@ type Stager interface {
 // will be updated by the method, allowing callers to call SelectMany
 // in a loop until fewer than Limit values are returned.
 type SelectManyCursor struct {
-	AfterTime  hlc.Time
-	AfterTable ident.Table
-	AfterKey   json.RawMessage
-	Backfill   bool            // If true, we read all updates for parent tables before children.
+	Start, End hlc.Time
 	Targets    [][]ident.Table // The outer slice defines FK groupings.
 	Limit      int
-	Until      hlc.Time
+	Backfill   bool // If true, we read all updates for parent tables before children.
+
+	OffsetKey   json.RawMessage
+	OffsetTable ident.Table
+	OffsetTime  hlc.Time
 }
 
 // Stagers is a factory for Stager instances.

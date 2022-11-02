@@ -20,14 +20,12 @@ import (
 	"net/url"
 	"regexp"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/batches"
-
-	"golang.org/x/sync/errgroup"
-
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 // See https://www.cockroachlabs.com/docs/stable/create-changefeed.html#general-file-format
