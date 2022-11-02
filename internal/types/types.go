@@ -119,6 +119,10 @@ type Stager interface {
 	TransactionTimes(ctx context.Context, tx pgxtype.Querier, before, after hlc.Time) ([]hlc.Time, error)
 }
 
+// SelectManyCallback is provided to Stagers.SelectMany to receive the
+// incoming data.
+type SelectManyCallback func(ctx context.Context, tbl ident.Table, mut Mutation) error
+
 // SelectManyCursor is used with Stagers.SelectMany. The After values
 // will be updated by the method, allowing callers to call SelectMany
 // in a loop until fewer than Limit values are returned.
@@ -126,7 +130,12 @@ type SelectManyCursor struct {
 	Start, End hlc.Time
 	Targets    [][]ident.Table // The outer slice defines FK groupings.
 	Limit      int
-	Backfill   bool // If true, we read all updates for parent tables before children.
+
+	// If true, we read all updates for parent tables before children,
+	// but make no guarantees around transactional boundaries. If false,
+	// we read some number of individual MVCC timestamps in their
+	// entirety.
+	Backfill bool
 
 	OffsetKey   json.RawMessage
 	OffsetTable ident.Table
@@ -142,9 +151,8 @@ type Stagers interface {
 	// result from a changefeed's initial_scan.
 	//
 	// This method will update the fields within the cursor so that it
-	// may be called in a loop without the caller needing to worry about
-	// the mechanics of iteration.
-	SelectMany(ctx context.Context, tx pgxtype.Querier, q *SelectManyCursor) (_ map[ident.Table][]Mutation, more bool, _ error)
+	// can be used to restart in case of interruption.
+	SelectMany(ctx context.Context, tx pgxtype.Querier, q *SelectManyCursor, fn SelectManyCallback) error
 }
 
 // ColData hold SQL column metadata.

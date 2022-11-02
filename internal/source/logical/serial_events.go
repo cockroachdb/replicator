@@ -34,7 +34,9 @@ type serialEvents struct {
 var _ Events = (*serialEvents)(nil)
 
 // AwaitConsistentPoint implements State.  It delegates to the loop.
-func (e *serialEvents) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error) {
+func (e *serialEvents) AwaitConsistentPoint(
+	ctx context.Context, point stamp.Stamp,
+) (stamp.Stamp, error) {
 	return e.loop.AwaitConsistentPoint(ctx, point)
 }
 

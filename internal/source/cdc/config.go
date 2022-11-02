@@ -17,7 +17,10 @@ import (
 	"github.com/spf13/pflag"
 )
 
-const defaultIdealMinBatchSize = 1000
+const (
+	defaultFlushBatchSize  = 1_000
+	defaultSelectBatchSize = 10_000
+)
 
 // Config adds CDC-specific configuration to the core logical loop.
 type Config struct {
@@ -25,10 +28,13 @@ type Config struct {
 
 	// Coalesce timestamps within a resolved-timestamp window until
 	// at least this many mutations have been collected.
-	IdealMinBatchSize int
+	IdealFlushBatchSize int
 
 	// The name of the resolved_timestamps table.
 	MetaTableName ident.Ident
+
+	// The number of rows to retrieve when loading staged data.
+	SelectBatchSize int
 }
 
 // Bind adds configuration flags to the set.
@@ -41,10 +47,12 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		panic(err)
 	}
 
-	f.IntVar(&c.IdealMinBatchSize, "idealMinBatchSize", defaultIdealMinBatchSize,
+	f.IntVar(&c.IdealFlushBatchSize, "idealFlushBatchSize", defaultFlushBatchSize,
 		"try to apply at least this many mutations per resolved-timestamp window")
 	f.Var(ident.NewValue("resolved_timestamps", &c.MetaTableName), "metaTable",
 		"the name of the table in which to store resolved timestamps")
+	f.IntVar(&c.SelectBatchSize, "selectBatchSize", defaultSelectBatchSize,
+		"the number of rows to select at once when reading staged data")
 }
 
 // Preflight implements logical.Config.
@@ -56,11 +64,14 @@ func (c *Config) Preflight() error {
 		return err
 	}
 
-	if c.IdealMinBatchSize == 0 {
-		c.IdealMinBatchSize = defaultIdealMinBatchSize
+	if c.IdealFlushBatchSize == 0 {
+		c.IdealFlushBatchSize = defaultFlushBatchSize
 	}
 	if c.MetaTableName.IsEmpty() {
 		return errors.New("no metadata table specified")
+	}
+	if c.SelectBatchSize == 0 {
+		c.SelectBatchSize = defaultSelectBatchSize
 	}
 
 	return nil

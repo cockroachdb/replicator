@@ -12,6 +12,7 @@ package stage_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -288,23 +289,19 @@ func TestSelectMany(t *testing.T) {
 			Limit: entries/2 - 1,           // Validate paging
 			Targets: [][]ident.Table{
 				{tables[0]},
-				{tables[1], tables[2]},
-				{tables[3], tables[4], tables[5]},
-				{tables[6], tables[7], tables[8], tables[9]},
+				// {tables[1], tables[2]},
+				// {tables[3], tables[4], tables[5]},
+				// {tables[6], tables[7], tables[8], tables[9]},
 			},
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		for {
-			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
-			r.NoError(err)
-			for tbl, tblMuts := range data {
-				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
-			}
-			if !more {
-				break
-			}
-		}
+		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
+				return nil
+			})
+		r.NoError(err)
 		for _, seen := range entriesByTable {
 			if a.Len(seen, len(expectedMutOrder)) {
 				a.Equal(expectedMutOrder, seen)
@@ -330,16 +327,12 @@ func TestSelectMany(t *testing.T) {
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		for {
-			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
-			r.NoError(err)
-			for tbl, tblMuts := range data {
-				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
-			}
-			if !more {
-				break
-			}
-		}
+		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
+				return nil
+			})
+		r.NoError(err)
 		for _, seen := range entriesByTable {
 			if a.Len(seen, 2*entries) {
 				a.Equal(expectedMutOrder[entries:3*entries], seen)
@@ -367,27 +360,20 @@ func TestSelectMany(t *testing.T) {
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		for {
-			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
-			r.NoError(err)
-			for tbl, tblMuts := range data {
-				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
-			}
+		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
 
-			// Check previous groups by induction. We do this in a
-			// separate loop, since we may cross a group boundary within
-			// a page of data.
-			for tbl := range data {
+				// Check that all data for parent groups have been received.
 				if group := tableToGroup[tbl]; group > 1 {
 					for _, tableToCheck := range tableGroups[group-1] {
-						a.Len(entriesByTable[tableToCheck], len(muts))
+						r.Len(entriesByTable[tableToCheck], len(muts))
 					}
 				}
-			}
-			if !more {
-				break
-			}
-		}
+				return nil
+			})
+		r.NoError(err)
+
 		for _, seen := range entriesByTable {
 			if a.Len(seen, len(expectedMutOrder)) {
 				a.Equal(expectedMutOrder, seen)
@@ -414,27 +400,20 @@ func TestSelectMany(t *testing.T) {
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		for {
-			data, more, err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q)
-			r.NoError(err)
-			for tbl, tblMuts := range data {
-				entriesByTable[tbl] = append(entriesByTable[tbl], tblMuts...)
-			}
+		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
 
-			// Check previous groups by induction. We do this in a
-			// separate loop, since we may cross a group boundary within
-			// a page of data.
-			for tbl := range data {
+				// Check that all data for parent groups have been received.
 				if group := tableToGroup[tbl]; group > 1 {
 					for _, tableToCheck := range tableGroups[group-1] {
-						a.Len(entriesByTable[tableToCheck], 2*entries)
+						r.Len(entriesByTable[tableToCheck], 2*entries)
 					}
 				}
-			}
-			if !more {
-				break
-			}
-		}
+				return nil
+			})
+		r.NoError(err)
+
 		for _, seen := range entriesByTable {
 			if a.Len(seen, 2*entries) {
 				a.Equal(expectedMutOrder[entries:3*entries], seen)
