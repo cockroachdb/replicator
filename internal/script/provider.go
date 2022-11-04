@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/dop251/goja"
+	"github.com/google/uuid"
 	"github.com/google/wire"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
@@ -86,6 +87,9 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 		return nil, err
 	}
 	if err := apiModule.Set("configureTable", l.configureTable); err != nil {
+		return nil, err
+	}
+	if err := apiModule.Set("randomUUID", randomUUID); err != nil {
 		return nil, err
 	}
 	if err := apiModule.Set("setOptions", l.setOptions); err != nil {
@@ -157,4 +161,10 @@ func ProvideUserScript(
 	})
 
 	return ret, err
+}
+
+// randomUUID returns a string containing a random UUID. It is exported
+// via the api object.
+func randomUUID() string {
+	return uuid.New().String()
 }

@@ -18,6 +18,7 @@ import * as lib from "./lib"; // Verify additional code imports.
 api.configureSource("expander", {
     dispatch: (doc, meta) => {
         console.log(JSON.stringify(doc), JSON.stringify(meta));
+        console.log(api.randomUUID());
 
         return {
             "table1": [{dest: "table1", msg: doc.msg}],
