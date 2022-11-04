@@ -174,6 +174,11 @@ declare module "cdc-sink@v1" {
     };
 
     /**
+     * @returns a string containing a rondom UUID.
+     */
+    function randomUUID(): string;
+
+    /**
      * Set runtime options. This function provides an alternate means of
      * setting some or all of the CLI flags. For example, this allows
      * configuration that is common to all (dev, test, staging,
