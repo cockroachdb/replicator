@@ -3,7 +3,7 @@ module github.com/cockroachdb/cdc-sink
 go 1.19
 
 require (
-	cloud.google.com/go/firestore v1.6.1
+	cloud.google.com/go/firestore v1.8.0
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20220610162206-024b567ce87b
 	github.com/dop251/goja v0.0.0-20220915101355-d79e1b125a30
@@ -31,7 +31,7 @@ require (
 	golang.org/x/net v0.2.0
 	golang.org/x/sync v0.1.0
 	golang.org/x/tools v0.3.0
-	google.golang.org/api v0.96.0
+	google.golang.org/api v0.98.0
 	google.golang.org/grpc v1.49.0
 	honnef.co/go/tools v0.3.3
 )
@@ -75,9 +75,10 @@ require (
 	golang.org/x/oauth2 v0.0.0-20220909003341-f21342109be1 // indirect
 	golang.org/x/sys v0.2.0 // indirect
 	golang.org/x/text v0.4.0 // indirect
+	golang.org/x/time v0.0.0-20220609170525-579cf78fd858 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
-	google.golang.org/genproto v0.0.0-20220920164045-a2a065f3c118 // indirect
+	google.golang.org/genproto v0.0.0-20221010155953-15ba04fc1c0e // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
