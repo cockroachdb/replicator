@@ -96,13 +96,14 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 
 // resolved acts upon a resolved timestamp message.
 func (h *Handler) resolved(ctx context.Context, req *request) error {
-	if h.Config.Immediate {
-		return nil
-	}
 	target := req.target.AsSchema()
 	resolver, err := h.Resolvers.get(ctx, target)
 	if err != nil {
 		return err
+	}
+	// In immediate mode, just log the incoming timestamp.
+	if h.Config.Immediate {
+		return resolver.Record(ctx, req.timestamp)
 	}
 	return resolver.Mark(ctx, req.timestamp)
 }
