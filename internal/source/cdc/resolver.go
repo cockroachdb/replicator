@@ -218,6 +218,7 @@ type resolver struct {
 	sql struct {
 		dequeue string
 		mark    string
+		record  string
 	}
 }
 
@@ -252,6 +253,7 @@ func newResolver(
 	}
 	ret.sql.dequeue = fmt.Sprintf(dequeueTemplate, metaTable)
 	ret.sql.mark = fmt.Sprintf(markTemplate, metaTable)
+	ret.sql.record = fmt.Sprintf(recordTemplate, metaTable)
 
 	return ret, nil
 }
@@ -432,6 +434,27 @@ func (r *resolver) Process(
 		}
 	}
 	return nil
+}
+
+const recordTemplate = `
+UPSERT INTO %s (target_db, target_schema, source_nanos, source_logical, target_applied_at)
+VALUES ($1, $2, $3, $4, now())`
+
+// Record is a no-op version of Mark. It simply records an incoming
+// resolved timestamp as though it had been processed by the resolver.
+// This is used when running in immediate mode to allow resolved
+// timestamps from the source cluster to be logged for performance
+// analysis and cross-cluster reconciliation via AOST queries.
+func (r *resolver) Record(ctx context.Context, ts hlc.Time) error {
+	_, err := r.pool.Exec(ctx,
+		r.sql.record,
+		r.target.Database().Raw(),
+		r.target.Schema().Raw(),
+		// The sql driver gets the wrong type back from CRDB v20.2
+		fmt.Sprintf("%d", ts.Nanos()),
+		fmt.Sprintf("%d", ts.Logical()),
+	)
+	return errors.WithStack(err)
 }
 
 // OnConsistent implements logical.ConsistentCallback. It is called once
