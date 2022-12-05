@@ -17,7 +17,7 @@ require (
 	github.com/jackc/pgconn v1.13.0
 	github.com/jackc/pglogrepl v0.0.0-20220827140821-40536e4ca386
 	github.com/jackc/pgproto3/v2 v2.3.1
-	github.com/jackc/pgtype v1.12.0
+	github.com/jackc/pgtype v1.13.0
 	github.com/jackc/pgx/v4 v4.17.2
 	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
 	github.com/jstemmer/go-junit-report/v2 v2.0.0
