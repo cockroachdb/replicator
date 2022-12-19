@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/iterator"
@@ -34,7 +35,10 @@ type Dialect struct {
 	backfillBatchSize int                      // Limit backfill query response size.
 	docIDProperty     string                   // Added to mutation properties.
 	fs                *firestore.Client        // Access to Firestore.
+	idempotent        bool                     // Detect reprocessing the same document.
 	loops             *logical.Factory         // Support dynamic nested collections.
+	memo              types.Memo               // Durable logging of processed doc ids.
+	pool              *pgxpool.Pool            // Database access.
 	query             firestore.Query          // The base query build from.
 	recurse           bool                     // Scan for dynamic, nested collections.
 	recurseFilter     map[ident.Ident]struct{} // Ignore nested collections with these names.
@@ -284,6 +288,13 @@ func (d *Dialect) Process(
 
 		case batchDoc:
 			doc := t.doc
+
+			if ok, err := d.shouldProcess(ctx, doc.Ref, doc.UpdateTime); err != nil {
+				return err
+			} else if !ok {
+				continue
+			}
+
 			docUpdatedAt, err := d.docUpdatedAt(doc)
 			if err != nil {
 				return err
@@ -307,7 +318,17 @@ func (d *Dialect) Process(
 				}
 			}
 
+			if err := d.markProcessed(ctx, doc.Ref, doc.UpdateTime); err != nil {
+				return err
+			}
+
 		case batchDelete:
+			if ok, err := d.shouldProcess(ctx, t.ref, t.ts); err != nil {
+				return err
+			} else if !ok {
+				continue
+			}
+
 			mut, err := marshalDeletion(t.ref, t.ts)
 			if err != nil {
 				return err
@@ -317,6 +338,10 @@ func (d *Dialect) Process(
 			// this is configured via a user-script.
 			if err := events.OnData(ctx,
 				d.sourceCollection, ident.Table{}, []types.Mutation{mut}); err != nil {
+				return err
+			}
+
+			if err := d.markProcessed(ctx, t.ref, t.ts); err != nil {
 				return err
 			}
 
@@ -466,4 +491,62 @@ func (d *Dialect) doRecurse(
 			return errors.WithMessage(err, coll.Path)
 		}
 	}
+}
+
+// markProcessed records an incoming document as having been processed.
+func (d *Dialect) markProcessed(
+	ctx context.Context, doc *firestore.DocumentRef, ts time.Time,
+) error {
+	payload := processedPayload{UpdatedAt: ts}
+	data, err := json.Marshal(&payload)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return d.memo.Put(ctx, d.pool, processedKey(doc), data)
+}
+
+// shouldProcess implements idempotent processing of document snapshots.
+// It ensures that the update-time of any given document always
+// advances.
+func (d *Dialect) shouldProcess(
+	ctx context.Context, doc *firestore.DocumentRef, ts time.Time,
+) (bool, error) {
+	if !d.idempotent {
+		return true, nil
+	}
+
+	data, err := d.memo.Get(ctx, d.pool, processedKey(doc))
+	if err != nil {
+		return false, err
+	}
+
+	// No data means we're seeing the document for the first time.
+	if data == nil {
+		log.Tracef("accepting document %s at %s", doc.ID, ts)
+		return true, nil
+	}
+
+	var payload processedPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	if ts.After(payload.UpdatedAt) {
+		log.Tracef("accepting document %s at %s > %s", doc.ID, ts, payload.UpdatedAt)
+		return true, nil
+	}
+
+	log.Tracef("ignoring document %s at %s <= %s", doc.ID, ts, payload.UpdatedAt)
+	return false, nil
+}
+
+// processedPayload is used by markProcessed and shouldProcess.
+type processedPayload struct {
+	UpdatedAt time.Time `json:"u,omitempty"`
+}
+
+// processedKey returns the memo key used by markProcessed and
+// shouldProcess.
+func processedKey(ref *firestore.DocumentRef) string {
+	return fmt.Sprintf("fs-doc-%s", ref.Path)
 }
