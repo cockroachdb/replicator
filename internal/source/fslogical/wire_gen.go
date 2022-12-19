@@ -48,31 +48,28 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
+	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
 	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
+	userScript, err := script.ProvideUserScript(contextContext, configs, loader, pool, targetSchema, watchers)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	client, cleanup4, err := ProvideFirestoreClient(contextContext, config, userScript)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
 	fans := &fan.Fans{
 		Appliers: appliers,
 		Pool:     pool,
 	}
 	memoMemo, err := memo.ProvideMemo(contextContext, pool, stagingDB)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
-	userScript, err := script.ProvideUserScript(contextContext, configs, loader, pool, targetSchema, watchers)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	factory, cleanup5 := logical.ProvideFactory(appliers, config, fans, memoMemo, pool, watchers, userScript)
-	client, cleanup6, err := ProvideFirestoreClient(contextContext, config)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -81,6 +78,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
+	factory, cleanup6 := logical.ProvideFactory(appliers, config, fans, memoMemo, pool, watchers, userScript)
 	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
 	if err != nil {
 		cleanup6()
@@ -91,7 +89,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	v, cleanup7, err := ProvideLoops(contextContext, config, factory, client, tombstones, userScript)
+	v, cleanup7, err := ProvideLoops(contextContext, config, client, factory, memoMemo, pool, tombstones, userScript)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -116,9 +114,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logical.Loop, func(), error) {
 	baseFixture := &fixture.BaseFixture
 	contextContext := baseFixture.Context
-	appliers := fixture.Appliers
-	fans := fixture.Fans
-	typesMemo := fixture.Memo
+	configs := fixture.Configs
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, nil, err
@@ -135,21 +131,22 @@ func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logica
 	if err != nil {
 		return nil, nil, err
 	}
-	watchers := fixture.Watchers
-	configs := fixture.Configs
 	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
+	watchers := fixture.Watchers
 	userScript, err := script.ProvideUserScript(contextContext, configs, loader, pool, targetSchema, watchers)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup2 := logical.ProvideFactory(appliers, config, fans, typesMemo, pool, watchers, userScript)
-	client, cleanup3, err := ProvideFirestoreClient(contextContext, config)
+	client, cleanup2, err := ProvideFirestoreClient(contextContext, config, userScript)
 	if err != nil {
-		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
+	appliers := fixture.Appliers
+	fans := fixture.Fans
+	typesMemo := fixture.Memo
+	factory, cleanup3 := logical.ProvideFactory(appliers, config, fans, typesMemo, pool, watchers, userScript)
 	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
 	if err != nil {
 		cleanup3()
@@ -157,7 +154,7 @@ func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logica
 		cleanup()
 		return nil, nil, err
 	}
-	v, cleanup4, err := ProvideLoops(contextContext, config, factory, client, tombstones, userScript)
+	v, cleanup4, err := ProvideLoops(contextContext, config, client, factory, typesMemo, pool, tombstones, userScript)
 	if err != nil {
 		cleanup3()
 		cleanup2()

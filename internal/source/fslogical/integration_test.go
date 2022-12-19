@@ -166,6 +166,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 		},
 		BackfillBatchSize:           10,
 		DocumentIDProperty:          ident.New("id"), // Map doc id metadata to target column.
+		Idempotent:                  true,
 		ProjectID:                   projectID,
 		TombstoneCollection:         "Tombstones",
 		TombstoneCollectionProperty: ident.New("collection"),

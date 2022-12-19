@@ -21,8 +21,10 @@ import (
 	"cloud.google.com/go/firestore"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/golang/groupcache/lru"
+	"github.com/jackc/pgx/v4/pgxpool"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 )
@@ -46,8 +48,10 @@ var enableWipe bool
 func ProvideLoops(
 	ctx context.Context,
 	cfg *Config,
-	loops *logical.Factory,
 	fs *firestore.Client,
+	loops *logical.Factory,
+	memo types.Memo,
+	pool *pgxpool.Pool,
 	st *Tombstones,
 	userscript *script.UserScript,
 ) ([]*logical.Loop, func(), error) {
@@ -78,7 +82,10 @@ func ProvideLoops(
 			backfillBatchSize: cfg.BackfillBatchSize,
 			docIDProperty:     cfg.DocumentIDProperty.Raw(),
 			fs:                fs,
+			idempotent:        cfg.Idempotent,
 			loops:             loops,
+			memo:              memo,
+			pool:              pool,
 			query:             q,
 			tombstones:        st,
 			recurse:           source.Recurse,
@@ -99,7 +106,11 @@ func ProvideLoops(
 
 // ProvideFirestoreClient is called by wire. If a local emulator is in
 // use, the cleanup function will delete the test project data.
-func ProvideFirestoreClient(ctx context.Context, cfg *Config) (*firestore.Client, func(), error) {
+// The UserScript is added as a fake dependency to ensure that any
+// script-driven configuration is performed first.
+func ProvideFirestoreClient(
+	ctx context.Context, cfg *Config, _ *script.UserScript,
+) (*firestore.Client, func(), error) {
 	// Project ID is usually baked into the JSON key file.
 	projectID := firestore.DetectProjectID
 	if cfg.ProjectID != "" {
