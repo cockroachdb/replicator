@@ -87,9 +87,16 @@ func TestResolverDeQueue(t *testing.T) {
 	// Make sure we arrived at the end.
 	a.Equal(hlc.New(rowCount, 0), committed)
 
-	// Verify empty queue.
-	_, err = resolver.dequeueInTx(ctx, fixture.Pool, committed)
-	a.Equal(errNoWork, err)
+	// Verify empty queue.  We may need to wait for a previous
+	// transaction to commit.
+	for {
+		_, err = resolver.dequeueInTx(ctx, fixture.Pool, committed)
+		if err == errBlocked {
+			continue
+		}
+		a.Equal(errNoWork, err)
+		break
+	}
 
 	// Verify that we can enqueue a timestamp, even if there's an open
 	// dequeue transaction running.

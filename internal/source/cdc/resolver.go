@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/txguard"
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4"
@@ -49,6 +50,16 @@ import (
 // and is especially relevant to an initial_scan from a changefeed. In
 // this state, we have an arbitrarily large number of mutations to
 // apply, all of which will have the same timestamp.
+//
+// Each resolvedStamp is associated with a separate database transaction
+// that holds a SELECT FOR UPDATE lock on the row that holds the
+// timestamp being resolved. The ownership of this transaction is
+// transferred to any derived resolvedStamp that represents partial
+// progress within a resolved timestamp. The resolved-timestamp
+// transaction is wrapped in a txguard.Guard to ensure that it is kept
+// alive.  If the resolved-timestamp transaction fails for any reason,
+// we can roll back to the previously committed stamp through the usual
+// logical-loop error-handling code.
 type resolvedStamp struct {
 	Backfill bool `json:"b,omitempty"`
 	// A resolved timestamp that represents a transactionally-consistent
@@ -64,13 +75,10 @@ type resolvedStamp struct {
 	OffsetTable ident.Table     `json:"otbl,omitempty"`
 	OffsetTime  hlc.Time        `json:"ots,omitempty"`
 
-	// Tx holds a reference to a transaction that, when committed,
-	// marks the resolved timestamp as having been processed.
-	Tx interface {
-		pgxtype.Querier
-		Commit(context.Context) error
-		Rollback(context.Context) error
-	} `json:"-"`
+	mu struct {
+		sync.Mutex
+		tx *txguard.Guard
+	}
 }
 
 // AsTime implements logical.TimeStamp to improve reporting.
@@ -79,14 +87,33 @@ func (s *resolvedStamp) AsTime() time.Time {
 	return time.Unix(0, s.CommittedTime.Nanos())
 }
 
-// Commit marks the resolved timestamp as resolved.
+// Commit marks the resolved timestamp as resolved, if the transaction
+// has not been handed off to another resolvedStamp. This handoff would
+// occur when processing a resolved-timestamp interval that contains a
+// large number of sub-batches (e.g. backfills, high-rate scenarios).
 func (s *resolvedStamp) Commit(ctx context.Context) error {
-	tx := s.Tx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx := s.mu.tx
 	if tx == nil {
-		return errors.New("transaction already ended")
+		return nil
 	}
-	s.Tx = nil
-	return tx.Commit(ctx)
+	s.mu.tx = nil
+	return errors.WithStack(tx.Commit(ctx))
+}
+
+// IsAlive returns any pending error from the transaction-keepalive
+// loop or nil if the keepalive loop is still running.
+func (s *resolvedStamp) IsAlive() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx := s.mu.tx
+	if tx == nil {
+		return errors.New("resolved-timestamp transaction owned by later stamp")
+	}
+	return tx.IsAlive()
 }
 
 // Less implements stamp.Stamp.
@@ -100,30 +127,28 @@ func (s *resolvedStamp) Less(other stamp.Stamp) bool {
 
 // NewCommitted returns a new resolvedStamp that represents the
 // completion of a resolved timestamp.
-func (s *resolvedStamp) NewCommitted() *resolvedStamp {
+func (s *resolvedStamp) NewCommitted() (*resolvedStamp, error) {
 	if s.ProposedTime == hlc.Zero() {
-		panic(errors.New("cannot make new committed timestamp without proposed value"))
+		return nil, errors.New("cannot make new committed timestamp without proposed value")
 	}
-	return &resolvedStamp{
-		CommittedTime: s.ProposedTime,
-		Tx:            s.Tx,
-	}
+
+	return s.handoff(&resolvedStamp{CommittedTime: s.ProposedTime}), nil
 }
 
 // NewProposed returns a new resolvedStamp that extends the existing
 // stamp with a later proposed timestamp.
-func (s *resolvedStamp) NewProposed(tx pgx.Tx, proposed hlc.Time) *resolvedStamp {
+func (s *resolvedStamp) NewProposed(tx *txguard.Guard, proposed hlc.Time) (*resolvedStamp, error) {
 	if hlc.Compare(proposed, s.CommittedTime) <= 0 {
-		panic(errors.Errorf("proposed time must advance: %s vs %s", proposed, s.CommittedTime))
+		return nil, errors.Errorf("proposed time must advance: %s vs %s", proposed, s.CommittedTime)
 	}
 	if hlc.Compare(proposed, s.OffsetTime) < 0 {
-		panic(errors.Errorf("proposed time undoing work: %s vs %s", proposed, s.OffsetTime))
+		return nil, errors.Errorf("proposed time undoing work: %s vs %s", proposed, s.OffsetTime)
 	}
 	if hlc.Compare(proposed, s.ProposedTime) < 0 {
-		panic(errors.Errorf("proposed time cannot go backward: %s vs %s", proposed, s.ProposedTime))
+		return nil, errors.Errorf("proposed time cannot go backward: %s vs %s", proposed, s.ProposedTime)
 	}
 
-	return &resolvedStamp{
+	ret := &resolvedStamp{
 		Backfill:      s.Backfill,
 		CommittedTime: s.CommittedTime,
 		Iteration:     s.Iteration + 1,
@@ -131,9 +156,10 @@ func (s *resolvedStamp) NewProposed(tx pgx.Tx, proposed hlc.Time) *resolvedStamp
 		OffsetTable:   s.OffsetTable,
 		OffsetTime:    s.OffsetTime,
 		ProposedTime:  proposed,
-		Tx:            tx,
 	}
-
+	// We don't call handoff here, since we have a new transaction.
+	ret.mu.tx = tx
+	return ret, nil
 }
 
 // NewProgress returns a resolvedStamp that represents partial progress
@@ -147,8 +173,8 @@ func (s *resolvedStamp) NewProgress(cursor *types.SelectManyCursor) *resolvedSta
 		OffsetTable:   s.OffsetTable,
 		OffsetTime:    s.OffsetTime,
 		ProposedTime:  s.ProposedTime,
-		Tx:            s.Tx,
 	}
+
 	if cursor != nil {
 		ret.OffsetTime = cursor.OffsetTime
 
@@ -160,7 +186,8 @@ func (s *resolvedStamp) NewProgress(cursor *types.SelectManyCursor) *resolvedSta
 			ret.OffsetTable = cursor.OffsetTable
 		}
 	}
-	return ret
+
+	return s.handoff(ret)
 }
 
 // Rollback aborts the enclosed transaction, if it exists. This method
@@ -169,19 +196,34 @@ func (s *resolvedStamp) Rollback() {
 	if s == nil {
 		return
 	}
-	tx := s.Tx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx := s.mu.tx
 	if tx == nil {
 		return
 	}
-	s.Tx = nil
-	_ = tx.Rollback(context.Background())
-	log.Tracef("rolled back a resolvedStamp")
+	s.mu.tx = nil
+	tx.Rollback()
 }
 
 // String is for debugging use only.
 func (s *resolvedStamp) String() string {
 	ret, _ := json.Marshal(s)
 	return string(ret)
+}
+
+// handoff transfers the transaction to another resolvedStamp and starts
+// its keepalive loop. This method should be called before the next
+// value has been made visible to any other callers.
+func (s *resolvedStamp) handoff(next *resolvedStamp) *resolvedStamp {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if tx := s.mu.tx; tx != nil {
+		s.mu.tx = nil
+		next.mu.tx = tx
+	}
+	return next
 }
 
 // Schema declared here for ease of reference, but it's actually created
@@ -335,6 +377,17 @@ func (r *resolver) readInto(
 	const maxSleep = 1 * time.Second
 	const backoff = 10
 	sleepDelay := minSleep
+
+	// We're going to create a long-running transaction to act as a lock
+	// on the resolved-timestamp row that we're processing. We want to
+	// keep this transaction alive by sending occasional SQL traffic.
+	var pinger *txguard.Guard
+	defer func() {
+		if pinger != nil {
+			pinger.Rollback()
+		}
+	}()
+
 	for {
 		prev := state.GetConsistentPoint().(*resolvedStamp)
 
@@ -344,13 +397,27 @@ func (r *resolver) readInto(
 			return errors.WithStack(err)
 		}
 
+		pinger = txguard.New(tx)
+
 		// Find the next resolved timestamp to apply, starting from
 		// a timestamp known to be committed.
-		nextResolved, err := r.dequeueInTx(ctx, tx, prev.CommittedTime)
+		var nextResolved hlc.Time
+		err = pinger.Use(func(tx pgxtype.Querier) (err error) {
+			nextResolved, err = r.dequeueInTx(ctx, tx, prev.CommittedTime)
+			return err
+		})
 
+		sentWork := false
 		switch err {
 		case nil:
-			work := prev.NewProposed(tx, nextResolved)
+			work, err := prev.NewProposed(pinger, nextResolved)
+
+			// It's possible that the call to Begin() above occurs prior to the previous resolved-timestamp transaction committing
+			if err != nil {
+				log.WithError(err).Warn("dequeued timestamp does not advance")
+				break
+			}
+
 			if backfill {
 				work.Backfill = true
 			}
@@ -364,32 +431,35 @@ func (r *resolver) readInto(
 				// processing, but still allows for recovery if
 				// something goes off the rails downstream.
 				sleepDelay = maxSleep
+				sentWork = true
 			case <-ctx.Done():
-				_ = tx.Rollback(ctx)
 				return ctx.Err()
 			}
 
 		case errNoWork:
 			// We've consumed all available work, become idle.
-			_ = tx.Rollback(ctx)
 			sleepDelay = maxSleep
 
 		case errBlocked:
-			// Another instance is running, just sleep.
-			_ = tx.Rollback(ctx)
-
 			// If we had a fast wakeup and are immediately blocked,
-			// start an exponential backoff.
+			// fall through to exponential backoff below.
+
+		default:
+			return err
+		}
+
+		// If we never sent the long-running transaction downstream,
+		// we want to clean it up eagerly.
+		if !sentWork {
+			pinger.Rollback()
+			pinger = nil
+
 			if sleepDelay < maxSleep {
 				sleepDelay *= backoff
 				if sleepDelay > maxSleep {
 					sleepDelay = maxSleep
 				}
 			}
-
-		default:
-			_ = tx.Rollback(ctx)
-			return err
 		}
 
 		select {
@@ -409,30 +479,32 @@ func (r *resolver) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	// Track the most recently seen stamp so that we can clean up if
-	// we see a rollback message.
+	// we see a rollback message or return with an error.
 	var rs *resolvedStamp
+	defer func() {
+		if rs != nil {
+			rs.Rollback()
+		}
+	}()
 
 	for msg := range ch {
 		if logical.IsRollback(msg) {
-			// Abort the transaction that would have marked the resolved
-			// timestamp as having been processed. This will unlock the
-			// read loop to allow an instance of cdc-sink to retry the
-			// timestamp.
-			if rs != nil {
-				rs.Rollback()
-			}
 			if err := events.OnRollback(ctx, msg); err != nil {
 				return err
+			}
+			if rs != nil {
+				rs.Rollback()
 			}
 			continue
 		}
 
-		rs = msg.(*resolvedStamp)
-		if err := r.process(ctx, rs, events); err != nil {
-			rs.Rollback()
+		var err error
+		rs, err = r.process(ctx, msg.(*resolvedStamp), events)
+		if err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -490,7 +562,12 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 	return &resolvedStamp{}
 }
 
-func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logical.Events) error {
+// process makes incremental progress in fulfilling the given
+// resolvedStamp. It returns the state to which the resolved timestamp
+// has been advanced.
+func (r *resolver) process(
+	ctx context.Context, rs *resolvedStamp, events logical.Events,
+) (*resolvedStamp, error) {
 	start := time.Now()
 	targets := r.watcher.Snapshot(r.target).Order
 
@@ -511,10 +588,9 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		ctx, cancel := context.WithTimeout(ctx, r.cfg.ApplyTimeout)
 		defer cancel()
 
-		// Send a command on this transaction to prevent the
-		// idle-in-transaction timeout from kicking in.
-		if _, err := rs.Tx.Exec(ctx, "SELECT 1"); err != nil {
-			return errors.Wrap(err, "could not ping resolved-timestamp transaction")
+		// Ensure that the resolved-timestamp transaction is still valid.
+		if err := rs.IsAlive(); err != nil {
+			return errors.Wrap(err, "resolved-timestamp transaction has failed")
 		}
 
 		// Apply the retrieved data.
@@ -617,13 +693,16 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 			epoch = mut.Time
 			return nil
 		}); err != nil {
-		return err
+		return rs, err
 	}
 
 	// Final flush cycle to commit the final stamp.
-	rs = rs.NewCommitted()
+	rs, err := rs.NewCommitted()
+	if err != nil {
+		return rs, err
+	}
 	if err := flush(toApply); err != nil {
-		return err
+		return rs, err
 	}
 	total += flushCounter
 	log.WithFields(log.Fields{
@@ -632,7 +711,7 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		"duration":  time.Since(start),
 		"schema":    r.target,
 	}).Debugf("processed resolved timestamp")
-	return nil
+	return rs, nil
 }
 
 // The FOR UPDATE NOWAIT will quickly fail the query with a 55P03 code
