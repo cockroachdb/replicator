@@ -10,11 +10,13 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '**/*.go'
+      - '.github/workflows/golang.yaml'
   pull_request:
     paths:
       - 'go.mod'
       - 'go.sum'
       - '**/*.go'
+      - '.github/workflows/golang.yaml'
   workflow_dispatch:
     inputs:
       build_binaries:
@@ -135,7 +137,7 @@ jobs:
         # against. The matrix component names should use the target
         # names listed in the docker-compose.yml file in the parent
         # directory.
-        cockroachdb: [ v22.1 ]
+        cockroachdb: [ v22.2 ]
         integration:
           - "firestore"
           - "mysql-v8"
@@ -151,10 +153,9 @@ jobs:
         # package doesn't use any SQL that couldn't be run on older CRDB
         # versions.
         include:
-          - cockroachdb: v20.2
           - cockroachdb: v21.1
           - cockroachdb: v21.2
-          - cockroachdb: v22.2 # Note this is currently pinned to alpha.3
+          - cockroachdb: v22.2
     env:
       COVER_OUT: coverage-${{ matrix.cockroachdb }}-${{ matrix.integration }}.out
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8181
