@@ -86,7 +86,6 @@ func (c *Config) Preflight() error {
 	}
 
 	c.BackfillWindow = time.Minute
-	c.Immediate = true
 
 	if c.BackfillBatchSize < 1 {
 		return errors.New("backfill batch size must be >= 1")
