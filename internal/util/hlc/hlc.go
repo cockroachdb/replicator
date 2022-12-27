@@ -13,7 +13,6 @@
 package hlc
 
 // The code in this file is reworked from sink_table.go.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -61,7 +60,7 @@ func Parse(timestamp string) (Time, error) {
 	if err != nil {
 		return Time{}, err
 	}
-	if nanos <= 0 {
+	if nanos < 0 {
 		return Time{}, errors.Errorf("nanos must be greater than 0: %d", nanos)
 	}
 	logical, err := strconv.Atoi(splits[1])
@@ -91,4 +90,18 @@ func (t Time) MarshalJSON() ([]byte, error) {
 // String returns the Time as a
 func (t Time) String() string {
 	return fmt.Sprintf("%d.%010d", t.nanos, t.logical)
+}
+
+// UnmarshalJSON restores the timestamp from a string representation.
+func (t *Time) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	parsed, err := Parse(s)
+	if err != nil {
+		return err
+	}
+	*t = parsed
+	return nil
 }
