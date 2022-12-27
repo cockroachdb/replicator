@@ -27,7 +27,7 @@ import (
 )
 
 // A ConsistentCallback is passed to Fans.New.
-type ConsistentCallback func(stamp.Stamp)
+type ConsistentCallback func(stamp.Stamp) error
 
 // Fans is a factory for constructing Fan instances.
 type Fans struct {
@@ -40,7 +40,7 @@ func (f *Fans) New(
 	applyTimeout time.Duration, onConsistent ConsistentCallback, shardCount int, bytesInFlight int,
 ) (_ *Fan, cancel func(), _ error) {
 	if onConsistent == nil {
-		onConsistent = func(stamp.Stamp) {}
+		onConsistent = func(stamp.Stamp) error { return nil }
 	}
 
 	ret := &Fan{
@@ -98,14 +98,15 @@ func (f *Fan) Enqueue(
 	ctx context.Context, stamp stamp.Stamp, table ident.Table, muts []types.Mutation,
 ) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	stopped := f.mu.stopFlag
+	f.mu.Unlock()
 
-	if f.mu.stopFlag {
+	if stopped {
 		return errors.New("already stopped")
 	}
 
 	for _, mut := range muts {
-		bucket, err := f.bucketForLocked(ctx, table, mut)
+		bucket, err := f.bucketFor(ctx, table, mut)
 		if err != nil {
 			return err
 		}
@@ -128,8 +129,7 @@ func (f *Fan) Mark(s stamp.Stamp) error {
 	// If there are no active buckets, we treat the mark as being
 	// consistent.
 	if len(f.mu.buckets) == 0 {
-		f.onConsistent(s)
-		return nil
+		return f.onConsistent(s)
 	}
 
 	for _, bucket := range f.mu.buckets {
@@ -168,9 +168,12 @@ func (f *Fan) Stopped() <-chan struct{} {
 
 // bucketForLocked finds or creates a new shard bucket for applying
 // mutations to the given table.
-func (f *Fan) bucketForLocked(
+func (f *Fan) bucketFor(
 	ctx context.Context, table ident.Table, mut types.Mutation,
 ) (*bucket, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	key := keyFor(table, f.shardCount, mut)
 	if found, ok := f.mu.buckets[key]; ok {
 		return found, nil
@@ -225,7 +228,7 @@ func (f *Fan) flushLoop() {
 // Handle notifications from each shard's bucket. When all shards have
 // agreed on a new consistent value, we can report that back to the
 // owner.
-func (f *Fan) onBucketConsistent(b *bucket, consistent stamp.Stamp) {
+func (f *Fan) onBucketConsistent(b *bucket, consistent stamp.Stamp) error {
 	var min stamp.Stamp
 	var changed bool
 
@@ -240,8 +243,9 @@ func (f *Fan) onBucketConsistent(b *bucket, consistent stamp.Stamp) {
 
 	// Perform callback outside critical section.
 	if changed {
-		f.onConsistent(min)
+		return f.onConsistent(min)
 	}
+	return nil
 }
 
 // stop will shut down the flush loop. This method blocks until all

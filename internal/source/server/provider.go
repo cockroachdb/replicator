@@ -21,19 +21,14 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
@@ -46,7 +41,6 @@ import (
 
 // Set is used by Wire.
 var Set = wire.NewSet(
-	ProvideApplyMode,
 	ProvideAuthenticator,
 	ProvideListener,
 	ProvideMux,
@@ -54,19 +48,11 @@ var Set = wire.NewSet(
 	ProvideTLSConfig,
 )
 
-// ProvideApplyMode responds to Config.Immediate.
-func ProvideApplyMode(config Config) cdc.ApplyMode {
-	if config.Immediate {
-		return cdc.IgnoreTX
-	}
-	return cdc.PreserveTX
-}
-
 // ProvideAuthenticator is called by Wire to construct a JWT-based
 // authenticator, or a no-op authenticator if Config.DisableAuth has
 // been set.
 func ProvideAuthenticator(
-	ctx context.Context, pool *pgxpool.Pool, config Config, stagingDB ident.StagingDB,
+	ctx context.Context, pool *pgxpool.Pool, config *Config, stagingDB ident.StagingDB,
 ) (types.Authenticator, func(), error) {
 	if config.DisableAuth {
 		log.Info("authentication disabled, any caller may write to the target database")
@@ -75,16 +61,9 @@ func ProvideAuthenticator(
 	return jwt.ProvideAuth(ctx, pool, stagingDB)
 }
 
-// ProvideMetaTable is called by Wire to return the name of the
-// pending_timestamps table.
-func ProvideMetaTable(stagingDB ident.StagingDB) resolve.MetaTable {
-	return resolve.MetaTable(
-		ident.NewTable(stagingDB.Ident(), ident.Public, ident.New("pending_timestamps")))
-}
-
 // ProvideListener is called by Wire to construct the incoming network
 // socket for the server.
-func ProvideListener(config Config) (net.Listener, func(), error) {
+func ProvideListener(config *Config) (net.Listener, func(), error) {
 	// Start listening only when everything else is ready.
 	l, err := net.Listen("tcp", config.BindAddr)
 	if err != nil {
@@ -124,35 +103,6 @@ func ProvideMux(handler *cdc.Handler, pool *pgxpool.Pool, applyConf *apply.Confi
 	mux.Handle("/_/", http.NotFoundHandler()) // Reserve all under /_/
 	mux.Handle("/", logWrapper(handler))
 	return mux
-}
-
-// ProvidePool is called by Wire to construct a connection pool to the
-// target cluster.
-func ProvidePool(ctx context.Context, config Config) (*pgxpool.Pool, func(), error) {
-	cfg, err := stdpool.ParseConfig(config.ConnectionString)
-	if err != nil {
-		return nil, nil, errors.Wrapf(err, "could not parse %q", config.ConnectionString)
-	}
-	pool, err := pgxpool.ConnectConfig(ctx, cfg)
-	cancelMetrics := stdpool.PublishMetrics(pool)
-	return pool, func() {
-		cancelMetrics()
-		pool.Close()
-	}, errors.Wrap(err, "could not connect to CockroachDB")
-}
-
-// ProvideStagingDB is called by Wire to return the name of the
-// _cdc_sink SQL DATABASE.
-func ProvideStagingDB(config Config) ident.StagingDB {
-	return ident.StagingDB(ident.New(config.StagingDB))
-}
-
-// ProvideTimeTable is called by Wire to return the name of the
-// timestamps table used to track the last-known resolved timestamps for
-// a schema.
-func ProvideTimeTable(stagingDB ident.StagingDB) timekeeper.TargetTable {
-	return timekeeper.TargetTable(
-		ident.NewTable(stagingDB.Ident(), ident.Public, ident.New("timestamps")))
 }
 
 // ProvideServer is called by Wire to construct the top-level network
@@ -197,7 +147,7 @@ func ProvideServer(
 // ProvideTLSConfig is called by Wire to load the certificate and key
 // from disk, to generate a self-signed localhost certificate, or to
 // return nil if TLS has been disabled.
-func ProvideTLSConfig(config Config) (*tls.Config, error) {
+func ProvideTLSConfig(config *Config) (*tls.Config, error) {
 	if config.TLSCertFile != "" && config.TLSPrivateKey != "" {
 		cert, err := tls.LoadX509KeyPair(config.TLSCertFile, config.TLSPrivateKey)
 		if err != nil {
@@ -248,38 +198,4 @@ func ProvideTLSConfig(config Config) (*tls.Config, error) {
 			Certificate: [][]byte{bytes},
 			PrivateKey:  priv,
 		}}}, nil
-}
-
-type connectionMode int
-
-const (
-	insecure connectionMode = iota
-	secure
-)
-
-type shouldUseWebhook bool
-
-func provideConnectionMode(dbInfo *sinktest.DBInfo, webhook shouldUseWebhook) connectionMode {
-	// In older versions of CRDB, the webhook endpoint is not available so no
-	// self signed certificate is needed. This acts as a signal as to wether the
-	// webhook endpoint is available.
-	if strings.Contains(dbInfo.Version(), "v20.2.") || strings.Contains(dbInfo.Version(), "v21.1.") {
-		return insecure
-	}
-	if webhook {
-		return secure
-	}
-	return insecure
-}
-
-// shouldUseImmediate is a test-injection point.
-type shouldUseImmediate bool
-
-func provideTestConfig(mode connectionMode, immediate shouldUseImmediate) Config {
-	return Config{
-		BindAddr: "127.0.0.1:0",
-		// ConnectionString unnecessary; injected by sinktest provider instead.
-		GenerateSelfSigned: mode == secure,
-		Immediate:          bool(immediate),
-	}
 }

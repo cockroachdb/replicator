@@ -86,11 +86,28 @@ func ProvidePool(ctx context.Context, config *BaseConfig) (*pgxpool.Pool, func()
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// We want to force our longest transaction time to respect the
+	// apply-duration timeout and/or the backfill window. We'll take
+	// the shortest non-zero value.
+	txTimeout := config.ApplyTimeout
+	if config.BackfillWindow > 0 &&
+		(txTimeout == 0 || config.BackfillWindow < config.ApplyTimeout) {
+		txTimeout = config.BackfillWindow
+	}
+	if txTimeout != 0 {
+		rp := targetCfg.ConnConfig.RuntimeParams
+		rp["idle_in_transaction_session_timeout"] = txTimeout.String()
+	}
+
 	targetPool, err := pgxpool.ConnectConfig(ctx, targetCfg)
 	cancelMetrics := stdpool.PublishMetrics(targetPool)
 	return targetPool, func() {
 		cancelMetrics()
-		targetPool.Close()
+		// Pool.Close is a blocking call, so it can wind up delaying
+		// shutdown indefinitely. Execute it from a goroutine, so that
+		// any future calls to Acquire will fail.
+		go targetPool.Close()
 	}, errors.Wrap(err, "could not connect to CockroachDB")
 }
 

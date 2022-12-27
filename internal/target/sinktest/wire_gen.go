@@ -10,10 +10,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
-	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 )
 
 // Injectors from injector.go:
@@ -109,34 +107,9 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	metaTable := ProvideMetaTable(stagingDB, testDB)
 	stagers := stage.ProvideFactory(pool, stagingDB)
-	targetTable := ProvideTimestampTable(stagingDB, testDB)
-	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
-	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	resolvers, cleanup8, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
-	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
 	watcher, err := ProvideWatcher(context, testDB, watchers)
 	if err != nil {
-		cleanup8()
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -151,16 +124,11 @@ func NewFixture() (*Fixture, func(), error) {
 		Configs:     configs,
 		Fans:        fans,
 		Memo:        memoMemo,
-		Resolvers:   resolvers,
 		Stagers:     stagers,
-		TimeKeeper:  timeKeeper,
 		Watchers:    watchers,
-		MetaTable:   metaTable,
 		Watcher:     watcher,
 	}
 	return fixture, func() {
-		cleanup8()
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()

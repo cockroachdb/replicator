@@ -22,8 +22,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Decode decodes a source of JSON bytes into a target slice in a
-// parallel manner.
+// Decode a source of JSON bytes into a target slice in a parallel
+// manner.
 func Decode[T any](ctx context.Context, dest []T, src func(i int) []byte) error {
 	numWorkers := runtime.GOMAXPROCS(0)
 	eg, errCtx := errgroup.WithContext(ctx)
@@ -47,7 +47,7 @@ func Decode[T any](ctx context.Context, dest []T, src func(i int) []byte) error 
 	return eg.Wait()
 }
 
-// Encode encodes objects into a target slide in a parallel manner.
+// Encode objects into a target slice in a parallel manner.
 func Encode[T any](ctx context.Context, dest [][]byte, src func(i int) T) error {
 	numWorkers := runtime.GOMAXPROCS(0)
 	eg, errCtx := errgroup.WithContext(ctx)

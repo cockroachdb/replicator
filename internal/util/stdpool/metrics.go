@@ -24,11 +24,11 @@ import (
 var (
 	hostLabels = []string{"host"}
 
-	poolAcquireCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	poolAcquireCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "pool_acquire_wait_count",
 		Help: "the total number of times we waited to add a connection to the pool",
 	}, hostLabels)
-	poolAcquireDelay = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	poolAcquireDelay = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "pool_acquire_wait_seconds",
 		Help: "the total amount of time spent waiting for connection acquisition",
 	}, hostLabels)
@@ -78,25 +78,37 @@ func PublishMetrics(pool *pgxpool.Pool) (cancel func()) {
 		return func() {}
 	}
 
-	labels := prometheus.Labels{
-		"host": fmt.Sprintf("%s:%d",
-			pool.Config().ConnConfig.Host, pool.Config().ConnConfig.Port),
-	}
-
-	// Update pool stats gauges at 1 QPS.
-	acquireCount := poolAcquireCount.With(labels)
-	acquireDelay := poolAcquireDelay.With(labels)
-	acquiredCount := poolAcquiredCount.With(labels)
-	constructingCount := poolConstructingCount.With(labels)
-	idleCount := poolIdleCount.With(labels)
-	maxCount := poolMaxCount.With(labels)
-
 	ctx, cancel := context.WithCancel(context.Background())
+	// Update pool stats gauges at 1 QPS.
 	go func() {
+		labels := prometheus.Labels{
+			"host": fmt.Sprintf("%s:%d",
+				pool.Config().ConnConfig.Host, pool.Config().ConnConfig.Port),
+		}
+
+		acquireCount := poolAcquireCount.With(labels)
+		acquireDelay := poolAcquireDelay.With(labels)
+		acquiredCount := poolAcquiredCount.With(labels)
+		constructingCount := poolConstructingCount.With(labels)
+		idleCount := poolIdleCount.With(labels)
+		maxCount := poolMaxCount.With(labels)
+
+		// These metrics are reported to us as counters, so we need to
+		// compute the deltas to pass them into the API.
+		var prevAcquireCount int64
+		var prevAcquireDuration time.Duration
+
 		for {
 			stat := pool.Stat()
-			acquireCount.Set(float64(stat.EmptyAcquireCount()))
-			acquireDelay.Set(stat.AcquireDuration().Seconds())
+
+			nextAcquireCount := stat.EmptyAcquireCount()
+			acquireCount.Add(float64(nextAcquireCount - prevAcquireCount))
+			prevAcquireCount = nextAcquireCount
+
+			nextAcquireDuration := stat.AcquireDuration()
+			acquireDelay.Add((nextAcquireDuration - prevAcquireDuration).Seconds())
+			prevAcquireDuration = nextAcquireDuration
+
 			acquiredCount.Set(float64(stat.AcquiredConns()))
 			constructingCount.Set(float64(stat.ConstructingConns()))
 			idleCount.Set(float64(stat.IdleConns()))

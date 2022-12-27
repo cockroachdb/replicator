@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 // See https://www.cockroachlabs.com/docs/stable/create-changefeed.html#general-file-format
@@ -101,35 +102,32 @@ func parseMutation(rawBytes []byte) (types.Mutation, error) {
 // Stager will store duplicate values in an idempotent manner,
 // should the request fail partway through.
 func (h *Handler) ndjson(ctx context.Context, req *request) error {
-	muts, release := batches.Mutation()
-	defer release()
+	eg, egCtx := errgroup.WithContext(ctx)
 	target := req.target.(ident.Table)
 
+	// The flush function will start a new goroutine and add it to eg.
 	// In immediate mode, we want to apply the mutations immediately.
 	// The CDC feed guarantees in-order delivery for individual rows.
-	var flush func() error
-	if h.Mode == IgnoreTX {
+	var flush func(muts []types.Mutation)
+	if h.Config.Immediate {
 		applier, err := h.Appliers.Get(ctx, target)
 		if err != nil {
 			return err
 		}
-		flush = func() error {
-			err := applier.Apply(ctx, h.Pool, muts)
-			muts = muts[:0]
-			return err
+		flush = func(muts []types.Mutation) {
+			eg.Go(func() error { return applier.Apply(egCtx, h.Pool, muts) })
 		}
 	} else {
 		store, err := h.Stores.Get(ctx, target)
 		if err != nil {
 			return err
 		}
-		flush = func() error {
-			err := store.Store(ctx, h.Pool, muts)
-			muts = muts[:0]
-			return err
+		flush = func(muts []types.Mutation) {
+			eg.Go(func() error { return store.Store(ctx, h.Pool, muts) })
 		}
 	}
 
+	muts := make([]types.Mutation, 0, batches.Size())
 	scanner := bufio.NewScanner(req.body)
 	for scanner.Scan() {
 		buf := scanner.Bytes()
@@ -142,13 +140,16 @@ func (h *Handler) ndjson(ctx context.Context, req *request) error {
 		}
 		muts = append(muts, mut)
 		if len(muts) == cap(muts) {
-			if err := flush(); err != nil {
-				return err
-			}
+			flush(muts)
+			muts = make([]types.Mutation, 0, batches.Size())
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	return flush()
+	if len(muts) > 0 {
+		flush(muts)
+	}
+
+	return eg.Wait()
 }

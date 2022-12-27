@@ -31,7 +31,7 @@ type bucket struct {
 	// This semaphore is owned by the Fan.
 	backpressure *semaphore.Weighted
 	// A callback to notify that the bucket's consistent point has changed.
-	onConsistent func(*bucket, stamp.Stamp)
+	onConsistent func(*bucket, stamp.Stamp) error
 	pool         pgxtype.Querier
 	// stopped is closed when flushLoop() method returns. This channel
 	// is provided to external callers, so it is independent of the
@@ -54,7 +54,7 @@ func newBucket(
 	applyTimeout time.Duration,
 	pool pgxtype.Querier,
 	backpressure *semaphore.Weighted,
-	onConsistent func(*bucket, stamp.Stamp),
+	onConsistent func(*bucket, stamp.Stamp) error,
 ) *bucket {
 	ret := &bucket{
 		applier:      applier,
@@ -170,7 +170,10 @@ outer:
 			if callbackFn != nil {
 				nextConsistent := b.Consistent()
 				if stamp.Compare(nextConsistent, consistent) > 0 {
-					callbackFn(b, nextConsistent)
+					if err := callbackFn(b, nextConsistent); err != nil {
+						log.WithError(err).Warn("could not advance consistent point; will retry")
+						continue outer
+					}
 					consistent = nextConsistent
 				}
 			}

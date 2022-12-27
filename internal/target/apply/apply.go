@@ -14,7 +14,6 @@ package apply
 // This file contains code repackaged from sink.go.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"sort"
@@ -27,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/msort"
+	"github.com/cockroachdb/cdc-sink/internal/util/pjson"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -198,28 +198,26 @@ func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		return err
 	}
 
+	keyGroups := make([][]any, len(muts))
+	if err := pjson.Decode(ctx, keyGroups, func(i int) []byte {
+		return muts[i].Key
+	}); err != nil {
+		return err
+	}
+
 	allArgs := make([]any, 0, len(a.mu.pks)*len(muts))
-
-	for i := range muts {
-		dec := json.NewDecoder(bytes.NewReader(muts[i].Key))
-		dec.UseNumber()
-
-		args := make([]any, 0, len(a.mu.pks))
-		if err := dec.Decode(&args); err != nil {
-			return errors.WithStack(err)
-		}
-
-		if len(args) != len(a.mu.pks) {
+	for i, keyGroup := range keyGroups {
+		if len(keyGroup) != len(a.mu.pks) {
 			return errors.Errorf(
 				"schema drift detected in %s: "+
 					"inconsistent number of key columns: "+
 					"received %d expect %d: "+
 					"key %s@%s",
 				a.target,
-				len(args), len(a.mu.pks),
+				len(keyGroup), len(a.mu.pks),
 				string(muts[i].Key), muts[i].Time)
 		}
-		allArgs = append(allArgs, args...)
+		allArgs = append(allArgs, keyGroup...)
 	}
 
 	for idx, arg := range allArgs {
@@ -246,6 +244,8 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 	if len(muts) == 0 {
 		return nil
 	}
+	start := time.Now()
+
 	sql, err := a.mu.templates.upsert(len(muts))
 	if err != nil {
 		return err
@@ -259,15 +259,15 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 	// that we see, so we can backtrack to fill in the blank.
 	extrasArgIdx := -1
 
-	for i := range muts {
-		dec := json.NewDecoder(bytes.NewReader(muts[i].Data))
-		dec.UseNumber()
+	// Decode the mutations into an actionable map.
+	columnData := make([]map[ident.Ident]any, len(muts))
+	if err := pjson.Decode(ctx, columnData,
+		func(i int) []byte { return muts[i].Data },
+	); err != nil {
+		return err
+	}
 
-		incomingColumnData := make(map[ident.Ident]any)
-		if err := dec.Decode(&incomingColumnData); err != nil {
-			return errors.WithStack(err)
-		}
-
+	for i, incomingColumnData := range columnData {
 		// Track the columns that we expect to see and that are seen in
 		// the incoming payload. This improves the error returned when
 		// there are unexpected columns.
@@ -383,6 +383,7 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 	a.upserts.Add(float64(tag.RowsAffected()))
 	log.WithFields(log.Fields{
 		"applied":  tag.RowsAffected(),
+		"duration": time.Since(start),
 		"proposed": len(muts),
 		"target":   a.target,
 	}).Debug("upserted rows")

@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,6 +94,17 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	}
 	defer cancelLoop()
 
+	// Start a goroutine to await the end consistent point.
+	endConsistent := make(chan stamp.Stamp, 1)
+	go func() {
+		defer close(endConsistent)
+
+		found, err := loop.AwaitConsistentPoint(ctx, &fakeMessage{Index: numEmits - 1})
+		if a.NoError(err) {
+			endConsistent <- found
+		}
+	}()
+
 	// Wait for replication.
 	for _, tgt := range tgts {
 		for {
@@ -119,6 +131,12 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	if !withChaos && !allowBackfill {
 		a.Equal(int32(1), atomic.LoadInt32(&gen.atomic.processExits))
 		a.Equal(int32(1), atomic.LoadInt32(&gen.atomic.readIntoExits))
+	}
+
+	select {
+	case <-endConsistent:
+	case <-time.After(time.Second):
+		a.Fail("did not find awaited consistent point")
 	}
 
 	// Verify that we did drain the generator.
