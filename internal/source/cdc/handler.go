@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-// Package cdc contains a http.Handler which can receive
-// webhook events from a CockroachDB CDC changefeed.
+// Package cdc contains a http.Handler which can receive webhook events
+// from a CockroachDB CDC changefeed. Row updates and resolved
+// timestamps are written to staging tables. The resolved timestamps are
+// processed as a logical loop.
 package cdc
 
 import (
@@ -26,27 +28,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// This file contains code repackaged from main.go
-
-// ApplyMode controls the strategy used to stage and/or apply mutations.
-type ApplyMode int
-
-const (
-	// PreserveTX will preserve transaction boundaries.
-	PreserveTX ApplyMode = iota
-	// IgnoreTX discards transaction boundaries, trading atomicity for
-	// throughput.
-	IgnoreTX
-)
-
 // Handler is an http.Handler for processing webhook requests
 // from a CockroachDB changefeed.
 type Handler struct {
 	Appliers      types.Appliers      // Update tables within TargetDb.
 	Authenticator types.Authenticator // Access checks.
-	Mode          ApplyMode           // Enable immediate mode.
+	Config        *Config             // Runtime options.
 	Pool          *pgxpool.Pool       // Access to the target cluster.
-	Resolvers     types.Resolvers     // Record resolved timestamps.
+	Resolvers     *Resolvers          // Process resolved timestamps.
 	Stores        types.Stagers       // Record incoming json blobs.
 }
 

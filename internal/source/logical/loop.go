@@ -37,6 +37,12 @@ type Loop struct {
 	initialPoint stamp.Stamp
 }
 
+// AwaitConsistentPoint waits until the consistent point has advanced to
+// the requested value or until the context is cancelled..
+func (l *Loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error) {
+	return l.loop.AwaitConsistentPoint(ctx, point)
+}
+
 // Dialect returns the logical.Dialect in use.
 func (l *Loop) Dialect() Dialect {
 	return l.loop.dialect
@@ -118,24 +124,31 @@ func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
 
 // setConsistentPoint is safe to call from any goroutine. It will
 // occasionally persist the consistent point to the memo table.
-func (l *loop) setConsistentPoint(p stamp.Stamp) {
+func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 	l.consistentPoint.L.Lock()
 	defer l.consistentPoint.L.Unlock()
+
+	// Notify Dialect instances that have explicit coordination needs
+	// that the consistent point is about to advance.
+	if cb, ok := l.dialect.(ConsistentCallback); ok {
+		if err := cb.OnConsistent(p); err != nil {
+			return errors.Wrap(err, "consistent point not advancing")
+		}
+	}
+
 	log.Tracef("loop %s new consistent point %s -> %s", l.config.LoopName, l.consistentPoint.stamp, p)
 	l.consistentPoint.stamp = p
 	l.consistentPoint.Broadcast()
 
-	if l.config.LoopName == "" {
-		return
-	}
 	if time.Now().Before(l.standbyDeadline) {
-		return
+		return nil
 	}
 	if err := l.storeConsistentPoint(p); err != nil {
-		log.WithError(err).Warn("could not persistent consistent point")
+		return errors.Wrap(err, "could not persistent consistent point")
 	}
 	l.standbyDeadline = time.Now().Add(l.config.StandbyTimeout)
 	log.Tracef("Saved checkpoint for %s", l.config.LoopName)
+	return nil
 }
 
 // storeConsistentPoint commits the given stamp to the memo table.
@@ -147,6 +160,42 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	return l.memo.Put(context.Background(),
 		l.targetPool, l.config.LoopName, data,
 	)
+}
+
+// AwaitConsistentPoint blocks until the consistent point is greater
+// than or equal to the given stamp or until the context is cancelled.
+// The consistent point that matches the condition will be returned.
+func (l *loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error) {
+	// Fast-path
+	if found := l.GetConsistentPoint(); stamp.Compare(found, point) >= 0 {
+		return found, nil
+	}
+
+	// Use a separate goroutine to allow cancellation.
+	result := make(chan stamp.Stamp, 1)
+	go func() {
+		defer close(result)
+		l.consistentPoint.L.Lock()
+		defer l.consistentPoint.L.Unlock()
+		for {
+			found := l.consistentPoint.stamp
+			if stamp.Compare(found, point) >= 0 {
+				select {
+				case result <- found:
+				case <-ctx.Done():
+				}
+				return
+			}
+			l.consistentPoint.Wait()
+		}
+	}()
+
+	select {
+	case found := <-result:
+		return found, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // GetConsistentPoint implements State.

@@ -7,140 +7,57 @@
 package cdc
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
+	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
-	"github.com/cockroachdb/cdc-sink/internal/target/memo"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/target/stage"
-	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 )
 
 // Injectors from test_fixture.go:
 
-func newTestFixture(mode ApplyMode) (*testFixture, func(), error) {
-	context, cleanup, err := sinktest.ProvideContext()
-	if err != nil {
-		return nil, nil, err
-	}
-	dbInfo, err := sinktest.ProvideDBInfo(context)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	pool := sinktest.ProvidePool(dbInfo)
-	stagingDB, cleanup2, err := sinktest.ProvideStagingDB(context, pool)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	testDB, cleanup3, err := sinktest.ProvideTestDB(context, pool)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	baseFixture := sinktest.BaseFixture{
-		Context:   context,
-		DBInfo:    dbInfo,
-		Pool:      pool,
-		StagingDB: stagingDB,
-		TestDB:    testDB,
-	}
-	configs, cleanup4, err := apply.ProvideConfigs(context, pool, stagingDB)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
-	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
-	fans := &fan.Fans{
-		Appliers: appliers,
-		Pool:     pool,
-	}
-	memoMemo, err := memo.ProvideMemo(context, pool, stagingDB)
-	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	metaTable := sinktest.ProvideMetaTable(stagingDB, testDB)
-	stagers := stage.ProvideFactory(pool, stagingDB)
-	targetTable := sinktest.ProvideTimestampTable(stagingDB, testDB)
-	timeKeeper, cleanup7, err := timekeeper.ProvideTimeKeeper(context, pool, targetTable)
-	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	resolvers, cleanup8, err := resolve.ProvideFactory(context, appliers, metaTable, pool, stagers, timeKeeper, watchers)
-	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	watcher, err := sinktest.ProvideWatcher(context, testDB, watchers)
-	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	fixture := &sinktest.Fixture{
-		BaseFixture: baseFixture,
-		Appliers:    appliers,
-		Configs:     configs,
-		Fans:        fans,
-		Memo:        memoMemo,
-		Resolvers:   resolvers,
-		Stagers:     stagers,
-		TimeKeeper:  timeKeeper,
-		Watchers:    watchers,
-		MetaTable:   metaTable,
-		Watcher:     watcher,
-	}
+func newTestFixture(fixture *sinktest.Fixture, config *Config) (*testFixture, func(), error) {
+	appliers := fixture.Appliers
 	authenticator := trust.New()
+	baseFixture := &fixture.BaseFixture
+	context := baseFixture.Context
+	scriptConfig, err := logical.ProvideUserScriptConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
+	loader, err := script.ProvideLoader(scriptConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	if err != nil {
+		return nil, nil, err
+	}
+	pool, cleanup, err := logical.ProvidePool(context, baseConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	metaTable := ProvideMetaTable(config)
+	stagers := fixture.Stagers
+	watchers := fixture.Watchers
+	resolvers, cleanup2, err := ProvideResolvers(context, config, metaTable, pool, stagers, watchers)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	handler := &Handler{
 		Appliers:      appliers,
 		Authenticator: authenticator,
-		Mode:          mode,
+		Config:        config,
 		Pool:          pool,
 		Resolvers:     resolvers,
 		Stores:        stagers,
 	}
 	cdcTestFixture := &testFixture{
-		Fixture: fixture,
-		Handler: handler,
+		Fixture:   fixture,
+		Handler:   handler,
+		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
 		cleanup2()
 		cleanup()
 	}, nil
@@ -150,5 +67,6 @@ func newTestFixture(mode ApplyMode) (*testFixture, func(), error) {
 
 type testFixture struct {
 	*sinktest.Fixture
-	Handler *Handler
+	Handler   *Handler
+	Resolvers *Resolvers
 }

@@ -83,7 +83,7 @@ func logWrapper(h http.Handler) http.Handler {
 				httpCodes.WithLabelValues(strconv.Itoa(rSpy.statusCode)).Inc()
 				httpLatency.Observe(latency.Seconds())
 				httpPayloadIn.Observe(float64(bodySpy.count))
-				msg.Info()
+				msg.Debug()
 				return
 			}
 

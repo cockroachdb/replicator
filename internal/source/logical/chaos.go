@@ -46,12 +46,15 @@ type chaosBackfiller struct {
 	delegate Backfiller
 }
 
-var _ Backfiller = (*chaosBackfiller)(nil)
-var _ Dialect = (*chaosBackfiller)(nil)
+var (
+	_ Backfiller         = (*chaosBackfiller)(nil)
+	_ ConsistentCallback = (*chaosBackfiller)(nil)
+	_ Dialect            = (*chaosBackfiller)(nil)
+)
 
 func (d *chaosBackfiller) BackfillInto(ctx context.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "BackfillInto")
 	}
 	return d.delegate.BackfillInto(ctx, ch, state)
 }
@@ -64,18 +67,32 @@ type chaosDialect struct {
 	prob     float32
 }
 
-var _ Dialect = (*chaosDialect)(nil)
+var (
+	_ ConsistentCallback = (*chaosDialect)(nil)
+	_ Dialect            = (*chaosDialect)(nil)
+)
+
+func (d *chaosDialect) OnConsistent(cp stamp.Stamp) error {
+	if real, ok := d.delegate.(ConsistentCallback); ok {
+		// Only return a chaos error if the real dialect can fail out.
+		if rand.Float32() < d.prob {
+			return errors.WithMessage(ErrChaos, "OnConsistent")
+		}
+		return real.OnConsistent(cp)
+	}
+	return nil
+}
 
 func (d *chaosDialect) ReadInto(ctx context.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "ReadInto")
 	}
 	return d.delegate.ReadInto(ctx, ch, state)
 }
 
 func (d *chaosDialect) Process(ctx context.Context, ch <-chan Message, events Events) error {
 	if rand.Float32() < d.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "Process")
 	}
 	return d.delegate.Process(ctx, ch, &chaosEvents{events, d.prob})
 }
@@ -91,11 +108,19 @@ type chaosEvents struct {
 
 var _ Events = (*chaosEvents)(nil)
 
+// AwaitConsistentPoint implements State. It delegates to the loop and
+// never injects an error.
+func (e *chaosEvents) AwaitConsistentPoint(
+	ctx context.Context, point stamp.Stamp,
+) (stamp.Stamp, error) {
+	return e.delegate.AwaitConsistentPoint(ctx, point)
+}
+
 func (e *chaosEvents) Backfill(
 	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
 ) error {
 	if rand.Float32() < e.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "Backfill")
 	}
 	return e.delegate.Backfill(ctx, loopName, backfiller, options...)
 }
@@ -110,14 +135,14 @@ func (e *chaosEvents) GetTargetDB() ident.Ident {
 
 func (e *chaosEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 	if rand.Float32() < e.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "OnBegin")
 	}
 	return e.delegate.OnBegin(ctx, point)
 }
 
 func (e *chaosEvents) OnCommit(ctx context.Context) error {
 	if rand.Float32() < e.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "OnCommit")
 	}
 	return e.delegate.OnCommit(ctx)
 }
@@ -126,14 +151,14 @@ func (e *chaosEvents) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	if rand.Float32() < e.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "OnData")
 	}
 	return e.delegate.OnData(ctx, source, target, muts)
 }
 
 func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
 	if rand.Float32() < e.prob {
-		return ErrChaos
+		return errors.WithMessage(ErrChaos, "OnRollback")
 	}
 	return e.delegate.OnRollback(ctx, msg)
 }
