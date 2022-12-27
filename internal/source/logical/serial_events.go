@@ -33,6 +33,13 @@ type serialEvents struct {
 
 var _ Events = (*serialEvents)(nil)
 
+// AwaitConsistentPoint implements State.  It delegates to the loop.
+func (e *serialEvents) AwaitConsistentPoint(
+	ctx context.Context, point stamp.Stamp,
+) (stamp.Stamp, error) {
+	return e.loop.AwaitConsistentPoint(ctx, point)
+}
+
 // Backfill implements Events. It delegates to the enclosing loop.
 func (e *serialEvents) Backfill(
 	ctx context.Context, source string, backfiller Backfiller, options ...Option,
@@ -69,8 +76,7 @@ func (e *serialEvents) OnCommit(ctx context.Context) error {
 		return errors.WithStack(err)
 	}
 
-	e.loop.setConsistentPoint(e.stamp)
-	return nil
+	return e.loop.setConsistentPoint(e.stamp)
 }
 
 // OnData implements Events.

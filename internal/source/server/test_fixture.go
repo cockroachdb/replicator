@@ -14,29 +14,40 @@
 package server
 
 import (
+	"context"
 	"net"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 type testFixture struct {
-	*sinktest.Fixture
 	Authenticator types.Authenticator
-	Config        Config
+	Config        *Config
 	Listener      net.Listener
+	Pool          *pgxpool.Pool
 	Server        *Server
+	StagingDB     ident.StagingDB
+	Watcher       types.Watchers
 }
 
-func newTestFixture(shouldUseWebhook, shouldUseImmediate) (*testFixture, func(), error) {
+// We want this to be as close as possible to Start, it just exposes
+// additional plumbing details via the returned testFixture pointer.
+func newTestFixture(context.Context, *Config) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,
-		sinktest.TestSet,
-		provideConnectionMode,
-		provideTestConfig,
+		logical.Set,
+		script.Set,
+		target.Set,
+		wire.Bind(new(logical.Config), new(*Config)),
+		wire.FieldsOf(new(*Config), "CDC"),
 		wire.Struct(new(testFixture), "*"),
 	))
 }

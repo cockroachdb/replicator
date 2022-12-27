@@ -17,7 +17,6 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
@@ -59,17 +58,14 @@ func (f *BaseFixture) CreateTable(ctx context.Context, schemaSpec string) (Table
 type Fixture struct {
 	BaseFixture
 
-	Appliers   types.Appliers
-	Configs    *apply.Configs
-	Fans       *fan.Fans
-	Memo       types.Memo
-	Resolvers  types.Resolvers
-	Stagers    types.Stagers
-	TimeKeeper types.TimeKeeper
-	Watchers   types.Watchers
+	Appliers types.Appliers
+	Configs  *apply.Configs
+	Fans     *fan.Fans
+	Memo     types.Memo
+	Stagers  types.Stagers
+	Watchers types.Watchers
 
-	MetaTable resolve.MetaTable // The _cdc_sink.resolved_timestamps table.
-	Watcher   types.Watcher     // A watcher for TestDB.
+	Watcher types.Watcher // A watcher for TestDB.
 }
 
 // CreateTable creates a test table within the TestDB and refreshes the

@@ -129,7 +129,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 
 		// Stage or apply the per-target mutations.
 		for target, muts := range toProcess {
-			if h.Mode == IgnoreTX {
+			if h.Config.Immediate {
 				applier, err := h.Appliers.Get(ctx, target)
 				if err != nil {
 					return err

@@ -153,7 +153,7 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 			Watcher: watcher,
 		}
 		loop.events.serial = &orderedEvents{
-			Events:  loop.events.fan,
+			Events:  loop.events.serial,
 			Watcher: watcher,
 		}
 	} else {

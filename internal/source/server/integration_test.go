@@ -11,11 +11,15 @@
 package server
 
 import (
+	"fmt"
 	"net/url"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -23,6 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -42,8 +47,10 @@ func TestIntegration(t *testing.T) {
 	t.Run("immediate_webhook", func(t *testing.T) { testIntegration(t, true, true) })
 }
 
-func testIntegration(t *testing.T, immediate shouldUseImmediate, webhook shouldUseWebhook) {
+func testIntegration(t *testing.T, immediate bool, webhook bool) {
+	log.SetLevel(log.TraceLevel)
 	a := assert.New(t)
+	r := require.New(t)
 
 	var stopped <-chan struct{}
 	defer func() {
@@ -52,61 +59,69 @@ func testIntegration(t *testing.T, immediate shouldUseImmediate, webhook shouldU
 		}
 	}()
 
-	// Create a source database connection.
-	sourceFixture, cancel, err := sinktest.NewFixture()
-	if !a.NoError(err) {
-		return
-	}
+	// Create a basic fixture to represent a source database.
+	sourceFixture, cancel, err := sinktest.NewBaseFixture()
+	r.NoError(err)
 	defer cancel()
 
-	sourceCtx := sourceFixture.Context
+	supportsWebhook := supportsWebhook(sourceFixture.DBInfo)
+	if webhook && !supportsWebhook {
+		t.Skipf("Webhook is not compatible with %s version of cockroach.", sourceFixture.DBInfo.Version())
+	}
+
+	ctx := sourceFixture.Context
+
+	// Create a basic destination database connection.
+	destFixture, cancel, err := sinktest.NewBaseFixture()
+	r.NoError(err)
+	defer cancel()
+
+	targetDB := destFixture.TestDB.Ident()
+	targetPool := destFixture.Pool
 
 	// The target fixture contains the cdc-sink server.
-	targetFixture, cancel, err := newTestFixture(webhook, immediate)
-	if !a.NoError(err) {
-		return
-	}
+	targetFixture, cancel, err := newTestFixture(ctx, &Config{
+		CDC: cdc.Config{
+			BaseConfig: logical.BaseConfig{
+				Immediate:  immediate,
+				LoopName:   "changefeed",
+				StagingDB:  destFixture.StagingDB.Ident(),
+				TargetDB:   destFixture.TestDB.Ident(),
+				TargetConn: destFixture.Pool.Config().ConnString(),
+			},
+			MetaTableName: ident.New("resolved_timestamps"),
+		},
+		BindAddr:           "127.0.0.1:0",
+		GenerateSelfSigned: webhook && supportsWebhook, // Webhook implies self-signed TLS is ok.
+	})
+	r.NoError(err)
 	defer cancel()
 
-	targetCtx := targetFixture.Context
-	targetDB := targetFixture.TestDB.Ident()
-	targetPool := targetFixture.Pool
-	selfSigned := targetFixture.Config.GenerateSelfSigned
-
-	// Webhook requires a selfSigned isn't supported on this version of CRDB, don't run the test.
-	if bool(webhook) && !selfSigned {
-		t.Skipf("Webhook is not compatible with %s version of cockroach.", targetFixture.DBInfo.Version())
-	}
-
 	// Set up source and target tables.
-	source, err := sourceFixture.CreateTable(sourceCtx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
-	if !a.NoError(err) {
-		return
-	}
+	source, err := sourceFixture.CreateTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
+	r.NoError(err)
 
 	// Since we're creating the target table without using the helper
 	// CreateTable(), we need to manually refresh the target's Watcher.
-	target := sinktest.NewTableInfo(targetFixture.DBInfo, ident.NewTable(targetDB, ident.Public, source.Name().Table()))
-	if !a.NoError(target.Exec(targetCtx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")) {
-		return
-	}
-	a.NoError(targetFixture.Watcher.Refresh(targetCtx, targetPool))
+	target := ident.NewTable(targetDB, ident.Public, source.Name().Table())
+	_, err = targetPool.Exec(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)", target))
+	r.NoError(err)
+	watcher, err := targetFixture.Watcher.Get(ctx, targetDB)
+	r.NoError(err)
+	r.NoError(watcher.Refresh(ctx, targetPool))
 
 	// Add base data to the source table.
-	a.NoError(source.Exec(sourceCtx, "INSERT INTO %s (pk, val) VALUES (1, 'one')"))
-	ct, err := source.RowCount(sourceCtx)
-	a.NoError(err)
+	r.NoError(source.Exec(ctx, "INSERT INTO %s (pk, val) VALUES (1, 'one')"))
+	ct, err := source.RowCount(ctx)
+	r.NoError(err)
 	a.Equal(1, ct)
 
 	// Allow access.
-	method, priv, err := jwt.InsertTestingKey(targetCtx, targetPool, targetFixture.Authenticator, targetFixture.StagingDB)
-	if !a.NoError(err) {
-		return
-	}
-	_, token, err := jwt.Sign(method, priv, []ident.Schema{target.Name().AsSchema()})
-	if !a.NoError(err) {
-		return
-	}
+	method, priv, err := jwt.InsertTestingKey(ctx, targetPool, targetFixture.Authenticator, targetFixture.StagingDB)
+	r.NoError(err)
+
+	_, token, err := jwt.Sign(method, priv, []ident.Schema{target.AsSchema()})
+	r.NoError(err)
 
 	params := make(url.Values)
 	// Set up the changefeed.
@@ -117,13 +132,13 @@ func testIntegration(t *testing.T, immediate shouldUseImmediate, webhook shouldU
 		feedURL = url.URL{
 			Scheme:   "webhook-https",
 			Host:     targetFixture.Listener.Addr().String(),
-			Path:     path.Join(target.Name().Database().Raw(), target.Name().Schema().Raw()),
+			Path:     path.Join(target.Database().Raw(), target.Schema().Raw()),
 			RawQuery: params.Encode(),
 		}
 		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
 			"INTO '" + feedURL.String() + "' " +
 			"WITH updated," +
-			"     resolved='1s'," +
+			"     resolved," +
 			"     webhook_auth_header='Bearer " + token + "'"
 	} else {
 		// No webhook_auth_header, so bake it into the query string.
@@ -132,24 +147,20 @@ func testIntegration(t *testing.T, immediate shouldUseImmediate, webhook shouldU
 		feedURL = url.URL{
 			Scheme:   "experimental-http",
 			Host:     targetFixture.Listener.Addr().String(),
-			Path:     path.Join(target.Name().Database().Raw(), target.Name().Schema().Raw()),
+			Path:     path.Join(target.Database().Raw(), target.Schema().Raw()),
 			RawQuery: params.Encode(),
 		}
 		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
 			"INTO '" + feedURL.String() + "' " +
-			"WITH updated,resolved='1s'"
+			"WITH updated,resolved"
 	}
 	log.Debugf("changefeed URL is %s", feedURL.String())
-	if !a.NoError(source.Exec(sourceCtx, createStmt)) {
-		return
-	}
+	r.NoError(source.Exec(ctx, createStmt))
 
 	// Wait for the backfilled value.
 	for {
-		ct, err := target.RowCount(targetCtx)
-		if !a.NoError(err) {
-			return
-		}
+		ct, err := sinktest.GetRowCount(ctx, targetPool, target)
+		r.NoError(err)
 		if ct >= 1 {
 			break
 		}
@@ -158,17 +169,15 @@ func testIntegration(t *testing.T, immediate shouldUseImmediate, webhook shouldU
 	}
 
 	// Insert an additional value
-	a.NoError(source.Exec(sourceCtx, "INSERT INTO %s (pk, val) VALUES (2, 'two')"))
-	ct, err = source.RowCount(sourceCtx)
-	a.NoError(err)
+	r.NoError(source.Exec(ctx, "INSERT INTO %s (pk, val) VALUES (2, 'two')"))
+	ct, err = source.RowCount(ctx)
+	r.NoError(err)
 	a.Equal(2, ct)
 
 	// Wait for the streamed value.
 	for {
-		ct, err := target.RowCount(targetCtx)
-		if !a.NoError(err) {
-			return
-		}
+		ct, err := sinktest.GetRowCount(ctx, targetPool, target)
+		r.NoError(err)
 		if ct >= 2 {
 			break
 		}
@@ -179,4 +188,14 @@ func testIntegration(t *testing.T, immediate shouldUseImmediate, webhook shouldU
 	metrics, err := prometheus.DefaultGatherer.Gather()
 	a.NoError(err)
 	log.WithField("metrics", metrics).Debug()
+}
+
+func supportsWebhook(dbInfo *sinktest.DBInfo) bool {
+	// In older versions of CRDB, the webhook endpoint is not available so no
+	// self signed certificate is needed. This acts as a signal as to wether the
+	// webhook endpoint is available.
+	if strings.Contains(dbInfo.Version(), "v20.2.") || strings.Contains(dbInfo.Version(), "v21.1.") {
+		return false
+	}
+	return true
 }

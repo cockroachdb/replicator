@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/target/resolve"
-	"github.com/cockroachdb/cdc-sink/internal/target/timekeeper"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
@@ -40,9 +38,7 @@ var TestSet = wire.NewSet(
 	ProvidePool,
 	ProvideTestDB,
 	ProvideWatcher,
-	ProvideMetaTable,
 	ProvideStagingDB,
-	ProvideTimestampTable,
 
 	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
 	wire.Struct(new(BaseFixture), "*"),
@@ -92,18 +88,6 @@ func ProvideWatcher(
 	ctx context.Context, testDB TestDB, watchers types.Watchers,
 ) (types.Watcher, error) {
 	return watchers.Get(ctx, testDB.Ident())
-}
-
-// ProvideMetaTable is called by Wire to provide a unique table.
-func ProvideMetaTable(stagingDB ident.StagingDB, testDB TestDB) resolve.MetaTable {
-	return resolve.MetaTable(ident.NewTable(
-		stagingDB.Ident(), ident.Public, ident.New("meta_"+testDB.Ident().Raw())))
-}
-
-// ProvideTimestampTable ensure that a unique table is used for each test.
-func ProvideTimestampTable(stagingDB ident.StagingDB, db TestDB) timekeeper.TargetTable {
-	return timekeeper.TargetTable(ident.NewTable(
-		stagingDB.Ident(), ident.Public, ident.New("timestamps_"+db.Ident().Raw())))
 }
 
 // ProvidePool is a convenience provider for the pgx pool type.

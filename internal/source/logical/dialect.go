@@ -37,6 +37,14 @@ type Backfiller interface {
 	BackfillInto(ctx context.Context, ch chan<- Message, state State) error
 }
 
+// ConsistentCallback is an optional interface that may be implemented
+// by a Dialect.
+type ConsistentCallback interface {
+	// OnConsistent will be called whenever the Dialect's logical loop
+	// has advanced to a new consistent point. This callback will block
+	OnConsistent(cp stamp.Stamp) error
+}
+
 // Dialect encapsulates the source-specific implementation details.
 type Dialect interface {
 	// ReadInto represents a potentially-fragile source of
@@ -107,6 +115,11 @@ type Events interface {
 
 // State provides information about a replication loop.
 type State interface {
+	// AwaitConsistentPoint blocks until the consistent point is greater
+	// than or equal to the given stamp or until the context is
+	// cancelled. The consistent point that matches the condition will
+	// be returned.
+	AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error)
 	// GetConsistentPoint returns the most recent consistent point that
 	// has been committed to the target database or the value returned
 	// from Dialect.ZeroStamp.

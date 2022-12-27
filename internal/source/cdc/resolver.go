@@ -1,0 +1,941 @@
+// Copyright 2022 The Cockroach Authors.
+//
+// Use of this software is governed by the Business Source License
+// included in the file licenses/BSL.txt.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0, included in the file
+// licenses/APL.txt.
+
+package cdc
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/txguard"
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+)
+
+// resolvedStamp tracks the progress of applying staged mutations for
+// a given resolved timestamp.  This type has some extra complexity to
+// support backfilling of initial changefeed scans.
+//
+// Here's a state diagram to help:
+//
+//	committed
+//	    |                *---*
+//	    V                V   |
+//	 proposed ---> backfill -*
+//	    |                |
+//	    V                |
+//	committed <----------*
+//
+// Tracking of FK levels and table offsets is only used in backfill mode
+// and is especially relevant to an initial_scan from a changefeed. In
+// this state, we have an arbitrarily large number of mutations to
+// apply, all of which will have the same timestamp.
+//
+// Each resolvedStamp is associated with a separate database transaction
+// that holds a SELECT FOR UPDATE lock on the row that holds the
+// timestamp being resolved. The ownership of this transaction is
+// transferred to any derived resolvedStamp that represents partial
+// progress within a resolved timestamp. The resolved-timestamp
+// transaction is wrapped in a txguard.Guard to ensure that it is kept
+// alive.  If the resolved-timestamp transaction fails for any reason,
+// we can roll back to the previously committed stamp through the usual
+// logical-loop error-handling code.
+type resolvedStamp struct {
+	Backfill bool `json:"b,omitempty"`
+	// A resolved timestamp that represents a transactionally-consistent
+	// point in the history of the workload.
+	CommittedTime hlc.Time `json:"c,omitempty"`
+	// Iteration is used to provide well-ordered behavior within a
+	// single backfill window.
+	Iteration int `json:"i,omitempty"`
+	// The next resolved timestamp that we want to advance to.
+	ProposedTime hlc.Time `json:"p,omitempty"`
+
+	OffsetKey   json.RawMessage `json:"ok,omitempty"`
+	OffsetTable ident.Table     `json:"otbl,omitempty"`
+	OffsetTime  hlc.Time        `json:"ots,omitempty"`
+
+	mu struct {
+		sync.Mutex
+		tx *txguard.Guard
+	}
+}
+
+// AsTime implements logical.TimeStamp to improve reporting.
+func (s *resolvedStamp) AsTime() time.Time {
+	// Use the older time when backfilling.
+	return time.Unix(0, s.CommittedTime.Nanos())
+}
+
+// Commit marks the resolved timestamp as resolved, if the transaction
+// has not been handed off to another resolvedStamp. This handoff would
+// occur when processing a resolved-timestamp interval that contains a
+// large number of sub-batches (e.g. backfills, high-rate scenarios).
+func (s *resolvedStamp) Commit(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx := s.mu.tx
+	if tx == nil {
+		return nil
+	}
+	s.mu.tx = nil
+	return errors.WithStack(tx.Commit(ctx))
+}
+
+// IsAlive returns any pending error from the transaction-keepalive
+// loop or nil if the keepalive loop is still running.
+func (s *resolvedStamp) IsAlive() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx := s.mu.tx
+	if tx == nil {
+		return errors.New("resolved-timestamp transaction owned by later stamp")
+	}
+	return tx.IsAlive()
+}
+
+// Less implements stamp.Stamp.
+func (s *resolvedStamp) Less(other stamp.Stamp) bool {
+	o := other.(*resolvedStamp)
+	if c := hlc.Compare(s.CommittedTime, o.CommittedTime); c != 0 {
+		return c < 0
+	}
+	return s.Iteration < o.Iteration
+}
+
+// NewCommitted returns a new resolvedStamp that represents the
+// completion of a resolved timestamp.
+func (s *resolvedStamp) NewCommitted() (*resolvedStamp, error) {
+	if s.ProposedTime == hlc.Zero() {
+		return nil, errors.New("cannot make new committed timestamp without proposed value")
+	}
+
+	return s.handoff(&resolvedStamp{CommittedTime: s.ProposedTime}), nil
+}
+
+// NewProposed returns a new resolvedStamp that extends the existing
+// stamp with a later proposed timestamp.
+func (s *resolvedStamp) NewProposed(tx *txguard.Guard, proposed hlc.Time) (*resolvedStamp, error) {
+	if hlc.Compare(proposed, s.CommittedTime) <= 0 {
+		return nil, errors.Errorf("proposed time must advance: %s vs %s", proposed, s.CommittedTime)
+	}
+	if hlc.Compare(proposed, s.OffsetTime) < 0 {
+		return nil, errors.Errorf("proposed time undoing work: %s vs %s", proposed, s.OffsetTime)
+	}
+	if hlc.Compare(proposed, s.ProposedTime) < 0 {
+		return nil, errors.Errorf("proposed time cannot go backward: %s vs %s", proposed, s.ProposedTime)
+	}
+
+	ret := &resolvedStamp{
+		Backfill:      s.Backfill,
+		CommittedTime: s.CommittedTime,
+		Iteration:     s.Iteration + 1,
+		OffsetKey:     s.OffsetKey,
+		OffsetTable:   s.OffsetTable,
+		OffsetTime:    s.OffsetTime,
+		ProposedTime:  proposed,
+	}
+	// We don't call handoff here, since we have a new transaction.
+	ret.mu.tx = tx
+	return ret, nil
+}
+
+// NewProgress returns a resolvedStamp that represents partial progress
+// within the same [committed, proposed] window.
+func (s *resolvedStamp) NewProgress(cursor *types.SelectManyCursor) *resolvedStamp {
+	ret := &resolvedStamp{
+		Backfill:      s.Backfill,
+		CommittedTime: s.CommittedTime,
+		Iteration:     s.Iteration + 1,
+		OffsetKey:     s.OffsetKey,
+		OffsetTable:   s.OffsetTable,
+		OffsetTime:    s.OffsetTime,
+		ProposedTime:  s.ProposedTime,
+	}
+
+	if cursor != nil {
+		ret.OffsetTime = cursor.OffsetTime
+
+		// Only Key and Table make sense to retain in a backfill. For
+		// transactional mode, we always want to restart at a specific
+		// timestamp.
+		if s.Backfill {
+			ret.OffsetKey = cursor.OffsetKey
+			ret.OffsetTable = cursor.OffsetTable
+		}
+	}
+
+	return s.handoff(ret)
+}
+
+// Rollback aborts the enclosed transaction, if it exists. This method
+// is safe to call on a nil receiver.
+func (s *resolvedStamp) Rollback() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx := s.mu.tx
+	if tx == nil {
+		return
+	}
+	s.mu.tx = nil
+	tx.Rollback()
+}
+
+// String is for debugging use only.
+func (s *resolvedStamp) String() string {
+	ret, _ := json.Marshal(s)
+	return string(ret)
+}
+
+// handoff transfers the transaction to another resolvedStamp and starts
+// its keepalive loop. This method should be called before the next
+// value has been made visible to any other callers.
+func (s *resolvedStamp) handoff(next *resolvedStamp) *resolvedStamp {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if tx := s.mu.tx; tx != nil {
+		s.mu.tx = nil
+		next.mu.tx = tx
+	}
+	return next
+}
+
+// Schema declared here for ease of reference, but it's actually created
+// in the factory.
+//
+// The secondary index allows us to find the last-known resolved
+// timestamp for a target schema without running into locks held by a
+// dequeued timestamp. This revscan is necessary to ensure ordering
+// invariants when marking new timestamps.
+const schema = `
+CREATE TABLE IF NOT EXISTS %[1]s (
+  target_db         STRING  NOT NULL,
+  target_schema     STRING  NOT NULL,
+  source_nanos      INT     NOT NULL,
+  source_logical    INT     NOT NULL,
+  target_applied_at TIMESTAMP,
+  PRIMARY KEY (target_db, target_schema, source_nanos, source_logical),
+  INDEX (target_db, target_schema, source_nanos DESC, source_logical DESC)    
+)`
+
+// A resolver is an implementation of a logical.Dialect which records
+// incoming resolved timestamps and (asynchronously) applies them.
+// Resolver instances are created for each destination schema.
+type resolver struct {
+	cfg         *Config
+	fastWakeup  chan struct{}
+	loop        *logical.Loop // Reference to driving loop, for testing.
+	pool        *pgxpool.Pool
+	retirements chan hlc.Time // Drives a goroutine to remove applied mutations.
+	stagers     types.Stagers
+	target      ident.Schema
+	watcher     types.Watcher
+
+	sql struct {
+		dequeue string
+		mark    string
+		record  string
+	}
+}
+
+var (
+	_ logical.Backfiller         = (*resolver)(nil)
+	_ logical.ConsistentCallback = (*resolver)(nil)
+	_ logical.Dialect            = (*resolver)(nil)
+)
+
+func newResolver(
+	ctx context.Context,
+	cfg *Config,
+	pool *pgxpool.Pool,
+	metaTable ident.Table,
+	stagers types.Stagers,
+	target ident.Schema,
+	watchers types.Watchers,
+) (*resolver, error) {
+	watcher, err := watchers.Get(ctx, target.Database())
+	if err != nil {
+		return nil, err
+	}
+
+	ret := &resolver{
+		cfg:         cfg,
+		fastWakeup:  make(chan struct{}, 1),
+		pool:        pool,
+		retirements: make(chan hlc.Time, 16),
+		stagers:     stagers,
+		target:      target,
+		watcher:     watcher,
+	}
+	ret.sql.dequeue = fmt.Sprintf(dequeueTemplate, metaTable)
+	ret.sql.mark = fmt.Sprintf(markTemplate, metaTable)
+	ret.sql.record = fmt.Sprintf(recordTemplate, metaTable)
+
+	return ret, nil
+}
+
+// This query conditionally inserts a new mark for a target schema if
+// there is no previous mark or if the proposed mark is after the
+// latest-known mark for the target schema.
+//
+// $1 = target_db
+// $2 = target_schema
+// $3 = source_nanos
+// $4 = source_logical
+const markTemplate = `
+WITH
+not_before AS (
+  SELECT source_nanos, source_logical FROM %[1]s
+  WHERE target_db=$1 AND target_schema=$2
+  ORDER BY source_nanos desc, source_logical desc
+  LIMIT 1),
+to_insert AS (
+  SELECT $1::STRING, $2::STRING, $3::INT, $4::INT
+  WHERE (SELECT count(*) FROM not_before) = 0
+     OR ($3::INT, $4::INT) > (SELECT (source_nanos, source_logical) FROM not_before))
+INSERT INTO %[1]s (target_db, target_schema, source_nanos, source_logical)
+SELECT * FROM to_insert`
+
+func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		r.sql.mark,
+		r.target.Database().Raw(),
+		r.target.Schema().Raw(),
+		// The sql driver gets the wrong type back from CRDB v20.2
+		fmt.Sprintf("%d", ts.Nanos()),
+		fmt.Sprintf("%d", ts.Logical()),
+	)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if tag.RowsAffected() == 0 {
+		log.Tracef("ignoring no-op resolved timestamp %s", ts)
+		return nil
+	}
+	log.WithFields(log.Fields{
+		"schema":   r.target,
+		"resolved": ts,
+	}).Trace("marked new resolved timestamp")
+
+	r.wake()
+
+	return nil
+}
+
+// BackfillInto implements logical.Backfiller.
+func (r *resolver) BackfillInto(
+	ctx context.Context, ch chan<- logical.Message, state logical.State,
+) error {
+	return r.readInto(ctx, ch, state, true)
+}
+
+// ReadInto implements logical.Dialect. It incrementally applies batches
+// of mutations within a resolved timeslice to be committed within a
+// single transaction.
+//
+// The dequeuing query uses a SELECT FOR UPDATE NOWAIT query to block
+// other instances of cdc-sink that may be running. The transaction will
+// be committed when the logical loop's consistent point advances.
+func (r *resolver) ReadInto(
+	ctx context.Context, ch chan<- logical.Message, state logical.State,
+) error {
+	return r.readInto(ctx, ch, state, false)
+}
+
+func (r *resolver) readInto(
+	ctx context.Context, ch chan<- logical.Message, state logical.State, backfill bool,
+) error { // Resume deletions on restart.
+	r.retirements <- state.GetConsistentPoint().(*resolvedStamp).CommittedTime
+
+	const minSleep = 10 * time.Millisecond
+	const maxSleep = 1 * time.Second
+	const backoff = 10
+	sleepDelay := minSleep
+
+	// We're going to create a long-running transaction to act as a lock
+	// on the resolved-timestamp row that we're processing. We want to
+	// keep this transaction alive by sending occasional SQL traffic.
+	var pinger *txguard.Guard
+	defer func() {
+		if pinger != nil {
+			pinger.Rollback()
+		}
+	}()
+
+	for {
+		prev := state.GetConsistentPoint().(*resolvedStamp)
+
+		// This transaction will be committed in OnConsistent.
+		tx, err := r.pool.Begin(ctx)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		pinger = txguard.New(tx)
+
+		// Find the next resolved timestamp to apply, starting from
+		// a timestamp known to be committed.
+		var nextResolved hlc.Time
+		err = pinger.Use(func(tx pgxtype.Querier) (err error) {
+			nextResolved, err = r.dequeueInTx(ctx, tx, prev.CommittedTime)
+			return err
+		})
+
+		sentWork := false
+		switch err {
+		case nil:
+			work, err := prev.NewProposed(pinger, nextResolved)
+
+			// It's possible that the call to Begin() above occurs prior to the previous resolved-timestamp transaction committing
+			if err != nil {
+				log.WithError(err).Warn("dequeued timestamp does not advance")
+				break
+			}
+
+			if backfill {
+				work.Backfill = true
+			}
+
+			select {
+			case ch <- work:
+				// We expect to get a fast wakeup when we finish
+				// processing this timestamp, so set the sleep value to
+				// a conservative value. This keeps us from trying to
+				// SELECT FOR UPDATE the row that we're already
+				// processing, but still allows for recovery if
+				// something goes off the rails downstream.
+				sleepDelay = maxSleep
+				sentWork = true
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+		case errNoWork:
+			// We've consumed all available work, become idle.
+			sleepDelay = maxSleep
+
+		case errBlocked:
+			// If we had a fast wakeup and are immediately blocked,
+			// fall through to exponential backoff below.
+
+		default:
+			return err
+		}
+
+		// If we never sent the long-running transaction downstream,
+		// we want to clean it up eagerly.
+		if !sentWork {
+			pinger.Rollback()
+			pinger = nil
+
+			if sleepDelay < maxSleep {
+				sleepDelay *= backoff
+				if sleepDelay > maxSleep {
+					sleepDelay = maxSleep
+				}
+			}
+		}
+
+		select {
+		case <-r.fastWakeup:
+			// Triggered by a calls to Mark and to OnConsistent.
+			sleepDelay = minSleep
+		case <-time.After(sleepDelay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// Process implements logical.Dialect. It receives a resolved timestamp
+// from ReadInto and drains the associated mutations.
+func (r *resolver) Process(
+	ctx context.Context, ch <-chan logical.Message, events logical.Events,
+) error {
+	// Track the most recently seen stamp so that we can clean up if
+	// we see a rollback message or return with an error.
+	var rs *resolvedStamp
+	defer func() {
+		if rs != nil {
+			rs.Rollback()
+		}
+	}()
+
+	for msg := range ch {
+		if logical.IsRollback(msg) {
+			if err := events.OnRollback(ctx, msg); err != nil {
+				return err
+			}
+			if rs != nil {
+				rs.Rollback()
+			}
+			continue
+		}
+
+		var err error
+		rs, err = r.process(ctx, msg.(*resolvedStamp), events)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+const recordTemplate = `
+UPSERT INTO %s (target_db, target_schema, source_nanos, source_logical, target_applied_at)
+VALUES ($1, $2, $3, $4, now())`
+
+// Record is a no-op version of Mark. It simply records an incoming
+// resolved timestamp as though it had been processed by the resolver.
+// This is used when running in immediate mode to allow resolved
+// timestamps from the source cluster to be logged for performance
+// analysis and cross-cluster reconciliation via AOST queries.
+func (r *resolver) Record(ctx context.Context, ts hlc.Time) error {
+	_, err := r.pool.Exec(ctx,
+		r.sql.record,
+		r.target.Database().Raw(),
+		r.target.Schema().Raw(),
+		// The sql driver gets the wrong type back from CRDB v20.2
+		fmt.Sprintf("%d", ts.Nanos()),
+		fmt.Sprintf("%d", ts.Logical()),
+	)
+	return errors.WithStack(err)
+}
+
+// OnConsistent implements logical.ConsistentCallback. It is called once
+// the enclosing logical loop has advanced to a new consistent point. We
+// know that it's safe to commit the transaction which has drained the
+// various datasources.  Once this transaction is closed, it will unlock
+// the resolved-timestamp table, allowing us (or another instance) to
+// loop around. Should the drain transaction fail to commit, we would
+// retry the same collections of mutations on the next loop.
+func (r *resolver) OnConsistent(cp stamp.Stamp) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rs := cp.(*resolvedStamp)
+	// Commit the transaction marking the resolved timestamp as complete.
+	if rs.ProposedTime == hlc.Zero() {
+		if err := rs.Commit(ctx); err != nil {
+			return errors.Wrap(err, "could not commit resolved-timestamp update")
+		}
+		log.Tracef("committed resolvedStamp transaction for %s", rs)
+
+		// Retire mutations as the committed time advances.
+		r.retirements <- rs.CommittedTime
+	}
+
+	// Kick the drain loop.
+	r.wake()
+	return nil
+}
+
+// ZeroStamp implements logical.Dialect.
+func (r *resolver) ZeroStamp() stamp.Stamp {
+	return &resolvedStamp{}
+}
+
+// process makes incremental progress in fulfilling the given
+// resolvedStamp. It returns the state to which the resolved timestamp
+// has been advanced.
+func (r *resolver) process(
+	ctx context.Context, rs *resolvedStamp, events logical.Events,
+) (*resolvedStamp, error) {
+	start := time.Now()
+	targets := r.watcher.Snapshot(r.target).Order
+
+	cursor := &types.SelectManyCursor{
+		Backfill:    rs.Backfill,
+		End:         rs.ProposedTime,
+		Limit:       r.cfg.SelectBatchSize,
+		OffsetKey:   rs.OffsetKey,
+		OffsetTable: rs.OffsetTable,
+		OffsetTime:  rs.OffsetTime,
+		Start:       rs.CommittedTime,
+		Targets:     targets,
+	}
+
+	flush := func(toApply map[ident.Table][]types.Mutation) error {
+		flushStart := time.Now()
+
+		ctx, cancel := context.WithTimeout(ctx, r.cfg.ApplyTimeout)
+		defer cancel()
+
+		// Ensure that the resolved-timestamp transaction is still valid.
+		if err := rs.IsAlive(); err != nil {
+			return errors.Wrap(err, "resolved-timestamp transaction has failed")
+		}
+
+		// Apply the retrieved data.
+		if err := events.OnBegin(ctx, rs); err != nil {
+			return err
+		}
+
+		flushCount := 0
+		previousGroupDirty := false
+		for _, tables := range targets {
+			for _, table := range tables {
+				muts := toApply[table]
+				if len(muts) == 0 {
+					continue
+				}
+
+				// When using fan-mode, foreign keys, and we hit a group
+				// edge transition, we need to wait for all in-flight
+				// commits to parent tables before we can continue with
+				// child tables. We'll do this by committing the current
+				// resolvedStamp, waiting for it to be marked as
+				// complete, then starting a new batch with an
+				// incremented iteration number.
+				if rs.Backfill && r.cfg.ForeignKeysEnabled && previousGroupDirty {
+					previousGroupDirty = false
+					if err := events.OnCommit(ctx); err != nil {
+						return err
+					}
+					if _, err := events.AwaitConsistentPoint(ctx, rs); err != nil {
+						return errors.Wrapf(err,
+							"consistent point failed to advance within %s", r.cfg.ApplyTimeout)
+					}
+					rs = rs.NewProgress(nil)
+					if err := events.OnBegin(ctx, rs); err != nil {
+						return err
+					}
+				}
+
+				flushCount += len(muts)
+				previousGroupDirty = true
+				if err := events.OnData(ctx, table.Table(), table, muts); err != nil {
+					return err
+				}
+			}
+		}
+		// Note that the data isn't necessarily committed to the database
+		// at this point. We need to wait for a call to OnConsistent to
+		// know that the data is safe.
+		if err := events.OnCommit(ctx); err != nil {
+			return err
+		}
+
+		// Advance the stamp once the flush has completed. The flush
+		// cycle can add some intermediate checkpoints for FK ordering,
+		// so we don't want to truly advance the ratchet until we know
+		// that everything's been committed.
+		rs = rs.NewProgress(cursor)
+
+		log.WithFields(log.Fields{
+			"count":    flushCount,
+			"duration": time.Since(flushStart),
+			"schema":   r.target,
+		}).Debugf("flushed mutations")
+		return nil
+	}
+
+	var epoch hlc.Time
+	flushCounter := 0
+	toApply := make(map[ident.Table][]types.Mutation)
+	total := 0
+	if err := r.stagers.SelectMany(ctx, r.pool, cursor,
+		func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+			// Check for flush before accumulating.
+			var needsFlush bool
+			if rs.Backfill {
+				// We're receiving data in table-order. Just read data
+				// and flush it once we hit our soft limit, since we
+				// can resume at any point.
+				needsFlush = flushCounter >= r.cfg.IdealFlushBatchSize
+			} else {
+				// We're receiving data ordered by MVCC timestamp. Flush
+				// data when we see a new epoch after accumulating a
+				// minimum number of mutations. This increases
+				// throughput when there are many single-row
+				// transactions in the source database.
+				needsFlush = flushCounter >= r.cfg.IdealFlushBatchSize &&
+					hlc.Compare(mut.Time, epoch) > 0
+			}
+			if needsFlush {
+				if err := flush(toApply); err != nil {
+					return err
+				}
+				total += flushCounter
+				flushCounter = 0
+				toApply = make(map[ident.Table][]types.Mutation)
+			}
+
+			flushCounter++
+			toApply[tbl] = append(toApply[tbl], mut)
+			epoch = mut.Time
+			return nil
+		}); err != nil {
+		return rs, err
+	}
+
+	// Final flush cycle to commit the final stamp.
+	rs, err := rs.NewCommitted()
+	if err != nil {
+		return rs, err
+	}
+	if err := flush(toApply); err != nil {
+		return rs, err
+	}
+	total += flushCounter
+	log.WithFields(log.Fields{
+		"committed": rs.CommittedTime,
+		"count":     total,
+		"duration":  time.Since(start),
+		"schema":    r.target,
+	}).Debugf("processed resolved timestamp")
+	return rs, nil
+}
+
+// The FOR UPDATE NOWAIT will quickly fail the query with a 55P03 code
+// if another transaction is processing that timestamp. We use the WHERE
+// ... IN clause to ensure a lookup join.
+//
+// $1 target_db
+// $2 target_schema
+// $3 last_known_nanos
+// $4 last_known_logical
+const dequeueTemplate = `
+WITH work AS (
+ SELECT target_db, target_schema, source_nanos, source_logical
+   FROM %[1]s
+  WHERE target_db=$1
+    AND target_schema=$2
+    AND (source_nanos, source_logical)>=($3, $4)
+    AND target_applied_at IS NULL
+  ORDER BY source_nanos, source_logical
+    FOR UPDATE NOWAIT
+  LIMIT 1)
+UPDATE %[1]s
+   SET target_applied_at=now()
+ WHERE (target_db, target_schema, source_nanos, source_logical) IN (SELECT * FROM work)
+RETURNING source_nanos, source_logical
+`
+
+// These error values are returned by dequeueInTx to indicate why
+// no timestamp was returned.
+var (
+	errNoWork  = errors.New("no work")
+	errBlocked = errors.New("blocked")
+)
+
+// dequeueInTx locates the next unresolved timestamp to flush. The after
+// parameter allows us to skip over most of the table contents.
+func (r *resolver) dequeueInTx(
+	ctx context.Context, tx pgxtype.Querier, after hlc.Time,
+) (hlc.Time, error) {
+	var sourceNanos int64
+	var sourceLogical int
+	err := tx.QueryRow(ctx,
+		r.sql.dequeue,
+		r.target.Database().Raw(),
+		r.target.Schema().Raw(),
+		after.Nanos(),
+		after.Logical(),
+	).Scan(&sourceNanos, &sourceLogical)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.WithField("schema", r.target).Trace("no work")
+			return hlc.Zero(), errNoWork
+		}
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+			log.WithField("schema", r.target).Trace("blocked by other")
+			return hlc.Zero(), errBlocked
+		}
+		return hlc.Zero(), errors.WithStack(err)
+	}
+	return hlc.New(sourceNanos, sourceLogical), nil
+}
+
+// retireLoop starts goroutines to ensure that old mutations are
+// eventually discarded. This method will return immediately. The
+// goroutines which it spawns will terminate when the context is
+// canceled.
+func (r *resolver) retireLoop(ctx context.Context) {
+	var toRetire atomic.Value
+	wakeup := make(chan struct{}, 1)
+
+	// Coalesce incoming candidates value. This goroutine will exit
+	// when the enclosing context is canceled.
+	go func() {
+		defer close(wakeup)
+		for {
+			select {
+			case retire := <-r.retirements:
+				toRetire.Store(retire)
+				select {
+				case wakeup <- struct{}{}:
+				default:
+				}
+
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Perform the work, taking however much time is needed. This loop
+	// will exit when the wakeup channel has been closed.
+	go func() {
+		for range wakeup {
+			next := toRetire.Load().(hlc.Time)
+			log.Tracef("retiring mutations in %s <= %s", r.target, next)
+
+			targetTables := r.watcher.Snapshot(r.target).Columns
+			for table := range targetTables {
+				stager, err := r.stagers.Get(ctx, table)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					log.WithError(err).Warnf("could not acquire stager for %s", table)
+					continue
+				}
+				if err := stager.Retire(ctx, r.pool, next); err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					log.WithError(err).Warnf("error while retiring staged mutations in %s", table)
+				}
+			}
+		}
+	}()
+}
+
+// wake triggers a nonblocking send to the wakeup channel.
+func (r *resolver) wake() {
+	select {
+	case r.fastWakeup <- struct{}{}:
+	default:
+	}
+}
+
+// Resolvers is a factory for Resolver instances.
+type Resolvers struct {
+	cfg       *Config
+	noStart   bool // Set by test code to disable call to loop.Start()
+	metaTable ident.Table
+	pool      *pgxpool.Pool
+	stagers   types.Stagers
+	watchers  types.Watchers
+
+	mu struct {
+		sync.Mutex
+		cleanups  []func()
+		instances map[ident.Schema]*resolver
+	}
+}
+
+// close will drain any running resolver loops.
+func (r *Resolvers) close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Cancel each loop.
+	for _, cancel := range r.mu.cleanups {
+		cancel()
+	}
+	// Wait for shutdown.
+	for _, r := range r.mu.instances {
+		<-r.loop.Stopped()
+	}
+	r.mu.cleanups = nil
+	r.mu.instances = nil
+}
+
+func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if found, ok := r.mu.instances[target]; ok {
+		return found, nil
+	}
+
+	ret, err := newResolver(ctx, r.cfg, r.pool, r.metaTable, r.stagers, target, r.watchers)
+	if err != nil {
+		return nil, err
+	}
+
+	// Start a new logical loop using a fresh configuration.
+	cfg := r.cfg.Base().Copy()
+	cfg.LoopName = "changefeed-" + target.Raw()
+	cfg.TargetDB = target.Database()
+
+	// For testing, we sometimes want to drive the resolver directly.
+	if r.noStart {
+		return ret, nil
+	}
+
+	loop, cleanup, err := logical.Start(ctx, cfg, ret)
+	if err != nil {
+		return nil, err
+	}
+	ret.loop = loop
+
+	r.mu.instances[target] = ret
+
+	// Start a goroutine to retire old data.
+	retireCtx, cancelRetire := context.WithCancel(context.Background())
+	ret.retireLoop(retireCtx)
+
+	r.mu.cleanups = append(r.mu.cleanups, cleanup, cancelRetire)
+	return ret, nil
+}
+
+const scanForTargetTemplate = `
+SELECT DISTINCT target_db, target_schema
+FROM %[1]s
+WHERE target_applied_at IS NULL
+`
+
+// ScanForTargetSchemas is used by the factory to ensure that any schema
+// with unprocessed, resolved timestamps will have an associated resolve
+// instance. This function is declared here to keep the sql queries in a
+// single file. It is exported to aid in testing.
+func ScanForTargetSchemas(
+	ctx context.Context, db pgxtype.Querier, metaTable ident.Table,
+) ([]ident.Schema, error) {
+	rows, err := db.Query(ctx, fmt.Sprintf(scanForTargetTemplate, metaTable))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rows.Close()
+	var ret []ident.Schema
+	for rows.Next() {
+		var db, schema string
+		if err := rows.Scan(&db, &schema); err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		ret = append(ret, ident.NewSchema(ident.New(db), ident.New(schema)))
+	}
+
+	return ret, nil
+}
