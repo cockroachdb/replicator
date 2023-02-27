@@ -11,6 +11,8 @@
 package cdc
 
 import (
+	"bufio"
+
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
@@ -20,6 +22,7 @@ import (
 const (
 	defaultFlushBatchSize  = 1_000
 	defaultSelectBatchSize = 10_000
+	defaultNDJsonBuffer    = bufio.MaxScanTokenSize // 64k
 )
 
 // Config adds CDC-specific configuration to the core logical loop.
@@ -29,6 +32,11 @@ type Config struct {
 	// Coalesce timestamps within a resolved-timestamp window until
 	// at least this many mutations have been collected.
 	IdealFlushBatchSize int
+
+	// The maximum amount of data to buffer when reading a single line
+	// of ndjson input. This can be increased if the source cluster
+	// has large blob values.
+	NDJsonBuffer int
 
 	// The name of the resolved_timestamps table.
 	MetaTableName ident.Ident
@@ -49,6 +57,9 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 
 	f.IntVar(&c.IdealFlushBatchSize, "idealFlushBatchSize", defaultFlushBatchSize,
 		"try to apply at least this many mutations per resolved-timestamp window")
+	f.IntVar(&c.NDJsonBuffer, "ndjsonBufferSize", defaultNDJsonBuffer,
+		"the maximum amount of data to buffer while reading a single line of ndjson input; "+
+			"increase when source cluster has large blob values")
 	f.Var(ident.NewValue("resolved_timestamps", &c.MetaTableName), "metaTable",
 		"the name of the table in which to store resolved timestamps")
 	f.IntVar(&c.SelectBatchSize, "selectBatchSize", defaultSelectBatchSize,
@@ -66,6 +77,9 @@ func (c *Config) Preflight() error {
 
 	if c.IdealFlushBatchSize == 0 {
 		c.IdealFlushBatchSize = defaultFlushBatchSize
+	}
+	if c.NDJsonBuffer == 0 {
+		c.NDJsonBuffer = defaultNDJsonBuffer
 	}
 	if c.MetaTableName.IsEmpty() {
 		return errors.New("no metadata table specified")

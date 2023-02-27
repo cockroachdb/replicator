@@ -129,6 +129,8 @@ func (h *Handler) ndjson(ctx context.Context, req *request) error {
 
 	muts := make([]types.Mutation, 0, batches.Size())
 	scanner := bufio.NewScanner(req.body)
+	// Our config defaults to bufio.MaxScanTokenSize.
+	scanner.Buffer(make([]byte, 0, h.Config.NDJsonBuffer), h.Config.NDJsonBuffer)
 	for scanner.Scan() {
 		buf := scanner.Bytes()
 		if len(buf) == 0 {
