@@ -176,7 +176,7 @@ cockroach sql --port 30002 --insecure -e "select * from ycsb.usertable"
 # create staging database for cdc-sink
 cockroach sql --port 30002 --insecure -e "CREATE DATABASE _cdc_sink"
 # cdc-sink started as a background task. Remove the tls flag for CockroachDB <= v21.1
-cdc-sink start --bindAddr :30004 --tlsSelfSigned --disableAuthentication --conn 'postgresql://root@localhost:30002/?sslmode=disable' &
+cdc-sink start --bindAddr :30004 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@localhost:30002/?sslmode=disable' &
 
 # start the CDC that will send across the initial data snapshot
 # Versions of CRDB before v21.2 should use the experimental-http:// URL scheme
