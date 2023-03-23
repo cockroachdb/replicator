@@ -130,8 +130,9 @@ func (s *resolvedStamp) NewCommitted() (*resolvedStamp, error) {
 // NewProposed returns a new resolvedStamp that extends the existing
 // stamp with a later proposed timestamp.
 func (s *resolvedStamp) NewProposed(tx *txguard.Guard, proposed hlc.Time) (*resolvedStamp, error) {
-	if hlc.Compare(proposed, s.CommittedTime) <= 0 {
-		return nil, errors.Errorf("proposed time must advance: %s vs %s", proposed, s.CommittedTime)
+	if hlc.Compare(proposed, s.CommittedTime) < 0 {
+		return nil, errors.Errorf("proposed cannot roll back committed time: %s vs %s",
+			proposed, s.CommittedTime)
 	}
 	if hlc.Compare(proposed, s.OffsetTime) < 0 {
 		return nil, errors.Errorf("proposed time undoing work: %s vs %s", proposed, s.OffsetTime)
