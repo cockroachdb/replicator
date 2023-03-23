@@ -13,7 +13,6 @@ package schemawatch
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -99,36 +98,46 @@ func getColumns(
 			if column.Primary {
 				foundPrimay = true
 			}
+
 			// If the column type is a user-defined type, e.g. an enum,
 			// then we want to treat it as a proper database ident, and
 			// not a string.  Fortunately, UDTs can be identified
-			// because they have the schema name baked in.  We can't
-			// blindly treat all type names as idents, because the
-			// introspection query returns upcased value (e.g. INT8),
-			// while the actual type name of builtin types are lower
-			// case (e.g. int8). Thus, the SQL expression 1:"INT8" is
-			// invalid, although 1:"int8" would be fine. Baking in a
-			// list of intrinsic datatypes also seems somewhat brittle
-			// as CRDB evolves.
-			if strings.Contains(rawColType, ".") {
-				parts := strings.Split(rawColType, ".")
-				switch len(parts) {
-				case 2: // CRDB <= 22.1
-					column.Type = ident.NewUDT(
-						table.Database(),
-						ident.New(parts[0]),
-						ident.New(parts[1]))
-				case 3: // CRDB >= 22.2
-					column.Type = ident.NewUDT(
-						ident.New(parts[0]),
-						ident.New(parts[1]),
-						ident.New(parts[2]))
-				default:
-					return errors.Errorf("cannot parse UDT %s", rawColType)
+			// because they have (at least) the schema name reported by
+			// the introspection query.  We can't blindly treat all type
+			// names as idents, because the introspection query returns
+			// upcased value (e.g. INT8), while the actual type name of
+			// builtin types are lower case (e.g. int8). Thus, the SQL
+			// expression 1::"INT8" is invalid, although 1::"int8" would
+			// be fine. Baking in a list of intrinsic datatypes also
+			// seems somewhat brittle as CRDB evolves.
+			parts := make([]ident.Ident, 0, 3)
+			for remainder := rawColType; remainder != ""; {
+				// Strip leading . from previous loop.
+				if remainder[0] == '.' {
+					remainder = remainder[1:]
 				}
-			} else {
-				column.Type = rawColType
+				var part ident.Ident
+				var err error
+				part, remainder, err = ident.ParseIdent(remainder)
+				if err != nil {
+					return err
+				}
+				parts = append(parts, part)
 			}
+			switch len(parts) {
+			case 1:
+				// Raw type, like INT8
+				column.Type = parts[0].Raw()
+			case 2:
+				// UDT for CRDB <= 22.1 only includes schema and name.
+				column.Type = ident.NewUDT(table.Database(), parts[0], parts[1])
+			case 3:
+				// Fully-qualified UDT.
+				column.Type = ident.NewUDT(parts[0], parts[1], parts[2])
+			default:
+				return errors.Errorf("unexpected type name %q", rawColType)
+			}
+
 			columns = append(columns, column)
 		}
 
