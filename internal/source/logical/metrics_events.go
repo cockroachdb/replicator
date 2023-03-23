@@ -12,6 +12,7 @@ package logical
 
 import (
 	"context"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/prometheus/client_golang/prometheus"
@@ -33,6 +34,10 @@ var (
 		Name: "logical_commit_failure_total",
 		Help: "the number transactions from the source database that failed to apply",
 	}, loopLabels)
+	commitLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "logical_commit_latency_seconds",
+		Help: "the current time minus the original time of the most recently applied commit from the source database",
+	}, loopLabels)
 	commitOffset = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "logical_last_commit_offset_bytes",
 		Help: "the offset that we are reporting to the source database",
@@ -51,6 +56,7 @@ type metricsEvents struct {
 	metrics struct {
 		commitSuccess prometheus.Counter
 		commitFailure prometheus.Counter
+		commitLatency prometheus.Gauge
 		commitOffset  prometheus.Gauge
 		commitTime    prometheus.Gauge
 	}
@@ -72,6 +78,7 @@ func (e *metricsEvents) OnCommit(ctx context.Context) error {
 
 	e.metrics.commitSuccess.Inc()
 	if x, ok := e.point.(TimeStamp); ok {
+		e.metrics.commitLatency.Set(time.Since(x.AsTime()).Seconds())
 		e.metrics.commitTime.Set(float64(x.AsTime().UnixNano()))
 	}
 	if x, ok := e.point.(OffsetStamp); ok {
@@ -83,6 +90,7 @@ func (e *metricsEvents) OnCommit(ctx context.Context) error {
 func (e *metricsEvents) withLoopName(name string) *metricsEvents {
 	e.metrics.commitSuccess = commitSuccessCount.WithLabelValues(name)
 	e.metrics.commitFailure = commitFailureCount.WithLabelValues(name)
+	e.metrics.commitLatency = commitLatency.WithLabelValues(name)
 	e.metrics.commitOffset = commitOffset.WithLabelValues(name)
 	e.metrics.commitTime = commitTime.WithLabelValues(name)
 	return e
