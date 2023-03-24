@@ -40,7 +40,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v4
         with:
           context: ./.github/firestore
           push: true
