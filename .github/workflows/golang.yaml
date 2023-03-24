@@ -60,7 +60,7 @@ jobs:
         run: echo '${{ github.job }} ${{ toJSON(matrix) }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -105,7 +105,7 @@ jobs:
         run: echo '${{ github.job }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -169,7 +169,7 @@ jobs:
         run: echo '${{ github.job }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
           cache: true
