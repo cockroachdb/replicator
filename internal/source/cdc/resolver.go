@@ -175,7 +175,8 @@ func (r *resolver) ReadInto(
 
 func (r *resolver) readInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State, backfill bool,
-) error { // Resume deletions on restart.
+) error {
+	// Resume deletions on restart.
 	r.retirements <- state.GetConsistentPoint().(*resolvedStamp).CommittedTime
 
 	const minSleep = 10 * time.Millisecond
@@ -183,88 +184,30 @@ func (r *resolver) readInto(
 	const backoff = 10
 	sleepDelay := minSleep
 
-	// We're going to create a long-running transaction to act as a lock
-	// on the resolved-timestamp row that we're processing. We want to
-	// keep this transaction alive by sending occasional SQL traffic.
-	var pinger *txguard.Guard
-	defer func() {
-		if pinger != nil {
-			pinger.Rollback()
-		}
-	}()
-
 	for {
 		prev := state.GetConsistentPoint().(*resolvedStamp)
+		err := r.readIntoOnce(ctx, ch, prev, backfill)
 
-		// This transaction will be committed in OnConsistent.
-		tx, err := r.pool.Begin(ctx)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		pinger = txguard.New(tx)
-
-		// Find the next resolved timestamp to apply, starting from
-		// a timestamp known to be committed.
-		var nextResolved hlc.Time
-		err = pinger.Use(func(tx pgxtype.Querier) (err error) {
-			nextResolved, err = r.dequeueInTx(ctx, tx, prev.CommittedTime)
-			return err
-		})
-
-		sentWork := false
 		switch err {
 		case nil:
-			work, err := prev.NewProposed(pinger, nextResolved)
-
-			// It's possible that the call to Begin() above occurs prior to the previous resolved-timestamp transaction committing
-			if err != nil {
-				log.WithError(err).Warn("dequeued timestamp does not advance")
-				break
-			}
-
-			if backfill {
-				work.Backfill = true
-			}
-
-			select {
-			case ch <- work:
-				// We expect to get a fast wakeup when we finish
-				// processing this timestamp, so set the sleep value to
-				// a conservative value. This keeps us from trying to
-				// SELECT FOR UPDATE the row that we're already
-				// processing, but still allows for recovery if
-				// something goes off the rails downstream.
-				sleepDelay = maxSleep
-				sentWork = true
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-
+			// Set to max, since we expect the fast wakeup signal below
+			// to reset to the minimum delay.
+			sleepDelay = maxSleep
 		case errNoWork:
 			// We've consumed all available work, become idle.
 			sleepDelay = maxSleep
-
 		case errBlocked:
-			// If we had a fast wakeup and are immediately blocked,
-			// fall through to exponential backoff below.
-
-		default:
-			return err
-		}
-
-		// If we never sent the long-running transaction downstream,
-		// we want to clean it up eagerly.
-		if !sentWork {
-			pinger.Rollback()
-			pinger = nil
-
+			// If we're blocked by another cdc-sink instance, increase
+			// the backoff time.
 			if sleepDelay < maxSleep {
 				sleepDelay *= backoff
 				if sleepDelay > maxSleep {
 					sleepDelay = maxSleep
 				}
 			}
+
+		default:
+			return err
 		}
 
 		select {
@@ -275,6 +218,70 @@ func (r *resolver) readInto(
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+}
+
+// readIntoOnce executes a single loop of readInto. The returned error
+// may be one of the sentinel values errNoWork or errBlocked that are
+// returned by dequeueInTx.
+func (r *resolver) readIntoOnce(
+	ctx context.Context, ch chan<- logical.Message, prev *resolvedStamp, backfill bool,
+) error {
+
+	// This transaction will be used to hold a SELECT FOR UPDATE lock on
+	// the next resolved timestamp to be processed. It will eventually
+	// be committed in OnConsistent.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// We'll wrap the database transaction in a keepalive facade,
+	// since there's an indefinite amount of processing that happens
+	// concurrently with the lock-holding transaction.
+	guard := txguard.New(tx)
+
+	// If we don't send the long-running transaction downstream,
+	// we want to clean it up eagerly.
+	var sentWork bool
+	defer func() {
+		if !sentWork {
+			guard.Rollback()
+		}
+	}()
+
+	// Find the next resolved timestamp to apply, starting from
+	// a timestamp known to be committed.
+	var nextResolved hlc.Time
+	if err := guard.Use(func(tx pgxtype.Querier) (err error) {
+		nextResolved, err = r.dequeueInTx(ctx, tx, prev.CommittedTime)
+		return err
+	}); err != nil {
+		return err
+	}
+
+	// Create a new marker that verifies that we're rolling forward.
+	work, err := prev.NewProposed(guard, nextResolved)
+
+	// It's possible that the call to Begin() above occurs prior to the
+	// previous resolved-timestamp transaction committing.
+	if err != nil {
+		log.WithError(err).Warn("dequeued timestamp does not advance; will retry")
+		return errNoWork
+	}
+
+	// Propagate the backfilling flag. This could already be set if
+	if backfill {
+		work.Backfill = true
+	}
+
+	select {
+	case ch <- work:
+		// Disable rollback in defer statement above.
+		sentWork = true
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

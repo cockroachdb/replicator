@@ -269,6 +269,9 @@ func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb floa
 	ctx := fixture.Context
 	h := fixture.Handler
 
+	loadStart := time.Now()
+	log.Info("starting data load")
+
 	parent, err := fixture.CreateTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	r.NoError(err)
@@ -303,7 +306,7 @@ func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb floa
 			}))
 		}
 	}
-	log.Info("finished filling data")
+	log.Info("finished filling data in ", time.Since(loadStart).String())
 
 	// Send a resolved timestamp that needs to dequeue many rows.
 	r.NoError(h.resolved(ctx, &request{
