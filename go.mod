@@ -7,7 +7,7 @@ require (
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20220610162206-024b567ce87b
 	github.com/dop251/goja v0.0.0-20220915101355-d79e1b125a30
-	github.com/evanw/esbuild v0.16.13
+	github.com/evanw/esbuild v0.17.14
 	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/gofrs/uuid v4.3.1+incompatible
 	github.com/golang-jwt/jwt/v4 v4.4.3
