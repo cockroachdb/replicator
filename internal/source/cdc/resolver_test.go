@@ -56,6 +56,7 @@ func TestResolverDeQueue(t *testing.T) {
 
 	for i := int64(0); i < rowCount; i++ {
 		r.NoError(resolver.Mark(ctx, hlc.New(i+1, 0)))
+		r.NoError(resolver.Mark(ctx, hlc.New(i, 0)))
 	}
 
 	log.Info("marked")

@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -88,6 +89,24 @@ type leases struct {
 	}
 }
 
+// leaseFacade implements the public types.Lease interface.
+type leaseFacade struct {
+	cancel func()
+	ctx    context.Context
+}
+
+var _ types.Lease = (*leaseFacade)(nil)
+
+// Context implements types.Lease.
+func (f *leaseFacade) Context() context.Context {
+	return f.ctx
+}
+
+// Release implements types.Lease.
+func (f *leaseFacade) Release() {
+	f.cancel()
+}
+
 var _ types.Leases = (*leases)(nil)
 
 const (
@@ -115,6 +134,35 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 	l.sql.renew = fmt.Sprintf(renewTemplate, cfg.Target)
 
 	return l, nil
+}
+
+// Acquire the named lease, keep it alive, and return a facade.
+func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) {
+	acquired, ok, err := l.acquire(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, &types.LeaseBusyError{}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		l.keepRenewed(ctx, acquired)
+		cancel()
+	}()
+
+	ret := &leaseFacade{
+		cancel: func() {
+			_, _ = l.release(ctx, acquired)
+			cancel()
+		},
+		ctx: ctx,
+	}
+
+	runtime.SetFinalizer(ret, func(f *leaseFacade) { f.Release() })
+
+	return ret, nil
 }
 
 // Singleton executes a callback when the named lease is acquired.

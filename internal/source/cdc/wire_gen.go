@@ -10,6 +10,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
+	"github.com/cockroachdb/cdc-sink/internal/target/leases"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 )
 
@@ -36,10 +37,20 @@ func newTestFixture(fixture *sinktest.Fixture, config *Config) (*testFixture, fu
 	if err != nil {
 		return nil, nil, err
 	}
+	stagingDB, err := logical.ProvideStagingDB(baseConfig)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	typesLeases, err := leases.ProvideLeases(context, pool, stagingDB)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	metaTable := ProvideMetaTable(config)
 	stagers := fixture.Stagers
 	watchers := fixture.Watchers
-	resolvers, cleanup2, err := ProvideResolvers(context, config, metaTable, pool, stagers, watchers)
+	resolvers, cleanup2, err := ProvideResolvers(context, config, typesLeases, metaTable, pool, stagers, watchers)
 	if err != nil {
 		cleanup()
 		return nil, nil, err

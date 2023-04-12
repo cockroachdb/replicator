@@ -48,12 +48,33 @@ type Authenticator interface {
 // Deadlines associate a column identifier with a duration.
 type Deadlines map[ident.Ident]time.Duration
 
-// ErrCancelSingleton may be returned by callbacks passed to
-// leases.Singleton to shut down cleanly.
-var ErrCancelSingleton = errors.New("singleton requested cancellation")
+var (
+	// ErrCancelSingleton may be returned by callbacks passed to
+	// leases.Singleton to shut down cleanly.
+	ErrCancelSingleton = errors.New("singleton requested cancellation")
+)
+
+// A Lease represents a time-based, exclusive lock.
+type Lease interface {
+	// Context will be canceled when the lease has expired.
+	Context() context.Context
+
+	// Release terminates the Lease.
+	Release()
+}
+
+// LeaseBusyError is returned by [Leases.Acquire] if another caller
+// holds the lease.
+type LeaseBusyError struct{}
+
+func (e *LeaseBusyError) Error() string { return "lease is held by another caller" }
 
 // Leases coordinates behavior across multiple instances of cdc-sink.
 type Leases interface {
+	// Acquire the named lease. A [LeaseBusyError] will be returned if
+	// another caller has already acquired the lease.
+	Acquire(ctx context.Context, name string) (Lease, error)
+
 	// Singleton executes a callback when the named lease is acquired.
 	//
 	// The lease will be released in the following circumstances:

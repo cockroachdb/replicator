@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/target/leases"
 	"github.com/google/wire"
 )
 
@@ -27,6 +28,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,
+		leases.Set,
 		logical.Set,
 		script.Set,
 		target.Set,

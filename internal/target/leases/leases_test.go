@@ -269,6 +269,28 @@ func TestLeases(t *testing.T) {
 		// Make sure the context has not timed out.
 		a.NoError(ctx.Err())
 	})
+
+	t.Run("lease_facade", func(t *testing.T) {
+		a := assert.New(t)
+
+		// Initial acquisition.
+		facade, err := l.Acquire(ctx, t.Name())
+		a.NoError(err)
+
+		// Verify that a duplicate fails.
+		_, err = l.Acquire(ctx, t.Name())
+		a.ErrorIs(err, &types.LeaseBusyError{})
+
+		// Verify that releasing cancels the lease.
+		a.Nil(facade.Context().Err())
+		facade.Release()
+
+		a.ErrorIs(facade.Context().Err(), context.Canceled)
+
+		// Re-acquisition should succeed.
+		_, err = l.Acquire(ctx, t.Name())
+		a.NoError(err)
+	})
 }
 
 func TestSanitize(t *testing.T) {
