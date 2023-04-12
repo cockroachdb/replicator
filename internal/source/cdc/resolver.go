@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 type resolver struct {
 	cfg         *Config
 	fastWakeup  chan struct{}
+	leases      types.Leases
 	loop        *logical.Loop // Reference to driving loop, for testing.
 	pool        *pgxpool.Pool
 	retirements chan hlc.Time // Drives a goroutine to remove applied mutations.
@@ -78,6 +79,7 @@ var (
 func newResolver(
 	ctx context.Context,
 	cfg *Config,
+	leases types.Leases,
 	pool *pgxpool.Pool,
 	metaTable ident.Table,
 	stagers types.Stagers,
@@ -92,6 +94,7 @@ func newResolver(
 	ret := &resolver{
 		cfg:         cfg,
 		fastWakeup:  make(chan struct{}, 1),
+		leases:      leases,
 		pool:        pool,
 		retirements: make(chan hlc.Time, 16),
 		stagers:     stagers,
@@ -119,6 +122,7 @@ not_before AS (
   SELECT source_nanos, source_logical FROM %[1]s
   WHERE target_db=$1 AND target_schema=$2
   ORDER BY source_nanos desc, source_logical desc
+  FOR UPDATE
   LIMIT 1),
 to_insert AS (
   SELECT $1::STRING, $2::STRING, $3::INT, $4::INT
@@ -227,6 +231,19 @@ func (r *resolver) readInto(
 func (r *resolver) readIntoOnce(
 	ctx context.Context, ch chan<- logical.Message, prev *resolvedStamp, backfill bool,
 ) error {
+	// Acquire a lease for the destination schema.
+	//
+	// This exists as a workaround for SELECT FOR UPDATE only using
+	// un-replicated locks. When the linked issue is closed, this
+	// hack can be removed.
+	//
+	// https://github.com/cockroachdb/cockroach/issues/100194
+	lease, err := r.leases.Acquire(ctx, r.target.Raw())
+	if errors.Is(err, &types.LeaseBusyError{}) {
+		return errBlocked
+	} else if err != nil {
+		return err
+	}
 
 	// This transaction will be used to hold a SELECT FOR UPDATE lock on
 	// the next resolved timestamp to be processed. It will eventually
@@ -247,6 +264,7 @@ func (r *resolver) readIntoOnce(
 	defer func() {
 		if !sentWork {
 			guard.Rollback()
+			lease.Release()
 		}
 	}()
 
@@ -261,7 +279,7 @@ func (r *resolver) readIntoOnce(
 	}
 
 	// Create a new marker that verifies that we're rolling forward.
-	work, err := prev.NewProposed(guard, nextResolved)
+	work, err := prev.NewProposed(guard, nextResolved, lease)
 
 	// It's possible that the call to Begin() above occurs prior to the
 	// previous resolved-timestamp transaction committing.
@@ -311,7 +329,7 @@ func (r *resolver) Process(
 		}
 
 		var err error
-		rs, err = r.process(ctx, msg.(*resolvedStamp), events)
+		rs, err = r.process(msg.(*resolvedStamp), events)
 		if err != nil {
 			return err
 		}
@@ -377,9 +395,11 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 // process makes incremental progress in fulfilling the given
 // resolvedStamp. It returns the state to which the resolved timestamp
 // has been advanced.
-func (r *resolver) process(
-	ctx context.Context, rs *resolvedStamp, events logical.Events,
-) (*resolvedStamp, error) {
+func (r *resolver) process(rs *resolvedStamp, events logical.Events) (*resolvedStamp, error) {
+	// Use a context that will be canceled if the associated lease
+	// cannot be renewed.
+	ctx := rs.Context()
+
 	start := time.Now()
 	targets := r.watcher.Snapshot(r.target).Order
 
@@ -654,6 +674,7 @@ func (r *resolver) wake() {
 // Resolvers is a factory for Resolver instances.
 type Resolvers struct {
 	cfg       *Config
+	leases    types.Leases
 	noStart   bool // Set by test code to disable call to loop.Start()
 	metaTable ident.Table
 	pool      *pgxpool.Pool
@@ -692,7 +713,7 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 		return found, nil
 	}
 
-	ret, err := newResolver(ctx, r.cfg, r.pool, r.metaTable, r.stagers, target, r.watchers)
+	ret, err := newResolver(ctx, r.cfg, r.leases, r.pool, r.metaTable, r.stagers, target, r.watchers)
 	if err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/leases"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -75,9 +76,19 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	cdcConfig := &config.CDC
+	typesLeases, err := leases.ProvideLeases(ctx, pool, stagingDB)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(pool, stagingDB)
-	resolvers, cleanup7, err := cdc.ProvideResolvers(ctx, cdcConfig, metaTable, pool, stagers, watchers)
+	resolvers, cleanup7, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, metaTable, pool, stagers, watchers)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -167,9 +178,19 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
 	cdcConfig := &config.CDC
+	typesLeases, err := leases.ProvideLeases(contextContext, pool, stagingDB)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(pool, stagingDB)
-	resolvers, cleanup7, err := cdc.ProvideResolvers(contextContext, cdcConfig, metaTable, pool, stagers, watchers)
+	resolvers, cleanup7, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, metaTable, pool, stagers, watchers)
 	if err != nil {
 		cleanup6()
 		cleanup5()

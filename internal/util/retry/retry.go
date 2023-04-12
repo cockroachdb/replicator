@@ -15,10 +15,10 @@ package retry
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgtype/pgxtype"
-	"github.com/pkg/errors"
 )
 
 // Marker is a settable flag.
@@ -50,7 +50,7 @@ func Retry(ctx context.Context, idempotent func(context.Context) error) error {
 }
 
 // inLoop is a key used by Loop to detect reentrant behavior.
-var inLoop struct{}
+type inLoop struct{}
 
 // Loop is a convenience wrapper to automatically retry idempotent
 // database operations that experience a transaction or a connection
@@ -62,16 +62,14 @@ var inLoop struct{}
 // suppressed within an inner loop, allowing the retryable error to
 // percolate into the outer loop.
 func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) error) error {
-	top := ctx.Value(inLoop) == nil
-	if !top {
-		var sideEffect Marker
-		return fn(ctx, &sideEffect)
+	if outerMarker, ok := ctx.Value(inLoop{}).(*Marker); ok {
+		return fn(ctx, outerMarker)
 	}
 
-	ctx = context.WithValue(ctx, inLoop, inLoop)
+	var sideEffect Marker
+	ctx = context.WithValue(ctx, inLoop{}, &sideEffect)
 	actionsCount.Inc()
 	for {
-		var sideEffect Marker
 		err := fn(ctx, &sideEffect)
 		if err == nil || sideEffect.Marked() {
 			return err

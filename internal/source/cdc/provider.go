@@ -44,6 +44,7 @@ func ProvideMetaTable(cfg *Config) MetaTable {
 func ProvideResolvers(
 	ctx context.Context,
 	cfg *Config,
+	leases types.Leases,
 	metaTable MetaTable,
 	pool *pgxpool.Pool,
 	stagers types.Stagers,
@@ -55,6 +56,7 @@ func ProvideResolvers(
 
 	ret := &Resolvers{
 		cfg:       cfg,
+		leases:    leases,
 		metaTable: metaTable.Table(),
 		pool:      pool,
 		stagers:   stagers,
