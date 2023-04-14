@@ -86,11 +86,14 @@ func (b *bucket) Enqueue(stamp stamp.Stamp, mut types.Mutation) error {
 		return errors.New("the bucket has been stopped")
 	}
 
+	toQueue := newBatch(stamp, mut)
+
 	// Apply backpressure based on the number of bytes in the mutations.
-	toAcquire := mutationWeight(mut)
-	// This should succeed in the majority case.  If not, the target
-	// cluster is likely under-sized or the connection pool is too
-	// small.
+	// This call to TryAcquire should succeed in the majority case.  If
+	// not, the target cluster is likely under-sized or the connection
+	// pool is too small. The weights of batches are preserved across
+	// any coalescing that may occur in the subsequent call to Enqueue.
+	toAcquire := toQueue.Weight()
 	if !b.backpressure.TryAcquire(toAcquire) {
 		log.Debugf("applying backpressure for %d bytes", toAcquire)
 		backpressureEncountered.Inc()
@@ -102,7 +105,7 @@ func (b *bucket) Enqueue(stamp stamp.Stamp, mut types.Mutation) error {
 		log.Debugf("backpressure relieved")
 	}
 
-	return b.mu.work.Enqueue(newBatch(stamp, mut))
+	return b.mu.work.Enqueue(toQueue)
 }
 
 // Flush requests the bucket to flush any in-memory data it has. Results
@@ -197,7 +200,7 @@ func (b *bucket) flushOneBatch(ctx context.Context) (more bool, _ error) {
 
 	toApply := peeked.(*stampedBatch)
 
-	muts := toApply.Pick()
+	muts, weight := toApply.Pick()
 	if err := b.applier.Apply(ctx, b.pool, muts); err != nil {
 		return false, err
 	}
@@ -209,20 +212,11 @@ func (b *bucket) flushOneBatch(ctx context.Context) (more bool, _ error) {
 	b.mu.Unlock()
 
 	// Release backpressure bytes in shared semaphore.
-	toRelease := int64(0)
-	for _, mut := range muts {
-		toRelease += mutationWeight(mut)
-	}
-	b.backpressure.Release(toRelease)
+	b.backpressure.Release(weight)
 
 	// Sanity-check that we drained the correct element.
 	if toApply != drained.(*stampedBatch) {
 		return false, errors.New("did not drain expected element")
 	}
 	return more, nil
-}
-
-// mutationWeight computes a weight to use for generating backpressure.
-func mutationWeight(mut types.Mutation) int64 {
-	return int64(len(mut.Data)) + int64(len(mut.Key))
 }
