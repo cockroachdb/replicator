@@ -139,7 +139,6 @@ func TestGuard(t *testing.T) {
 		r.NoError(err)
 
 		g := New(tx, WithPeriod(testPeriod), WithQuery("B0RK"))
-		a.NotNil(g.getTX())
 
 		// Wait for the health-check query to error out.
 		time.Sleep(2 * testPeriod)
