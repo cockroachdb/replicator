@@ -35,9 +35,9 @@ var _ Events = (*serialEvents)(nil)
 
 // AwaitConsistentPoint implements State.  It delegates to the loop.
 func (e *serialEvents) AwaitConsistentPoint(
-	ctx context.Context, point stamp.Stamp,
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
 ) (stamp.Stamp, error) {
-	return e.loop.AwaitConsistentPoint(ctx, point)
+	return e.loop.AwaitConsistentPoint(ctx, comparison, point)
 }
 
 // Backfill implements Events. It delegates to the enclosing loop.

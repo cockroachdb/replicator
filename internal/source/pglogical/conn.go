@@ -234,7 +234,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 
 // ZeroStamp implements Dialect.
 func (c *conn) ZeroStamp() stamp.Stamp {
-	return lsnStamp{}
+	return &lsnStamp{}
 }
 
 // decodeMutation converts the incoming tuple data into a Mutation.

@@ -69,8 +69,7 @@ type resolvedStamp struct {
 
 	mu struct {
 		sync.Mutex
-		lease types.Lease // See note in [resolver.readIntoOnce].
-		tx    *txguard.Guard
+		tx *txguard.Guard
 	}
 }
 
@@ -94,19 +93,7 @@ func (s *resolvedStamp) Commit(ctx context.Context) error {
 		err = errors.WithStack(tx.Commit(ctx))
 	}
 
-	if lease := s.mu.lease; lease != nil {
-		s.mu.lease = nil
-		lease.Release()
-	}
-
 	return err
-}
-
-// Context returns a context whose lifetime is bound to the lease.
-func (s *resolvedStamp) Context() context.Context {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.mu.lease.Context()
 }
 
 // IsAlive returns any pending error from the transaction-keepalive
@@ -119,10 +106,7 @@ func (s *resolvedStamp) IsAlive() error {
 	if tx == nil {
 		return errors.New("resolved-timestamp transaction owned by later stamp")
 	}
-	if err := tx.IsAlive(); err != nil {
-		return err
-	}
-	return s.mu.lease.Context().Err()
+	return tx.IsAlive()
 }
 
 // Less implements stamp.Stamp.
@@ -146,9 +130,7 @@ func (s *resolvedStamp) NewCommitted() (*resolvedStamp, error) {
 
 // NewProposed returns a new resolvedStamp that extends the existing
 // stamp with a later proposed timestamp.
-func (s *resolvedStamp) NewProposed(
-	tx *txguard.Guard, proposed hlc.Time, lease types.Lease,
-) (*resolvedStamp, error) {
+func (s *resolvedStamp) NewProposed(tx *txguard.Guard, proposed hlc.Time) (*resolvedStamp, error) {
 	if hlc.Compare(proposed, s.CommittedTime) < 0 {
 		return nil, errors.Errorf("proposed cannot roll back committed time: %s vs %s",
 			proposed, s.CommittedTime)
@@ -170,7 +152,6 @@ func (s *resolvedStamp) NewProposed(
 		ProposedTime:  proposed,
 	}
 	// We don't call handoff here, since we have a new transaction.
-	ret.mu.lease = lease
 	ret.mu.tx = tx
 	return ret, nil
 }
@@ -216,10 +197,6 @@ func (s *resolvedStamp) Rollback() {
 		tx.Rollback()
 		s.mu.tx = nil
 	}
-	if lease := s.mu.lease; lease != nil {
-		lease.Release()
-		s.mu.lease = nil
-	}
 }
 
 // String is for debugging use only.
@@ -238,11 +215,6 @@ func (s *resolvedStamp) handoff(next *resolvedStamp) *resolvedStamp {
 	if tx := s.mu.tx; tx != nil {
 		next.mu.tx = tx
 		s.mu.tx = nil
-	}
-
-	if lease := s.mu.lease; lease != nil {
-		next.mu.lease = lease
-		s.mu.lease = nil
 	}
 
 	return next

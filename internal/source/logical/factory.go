@@ -13,7 +13,6 @@ package logical
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
@@ -120,13 +119,12 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		dialect = WithChaos(dialect, config.ChaosProb)
 	}
 	loop := &loop{
-		config:          config,
-		dialect:         dialect,
-		factory:         f,
-		memo:            f.memo,
-		standbyDeadline: time.Now().Add(config.StandbyTimeout),
-		stopped:         make(chan struct{}),
-		targetPool:      f.pool,
+		config:     config,
+		dialect:    dialect,
+		factory:    f,
+		memo:       f.memo,
+		stopped:    make(chan struct{}),
+		targetPool: f.pool,
 	}
 	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
 	initialPoint, err := loop.loadConsistentPoint(ctx)
