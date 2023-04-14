@@ -54,7 +54,7 @@ var (
 
 func (d *chaosBackfiller) BackfillInto(ctx context.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {
-		return errors.WithMessage(ErrChaos, "BackfillInto")
+		return doChaos("BackfillInto")
 	}
 	return d.delegate.BackfillInto(ctx, ch, state)
 }
@@ -76,7 +76,7 @@ func (d *chaosDialect) OnConsistent(cp stamp.Stamp) error {
 	if real, ok := d.delegate.(ConsistentCallback); ok {
 		// Only return a chaos error if the real dialect can fail out.
 		if rand.Float32() < d.prob {
-			return errors.WithMessage(ErrChaos, "OnConsistent")
+			return doChaos("OnConsistent")
 		}
 		return real.OnConsistent(cp)
 	}
@@ -85,14 +85,14 @@ func (d *chaosDialect) OnConsistent(cp stamp.Stamp) error {
 
 func (d *chaosDialect) ReadInto(ctx context.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {
-		return errors.WithMessage(ErrChaos, "ReadInto")
+		return doChaos("ReadInto")
 	}
 	return d.delegate.ReadInto(ctx, ch, state)
 }
 
 func (d *chaosDialect) Process(ctx context.Context, ch <-chan Message, events Events) error {
 	if rand.Float32() < d.prob {
-		return errors.WithMessage(ErrChaos, "Process")
+		return doChaos("Process")
 	}
 	return d.delegate.Process(ctx, ch, &chaosEvents{events, d.prob})
 }
@@ -111,16 +111,16 @@ var _ Events = (*chaosEvents)(nil)
 // AwaitConsistentPoint implements State. It delegates to the loop and
 // never injects an error.
 func (e *chaosEvents) AwaitConsistentPoint(
-	ctx context.Context, point stamp.Stamp,
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
 ) (stamp.Stamp, error) {
-	return e.delegate.AwaitConsistentPoint(ctx, point)
+	return e.delegate.AwaitConsistentPoint(ctx, comparison, point)
 }
 
 func (e *chaosEvents) Backfill(
 	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
 ) error {
 	if rand.Float32() < e.prob {
-		return errors.WithMessage(ErrChaos, "Backfill")
+		return doChaos("Backfill")
 	}
 	return e.delegate.Backfill(ctx, loopName, backfiller, options...)
 }
@@ -135,14 +135,14 @@ func (e *chaosEvents) GetTargetDB() ident.Ident {
 
 func (e *chaosEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 	if rand.Float32() < e.prob {
-		return errors.WithMessage(ErrChaos, "OnBegin")
+		return doChaos("OnBegin")
 	}
 	return e.delegate.OnBegin(ctx, point)
 }
 
 func (e *chaosEvents) OnCommit(ctx context.Context) error {
 	if rand.Float32() < e.prob {
-		return errors.WithMessage(ErrChaos, "OnCommit")
+		return doChaos("OnCommit")
 	}
 	return e.delegate.OnCommit(ctx)
 }
@@ -151,18 +151,23 @@ func (e *chaosEvents) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	if rand.Float32() < e.prob {
-		return errors.WithMessage(ErrChaos, "OnData")
+		return doChaos("OnData")
 	}
 	return e.delegate.OnData(ctx, source, target, muts)
 }
 
 func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
 	if rand.Float32() < e.prob {
-		return errors.WithMessage(ErrChaos, "OnRollback")
+		return doChaos("OnRollback")
 	}
 	return e.delegate.OnRollback(ctx, msg)
 }
 
 func (e *chaosEvents) stop() {
 	e.delegate.stop()
+}
+
+// doChaos is a convenient place to set a breakpoint.
+func doChaos(msg string) error {
+	return errors.WithMessage(ErrChaos, msg)
 }
