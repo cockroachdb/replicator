@@ -36,9 +36,9 @@ var _ Events = (*fanEvents)(nil)
 
 // AwaitConsistentPoint implements State.  It delegates to the loop.
 func (f *fanEvents) AwaitConsistentPoint(
-	ctx context.Context, point stamp.Stamp,
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
 ) (stamp.Stamp, error) {
-	return f.loop.AwaitConsistentPoint(ctx, point)
+	return f.loop.AwaitConsistentPoint(ctx, comparison, point)
 }
 
 // Backfill implements Events. It delegates to the enclosing loop.

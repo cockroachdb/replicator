@@ -74,6 +74,7 @@ var (
 	_ logical.Backfiller         = (*resolver)(nil)
 	_ logical.ConsistentCallback = (*resolver)(nil)
 	_ logical.Dialect            = (*resolver)(nil)
+	_ logical.Lessor             = (*resolver)(nil)
 )
 
 func newResolver(
@@ -106,6 +107,11 @@ func newResolver(
 	ret.sql.record = fmt.Sprintf(recordTemplate, metaTable)
 
 	return ret, nil
+}
+
+// Acquire a lease for the destination schema.
+func (r *resolver) Acquire(ctx context.Context) (types.Lease, error) {
+	return r.leases.Acquire(ctx, r.target.Raw())
 }
 
 // This query conditionally inserts a new mark for a target schema if
@@ -231,20 +237,6 @@ func (r *resolver) readInto(
 func (r *resolver) readIntoOnce(
 	ctx context.Context, ch chan<- logical.Message, prev *resolvedStamp, backfill bool,
 ) error {
-	// Acquire a lease for the destination schema.
-	//
-	// This exists as a workaround for SELECT FOR UPDATE only using
-	// un-replicated locks. When the linked issue is closed, this
-	// hack can be removed.
-	//
-	// https://github.com/cockroachdb/cockroach/issues/100194
-	lease, err := r.leases.Acquire(ctx, r.target.Raw())
-	if errors.Is(err, &types.LeaseBusyError{}) {
-		return errBlocked
-	} else if err != nil {
-		return err
-	}
-
 	// This transaction will be used to hold a SELECT FOR UPDATE lock on
 	// the next resolved timestamp to be processed. It will eventually
 	// be committed in OnConsistent.
@@ -264,7 +256,6 @@ func (r *resolver) readIntoOnce(
 	defer func() {
 		if !sentWork {
 			guard.Rollback()
-			lease.Release()
 		}
 	}()
 
@@ -279,7 +270,7 @@ func (r *resolver) readIntoOnce(
 	}
 
 	// Create a new marker that verifies that we're rolling forward.
-	work, err := prev.NewProposed(guard, nextResolved, lease)
+	work, err := prev.NewProposed(guard, nextResolved)
 
 	// It's possible that the call to Begin() above occurs prior to the
 	// previous resolved-timestamp transaction committing.
@@ -329,7 +320,7 @@ func (r *resolver) Process(
 		}
 
 		var err error
-		rs, err = r.process(msg.(*resolvedStamp), events)
+		rs, err = r.process(ctx, msg.(*resolvedStamp), events)
 		if err != nil {
 			return err
 		}
@@ -395,11 +386,9 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 // process makes incremental progress in fulfilling the given
 // resolvedStamp. It returns the state to which the resolved timestamp
 // has been advanced.
-func (r *resolver) process(rs *resolvedStamp, events logical.Events) (*resolvedStamp, error) {
-	// Use a context that will be canceled if the associated lease
-	// cannot be renewed.
-	ctx := rs.Context()
-
+func (r *resolver) process(
+	ctx context.Context, rs *resolvedStamp, events logical.Events,
+) (*resolvedStamp, error) {
 	start := time.Now()
 	targets := r.watcher.Snapshot(r.target).Order
 
@@ -451,7 +440,7 @@ func (r *resolver) process(rs *resolvedStamp, events logical.Events) (*resolvedS
 					if err := events.OnCommit(ctx); err != nil {
 						return err
 					}
-					if _, err := events.AwaitConsistentPoint(ctx, rs); err != nil {
+					if _, err := events.AwaitConsistentPoint(ctx, logical.AwaitGTE, rs); err != nil {
 						return errors.Wrapf(err,
 							"consistent point failed to advance within %s", r.cfg.ApplyTimeout)
 					}

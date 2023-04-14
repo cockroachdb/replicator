@@ -99,7 +99,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	go func() {
 		defer close(endConsistent)
 
-		found, err := loop.AwaitConsistentPoint(ctx, &fakeMessage{Index: numEmits - 1})
+		found, err := loop.AwaitConsistentPoint(ctx, logical.AwaitGTE, &fakeMessage{Index: numEmits - 1})
 		if a.NoError(err) {
 			endConsistent <- found
 		}

@@ -38,9 +38,11 @@ type Loop struct {
 }
 
 // AwaitConsistentPoint waits until the consistent point has advanced to
-// the requested value or until the context is cancelled..
-func (l *Loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error) {
-	return l.loop.AwaitConsistentPoint(ctx, point)
+// the requested value or until the context is cancelled.
+func (l *Loop) AwaitConsistentPoint(
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
+) (stamp.Stamp, error) {
+	return l.loop.AwaitConsistentPoint(ctx, comparison, point)
 }
 
 // Dialect returns the logical.Dialect in use.
@@ -82,10 +84,8 @@ type loop struct {
 	// The Factory that created the loop.
 	factory *Factory
 	// Optional checkpoint saved into the target database
-	memo types.Memo
-	// Tracks when it is time to update the consistentPoint.
-	standbyDeadline time.Time
-	stopped         chan struct{}
+	memo    types.Memo
+	stopped chan struct{}
 	// Used to update the consistentPoint in the target database.
 	targetPool pgxtype.Querier
 
@@ -140,13 +140,9 @@ func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 	l.consistentPoint.stamp = p
 	l.consistentPoint.Broadcast()
 
-	if time.Now().Before(l.standbyDeadline) {
-		return nil
-	}
 	if err := l.storeConsistentPoint(p); err != nil {
 		return errors.Wrap(err, "could not persistent consistent point")
 	}
-	l.standbyDeadline = time.Now().Add(l.config.StandbyTimeout)
 	log.Tracef("Saved checkpoint for %s", l.config.LoopName)
 	return nil
 }
@@ -162,12 +158,12 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	)
 }
 
-// AwaitConsistentPoint blocks until the consistent point is greater
-// than or equal to the given stamp or until the context is cancelled.
-// The consistent point that matches the condition will be returned.
-func (l *loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error) {
+// AwaitConsistentPoint implements State.
+func (l *loop) AwaitConsistentPoint(
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
+) (stamp.Stamp, error) {
 	// Fast-path
-	if found := l.GetConsistentPoint(); stamp.Compare(found, point) >= 0 {
+	if found := l.GetConsistentPoint(); stamp.Compare(found, point) >= int(comparison) {
 		return found, nil
 	}
 
@@ -177,13 +173,10 @@ func (l *loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (sta
 		defer close(result)
 		l.consistentPoint.L.Lock()
 		defer l.consistentPoint.L.Unlock()
-		for {
+		for ctx.Err() == nil {
 			found := l.consistentPoint.stamp
-			if stamp.Compare(found, point) >= 0 {
-				select {
-				case result <- found:
-				case <-ctx.Done():
-				}
+			if stamp.Compare(found, point) >= int(comparison) {
+				result <- found
 				return
 			}
 			l.consistentPoint.Wait()
@@ -192,8 +185,15 @@ func (l *loop) AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (sta
 
 	select {
 	case found := <-result:
+		// We know that the goroutine above must have exited.
 		return found, nil
+
 	case <-ctx.Done():
+		// Ensure that the goroutine above can exit.
+		l.consistentPoint.L.Lock()
+		l.consistentPoint.Broadcast()
+		l.consistentPoint.L.Unlock()
+
 		return nil, ctx.Err()
 	}
 }
@@ -216,9 +216,7 @@ func (l *loop) run(ctx context.Context) {
 	defer close(l.stopped)
 
 	for {
-		// Determine how to perform the filling.
-		source, events, isBackfilling := l.chooseFillStrategy()
-		err := l.runOnce(ctx, source, events, isBackfilling)
+		err := l.runOnce(ctx)
 
 		// If the outer context is done, just return.
 		if ctx.Err() != nil {
@@ -226,14 +224,13 @@ func (l *loop) run(ctx context.Context) {
 			return
 		}
 
-		// Clean exit, likely switching modes.
-		if err == nil {
-			continue
+		// Otherwise, log any error, and sleep for a bit.
+		if err != nil {
+			log.WithError(err).Errorf("error in replication loop %s; retrying in %s",
+				l.config.LoopName, l.config.RetryDelay)
 		}
 
-		// Otherwise, log the error, and sleep for a bit.
-		log.WithError(err).Errorf("error in replication loop %s; retrying in %s",
-			l.config.LoopName, l.config.RetryDelay)
+		// On a clean exit, we still want to sleep for a bit.
 		select {
 		case <-time.After(l.config.RetryDelay):
 		case <-ctx.Done():
@@ -242,8 +239,47 @@ func (l *loop) run(ctx context.Context) {
 	}
 }
 
-// runOnce is called by run or by doBackfill.
-func (l *loop) runOnce(
+// runOnce is called by run.
+func (l *loop) runOnce(ctx context.Context) error {
+	if lessor, ok := l.dialect.(Lessor); ok {
+		lease, err := lessor.Acquire(ctx)
+		if err != nil {
+			// Mask lease-busy error.  We'll just try again later.
+			if errors.As(err, (*types.LeaseBusyError)(nil)) {
+				return nil
+			}
+			return err
+		}
+		defer lease.Release()
+		// Ensure that all work is bound to the lifetime of the lease.
+		ctx = lease.Context()
+	}
+
+	// Ensure our in-memory consistent point matches the database.
+	point, err := l.loadConsistentPoint(ctx)
+	if err != nil {
+		return err
+	}
+	l.consistentPoint.L.Lock()
+	l.consistentPoint.stamp = point
+	l.consistentPoint.L.Unlock()
+
+	// Determine how to perform the filling.
+	source, events, isBackfilling := l.chooseFillStrategy()
+	// Ensure that we're in a clear state when recovering.
+	defer events.stop()
+
+	if err := l.runOnceUsing(ctx, source, events, isBackfilling); err != nil {
+		return err
+	}
+
+	// Ensure that the latest point has been saved on a clean exit.
+	return errors.Wrapf(l.storeConsistentPoint(l.GetConsistentPoint()),
+		"could not save consistent point for %s", l.config.LoopName)
+}
+
+// runOnceUsing is called from runOnce or doBackfill.
+func (l *loop) runOnceUsing(
 	ctx context.Context, source fillFn, events Events, isBackfilling bool,
 ) error {
 	if isBackfilling {
@@ -252,12 +288,9 @@ func (l *loop) runOnce(
 		l.metrics.backfillStatus.Set(0)
 	}
 
-	// Ensure that we're in a clear state when recovering.
-	defer events.stop()
-
-	groupCtx, cancelGroup := context.WithCancel(ctx)
-	defer cancelGroup()
-	group, groupCtx := errgroup.WithContext(groupCtx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	group, ctx := errgroup.WithContext(ctx)
 
 	// Start a background goroutine to maintain the replication
 	// connection. This source goroutine is set up to be robust; if
@@ -266,13 +299,13 @@ func (l *loop) runOnce(
 	ch := make(chan Message, 16)
 	group.Go(func() error {
 		defer close(ch)
-		for groupCtx.Err() == nil {
-			err := source(groupCtx, ch, events)
+		for ctx.Err() == nil {
+			err := source(ctx, ch, events)
 
 			// Return if the source closed cleanly (we may switch
 			// from backfill to streaming modes) or if the outer
 			// context is being shut down.
-			if err == nil || groupCtx.Err() != nil {
+			if err == nil || ctx.Err() != nil {
 				return nil
 			}
 
@@ -285,7 +318,7 @@ func (l *loop) runOnce(
 			select {
 			case ch <- msgRollback:
 				continue
-			case <-groupCtx.Done():
+			case <-ctx.Done():
 				return nil
 			}
 		}
@@ -296,10 +329,10 @@ func (l *loop) runOnce(
 	// database. It is fragile, when it errors, we need to also
 	// restart the source goroutine.
 	group.Go(func() error {
-		err := l.dialect.Process(groupCtx, ch, events)
+		err := l.dialect.Process(ctx, ch, events)
 
 		// As above.
-		if err == nil || groupCtx.Err() != nil {
+		if err == nil || ctx.Err() != nil {
 			return nil
 		}
 
@@ -309,47 +342,52 @@ func (l *loop) runOnce(
 		return err
 	})
 
-	// If we're in backfill mode, start a goroutine to stop the backfill
-	// process once we've caught up. This routine never errors out, and
-	// we don't need to wait for it below.
-	if isBackfilling {
-		go func() {
-			defer cancelGroup()
+	// Toggle backfilling mode as necessary by canceling the work
+	// context. This will restart the loop, choosing the appropriate
+	// replication mode.
+	_, canBackfill := l.dialect.(Backfiller)
+	canBackfill = canBackfill && l.config.BackfillWindow > 0
+	if isBackfilling || canBackfill {
+		group.Go(func() error {
+			defer cancel()
 
-			l.consistentPoint.L.Lock()
-			defer l.consistentPoint.L.Unlock()
-			for groupCtx.Err() == nil {
-				ts := l.consistentPoint.stamp.(TimeStamp).AsTime()
-				if time.Since(ts) < l.config.BackfillWindow {
-					log.WithFields(log.Fields{
-						"loop": l.config.LoopName,
-						"ts":   ts,
-					}).Debug("backfill has caught up")
-					return
+			point := l.dialect.ZeroStamp()
+			for {
+				// Wait for the consistent point to advance. This method
+				// only returns an error if the context has been
+				// canceled.
+				point, _ = l.AwaitConsistentPoint(ctx, AwaitGT, point)
+				if ctx.Err() != nil {
+					return nil
 				}
-				l.consistentPoint.Wait()
+				ts, ok := point.(TimeStamp)
+				if !ok {
+					log.Warn("dialect implements Backfiller, but doesn't use TimeStamp stamps")
+					return nil
+				}
+				delta := time.Since(ts.AsTime())
+				if isBackfilling {
+					if delta < l.config.BackfillWindow {
+						log.WithFields(log.Fields{
+							"loop": l.config.LoopName,
+							"ts":   ts,
+						}).Debug("backfill has caught up")
+						return nil
+					}
+				} else if canBackfill {
+					if delta > l.config.BackfillWindow {
+						log.WithFields(log.Fields{
+							"loop": l.config.LoopName,
+							"ts":   ts,
+						}).Warn("replication has fallen behind, switching to backfill mode")
+						return nil
+					}
+				}
 			}
-		}()
-
-		// When the group context has closed, we want to perform a
-		// broadcast on the consistent point, to ensure that the above
-		// goroutine doesn't become blocked on the call to Wait().
-		go func() {
-			<-groupCtx.Done()
-			l.consistentPoint.L.Lock()
-			defer l.consistentPoint.L.Unlock()
-			l.consistentPoint.Broadcast()
-		}()
+		})
 	}
 
-	groupErr := group.Wait()
-	// Ensure that the latest point has been saved on a clean exit.
-	if groupErr == nil {
-		if err := l.storeConsistentPoint(l.GetConsistentPoint()); err != nil {
-			log.WithError(err).Warnf("could not save consistent point for %s", l.config.LoopName)
-		}
-	}
-	return groupErr
+	return group.Wait()
 }
 
 type fillFn = func(context.Context, chan<- Message, State) error
@@ -407,5 +445,5 @@ func (l *loop) doBackfill(
 		return err
 	}
 
-	return filler.loop.runOnce(ctx, backfiller.BackfillInto, filler.loop.events.fan, true)
+	return filler.loop.runOnceUsing(ctx, backfiller.BackfillInto, filler.loop.events.fan, true)
 }

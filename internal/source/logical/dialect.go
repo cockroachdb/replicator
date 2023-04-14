@@ -72,6 +72,17 @@ type Dialect interface {
 	ZeroStamp() stamp.Stamp
 }
 
+// Lessor is an optional Dialect capability when the Dialect requires an
+// external lock to ensure correctness if multiple instances of cdc-sink
+// are running.
+type Lessor interface {
+	// Acquire should return a lease used to control when a specific
+	// replication loop is allowed to run. A error of
+	// [types.LeaseBusyError] will trigger a sleep behavior before
+	// attempting to reacquire the lease.
+	Acquire(ctx context.Context) (types.Lease, error)
+}
+
 // A Message is specific to a Dialect.
 type Message any
 
@@ -113,13 +124,25 @@ type Events interface {
 	stop()
 }
 
+// AwaitComparison is used with [State.AwaitConsistentPoint].
+type AwaitComparison int
+
+const (
+	// AwaitGTE waits until the consistent point is greater than or
+	// equal to some other point.
+	AwaitGTE AwaitComparison = 0
+	// AwaitGT waits until the consistent point is greater than some
+	// other point.
+	AwaitGT AwaitComparison = 1
+)
+
 // State provides information about a replication loop.
 type State interface {
-	// AwaitConsistentPoint blocks until the consistent point is greater
-	// than or equal to the given stamp or until the context is
-	// cancelled. The consistent point that matches the condition will
-	// be returned.
-	AwaitConsistentPoint(ctx context.Context, point stamp.Stamp) (stamp.Stamp, error)
+	// AwaitConsistentPoint blocks until the current consistent point
+	// satisfies the comparison with the given stamp or until the
+	// context is cancelled. A consistent point that matches the
+	// condition will be returned.
+	AwaitConsistentPoint(ctx context.Context, comparison AwaitComparison, point stamp.Stamp) (stamp.Stamp, error)
 	// GetConsistentPoint returns the most recent consistent point that
 	// has been committed to the target database or the value returned
 	// from Dialect.ZeroStamp.
