@@ -92,8 +92,8 @@ The behavior described above, staging and application as two phases, ensures tha
 will be in a transactionally-consistent state with respect to the source database. This is desirable
 in a steady-state configuration, however it imposes limitations on the maximum throughput or
 transaction size that `cdc-sink` is able to achieve. In situations where a large volume or a high
-rate of data must be transferred, e.g.: an initial CDC `CHANGEFEED` backfill, the changefeed may be
-created with the `?immediate=true` query parameter in order to apply all mutations to the target
+rate of data must be transferred, e.g.: an initial CDC `CHANGEFEED` backfill, the server may be
+started with the `--immediate` command-line parameter in order to apply all mutations to the target
 table without staging them.
 
 `cdc-sink` relies heavily upon the delivery guarantees provided by a CockroachDB `CHANGEFEED`. When
