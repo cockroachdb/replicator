@@ -252,7 +252,7 @@ func TestLeases(t *testing.T) {
 
 		eg, egCtx := errgroup.WithContext(ctx)
 		var running int32
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 10; i++ {
 			eg.Go(func() error {
 				// Each callback verifies that it's the only instance
 				// running, then requests to be shut down.

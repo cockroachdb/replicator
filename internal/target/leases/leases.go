@@ -153,7 +153,7 @@ func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) 
 
 	ret := &leaseFacade{
 		cancel: func() {
-			_, _ = l.release(ctx, leaseRow)
+			_, _ = l.release(context.Background(), leaseRow)
 			cancel()
 		},
 		ctx: ctx,
@@ -167,7 +167,7 @@ func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) 
 // Singleton executes a callback when the named lease is acquired.
 //
 // The lease will be released in the following circumstances:
-//   - The callback returns nil.
+//   - The callback function returns.
 //   - The lease cannot be renewed before it expires.
 //   - The outer context is canceled.
 //
@@ -177,50 +177,47 @@ func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) 
 // re-acquired.
 func (l *leases) Singleton(ctx context.Context, name string, fn func(ctx context.Context) error) {
 	// It's easier to ensure cleanup behavior using defer keyword. This
-	// function returns false when the singleton should be torn down.
-	loopBehavior := func() bool {
+	// function returns -1 when the singleton should be torn down.
+	// Otherwise, it returns the expected delay between retries.
+	loopBehavior := func() time.Duration {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-		tgt, ok := l.waitToAcquire(ctx, name)
-		if !ok {
-			// Context cancellation.
-			return false
+		lease, err := l.Acquire(ctx, name)
+		if err != nil {
+			if _, busy := types.IsLeaseBusy(err); busy {
+				log.WithField("lease", name).Trace("lease is busy, waiting")
+				// Jitter the polling time to even out the load.
+				return l.cfg.Poll + time.Duration(rand.Int31n(10))*time.Millisecond
+			}
+
+			log.WithField("lease", name).WithError(err).Error("unable to acquire lease")
+			return l.cfg.RetryDelay
 		}
-
-		// Try to clean up, if possible. This uses a background context
-		// so that the release code will still run if the outer context
-		// was cancelled.
-		defer func() {
-			_, _ = l.release(context.Background(), tgt)
-		}()
-
-		// Create a channel to delay the return from this function until
-		// we know that the renewal goroutine has shut down.
-		renewStopped := make(chan struct{})
-		go func() {
-			l.keepRenewed(ctx, tgt)
-			cancel()
-			close(renewStopped)
-		}()
+		defer lease.Release()
 
 		// Execute the callback.
-		err := fn(ctx)
-
-		// Ensure the renewal goroutine has stopped.
-		cancel()
-		<-renewStopped
+		err = fn(lease.Context())
 
 		if errors.Is(err, types.ErrCancelSingleton) || errors.Is(err, context.Canceled) {
 			log.WithField("lease", name).Trace("callback requested shutdown or was canceled")
-			return false
+			return -1
 		}
 		log.WithField("lease", name).WithError(err).Error("lease callback exited; continuing")
-		return true
+		return l.cfg.RetryDelay
 	}
 
-	for loopBehavior() {
-		time.Sleep(l.cfg.RetryDelay)
+	for {
+		delay := loopBehavior()
+		if delay < 0 {
+			// Clean exit.
+			return
+		}
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
