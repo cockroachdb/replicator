@@ -62,14 +62,16 @@ func TestLeases(t *testing.T) {
 		a.NotZero(initial)
 
 		// Acquiring at the same time should not do anything.
-		_, ok, err = l.tryAcquire(ctx, t.Name(), now)
+		blocked, ok, err := l.tryAcquire(ctx, t.Name(), now)
 		a.NoError(err)
 		a.False(ok)
+		a.Equal(initial.expires, blocked.expires)
 
 		// Acquire within the validity period should be a no-op.
-		_, ok, err = l.tryAcquire(ctx, t.Name(), now.Add(l.cfg.Lifetime/2))
+		blocked, ok, err = l.tryAcquire(ctx, t.Name(), now.Add(l.cfg.Lifetime/2))
 		a.NoError(err)
 		a.False(ok)
+		a.Equal(initial.expires, blocked.expires)
 
 		// Acquire at the expiration time should succeed.
 		next, ok, err := l.tryAcquire(ctx, t.Name(), now.Add(l.cfg.Lifetime))
@@ -81,9 +83,10 @@ func TestLeases(t *testing.T) {
 		}
 
 		// Acquire within the extended lifetime should be a no-op.
-		_, ok, err = l.tryAcquire(ctx, t.Name(), now.Add(2*l.cfg.Lifetime/3))
+		blocked, ok, err = l.tryAcquire(ctx, t.Name(), now.Add(2*l.cfg.Lifetime/3))
 		a.NoError(err)
 		a.False(ok)
+		a.Equal(next.expires, blocked.expires)
 	})
 
 	t.Run("tryRelease", func(t *testing.T) {
@@ -279,7 +282,9 @@ func TestLeases(t *testing.T) {
 
 		// Verify that a duplicate fails.
 		_, err = l.Acquire(ctx, t.Name())
-		a.ErrorIs(err, &types.LeaseBusyError{})
+		if busy, ok := types.IsLeaseBusy(err); a.True(ok) {
+			a.NotZero(busy.Expiration)
+		}
 
 		// Verify that releasing cancels the lease.
 		a.Nil(facade.Context().Err())

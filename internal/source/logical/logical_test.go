@@ -71,7 +71,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 
 	var dialect logical.Dialect = gen
 	if withChaos {
-		dialect = logical.WithChaos(gen, 0.01)
+		dialect = logical.WithChaos(gen, 0.05)
 	}
 
 	cfg := &logical.BaseConfig{

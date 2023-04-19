@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/google/uuid"
 	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -138,23 +137,23 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 
 // Acquire the named lease, keep it alive, and return a facade.
 func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) {
-	acquired, ok, err := l.acquire(ctx, name)
+	leaseRow, ok, err := l.acquire(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, &types.LeaseBusyError{}
+		return nil, &types.LeaseBusyError{Expiration: leaseRow.expires}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
-		l.keepRenewed(ctx, acquired)
+		l.keepRenewed(ctx, leaseRow)
 		cancel()
 	}()
 
 	ret := &leaseFacade{
 		cancel: func() {
-			_, _ = l.release(ctx, acquired)
+			_, _ = l.release(ctx, leaseRow)
 			cancel()
 		},
 		ctx: ctx,
@@ -318,10 +317,12 @@ func (l *leases) keepRenewed(ctx context.Context, tgt lease) lease {
 }
 
 // acquire returns a non-nil lease if it was able to acquire the named lease.
-func (l *leases) acquire(ctx context.Context, name string) (acquired lease, ok bool, err error) {
+func (l *leases) acquire(
+	ctx context.Context, name string,
+) (leaseRow lease, acquired bool, err error) {
 	err = retry.Retry(ctx, func(ctx context.Context) error {
 		var err error
-		acquired, ok, err = l.tryAcquire(ctx, name, time.Now())
+		leaseRow, acquired, err = l.tryAcquire(ctx, name, time.Now())
 		return err
 	})
 	return
@@ -341,35 +342,44 @@ const acquireTemplate = `
 WITH
   proposed (name, expires, nonce) AS (VALUES ($1::STRING, $2::TIMESTAMP, gen_random_uuid())),
   blocking AS (
-    SELECT 1
+    SELECT x.expires
     FROM %[1]s x
     JOIN proposed USING (name)
     WHERE x.expires > $3::TIMESTAMP
-    LIMIT 1)
-UPSERT INTO %[1]s 
-  SELECT name, expires, nonce
-  FROM proposed
-  WHERE (SELECT count(*) FROM blocking) = 0
-  RETURNING nonce
+    FOR UPDATE
+    LIMIT 1),
+  acquired AS (
+    UPSERT INTO %[1]s
+    SELECT name, expires, nonce
+    FROM proposed
+    WHERE (SELECT count(*) FROM blocking) = 0
+    RETURNING nonce)
+SELECT (SELECT expires FROM blocking), (SELECT nonce FROM acquired)
 `
 
-// tryAcquire returns a non-nil lease if it was able to acquire the named lease.
+// tryAcquire returns the current state of the named lease in the
+// database. The ok value will be true if this call acquired the lease.
 func (l *leases) tryAcquire(
 	ctx context.Context, name string, now time.Time,
-) (acquired lease, ok bool, err error) {
-	now = now.UTC()
+) (leaseRow lease, acquired bool, err error) {
+	// We only have millisecond-level resolution in the db.
+	now = now.UTC().Round(time.Millisecond)
 	expires := now.Add(l.cfg.Lifetime)
+	var blockedUntil *time.Time
 	var nonce uuid.UUID
 
 	// Explicit call to Format needed for compatibility with CRDB 20.2.
-	row := l.cfg.Pool.QueryRow(ctx, l.sql.acquire, name,
-		expires.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
-	if err := row.Scan(&nonce); errors.Is(err, pgx.ErrNoRows) {
-		return lease{}, false, nil
-	} else if err != nil {
+	if err := l.cfg.Pool.QueryRow(ctx,
+		l.sql.acquire,
+		name,
+		expires.Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano),
+	).Scan(&blockedUntil, &nonce); err != nil {
 		return lease{}, false, errors.WithStack(err)
 	}
-
+	if blockedUntil != nil {
+		return lease{*blockedUntil, name, uuid.UUID{}}, false, nil
+	}
 	return lease{expires, name, nonce}, true, nil
 }
 

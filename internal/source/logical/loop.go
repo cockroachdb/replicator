@@ -242,12 +242,28 @@ func (l *loop) run(ctx context.Context) {
 // runOnce is called by run.
 func (l *loop) runOnce(ctx context.Context) error {
 	if lessor, ok := l.dialect.(Lessor); ok {
-		lease, err := lessor.Acquire(ctx)
-		if err != nil {
-			// Mask lease-busy error.  We'll just try again later.
-			if errors.As(err, (*types.LeaseBusyError)(nil)) {
-				return nil
+		// Loop until we can acquire a lease.
+		var lease types.Lease
+		for {
+			var err error
+			lease, err = lessor.Acquire(ctx)
+			// Lease acquired.
+			if err == nil {
+				log.Tracef("lease %s acquired", l.config.LoopName)
+				break
 			}
+			// If busy, wait until the expiration.
+			if busy, ok := types.IsLeaseBusy(err); ok {
+				log.WithField("until", busy.Expiration).Tracef(
+					"lease %s was busy, waiting", l.config.LoopName)
+				select {
+				case <-time.After(time.Until(busy.Expiration)):
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			// General err, defer to the loop's retry delay.
 			return err
 		}
 		defer lease.Release()

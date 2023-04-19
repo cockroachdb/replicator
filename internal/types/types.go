@@ -65,9 +65,16 @@ type Lease interface {
 
 // LeaseBusyError is returned by [Leases.Acquire] if another caller
 // holds the lease.
-type LeaseBusyError struct{}
+type LeaseBusyError struct {
+	Expiration time.Time
+}
 
 func (e *LeaseBusyError) Error() string { return "lease is held by another caller" }
+
+// IsLeaseBusy returns the error if it represents a busy lease.
+func IsLeaseBusy(err error) (busy *LeaseBusyError, ok bool) {
+	return busy, errors.As(err, &busy)
+}
 
 // Leases coordinates behavior across multiple instances of cdc-sink.
 type Leases interface {
