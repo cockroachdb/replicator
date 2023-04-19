@@ -13,6 +13,7 @@ package logical
 import (
 	"context"
 	"math/rand"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -70,7 +71,25 @@ type chaosDialect struct {
 var (
 	_ ConsistentCallback = (*chaosDialect)(nil)
 	_ Dialect            = (*chaosDialect)(nil)
+	_ Lessor             = (*chaosDialect)(nil)
 )
+
+// Acquire will simulate busy leases, failures to acquire a lease, or
+// delegate to a Lessor. If the delegate does not implement Lessor, a
+// fake lease will be returned.
+func (d *chaosDialect) Acquire(ctx context.Context) (types.Lease, error) {
+	if rand.Float32() < d.prob {
+		return nil, &types.LeaseBusyError{Expiration: time.Now().Add(time.Nanosecond)}
+	}
+	if rand.Float32() < d.prob {
+		return nil, doChaos("Acquire")
+	}
+	if real, ok := d.delegate.(Lessor); ok {
+		return real.Acquire(ctx)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	return &fakeLease{ctx, cancel}, nil
+}
 
 func (d *chaosDialect) OnConsistent(cp stamp.Stamp) error {
 	if real, ok := d.delegate.(ConsistentCallback); ok {
@@ -171,3 +190,13 @@ func (e *chaosEvents) stop() {
 func doChaos(msg string) error {
 	return errors.WithMessage(ErrChaos, msg)
 }
+
+type fakeLease struct {
+	ctx    context.Context
+	cancel func()
+}
+
+var _ types.Lease = (*fakeLease)(nil)
+
+func (f *fakeLease) Context() context.Context { return f.ctx }
+func (f *fakeLease) Release()                 { f.cancel() }
