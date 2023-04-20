@@ -212,3 +212,36 @@ func TestGetColumns(t *testing.T) {
 		})
 	}
 }
+
+// Ensure that only tables are loaded.
+func TestColDataIgnoresViews(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	ti, err := fixture.CreateTable(ctx, `CREATE TABLE %s ( pk INT PRIMARY KEY )`)
+	if !a.NoError(err) {
+		return
+	}
+	tableName := ti.Name()
+
+	vi, err := fixture.CreateTable(ctx, fmt.Sprintf(`CREATE VIEW %%s AS SELECT pk FROM %s`, tableName))
+	if !a.NoError(err) {
+		return
+	}
+	viewName := vi.Name()
+
+	colData, ok := fixture.Watcher.Snapshot(tableName.AsSchema()).Columns[tableName]
+	a.True(ok)
+	a.NotNil(colData)
+
+	viewData, ok := fixture.Watcher.Snapshot(tableName.AsSchema()).Columns[viewName]
+	a.False(ok)
+	a.Nil(viewData)
+}
