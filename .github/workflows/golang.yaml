@@ -156,6 +156,7 @@ jobs:
           - cockroachdb: v21.1
           - cockroachdb: v21.2
           - cockroachdb: v22.2
+          - cockroachdb: v23.1
     env:
       COVER_OUT: coverage-${{ matrix.cockroachdb }}-${{ matrix.integration }}.out
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8181
