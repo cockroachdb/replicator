@@ -82,7 +82,8 @@ type templates struct {
 	Conditions []types.ColData        // The version-like fields for CAS ops.
 	Deadlines  types.Deadlines        // Allow too-old data to just be dropped.
 	Exprs      map[ident.Ident]string // Value-replacement expressions.
-	PK         []types.ColData        // All primary-key columns.
+	PK         []types.ColData        // Primary-key columns for upserts.
+	PKDelete   []types.ColData        // Primary-key columns for delete expressions.
 	TableName  ident.Table            // The target table.
 	cache      *templateCache         // Memoize calls to delete() and upsert().
 
@@ -118,6 +119,9 @@ func newTemplates(target ident.Table, cfgData *Config, colData []types.ColData) 
 	// https://github.com/golang/go/wiki/SliceTricks#filter-in-place
 	idx := 0
 	for _, col := range ret.Columns {
+		if col.Primary && !strings.HasPrefix("crdb_internal_", col.Name.Raw()) {
+			ret.PKDelete = append(ret.PKDelete, col)
+		}
 		if col.Ignored || cfgData.Ignore[col.Name] {
 			continue
 		}
@@ -192,7 +196,7 @@ func (t *templates) delete(rowCount int) (string, error) {
 
 	// Make a copy that we can tweak.
 	cpy := *t
-	cpy.Columns = t.PK
+	cpy.Columns = t.PKDelete
 	cpy.RowCount = rowCount
 
 	var buf strings.Builder

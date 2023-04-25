@@ -838,9 +838,9 @@ func TestUTDEnum(t *testing.T) {
 	}}))
 }
 
-// Ensure that if stored computed columns are present, we don't
-// try to write to them and that we correctly ignore those columns
-// in incoming payloads.
+// Ensure that if columns with generation expressions are present, we
+// don't try to write to them and that we correctly ignore those columns
+// in incoming key and data payloads.
 func TestVirtualColumns(t *testing.T) {
 	a := assert.New(t)
 
@@ -853,13 +853,19 @@ func TestVirtualColumns(t *testing.T) {
 	ctx := fixture.Context
 
 	type Payload struct {
-		A int `json:"a"`
-		B int `json:"b"`
-		C int `json:"c"`
-		X int `json:"x,omitempty"`
+		A  int `json:"a"`
+		B  int `json:"b"`
+		C  int `json:"c"`
+		CK int `json:"ck"`
+		X  int `json:"x,omitempty"`
 	}
 	tbl, err := fixture.CreateTable(ctx,
-		"CREATE TABLE %s (a INT, b INT, c INT AS (a + b) STORED, PRIMARY KEY (a,b))")
+		"CREATE TABLE %s ("+
+			"a INT, "+
+			"ck INT AS (a + b) STORED, "+
+			"b INT, "+
+			"c INT AS (a + b) STORED, "+
+			"PRIMARY KEY (a,ck,b))")
 	if !a.NoError(err) {
 		return
 	}
@@ -871,12 +877,12 @@ func TestVirtualColumns(t *testing.T) {
 
 	t.Run("computed-is-ignored", func(t *testing.T) {
 		a := assert.New(t)
-		p := Payload{A: 1, B: 2, C: 3}
+		p := Payload{A: 1, B: 2, C: 3, CK: 3}
 		bytes, err := json.Marshal(p)
 		a.NoError(err)
 		muts := []types.Mutation{{
 			Data: bytes,
-			Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
+			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
 		a.NoError(app.Apply(ctx, fixture.Pool, muts))
@@ -889,13 +895,24 @@ func TestVirtualColumns(t *testing.T) {
 		a.NoError(err)
 		muts := []types.Mutation{{
 			Data: bytes,
-			Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
+			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
 		err = app.Apply(ctx, fixture.Pool, muts)
 		if a.Error(err) {
 			a.Contains(err.Error(), "unexpected columns")
 		}
+	})
+
+	t.Run("deletes", func(t *testing.T) {
+		a := assert.New(t)
+		p := Payload{A: 1, B: 2, C: 3, CK: 3}
+		a.NoError(err)
+		muts := []types.Mutation{{
+			Key: []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
+		}}
+
+		a.NoError(app.Apply(ctx, fixture.Pool, muts))
 	})
 }
 

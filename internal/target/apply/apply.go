@@ -44,10 +44,10 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
-		configData *Config
-		schemaData []types.ColData
-		pks        []types.ColData
-		templates  *templates
+		configData        *Config
+		expectedKeyLength int // Sanity-check "key" attribute
+		schemaData        []types.ColData
+		templates         *templates
 	}
 }
 
@@ -205,16 +205,16 @@ func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		return err
 	}
 
-	allArgs := make([]any, 0, len(a.mu.pks)*len(muts))
+	allArgs := make([]any, 0, a.mu.expectedKeyLength*len(muts))
 	for i, keyGroup := range keyGroups {
-		if len(keyGroup) != len(a.mu.pks) {
+		if len(keyGroup) != a.mu.expectedKeyLength {
 			return errors.Errorf(
 				"schema drift detected in %s: "+
 					"inconsistent number of key columns: "+
 					"received %d expect %d: "+
 					"key %s@%s",
 				a.target,
-				len(keyGroup), len(a.mu.pks),
+				len(keyGroup), a.mu.expectedKeyLength,
 				string(muts[i].Key), muts[i].Time)
 		}
 		allArgs = append(allArgs, keyGroup...)
@@ -424,13 +424,32 @@ func (a *apply) refreshUnlocked(configData *Config, schemaData []types.ColData) 
 		}
 	}
 
-	tmpls := newTemplates(a.target, configData, schemaData)
+	// Compute the expected length of the "key" attribute in the
+	// incoming changefeed messages. This length may be greater than the
+	// number of PKs that we'll actually write to, since columns with a
+	// generation expression are included in the changefeed.
+	var expectedKeyLength int
+	for _, col := range schemaData {
+		// PKs are always first in the slice.
+		if !col.Primary {
+			break
+		}
+		// Special case: If the primary key is hash-sharded, the
+		// changefeed strips the shard from the key before sending it.
+		if strings.HasPrefix(col.Name.Raw(), "crdb_internal_") {
+			continue
+		}
+		// Note that we include any other "ignored" columns to support
+		// schemas with PKs that contain generated columns (e.g. custom
+		// sharding approaches).
+		expectedKeyLength++
+	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.mu.configData = configData
 	a.mu.schemaData = schemaData
-	a.mu.pks = tmpls.PK
-	a.mu.templates = tmpls
+	a.mu.expectedKeyLength = expectedKeyLength
+	a.mu.templates = newTemplates(a.target, configData, schemaData)
 	return nil
 }

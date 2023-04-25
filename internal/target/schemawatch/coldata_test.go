@@ -95,13 +95,22 @@ func TestGetColumns(t *testing.T) {
 			[]string{"q", "r"},
 			nil,
 		},
-		// Ensure that computed columns are ignored.
+		// Ensure that computed data columns are ignored.
 		{
 			"a INT, b INT, " +
 				"c INT AS (a + b) STORED, " +
 				"PRIMARY KEY (a,b)",
 			[]string{"a", "b"},
 			[]string{"ignored_c"},
+			nil,
+		},
+		// Ensure that computed pk columns are retained.
+		{
+			"a INT, b INT, " +
+				"c INT AS (a + b) STORED, " +
+				"PRIMARY KEY (a,c,b)",
+			[]string{"a", "ignored_c", "b"},
+			nil,
 			nil,
 		},
 		// Ensure that the PK constraint may have an arbitrary name.
