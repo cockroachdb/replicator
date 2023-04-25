@@ -334,19 +334,24 @@ func TestAllDataTypes(t *testing.T) {
 		"decimal_eng_50,2": "400000000000000000000000000000000000000000000000000.00",
 	}
 
-	a := assert.New(t)
-
-	fixture, cancel, err := sinktest.NewFixture()
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
-
-	ctx := fixture.Context
-
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := assert.New(t)
+
+			// Creating a new database for each loop is, as of v22.2 and
+			// v23.1 faster than dropping the table between iterations.
+			// This is relevant because the fixture contains a test
+			// timeout which was getting tripped due to performance
+			// changes in v23.1.
+			//
+			// https://github.com/cockroachdb/cockroach/issues/102259
+			fixture, cancel, err := sinktest.NewFixture()
+			if !a.NoError(err) {
+				return
+			}
+			defer cancel()
+
+			ctx := fixture.Context
 
 			// Place the PK index on the data type under test, if allowable.
 			var create string
