@@ -74,8 +74,8 @@ func TestQueryTemplates(t *testing.T) {
 		ident.New("schema"),
 		ident.New("table"))
 
-	const typicalDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")IN(($1::STRING,$2::INT8),
-($3::STRING,$4::INT8))`
+	const typicalDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1","ignored_pk")IN(($1::STRING,$2::INT8,$3::STRING),
+($4::STRING,$5::INT8,$6::STRING))`
 
 	tcs := []struct {
 		name   string
@@ -205,8 +205,8 @@ SELECT * FROM action`,
 					ident.New("geog"): true,
 				},
 			},
-			delete: `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")IN(($1::STRING,($2+$2)::INT8),
-($3::STRING,($4+$4)::INT8))`,
+			delete: `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1","ignored_pk")IN(($1::STRING,($2+$2)::INT8,$3::STRING),
+($4::STRING,($5+$5)::INT8,$6::STRING))`,
 			upsert: `UPSERT INTO "database"."schema"."table" (
 "pk0","pk1","val0","val1","enum"
 ) VALUES
