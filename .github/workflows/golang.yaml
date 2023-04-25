@@ -193,10 +193,10 @@ jobs:
         working-directory: .github
         run: docker-compose up -d ${{ matrix.integration }}
 
-      # The go test json output will be written into a file that's
-      # processed by a subsequent step into a JUnit.xml file. The test
-      # reports are aggregated later on to produce a nicer summary of
-      # the test output in the GitHub Actions UI.
+      # The go test json output will be written into a pipeline to
+      # create a JUnit.xml file. The test reports are aggregated later
+      # on to produce a nicer summary of the test output in the GitHub
+      # Actions UI.
       #
       # Inspired by
       # https://www.cloudwithchris.com/blog/githubactions-testsummary-go/
@@ -205,13 +205,22 @@ jobs:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
           CDC_INTEGRATION: ${{ matrix.integration }}
         run: >
+          set -o pipefail;
           go test
+          -count 1
           -coverpkg=./internal/...
           -covermode=atomic
           -coverprofile=${{ env.COVER_OUT }}
-          -json
           -race
-          ./... > ${{ env.TEST_OUT }}
+          -v
+          ./... 2>&1 |
+          go run github.com/jstemmer/go-junit-report/v2
+          -iocopy
+          -out ${{ env.JUNIT_OUT }}
+          -p cockroachdb=${{ matrix.cockroachdb }}
+          -p integration=${{ matrix.integration }}
+          -package-name ${{ matrix.cockroachdb }}-${{ matrix.integration }} |
+          tee ${{ env.TEST_OUT }}
 
       - name: Stop databases
         if: ${{ always() }}
@@ -223,17 +232,6 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ${{ env.COVER_OUT }}
-
-      - name: Convert test json to JUnit xml
-        if: always()
-        run: >
-          go run github.com/jstemmer/go-junit-report/v2
-          -parser gojson
-          -in ${{ env.TEST_OUT }}
-          -out ${{ env.JUNIT_OUT }}
-          -p cockroachdb=${{ matrix.cockroachdb }}
-          -p integration=${{ matrix.integration }}
-          -package-name ${{ matrix.cockroachdb }}-${{ matrix.integration }}
 
       # Upload all test reports to a common artifact name, to make them
       # available to the summarization step. The go test json is
