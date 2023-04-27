@@ -155,6 +155,7 @@ jobs:
         include:
           - cockroachdb: v21.1
           - cockroachdb: v21.2
+          - cockroachdb: v22.1
           - cockroachdb: v22.2
           - cockroachdb: v23.1
     env:

@@ -138,7 +138,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
 			"INTO '" + feedURL.String() + "' " +
 			"WITH updated," +
-			"     resolved," +
+			"     resolved='1s'," +
 			"     webhook_auth_header='Bearer " + token + "'"
 	} else {
 		// No webhook_auth_header, so bake it into the query string.
@@ -152,7 +152,12 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 		}
 		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
 			"INTO '" + feedURL.String() + "' " +
-			"WITH updated,resolved"
+			"WITH updated,resolved='1s'"
+	}
+	// Don't wait the entire 30s. This options was introduced in the
+	// same versions as webhooks.
+	if supportsMinCheckpoint(sourceFixture.DBInfo) {
+		createStmt += ",min_checkpoint_frequency='1s'"
 	}
 	log.Debugf("changefeed URL is %s", feedURL.String())
 	r.NoError(source.Exec(ctx, createStmt))
@@ -188,6 +193,13 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	metrics, err := prometheus.DefaultGatherer.Gather()
 	a.NoError(err)
 	log.WithField("metrics", metrics).Debug()
+}
+
+func supportsMinCheckpoint(dbInfo *sinktest.DBInfo) bool {
+	if strings.Contains(dbInfo.Version(), "v20.") || strings.Contains(dbInfo.Version(), "v21.") {
+		return false
+	}
+	return true
 }
 
 func supportsWebhook(dbInfo *sinktest.DBInfo) bool {
