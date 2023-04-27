@@ -11,7 +11,9 @@
 package cdc
 
 import (
+	"context"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +28,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestHandler(t *testing.T) {
@@ -227,17 +230,29 @@ func TestRejectedAuth(t *testing.T) {
 // This test adds a large number of rows that have FK dependencies, in
 // excess of a number that should be processed as a single transaction.
 func TestWithForeignKeys(t *testing.T) {
-	t.Run("normal-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0) })
-	t.Run("normal-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0) })
-	t.Run("chaos-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0.01) })
-	t.Run("chaos-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0.01) })
+	t.Run("normal-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0, 1) })
+	t.Run("normal-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0, 1) })
+	t.Run("chaos-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0.01, 1) })
+	t.Run("chaos-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0.01, 1) })
 }
 
-func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb float32) {
+// This test simulates having multiple instances of the handler as we
+// would see in a load-balanced configuration.
+func TestConcurrentHandlers(t *testing.T) {
+	t.Run("normal-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0, 3) })
+	t.Run("normal-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0, 3) })
+	t.Run("chaos-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0.01, 3) })
+	t.Run("chaos-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0.01, 3) })
+}
+
+func testMassBackfillWithForeignKeys(
+	t *testing.T, backfill bool, chaosProb float32, fixtureCount int,
+) {
 	const rowCount = 10_000
 	r := require.New(t)
 
 	baseFixture, cancel, err := sinktest.NewFixture()
+	ctx := baseFixture.Context
 	r.NoError(err)
 	defer cancel()
 
@@ -246,52 +261,71 @@ func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb floa
 		backfillWindow = time.Minute
 	}
 
-	fixture, cancel, err := newTestFixture(baseFixture, &Config{
-		IdealFlushBatchSize: 123, // Pick weird batch sizes.
-		SelectBatchSize:     587,
-		MetaTableName:       ident.New("resolved_timestamps"),
-		BaseConfig: logical.BaseConfig{
-			ApplyTimeout:       time.Second,
-			BackfillWindow:     backfillWindow,
-			ChaosProb:          chaosProb,
-			FanShards:          16,
-			ForeignKeysEnabled: true,
-			LoopName:           "changefeed",
-			StagingDB:          baseFixture.StagingDB.Ident(),
-			RetryDelay:         time.Nanosecond,
-			TargetConn:         baseFixture.Pool.Config().ConnString(),
-			TargetDB:           baseFixture.TestDB.Ident(),
-		},
-	})
-	r.NoError(err)
-	defer cancel()
+	fixtures := make([]*testFixture, fixtureCount)
 
-	ctx := fixture.Context
-	h := fixture.Handler
+	cancels := make([]context.CancelFunc, fixtureCount)
+	defer func() {
+		for _, fn := range cancels {
+			if fn != nil {
+				fn()
+			}
+		}
+	}()
+
+	for idx := range fixtures {
+		fixtures[idx], cancels[idx], err = newTestFixture(baseFixture, &Config{
+			IdealFlushBatchSize: 123, // Pick weird batch sizes.
+			SelectBatchSize:     587,
+			MetaTableName:       ident.New("resolved_timestamps"),
+			BaseConfig: logical.BaseConfig{
+				ApplyTimeout:       time.Second,
+				BackfillWindow:     backfillWindow,
+				ChaosProb:          chaosProb,
+				FanShards:          16,
+				ForeignKeysEnabled: true,
+				LoopName:           "changefeed",
+				StagingDB:          baseFixture.StagingDB.Ident(),
+				RetryDelay:         time.Nanosecond,
+				TargetConn:         baseFixture.Pool.Config().ConnString(),
+				TargetDB:           baseFixture.TestDB.Ident(),
+			},
+		})
+		r.NoError(err)
+	}
 
 	loadStart := time.Now()
 	log.Info("starting data load")
 
-	parent, err := fixture.CreateTable(ctx,
+	parent, err := baseFixture.CreateTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	r.NoError(err)
 
-	child, err := fixture.CreateTable(ctx, fmt.Sprintf(
+	child, err := baseFixture.CreateTable(ctx, fmt.Sprintf(
 		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
 		parent.Name()))
 	r.NoError(err)
 
-	grand, err := fixture.CreateTable(ctx, fmt.Sprintf(
+	grand, err := baseFixture.CreateTable(ctx, fmt.Sprintf(
 		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
 		child.Name()))
 	r.NoError(err)
 
+	// h returns a random Handler instance, to simulate a loadbalancer.
+	h := func() *Handler {
+		return fixtures[rand.Intn(fixtureCount)].Handler
+	}
+
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(32)
 	for i := 0; i < rowCount; i += 10 {
+		i := i // Capture loop variable.
 		// Stage data, but stage child data before parent data.
 		for _, tbl := range []ident.Table{child.Name(), parent.Name(), grand.Name()} {
-			r.NoError(h.ndjson(ctx, &request{
-				target: tbl,
-				body: strings.NewReader(fmt.Sprintf(`
+			tbl := tbl // Capture loop variable.
+			eg.Go(func() error {
+				if err := h().ndjson(egCtx, &request{
+					target: tbl,
+					body: strings.NewReader(fmt.Sprintf(`
 { "after" : { "pk" : %[1]d, "v" : %[1]d }, "key" : [ %[1]d ], "updated" : "%[1]d.0" }
 { "after" : { "pk" : %[2]d, "v" : %[2]d }, "key" : [ %[2]d ], "updated" : "%[2]d.0" }
 { "after" : { "pk" : %[3]d, "v" : %[3]d }, "key" : [ %[3]d ], "updated" : "%[3]d.0" }
@@ -302,14 +336,20 @@ func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb floa
 { "after" : { "pk" : %[8]d, "v" : %[8]d }, "key" : [ %[8]d ], "updated" : "%[8]d.0" }
 { "after" : { "pk" : %[9]d, "v" : %[9]d }, "key" : [ %[9]d ], "updated" : "%[9]d.0" }
 { "after" : { "pk" : %[10]d, "v" : %[10]d }, "key" : [ %[10]d ], "updated" : "%[10]d.0" }`,
-					i+1, i+2, i+3, i+4, i+5, i+6, i+7, i+8, i+9, i+10)),
-			}))
+						i+1, i+2, i+3, i+4, i+5, i+6, i+7, i+8, i+9, i+10)),
+				}); err != nil {
+					return err
+				}
+				return nil
+			})
 		}
 	}
+	r.NoError(eg.Wait())
+
 	log.Info("finished filling data in ", time.Since(loadStart).String())
 
 	// Send a resolved timestamp that needs to dequeue many rows.
-	r.NoError(h.resolved(ctx, &request{
+	r.NoError(h().resolved(ctx, &request{
 		target:    parent.Name(),
 		timestamp: hlc.New(rowCount+1, 0),
 	}))
@@ -317,7 +357,7 @@ func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb floa
 	// Wait for rows to appear.
 	for _, tbl := range []ident.Table{parent.Name(), child.Name(), grand.Name()} {
 		for {
-			count, err := sinktest.GetRowCount(ctx, fixture.Pool, tbl)
+			count, err := sinktest.GetRowCount(ctx, baseFixture.Pool, tbl)
 			r.NoError(err)
 			log.Infof("saw %d of %d rows in %s", count, rowCount, tbl)
 			if count == rowCount {
