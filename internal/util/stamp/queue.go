@@ -252,7 +252,7 @@ func (s *Queue) validate() error {
 	// Invariant 4: consistent < markers[0]
 	if mark := s.PeekMarker(); mark != nil {
 		if Compare(s.consistent, mark) >= 0 {
-			return errors.Errorf("consistent stamp %s > markers stamp %s", s.consistent, mark)
+			return errors.Errorf("consistent stamp %s >= markers stamp %s", s.consistent, mark)
 		}
 	}
 
