@@ -22,8 +22,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/cockroachdb/cdc-sink/internal/util/txguard"
-	"github.com/jackc/pgconn"
 	"github.com/jackc/pgtype/pgxtype"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
@@ -64,9 +62,9 @@ type resolver struct {
 	watcher     types.Watcher
 
 	sql struct {
-		dequeue string
-		mark    string
-		record  string
+		mark            string
+		record          string
+		selectTimestamp string
 	}
 }
 
@@ -102,7 +100,7 @@ func newResolver(
 		target:      target,
 		watcher:     watcher,
 	}
-	ret.sql.dequeue = fmt.Sprintf(dequeueTemplate, metaTable)
+	ret.sql.selectTimestamp = fmt.Sprintf(selectTimestampTemplate, metaTable)
 	ret.sql.mark = fmt.Sprintf(markTemplate, metaTable)
 	ret.sql.record = fmt.Sprintf(recordTemplate, metaTable)
 
@@ -189,109 +187,70 @@ func (r *resolver) readInto(
 	// Resume deletions on restart.
 	r.retirements <- state.GetConsistentPoint().(*resolvedStamp).CommittedTime
 
-	const minSleep = 10 * time.Millisecond
-	const maxSleep = 1 * time.Second
-	const backoff = 10
-	sleepDelay := minSleep
+	const dbPollInterval = 100 * time.Millisecond
 
 	for {
 		prev := state.GetConsistentPoint().(*resolvedStamp)
-		err := r.readIntoOnce(ctx, ch, prev, backfill)
+		proposed, err := r.nextProposedStamp(ctx, prev, backfill)
 
 		switch err {
 		case nil:
-			// Set to max, since we expect the fast wakeup signal below
-			// to reset to the minimum delay.
-			sleepDelay = maxSleep
+			// We have work to do, send it down the channel.
+			select {
+			case ch <- proposed:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			// Wait for the proposed stamp to be processed before
+			// reading the next stamp.
+			_, err := state.AwaitConsistentPoint(ctx, logical.AwaitGTE, proposed)
+			if err != nil {
+				return err
+			}
+
 		case errNoWork:
 			// We've consumed all available work, become idle.
-			sleepDelay = maxSleep
-		case errBlocked:
-			// If we're blocked by another cdc-sink instance, increase
-			// the backoff time.
-			if sleepDelay < maxSleep {
-				sleepDelay *= backoff
-				if sleepDelay > maxSleep {
-					sleepDelay = maxSleep
-				}
+			select {
+			case <-r.fastWakeup:
+				// Triggered by a calls to Mark and to OnConsistent.
+			case <-time.After(dbPollInterval):
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 
 		default:
 			return err
 		}
-
-		select {
-		case <-r.fastWakeup:
-			// Triggered by a calls to Mark and to OnConsistent.
-			sleepDelay = minSleep
-		case <-time.After(sleepDelay):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
 	}
 }
 
-// readIntoOnce executes a single loop of readInto. The returned error
+// nextProposedStamp will load the next unresolved timestamp from the
+// database and return a proposed resolvedStamp.   The returned error
 // may be one of the sentinel values errNoWork or errBlocked that are
-// returned by dequeueInTx.
-func (r *resolver) readIntoOnce(
-	ctx context.Context, ch chan<- logical.Message, prev *resolvedStamp, backfill bool,
-) error {
-	// This transaction will be used to hold a SELECT FOR UPDATE lock on
-	// the next resolved timestamp to be processed. It will eventually
-	// be committed in OnConsistent.
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	// We'll wrap the database transaction in a keepalive facade,
-	// since there's an indefinite amount of processing that happens
-	// concurrently with the lock-holding transaction.
-	guard := txguard.New(tx)
-
-	// If we don't send the long-running transaction downstream,
-	// we want to clean it up eagerly.
-	var sentWork bool
-	defer func() {
-		if !sentWork {
-			guard.Rollback()
-		}
-	}()
-
+// returned by selectTimestamp.
+func (r *resolver) nextProposedStamp(
+	ctx context.Context, prev *resolvedStamp, backfill bool,
+) (*resolvedStamp, error) {
 	// Find the next resolved timestamp to apply, starting from
 	// a timestamp known to be committed.
-	var nextResolved hlc.Time
-	if err := guard.Use(func(tx pgxtype.Querier) (err error) {
-		nextResolved, err = r.dequeueInTx(ctx, tx, prev.CommittedTime)
-		return err
-	}); err != nil {
-		return err
+	nextResolved, err := r.selectTimestamp(ctx, prev.CommittedTime)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create a new marker that verifies that we're rolling forward.
-	work, err := prev.NewProposed(guard, nextResolved)
-
-	// It's possible that the call to Begin() above occurs prior to the
-	// previous resolved-timestamp transaction committing.
+	ret, err := prev.NewProposed(nextResolved)
 	if err != nil {
-		log.WithError(err).Warn("dequeued timestamp does not advance; will retry")
-		return errNoWork
+		return nil, err
 	}
 
 	// Propagate the backfilling flag. This could already be set if
 	if backfill {
-		work.Backfill = true
+		ret.Backfill = true
 	}
 
-	select {
-	case ch <- work:
-		// Disable rollback in defer statement above.
-		sentWork = true
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return ret, nil
 }
 
 // Process implements logical.Dialect. It receives a resolved timestamp
@@ -299,29 +258,15 @@ func (r *resolver) readIntoOnce(
 func (r *resolver) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
-	// Track the most recently seen stamp so that we can clean up if
-	// we see a rollback message or return with an error.
-	var rs *resolvedStamp
-	defer func() {
-		if rs != nil {
-			rs.Rollback()
-		}
-	}()
-
 	for msg := range ch {
 		if logical.IsRollback(msg) {
 			if err := events.OnRollback(ctx, msg); err != nil {
 				return err
 			}
-			if rs != nil {
-				rs.Rollback()
-			}
 			continue
 		}
 
-		var err error
-		rs, err = r.process(ctx, msg.(*resolvedStamp), events)
-		if err != nil {
+		if _, err := r.process(ctx, msg.(*resolvedStamp), events); err != nil {
 			return err
 		}
 	}
@@ -343,9 +288,8 @@ func (r *resolver) Record(ctx context.Context, ts hlc.Time) error {
 		r.sql.record,
 		r.target.Database().Raw(),
 		r.target.Schema().Raw(),
-		// The sql driver gets the wrong type back from CRDB v20.2
-		fmt.Sprintf("%d", ts.Nanos()),
-		fmt.Sprintf("%d", ts.Logical()),
+		ts.Nanos(),
+		ts.Logical(),
 	)
 	return errors.WithStack(err)
 }
@@ -364,7 +308,7 @@ func (r *resolver) OnConsistent(cp stamp.Stamp) error {
 	rs := cp.(*resolvedStamp)
 	// Commit the transaction marking the resolved timestamp as complete.
 	if rs.ProposedTime == hlc.Zero() {
-		if err := rs.Commit(ctx); err != nil {
+		if err := r.Record(ctx, rs.CommittedTime); err != nil {
 			return errors.Wrap(err, "could not commit resolved-timestamp update")
 		}
 		log.Tracef("committed resolvedStamp transaction for %s", rs)
@@ -408,11 +352,6 @@ func (r *resolver) process(
 
 		ctx, cancel := context.WithTimeout(ctx, r.cfg.ApplyTimeout)
 		defer cancel()
-
-		// Ensure that the resolved-timestamp transaction is still valid.
-		if err := rs.IsAlive(); err != nil {
-			return errors.Wrap(err, "resolved-timestamp transaction has failed")
-		}
 
 		// Apply the retrieved data.
 		if err := events.OnBegin(ctx, rs); err != nil {
@@ -538,47 +477,34 @@ func (r *resolver) process(
 	return rs, nil
 }
 
-// The FOR UPDATE NOWAIT will quickly fail the query with a 55P03 code
-// if another transaction is processing that timestamp. We use the WHERE
-// ... IN clause to ensure a lookup join.
-//
 // $1 target_db
 // $2 target_schema
 // $3 last_known_nanos
 // $4 last_known_logical
-const dequeueTemplate = `
-WITH work AS (
- SELECT target_db, target_schema, source_nanos, source_logical
-   FROM %[1]s
-  WHERE target_db=$1
-    AND target_schema=$2
-    AND (source_nanos, source_logical)>=($3, $4)
-    AND target_applied_at IS NULL
-  ORDER BY source_nanos, source_logical
-    FOR UPDATE NOWAIT
-  LIMIT 1)
-UPDATE %[1]s
-   SET target_applied_at=now()
- WHERE (target_db, target_schema, source_nanos, source_logical) IN (SELECT * FROM work)
-RETURNING source_nanos, source_logical
+const selectTimestampTemplate = `
+SELECT source_nanos, source_logical
+  FROM %[1]s
+ WHERE target_db=$1
+   AND target_schema=$2
+   AND (source_nanos, source_logical)>=($3, $4)
+   AND target_applied_at IS NULL
+ ORDER BY source_nanos, source_logical
+ LIMIT 1
 `
 
 // These error values are returned by dequeueInTx to indicate why
 // no timestamp was returned.
 var (
-	errNoWork  = errors.New("no work")
-	errBlocked = errors.New("blocked")
+	errNoWork = errors.New("no work")
 )
 
-// dequeueInTx locates the next unresolved timestamp to flush. The after
+// selectTimestamp locates the next unresolved timestamp to flush. The after
 // parameter allows us to skip over most of the table contents.
-func (r *resolver) dequeueInTx(
-	ctx context.Context, tx pgxtype.Querier, after hlc.Time,
-) (hlc.Time, error) {
+func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Time, error) {
 	var sourceNanos int64
 	var sourceLogical int
-	if err := tx.QueryRow(ctx,
-		r.sql.dequeue,
+	if err := r.pool.QueryRow(ctx,
+		r.sql.selectTimestamp,
 		r.target.Database().Raw(),
 		r.target.Schema().Raw(),
 		after.Nanos(),
@@ -587,10 +513,6 @@ func (r *resolver) dequeueInTx(
 		if errors.Is(err, pgx.ErrNoRows) {
 			log.WithField("schema", r.target).Trace("no work")
 			return hlc.Zero(), errNoWork
-		}
-		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "55P03" {
-			log.WithField("schema", r.target).Trace("blocked by other")
-			return hlc.Zero(), errBlocked
 		}
 		return hlc.Zero(), errors.WithStack(err)
 	}

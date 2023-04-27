@@ -11,9 +11,7 @@
 package cdc
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
@@ -63,26 +61,11 @@ func TestResolverDeQueue(t *testing.T) {
 
 	var committed hlc.Time
 	for i := 0; i < rowCount; i++ {
-		tx, err := fixture.Pool.Begin(ctx)
-		r.NoError(err)
-
-		found, err := resolver.dequeueInTx(ctx, tx, committed)
-		// It's possible that the transaction commit below hasn't
-		// finished its async cleanup by the time we roll around.
-		// If this happens, try again.
-		if err == errBlocked {
-			i--
-			_ = tx.Rollback(ctx)
-			continue
-		}
+		found, err := resolver.selectTimestamp(ctx, committed)
 		r.NoError(err)
 		a.Equal(int64(i), committed.Nanos()) // Verify expected order.
 
-		// Verify that a concurrent transaction returns busy.
-		_, err = resolver.dequeueInTx(ctx, fixture.Pool, committed)
-		a.Equal(errBlocked, err)
-
-		r.NoError(tx.Commit(ctx))
+		r.NoError(resolver.Record(ctx, found))
 		committed = found
 	}
 	// Make sure we arrived at the end.
@@ -90,34 +73,6 @@ func TestResolverDeQueue(t *testing.T) {
 
 	// Verify empty queue.  We may need to wait for a previous
 	// transaction to commit.
-	for {
-		_, err = resolver.dequeueInTx(ctx, fixture.Pool, committed)
-		if err == errBlocked {
-			continue
-		}
-		a.Equal(errNoWork, err)
-		break
-	}
-
-	// Verify that we can enqueue a timestamp, even if there's an open
-	// dequeue transaction running.
-	heldOpen := hlc.New(rowCount+1, 0)
-	r.NoError(resolver.Mark(ctx, heldOpen))
-	for {
-		tx, err := fixture.Pool.Begin(ctx)
-		r.NoError(err)
-		found, err := resolver.dequeueInTx(ctx, tx, heldOpen)
-		// As above, it's possible that we're waiting for async cleanup.
-		if err == errBlocked {
-			_ = tx.Rollback(ctx)
-			continue
-		}
-		r.NoError(err)
-		a.Equal(heldOpen, found)
-		timeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		r.NoError(resolver.Mark(timeout, hlc.New(rowCount+2, 0)))
-		cancel()
-		r.NoError(tx.Commit(ctx))
-		break
-	}
+	_, err = resolver.selectTimestamp(ctx, committed)
+	a.Equal(errNoWork, err)
 }

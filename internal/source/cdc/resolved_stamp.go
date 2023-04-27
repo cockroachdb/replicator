@@ -11,16 +11,13 @@
 package cdc
 
 import (
-	"context"
 	"encoding/json"
-	"sync"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/cockroachdb/cdc-sink/internal/util/txguard"
 	"github.com/pkg/errors"
 )
 
@@ -66,11 +63,6 @@ type resolvedStamp struct {
 	OffsetKey   json.RawMessage `json:"ok,omitempty"`
 	OffsetTable ident.Table     `json:"otbl,omitempty"`
 	OffsetTime  hlc.Time        `json:"ots,omitempty"`
-
-	mu struct {
-		sync.Mutex
-		tx *txguard.Guard
-	}
 }
 
 // AsTime implements logical.TimeStamp to improve reporting.
@@ -79,40 +71,13 @@ func (s *resolvedStamp) AsTime() time.Time {
 	return time.Unix(0, s.CommittedTime.Nanos())
 }
 
-// Commit marks the resolved timestamp as resolved, if the transaction
-// has not been handed off to another resolvedStamp. This handoff would
-// occur when processing a resolved-timestamp interval that contains a
-// large number of sub-batches (e.g. backfills, high-rate scenarios).
-func (s *resolvedStamp) Commit(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var err error
-	if tx := s.mu.tx; tx != nil {
-		s.mu.tx = nil
-		err = errors.WithStack(tx.Commit(ctx))
-	}
-
-	return err
-}
-
-// IsAlive returns any pending error from the transaction-keepalive
-// loop or nil if the keepalive loop is still running.
-func (s *resolvedStamp) IsAlive() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	tx := s.mu.tx
-	if tx == nil {
-		return errors.New("resolved-timestamp transaction owned by later stamp")
-	}
-	return tx.IsAlive()
-}
-
 // Less implements stamp.Stamp.
 func (s *resolvedStamp) Less(other stamp.Stamp) bool {
 	o := other.(*resolvedStamp)
 	if c := hlc.Compare(s.CommittedTime, o.CommittedTime); c != 0 {
+		return c < 0
+	}
+	if c := hlc.Compare(s.ProposedTime, o.ProposedTime); c != 0 {
 		return c < 0
 	}
 	return s.Iteration < o.Iteration
@@ -125,12 +90,12 @@ func (s *resolvedStamp) NewCommitted() (*resolvedStamp, error) {
 		return nil, errors.New("cannot make new committed timestamp without proposed value")
 	}
 
-	return s.handoff(&resolvedStamp{CommittedTime: s.ProposedTime}), nil
+	return &resolvedStamp{CommittedTime: s.ProposedTime}, nil
 }
 
 // NewProposed returns a new resolvedStamp that extends the existing
 // stamp with a later proposed timestamp.
-func (s *resolvedStamp) NewProposed(tx *txguard.Guard, proposed hlc.Time) (*resolvedStamp, error) {
+func (s *resolvedStamp) NewProposed(proposed hlc.Time) (*resolvedStamp, error) {
 	if hlc.Compare(proposed, s.CommittedTime) < 0 {
 		return nil, errors.Errorf("proposed cannot roll back committed time: %s vs %s",
 			proposed, s.CommittedTime)
@@ -142,7 +107,7 @@ func (s *resolvedStamp) NewProposed(tx *txguard.Guard, proposed hlc.Time) (*reso
 		return nil, errors.Errorf("proposed time cannot go backward: %s vs %s", proposed, s.ProposedTime)
 	}
 
-	ret := &resolvedStamp{
+	return &resolvedStamp{
 		Backfill:      s.Backfill,
 		CommittedTime: s.CommittedTime,
 		Iteration:     s.Iteration + 1,
@@ -150,10 +115,7 @@ func (s *resolvedStamp) NewProposed(tx *txguard.Guard, proposed hlc.Time) (*reso
 		OffsetTable:   s.OffsetTable,
 		OffsetTime:    s.OffsetTime,
 		ProposedTime:  proposed,
-	}
-	// We don't call handoff here, since we have a new transaction.
-	ret.mu.tx = tx
-	return ret, nil
+	}, nil
 }
 
 // NewProgress returns a resolvedStamp that represents partial progress
@@ -181,41 +143,11 @@ func (s *resolvedStamp) NewProgress(cursor *types.SelectManyCursor) *resolvedSta
 		}
 	}
 
-	return s.handoff(ret)
-}
-
-// Rollback aborts the enclosed transaction, if it exists. This method
-// is safe to call on a nil receiver.
-func (s *resolvedStamp) Rollback() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if tx := s.mu.tx; tx != nil {
-		tx.Rollback()
-		s.mu.tx = nil
-	}
+	return ret
 }
 
 // String is for debugging use only.
 func (s *resolvedStamp) String() string {
 	ret, _ := json.Marshal(s)
 	return string(ret)
-}
-
-// handoff transfers the transaction to another resolvedStamp and starts
-// its keepalive loop. This method should be called before the next
-// value has been made visible to any other callers.
-func (s *resolvedStamp) handoff(next *resolvedStamp) *resolvedStamp {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if tx := s.mu.tx; tx != nil {
-		next.mu.tx = tx
-		s.mu.tx = nil
-	}
-
-	return next
 }
