@@ -289,7 +289,7 @@ func (l *loop) runOnce(ctx context.Context) error {
 	// Determine how to perform the filling.
 	source, events, isBackfilling := l.chooseFillStrategy()
 	// Ensure that we're in a clear state when recovering.
-	defer events.stop()
+	defer events.stop(ctx)
 
 	if err := l.runOnceUsing(ctx, source, events, isBackfilling); err != nil {
 		return err

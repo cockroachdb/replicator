@@ -14,7 +14,6 @@ package target
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
@@ -25,7 +24,6 @@ import (
 // sub-packages.
 var Set = wire.NewSet(
 	apply.Set,
-	fan.Set,
 	memo.Set,
 	schemawatch.Set,
 	stage.Set,

@@ -37,6 +37,7 @@ func TestLogical(t *testing.T) {
 }
 
 func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
+	log.SetLevel(log.TraceLevel)
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -75,7 +76,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	}
 
 	cfg := &logical.BaseConfig{
-		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
+		ApplyTimeout:   time.Second, // Increase to make using the debugger easier.
 		LoopName:       "generator",
 		Immediate:      immediate,
 		RetryDelay:     time.Nanosecond,

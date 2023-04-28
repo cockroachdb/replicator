@@ -90,20 +90,20 @@ func (e *serialEvents) OnData(
 	return app.Apply(ctx, e.tx, muts)
 }
 
-// OnRollback implements Events.
-func (e *serialEvents) OnRollback(_ context.Context, msg Message) error {
+// OnRollback implements Events and delegates to stop.
+func (e *serialEvents) OnRollback(ctx context.Context, msg Message) error {
 	if !IsRollback(msg) {
 		return errors.New("the rollback message must be passed to OnRollback")
 	}
-	e.stop()
-	return nil
+	return e.stop(ctx)
 }
 
-// reset implements Events.
-func (e *serialEvents) stop() {
+// stop implements Events.
+func (e *serialEvents) stop(_ context.Context) error {
 	if e.tx != nil {
 		_ = e.tx.Rollback(context.Background())
 	}
 	e.stamp = nil
 	e.tx = nil
+	return nil
 }

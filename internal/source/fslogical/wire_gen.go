@@ -11,7 +11,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
@@ -50,10 +49,6 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 	}
 	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	fans := &fan.Fans{
-		Appliers: appliers,
-		Pool:     pool,
-	}
 	memoMemo, err := memo.ProvideMemo(contextContext, pool, stagingDB)
 	if err != nil {
 		cleanup4()
@@ -71,7 +66,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup5 := logical.ProvideFactory(appliers, config, fans, memoMemo, pool, watchers, userScript)
+	factory, cleanup5 := logical.ProvideFactory(appliers, config, memoMemo, pool, watchers, userScript)
 	client, cleanup6, err := ProvideFirestoreClient(contextContext, config)
 	if err != nil {
 		cleanup5()
@@ -117,7 +112,6 @@ func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logica
 	baseFixture := &fixture.BaseFixture
 	contextContext := baseFixture.Context
 	appliers := fixture.Appliers
-	fans := fixture.Fans
 	typesMemo := fixture.Memo
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
@@ -143,7 +137,7 @@ func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logica
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup2 := logical.ProvideFactory(appliers, config, fans, typesMemo, pool, watchers, userScript)
+	factory, cleanup2 := logical.ProvideFactory(appliers, config, typesMemo, pool, watchers, userScript)
 	client, cleanup3, err := ProvideFirestoreClient(contextContext, config)
 	if err != nil {
 		cleanup2()
