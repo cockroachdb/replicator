@@ -11,7 +11,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 )
@@ -49,10 +48,6 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	}
 	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	fans := &fan.Fans{
-		Appliers: appliers,
-		Pool:     pool,
-	}
 	memoMemo, err := memo.ProvideMemo(ctx, pool, stagingDB)
 	if err != nil {
 		cleanup4()
@@ -70,7 +65,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup5 := logical.ProvideFactory(appliers, config, fans, memoMemo, pool, watchers, userScript)
+	factory, cleanup5 := logical.ProvideFactory(appliers, config, memoMemo, pool, watchers, userScript)
 	dialect, err := ProvideDialect(config)
 	if err != nil {
 		cleanup5()

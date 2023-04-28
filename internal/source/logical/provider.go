@@ -14,7 +14,6 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
@@ -53,7 +52,6 @@ func ProvideBaseConfig(config Config, _ *script.Loader) (*BaseConfig, error) {
 func ProvideFactory(
 	appliers types.Appliers,
 	config Config,
-	fans *fan.Fans,
 	memo types.Memo,
 	pool *pgxpool.Pool,
 	watchers types.Watchers,
@@ -62,7 +60,6 @@ func ProvideFactory(
 	f := &Factory{
 		appliers:   appliers,
 		cfg:        config,
-		fans:       fans,
 		memo:       memo,
 		pool:       pool,
 		watchers:   watchers,

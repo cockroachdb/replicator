@@ -22,6 +22,7 @@ import (
 
 const (
 	defaultApplyTimeout   = 30 * time.Second
+	defaultFanShards      = 16
 	defaultRetryDelay     = 10 * time.Second
 	defaultStandbyTimeout = 5 * time.Second
 	defaultTargetDBConns  = 1024
@@ -106,7 +107,7 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 	// DefaultConsistentPoint bound by dialect packages.
 	f.BoolVar(&c.Immediate, "immediate", false,
 		"apply data without waiting for transaction boundaries")
-	f.IntVar(&c.FanShards, "fanShards", 16,
+	f.IntVar(&c.FanShards, "fanShards", defaultFanShards,
 		"the number of concurrent connections to use when writing data in fan mode")
 	f.BoolVar(&c.ForeignKeysEnabled, "foreignKeys", false,
 		"re-order updates to satisfy foreign key constraints")
@@ -145,6 +146,9 @@ func (c *BaseConfig) Preflight() error {
 	}
 	if c.BytesInFlight == 0 {
 		c.BytesInFlight = defaultBytesInFlight
+	}
+	if c.FanShards == 0 {
+		c.FanShards = defaultFanShards
 	}
 	if c.ForeignKeysEnabled && c.Immediate {
 		return errors.New("foreign-key mode incompatible with immediate mode")

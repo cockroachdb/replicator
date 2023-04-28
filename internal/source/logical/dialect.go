@@ -121,7 +121,7 @@ type Events interface {
 	// stop is called after any attempt to run a replication loop.
 	// Implementations should block until any pending mutations have
 	// been committed.
-	stop()
+	stop(ctx context.Context) error
 }
 
 // AwaitComparison is used with [State.AwaitConsistentPoint].

@@ -182,8 +182,8 @@ func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
 	return e.delegate.OnRollback(ctx, msg)
 }
 
-func (e *chaosEvents) stop() {
-	e.delegate.stop()
+func (e *chaosEvents) stop(ctx context.Context) error {
+	return e.delegate.stop(ctx)
 }
 
 // doChaos is a convenient place to set a breakpoint.

@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/pkg/errors"
@@ -31,7 +30,6 @@ type loopCancel struct {
 type Factory struct {
 	appliers   types.Appliers
 	cfg        Config
-	fans       *fan.Fans
 	memo       types.Memo
 	pool       *pgxpool.Pool
 	watchers   types.Watchers
@@ -134,9 +132,7 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 	loop.consistentPoint.stamp = initialPoint
 
 	loop.events.fan = &fanEvents{
-		config: config,
-		fans:   f.fans,
-		loop:   loop,
+		loop: loop,
 	}
 
 	loop.events.serial = &serialEvents{

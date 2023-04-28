@@ -8,7 +8,6 @@ package sinktest
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
@@ -93,10 +92,6 @@ func NewFixture() (*Fixture, func(), error) {
 	}
 	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
 	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
-	fans := &fan.Fans{
-		Appliers: appliers,
-		Pool:     pool,
-	}
 	memoMemo, err := memo.ProvideMemo(context, pool, stagingDB)
 	if err != nil {
 		cleanup6()
@@ -122,7 +117,6 @@ func NewFixture() (*Fixture, func(), error) {
 		BaseFixture: baseFixture,
 		Appliers:    appliers,
 		Configs:     configs,
-		Fans:        fans,
 		Memo:        memoMemo,
 		Stagers:     stagers,
 		Watchers:    watchers,

@@ -13,7 +13,6 @@ package logical
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply/fan"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
@@ -23,13 +22,9 @@ import (
 // fanEvents is a high-throughput implementation of Events which
 // does not preserve transaction boundaries.
 type fanEvents struct {
-	config *BaseConfig // The loop's configuration. Set by provider.
-	fans   *fan.Fans   // Factory for fan-out behavior. Set by provider.
-	loop   *loop       // The underlying loop.
+	loop *loop // The underlying loop.
 
-	fan     *fan.Fan    // Created by OnBegin(), destroyed in stop().
-	stamp   stamp.Stamp // The latest stamp passed into OnBegin().
-	stopFan func()      // Called by stop() to ensure mutations have drained.
+	workers *fanWorkers // Contains the stamp passed into OnBegin().
 }
 
 var _ Events = (*fanEvents)(nil)
@@ -55,64 +50,55 @@ func (f *fanEvents) GetConsistentPoint() stamp.Stamp { return f.loop.GetConsiste
 func (f *fanEvents) GetTargetDB() ident.Ident { return f.loop.GetTargetDB() }
 
 // OnBegin implements Events.
-func (f *fanEvents) OnBegin(_ context.Context, s stamp.Stamp) error {
-	if f.fan == nil {
-		var err error
-		f.fan, f.stopFan, err = f.fans.New(
-			f.config.ApplyTimeout,
-			f.loop.setConsistentPoint,
-			f.config.FanShards,
-			f.config.BytesInFlight)
-		if err != nil {
-			return err
-		}
+func (f *fanEvents) OnBegin(ctx context.Context, s stamp.Stamp) error {
+	if f.workers != nil {
+		return errors.New("OnBegin() called without OnCommit() or reset()")
 	}
-	f.stamp = s
+	f.workers = newFanWorkers(ctx, f.loop, s)
 	return nil
 }
 
 // OnCommit implements Events.
-func (f *fanEvents) OnCommit(_ context.Context) error {
-	if f.stamp == nil {
-		return errors.New("OnCommit called without OnBegin")
+func (f *fanEvents) OnCommit(ctx context.Context) error {
+	workers := f.workers
+	if workers == nil {
+		return errors.New("OnCommit() called without OnBegin()")
 	}
-	// The fan will eventually call State.setConsistentPoint.
-	err := f.fan.Mark(f.stamp)
-	f.stamp = nil
-	return err
+	err := workers.Wait(ctx, true)
+	f.workers = nil
+	if err != nil {
+		return err
+	}
+	return f.loop.setConsistentPoint(workers.Stamp())
 }
 
 // OnData implements Events and delegates to the enclosed fan.
 func (f *fanEvents) OnData(
-	ctx context.Context, _ ident.Ident, target ident.Table, muts []types.Mutation,
+	_ context.Context, _ ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
-	if f.stamp == nil {
-		return errors.New("OnData called without OnBegin")
+	if f.workers == nil {
+		return errors.New("OnData() called without OnBegin")
 	}
-	return f.fan.Enqueue(ctx, f.stamp, target, muts)
+	return f.workers.Enqueue(target, muts)
 }
 
-// OnRollback implements Events and resets the enclosed fan.
-func (f *fanEvents) OnRollback(_ context.Context, msg Message) error {
+// OnRollback implements Events and resets any pending work.
+func (f *fanEvents) OnRollback(ctx context.Context, msg Message) error {
 	if !IsRollback(msg) {
 		return errors.New("the rollback message must be passed to OnRollback")
 	}
-	// Dump any in-flight mutations, but keep the fan running.
-	if f.fan != nil {
-		f.fan.Reset()
+	if workers := f.workers; workers != nil {
+		f.workers = nil
+		return workers.Wait(ctx, false /* abandon */)
 	}
-	f.stamp = nil
 	return nil
 }
 
-// reset implements Events.
-func (f *fanEvents) stop() {
-	if f.fan != nil {
-		// Shut down the fan and wait for it to have stopped.
-		f.stopFan()
-		<-f.fan.Stopped()
+// stop implements Events and gracefully drains any pending work.
+func (f *fanEvents) stop(ctx context.Context) error {
+	if workers := f.workers; workers != nil {
+		f.workers = nil
+		return workers.Wait(ctx, true /* graceful */)
 	}
-	f.fan = nil
-	f.stamp = nil
-	f.stopFan = nil
+	return nil
 }
