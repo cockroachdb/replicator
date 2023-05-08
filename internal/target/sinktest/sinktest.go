@@ -21,11 +21,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -61,7 +61,7 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := pgxpool.ConnectConfig(ctx, cfg)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not open database connection")
 	}
@@ -79,7 +79,7 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 		cfg.ConnConfig.RuntimeParams["experimental_enable_hash_sharded_indexes"] = "true"
 
 		pool.Close()
-		pool, err = pgxpool.ConnectConfig(ctx, cfg)
+		pool, err = pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
 			return nil, errors.Wrap(err, "could not re-open pool")
 		}
@@ -110,7 +110,7 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 }
 
 // GetRowCount returns the number of rows in the table.
-func GetRowCount(ctx context.Context, db pgxtype.Querier, name ident.Table) (int, error) {
+func GetRowCount(ctx context.Context, db types.Querier, name ident.Table) (int, error) {
 	var count int
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		return db.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", name)).Scan(&count)

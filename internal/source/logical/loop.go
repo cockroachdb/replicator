@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -88,7 +87,7 @@ type loop struct {
 	memo    types.Memo
 	stopped chan struct{}
 	// Used to update the consistentPoint in the target database.
-	targetPool pgxtype.Querier
+	targetPool types.Querier
 
 	// This represents a position in the source's transaction log.
 	// The value in this struct should only be accessed when holding

@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,7 +55,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "transaction not open")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(pgxtype.Querier) error { return nil }),
+			g.Use(func(types.Querier) error { return nil }),
 			"transaction not open")
 	})
 
@@ -80,7 +80,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "transaction not open")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(pgxtype.Querier) error { return nil }),
+			g.Use(func(types.Querier) error { return nil }),
 			"transaction not open")
 	})
 
@@ -98,7 +98,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "keepalive previously failed")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(pgxtype.Querier) error { return nil }),
+			g.Use(func(types.Querier) error { return nil }),
 			"keepalive previously failed")
 	})
 
@@ -113,7 +113,7 @@ func TestGuard(t *testing.T) {
 		a.NotNil(g.getTX())
 
 		// Do a bad thing and kill the network connection.
-		a.NoError(g.Use(func(tx pgxtype.Querier) error {
+		a.NoError(g.Use(func(tx types.Querier) error {
 			return tx.(pgx.Tx).Conn().Close(ctx)
 		}))
 
@@ -127,7 +127,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "keepalive previously failed")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(pgxtype.Querier) error { return nil }),
+			g.Use(func(types.Querier) error { return nil }),
 			"keepalive previously failed")
 	})
 

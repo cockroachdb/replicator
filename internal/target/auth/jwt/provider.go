@@ -21,7 +21,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -33,7 +32,7 @@ var Set = wire.NewSet(ProvideAuth)
 // This provider will also start a background goroutine to look for
 // configuration changes in the database.
 func ProvideAuth(
-	ctx context.Context, db pgxtype.Querier, stagingDB ident.StagingDB,
+	ctx context.Context, db types.Querier, stagingDB ident.StagingDB,
 ) (auth types.Authenticator, cancel func(), err error) {
 	cancel = func() {}
 

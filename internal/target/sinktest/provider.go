@@ -23,8 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/google/wire"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -40,7 +39,7 @@ var TestSet = wire.NewSet(
 	ProvideWatcher,
 	ProvideStagingDB,
 
-	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
+	wire.Bind(new(types.Querier), new(*pgxpool.Pool)),
 	wire.Struct(new(BaseFixture), "*"),
 	wire.Struct(new(Fixture), "*"),
 )
@@ -113,7 +112,7 @@ var dbIdentCounter int32
 // provideTestDB creates a SQL DATABASE with a unique name that will be
 // dropped when the cancel function is called.
 func provideTestDB(
-	ctx context.Context, pool pgxtype.Querier, prefix string,
+	ctx context.Context, pool types.Querier, prefix string,
 ) (ident.Ident, func(), error) {
 	dbNum := atomic.AddInt32(&dbIdentCounter, 1)
 

@@ -18,10 +18,10 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -48,7 +48,7 @@ type Pool struct {
 	}
 }
 
-var _ pgxtype.Querier = (*Pool)(nil)
+var _ types.Querier = (*Pool)(nil)
 
 // Begin opens a new transaction to concentrate work into.
 func (s *Pool) Begin(ctx context.Context) error {
@@ -80,19 +80,19 @@ func (s *Pool) Commit(ctx context.Context) error {
 	return tx.Commit(ctx)
 }
 
-// Exec implements pgxtype.Querier and can only be called after Begin.
+// Exec implements types.Querier and can only be called after Begin.
 func (s *Pool) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	tx := s.mu.tx
 	if tx == nil {
-		return nil, errors.New(noTxMsg)
+		return pgconn.NewCommandTag(""), errors.New(noTxMsg)
 	}
 	return tx.Exec(ctx, sql, arguments...)
 }
 
-// Query implements pgxtype.Querier and can only be called after Begin.
+// Query implements types.Querier and can only be called after Begin.
 // The Rows that are returned from this method must be closed, fully
 // consumed, or encounter an error before other query methods will be
 // allowed to proceed.
@@ -130,7 +130,7 @@ func (s *Pool) queryLocked(
 	return ret, err
 }
 
-// QueryRow implements pgxtype.Querier and can only be called after
+// QueryRow implements types.Querier and can only be called after
 // Begin. The Row that is returned must be scanned before any other
 // query methods wil be allowed to proceed.
 func (s *Pool) QueryRow(ctx context.Context, sql string, optionsAndArgs ...any) pgx.Row {

@@ -22,14 +22,15 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/jackc/pgtype/pgxtype"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 )
 
 // An Applier accepts some number of Mutations and applies them to
 // a target table.
 type Applier interface {
-	Apply(context.Context, pgxtype.Querier, []Mutation) error
+	Apply(context.Context, Querier, []Mutation) error
 }
 
 // Appliers is a factory for Applier instances.
@@ -100,9 +101,9 @@ type Leases interface {
 type Memo interface {
 	// Get retrieves the value associate to the given key.
 	// If the value is not found, a nil slice is returned.
-	Get(ctx context.Context, tx pgxtype.Querier, key string) ([]byte, error)
+	Get(ctx context.Context, tx Querier, key string) ([]byte, error)
 	// Put stores a value associated to the key.
-	Put(ctx context.Context, tx pgxtype.Querier, key string, value []byte) error
+	Put(ctx context.Context, tx Querier, key string, value []byte) error
 }
 
 // A Mutation describes a row to upsert into the target database.  That
@@ -129,22 +130,22 @@ type Stager interface {
 	// or equal to the given end time. Note that this call may take an
 	// arbitrarily long amount of time to complete and its effects may
 	// not occur within a single database transaction.
-	Retire(ctx context.Context, db pgxtype.Querier, end hlc.Time) error
+	Retire(ctx context.Context, db Querier, end hlc.Time) error
 
 	// Select will return all queued mutations between the timestamps.
-	Select(ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time) ([]Mutation, error)
+	Select(ctx context.Context, tx Querier, prev, next hlc.Time) ([]Mutation, error)
 
 	// SelectPartial will return queued mutations between the
 	// timestamps. The after and limit arguments are used together when
 	// backfilling large amounts of data.
-	SelectPartial(ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time, afterKey []byte, limit int) ([]Mutation, error)
+	SelectPartial(ctx context.Context, tx Querier, prev, next hlc.Time, afterKey []byte, limit int) ([]Mutation, error)
 
 	// Store implementations should be idempotent.
-	Store(ctx context.Context, db pgxtype.Querier, muts []Mutation) error
+	Store(ctx context.Context, db Querier, muts []Mutation) error
 
 	// TransactionTimes returns  distinct timestamps in the range
 	// (after, before] for which there is data in the associated table.
-	TransactionTimes(ctx context.Context, tx pgxtype.Querier, before, after hlc.Time) ([]hlc.Time, error)
+	TransactionTimes(ctx context.Context, tx Querier, before, after hlc.Time) ([]hlc.Time, error)
 }
 
 // SelectManyCallback is provided to Stagers.SelectMany to receive the
@@ -180,7 +181,7 @@ type Stagers interface {
 	//
 	// This method will update the fields within the cursor so that it
 	// can be used to restart in case of interruption.
-	SelectMany(ctx context.Context, tx pgxtype.Querier, q *SelectManyCursor, fn SelectManyCallback) error
+	SelectMany(ctx context.Context, tx Querier, q *SelectManyCursor, fn SelectManyCallback) error
 }
 
 // ColData hold SQL column metadata.
@@ -190,6 +191,18 @@ type ColData struct {
 	Primary bool
 	// Type of the column. Dialect might choose to use a string representation or a enum.
 	Type any
+}
+
+// Querier is implemented by pgxpool.Pool, pgxpool.Conn, pgxpool.Tx,
+// pgx.Conn, and pgx.Tx types. This allows a degree of flexibility in
+// defining types that require a database connection.
+//
+// The Querier type used to be imported from the
+// github.com/jackc/pgtype, but that is v4 only.
+type Querier interface {
+	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, optionsAndArgs ...interface{}) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, optionsAndArgs ...interface{}) pgx.Row
 }
 
 // SchemaData holds SQL schema metadata.
@@ -219,7 +232,7 @@ type Watcher interface {
 	// Refresh will force the Watcher to immediately query the database
 	// for updated schema information. This is intended for testing and
 	// does not need to be called in the general case.
-	Refresh(context.Context, pgxtype.Querier) error
+	Refresh(context.Context, Querier) error
 	// Snapshot returns the tables known to be part of the given
 	// user-defined schema.
 	Snapshot(in ident.Schema) *SchemaData

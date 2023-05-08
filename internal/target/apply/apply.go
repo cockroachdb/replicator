@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/msort"
 	"github.com/cockroachdb/cdc-sink/internal/util/pjson"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -130,7 +129,7 @@ func newApply(
 }
 
 // Apply applies the mutations to the target table.
-func (a *apply) Apply(ctx context.Context, tx pgxtype.Querier, muts []types.Mutation) error {
+func (a *apply) Apply(ctx context.Context, tx types.Querier, muts []types.Mutation) error {
 	start := time.Now()
 	deletes, r := batches.Mutation()
 	defer r()
@@ -189,7 +188,7 @@ func (a *apply) Apply(ctx context.Context, tx pgxtype.Querier, muts []types.Muta
 	return nil
 }
 
-func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []types.Mutation) error {
+func (a *apply) deleteLocked(ctx context.Context, db types.Querier, muts []types.Mutation) error {
 	if len(muts) == 0 {
 		return nil
 	}
@@ -240,7 +239,7 @@ func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 	return nil
 }
 
-func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []types.Mutation) error {
+func (a *apply) upsertLocked(ctx context.Context, db types.Querier, muts []types.Mutation) error {
 	if len(muts) == 0 {
 		return nil
 	}

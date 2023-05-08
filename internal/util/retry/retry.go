@@ -17,8 +17,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgtype/pgxtype"
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Marker is a settable flag.
@@ -32,7 +32,7 @@ func (m *Marker) Marked() bool { return bool(*m) }
 
 // Execute is a wrapper around Retry that can be used for sql
 // queries that don't have any return values.
-func Execute(ctx context.Context, db pgxtype.Querier, query string, args ...any) error {
+func Execute(ctx context.Context, db types.Querier, query string, args ...any) error {
 	return Retry(ctx, func(ctx context.Context) error {
 		_, err := db.Exec(ctx, query, args...)
 		return err

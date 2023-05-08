@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -57,7 +56,7 @@ var _ types.Watcher = (*watcher)(nil)
 // named database. The returned watcher will internally refresh
 // until the cancel callback is executed.
 func newWatcher(
-	ctx context.Context, tx pgxtype.Querier, dbName ident.Ident,
+	ctx context.Context, tx types.Querier, dbName ident.Ident,
 ) (_ *watcher, cancel func(), _ error) {
 	background, cancel := context.WithCancel(context.Background())
 
@@ -104,7 +103,7 @@ func (w *watcher) Get() *types.SchemaData {
 
 // Refresh immediately refreshes the watcher's internal cache. This
 // is intended for use by tests.
-func (w *watcher) Refresh(ctx context.Context, tx pgxtype.Querier) error {
+func (w *watcher) Refresh(ctx context.Context, tx types.Querier) error {
 	data, err := w.getTables(ctx, tx)
 	if err != nil {
 		return err
@@ -197,7 +196,7 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 
 const tableTemplate = `SELECT schema_name, table_name FROM [SHOW TABLES FROM %s] WHERE type = 'table'`
 
-func (w *watcher) getTables(ctx context.Context, tx pgxtype.Querier) (*types.SchemaData, error) {
+func (w *watcher) getTables(ctx context.Context, tx types.Querier) (*types.SchemaData, error) {
 	ret := &types.SchemaData{
 		Columns: make(map[ident.Table][]types.ColData),
 	}

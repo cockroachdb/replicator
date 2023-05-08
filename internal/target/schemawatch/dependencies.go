@@ -14,9 +14,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 )
 
@@ -79,7 +79,7 @@ ORDER BY 3, 1, 2
 // within the given database. The order of the slice will satisfy
 // the (acyclic) foreign-key dependency graph.
 func getDependencyOrder(
-	ctx context.Context, tx pgxtype.Querier, db ident.Ident,
+	ctx context.Context, tx types.Querier, db ident.Ident,
 ) ([][]ident.Table, error) {
 	stmt := fmt.Sprintf(depOrderTemplate, db)
 

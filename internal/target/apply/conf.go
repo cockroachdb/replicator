@@ -21,7 +21,6 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -98,7 +97,7 @@ func (t *Config) IsZero() bool {
 // configurations.
 type Configs struct {
 	dataChanged *sync.Cond
-	pool        pgxtype.Querier
+	pool        types.Querier
 
 	// Parent context of all watch behaviors. When the background
 	// refresh loop is stopped, we can cancel all watches as there will
@@ -302,7 +301,7 @@ func (c *Configs) refreshLoop(ctx context.Context) {
 // instead, call Refresh once the associated database transaction has
 // committed.
 func (c *Configs) Store(
-	ctx context.Context, tx pgxtype.Querier, table ident.Table, cfg *Config,
+	ctx context.Context, tx types.Querier, table ident.Table, cfg *Config,
 ) error {
 	// Delete existing configuration data for the table.
 	if _, err := tx.Exec(ctx,
