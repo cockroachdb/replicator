@@ -1,6 +1,6 @@
 module github.com/cockroachdb/cdc-sink
 
-go 1.19
+go 1.20
 
 require (
 	cloud.google.com/go/firestore v1.9.0
@@ -30,7 +30,7 @@ require (
 	golang.org/x/tools v0.8.0
 	google.golang.org/api v0.118.0
 	google.golang.org/grpc v1.54.0
-	honnef.co/go/tools v0.3.3
+	honnef.co/go/tools v0.4.3
 )
 
 require (
@@ -38,7 +38,7 @@ require (
 	cloud.google.com/go/compute v1.19.0 // indirect
 	cloud.google.com/go/compute/metadata v0.2.3 // indirect
 	cloud.google.com/go/longrunning v0.4.1 // indirect
-	github.com/BurntSushi/toml v1.2.0 // indirect
+	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/cockroachdb/gostdlib v1.19.0 // indirect
@@ -70,10 +70,10 @@ require (
 	go.opencensus.io v0.24.0 // indirect
 	go.uber.org/atomic v1.10.0 // indirect
 	golang.org/x/crypto v0.8.0 // indirect
-	golang.org/x/exp/typeparams v0.0.0-20220916125017-b168a2c6b86b // indirect
+	golang.org/x/exp/typeparams v0.0.0-20230425010034-47ecfdc1ba53 // indirect
 	golang.org/x/mod v0.10.0 // indirect
 	golang.org/x/oauth2 v0.7.0 // indirect
-	golang.org/x/sys v0.7.0 // indirect
+	golang.org/x/sys v0.8.0 // indirect
 	golang.org/x/text v0.9.0 // indirect
 	golang.org/x/time v0.1.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect

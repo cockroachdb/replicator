@@ -15,7 +15,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -52,8 +51,6 @@ func bootstrap(ctx context.Context) (*DBInfo, error) {
 	}
 
 	// Create the testing database
-	rand.Seed(time.Now().UnixNano())
-
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
