@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
@@ -68,10 +69,12 @@ func TestResolvedURL(t *testing.T) {
 		u         string
 		expect    string
 		expectErr bool
+		time      hlc.Time
 	}{
 		{
-			u:      "/db/public/2020-04-04/202004042351304139680000000000456.RESOLVED",
+			u:      "/db/public/2020-04-04/202011221122335555555556666666666.RESOLVED",
 			expect: "db.public",
+			time:   hlc.New(1606044153_555555555, 6666666666),
 		},
 		{
 			u:         "/db/2020-04-04/202004042351304139680000000000456.RESOLVED",
@@ -97,6 +100,7 @@ func TestResolvedURL(t *testing.T) {
 			}
 			if a.NoError(err) {
 				a.Equal(tc.expect, req.target.AsSchema().Raw())
+				a.Equal(tc.time, req.timestamp)
 			}
 		})
 	}

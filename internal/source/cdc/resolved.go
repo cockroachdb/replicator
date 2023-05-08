@@ -83,7 +83,7 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 	if err != nil {
 		return hlc.Time{}, err
 	}
-	timestampParsed.Add(nanos)
+	timestampParsed = timestampParsed.Add(nanos)
 
 	// Parse out the logical timestamp
 	logicalParsed, err := strconv.Atoi(logical)
