@@ -23,9 +23,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/google/uuid"
-	"github.com/jackc/pgconn"
 	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgproto3/v2"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

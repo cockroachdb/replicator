@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -120,7 +120,7 @@ func (g *Guard) Rollback() {
 }
 
 // Use accesses the underlying transaction in a thread-safe manner.
-func (g *Guard) Use(fn func(tx pgxtype.Querier) error) error {
+func (g *Guard) Use(fn func(tx types.Querier) error) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 

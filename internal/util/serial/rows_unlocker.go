@@ -13,9 +13,8 @@ package serial
 import (
 	"runtime"
 
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgproto3/v2"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // rowsUnlocker will call an Unlock method once the Rows has been
@@ -26,6 +25,10 @@ type rowsUnlocker struct {
 }
 
 var _ pgx.Rows = (*rowsUnlocker)(nil)
+
+func (r *rowsUnlocker) Conn() *pgx.Conn {
+	return r.r.Conn()
+}
 
 func (r *rowsUnlocker) CommandTag() pgconn.CommandTag {
 	return r.r.CommandTag()
@@ -44,7 +47,7 @@ func (r *rowsUnlocker) Err() error {
 	return err
 }
 
-func (r *rowsUnlocker) FieldDescriptions() []pgproto3.FieldDescription {
+func (r *rowsUnlocker) FieldDescriptions() []pgconn.FieldDescription {
 	return r.r.FieldDescriptions()
 }
 

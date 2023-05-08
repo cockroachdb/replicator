@@ -14,9 +14,8 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgproto3/v2"
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
@@ -36,13 +35,14 @@ type fakeRows struct {
 
 var _ pgx.Rows = (*fakeRows)(nil)
 
-func (f *fakeRows) Close()                                         {}
-func (f *fakeRows) CommandTag() pgconn.CommandTag                  { return nil }
-func (f *fakeRows) Err() error                                     { return f.err }
-func (f *fakeRows) FieldDescriptions() []pgproto3.FieldDescription { return nil }
-func (f *fakeRows) RawValues() [][]byte                            { return nil }
-func (f *fakeRows) Scan(...any) error                              { return f.err }
-func (f *fakeRows) Values() ([]any, error)                         { return nil, f.err }
+func (f *fakeRows) Close()                                       {}
+func (f *fakeRows) Conn() *pgx.Conn                              { return nil }
+func (f *fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("") }
+func (f *fakeRows) Err() error                                   { return f.err }
+func (f *fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (f *fakeRows) RawValues() [][]byte                          { return nil }
+func (f *fakeRows) Scan(...any) error                            { return f.err }
+func (f *fakeRows) Values() ([]any, error)                       { return nil, f.err }
 
 func (f *fakeRows) Next() bool {
 	if f.rowCount == 0 {

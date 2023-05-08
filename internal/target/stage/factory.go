@@ -23,9 +23,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -73,7 +72,7 @@ func (f *factory) getUnlocked(table ident.Table) *stage {
 
 // SelectMany implements types.Stagers.
 func (f *factory) SelectMany(
-	ctx context.Context, tx pgxtype.Querier, q *types.SelectManyCursor, fn types.SelectManyCallback,
+	ctx context.Context, tx types.Querier, q *types.SelectManyCursor, fn types.SelectManyCallback,
 ) error {
 	if q.Limit == 0 {
 		return errors.New("limit must be set")

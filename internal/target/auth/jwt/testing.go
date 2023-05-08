@@ -23,14 +23,13 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/golang-jwt/jwt/v4"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 )
 
 // InsertTestingKey generates a new private key and updates the existing
 // Authenticator with the associated public key.
 func InsertTestingKey(
-	ctx context.Context, tx pgxtype.Querier, auth types.Authenticator, stagingDB ident.StagingDB,
+	ctx context.Context, tx types.Querier, auth types.Authenticator, stagingDB ident.StagingDB,
 ) (method jwt.SigningMethod, signer crypto.PrivateKey, err error) {
 	impl, ok := auth.(*authenticator)
 	if !ok {
@@ -55,7 +54,7 @@ func InsertTestingKey(
 
 // insertKey inserts a PEM-encoded key into the database.
 func insertKey(
-	ctx context.Context, tx pgxtype.Querier, stagingDB ident.Ident, pemBytes []byte,
+	ctx context.Context, tx types.Querier, stagingDB ident.Ident, pemBytes []byte,
 ) error {
 	keyTable := ident.NewTable(stagingDB, ident.Public, PublicKeysTable)
 	_, err := tx.Exec(ctx,
@@ -84,7 +83,7 @@ func makeKeyBytes() (jwt.SigningMethod, crypto.PrivateKey, []byte, error) {
 // Authenticator.
 func InsertRevokedToken(
 	ctx context.Context,
-	tx pgxtype.Querier,
+	tx types.Querier,
 	auth types.Authenticator,
 	stagingDB ident.StagingDB,
 	id string,

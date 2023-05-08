@@ -30,10 +30,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -79,7 +78,7 @@ var _ types.Stager = (*stage)(nil)
 // newStore constructs a new mutation stage that will track pending
 // mutations to be applied to the given target table.
 func newStore(
-	ctx context.Context, db pgxtype.Querier, stagingDB ident.Ident, target ident.Table,
+	ctx context.Context, db types.Querier, stagingDB ident.Ident, target ident.Table,
 ) (*stage, error) {
 	table := stagingTable(stagingDB, target)
 
@@ -129,7 +128,7 @@ ORDER BY nanos, logical
 // TransactionTimes implements types.Stager and returns timestamps for
 // which data is available in the (before, after] range.
 func (s *stage) TransactionTimes(
-	ctx context.Context, tx pgxtype.Querier, before, after hlc.Time,
+	ctx context.Context, tx types.Querier, before, after hlc.Time,
 ) ([]hlc.Time, error) {
 	var ret []hlc.Time
 	err := retry.Retry(ctx, func(ctx context.Context) error {
@@ -192,14 +191,14 @@ SELECT key, nanos, logical, mut
 
 // Select implements types.Stager.
 func (s *stage) Select(
-	ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time,
+	ctx context.Context, tx types.Querier, prev, next hlc.Time,
 ) ([]types.Mutation, error) {
 	return s.SelectPartial(ctx, tx, prev, next, nil, -1)
 }
 
 // SelectPartial implements types.Stager.
 func (s *stage) SelectPartial(
-	ctx context.Context, tx pgxtype.Querier, prev, next hlc.Time, afterKey []byte, limit int,
+	ctx context.Context, tx types.Querier, prev, next hlc.Time, afterKey []byte, limit int,
 ) ([]types.Mutation, error) {
 	if hlc.Compare(prev, next) > 0 {
 		return nil, errors.Errorf("timestamps out of order: %s > %s", prev, next)
@@ -289,7 +288,7 @@ UPSERT INTO %s (nanos, logical, key, mut)
 SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[])`
 
 // Store stores some number of Mutations into the database.
-func (s *stage) Store(ctx context.Context, db pgxtype.Querier, mutations []types.Mutation) error {
+func (s *stage) Store(ctx context.Context, db types.Querier, mutations []types.Mutation) error {
 	start := time.Now()
 
 	// If we're working with a pool, and not a transaction, we'll stage
@@ -329,7 +328,7 @@ func (s *stage) Store(ctx context.Context, db pgxtype.Querier, mutations []types
 	return nil
 }
 
-func (s *stage) putOne(ctx context.Context, db pgxtype.Querier, mutations []types.Mutation) error {
+func (s *stage) putOne(ctx context.Context, db types.Querier, mutations []types.Mutation) error {
 	nanos := make([]int64, len(mutations))
 	logical := make([]int, len(mutations))
 	keys := make([]string, len(mutations))
@@ -395,7 +394,7 @@ SELECT last_value(nanos) OVER (), last_value(logical) OVER ()
  LIMIT 1`
 
 // Retire deletes staged data up to the given end time.
-func (s *stage) Retire(ctx context.Context, db pgxtype.Querier, end hlc.Time) error {
+func (s *stage) Retire(ctx context.Context, db types.Querier, end hlc.Time) error {
 	start := time.Now()
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		for hlc.Compare(s.retireFrom, end) < 0 {

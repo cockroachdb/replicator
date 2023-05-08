@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v5/pgconn"
 	log "github.com/sirupsen/logrus"
 )
 

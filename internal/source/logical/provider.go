@@ -18,8 +18,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -32,7 +31,7 @@ var Set = wire.NewSet(
 	ProvideStagingDB,
 	ProvideUserScriptConfig,
 	ProvideUserScriptTarget,
-	wire.Bind(new(pgxtype.Querier), new(*pgxpool.Pool)),
+	wire.Bind(new(types.Querier), new(*pgxpool.Pool)),
 )
 
 // ProvideBaseConfig is called by wire to extract the BaseConfig from
@@ -97,7 +96,7 @@ func ProvidePool(ctx context.Context, config *BaseConfig) (*pgxpool.Pool, func()
 		rp["idle_in_transaction_session_timeout"] = txTimeout.String()
 	}
 
-	targetPool, err := pgxpool.ConnectConfig(ctx, targetCfg)
+	targetPool, err := pgxpool.NewWithConfig(ctx, targetCfg)
 	cancelMetrics := stdpool.PublishMetrics(targetPool)
 	return targetPool, func() {
 		cancelMetrics()

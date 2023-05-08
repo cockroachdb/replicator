@@ -51,7 +51,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/gofrs/uuid"
 	"github.com/golang-jwt/jwt/v4"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -155,7 +154,7 @@ CREATE TABLE IF NOT EXISTS %s (
 
 // refresh will load PEM-encoded public keys from the database table
 // as well as a list of revoked JWT token ids.
-func (a *authenticator) refresh(ctx context.Context, tx pgxtype.Querier) error {
+func (a *authenticator) refresh(ctx context.Context, tx types.Querier) error {
 	var nextKeys []crypto.PublicKey
 	nextRevoked := make(map[string]struct{})
 

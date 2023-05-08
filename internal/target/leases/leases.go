@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/google/uuid"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -35,8 +34,8 @@ const (
 
 // Config is passed to New.
 type Config struct {
-	Pool   pgxtype.Querier // Database access.
-	Target ident.Table     // The lease table.
+	Pool   types.Querier // Database access.
+	Target ident.Table   // The lease table.
 
 	// Guard provides a quiescent period between when a lease is
 	// considered to be expired (i.e. a lease callback's context is

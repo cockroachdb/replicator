@@ -21,7 +21,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 

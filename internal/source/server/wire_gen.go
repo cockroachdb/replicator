@@ -8,6 +8,8 @@ package server
 
 import (
 	"context"
+	"net"
+
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
@@ -17,11 +19,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/jackc/pgx/v4/pgxpool"
-	"net"
-)
+	"github.com/jackc/pgx/v5/pgxpool"
 
-import (
 	_ "net/http/pprof"
 )
 

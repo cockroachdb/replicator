@@ -10,7 +10,7 @@
 
 package sinktest
 
-import "github.com/jackc/pgx/v4/pgxpool"
+import "github.com/jackc/pgx/v5/pgxpool"
 
 // DBInfo encapsulates metadata and a connection to a database.
 type DBInfo struct {

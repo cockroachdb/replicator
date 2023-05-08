@@ -22,9 +22,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/jackc/pgtype/pgxtype"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -666,7 +665,7 @@ WHERE target_applied_at IS NULL
 // instance. This function is declared here to keep the sql queries in a
 // single file. It is exported to aid in testing.
 func ScanForTargetSchemas(
-	ctx context.Context, db pgxtype.Querier, metaTable ident.Table,
+	ctx context.Context, db types.Querier, metaTable ident.Table,
 ) ([]ident.Schema, error) {
 	rows, err := db.Query(ctx, fmt.Sprintf(scanForTargetTemplate, metaTable))
 	if err != nil {

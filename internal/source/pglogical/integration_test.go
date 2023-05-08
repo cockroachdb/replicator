@@ -26,7 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
@@ -381,7 +381,7 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	baseConn, err := pgxpool.Connect(ctx, *pgConnString)
+	baseConn, err := pgxpool.New(ctx, *pgConnString)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -395,7 +395,7 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 	// Open the pool, using the newly-created database.
 	next := baseConn.Config().Copy()
 	next.ConnConfig.Database = database.Raw()
-	retConn, err := pgxpool.ConnectConfig(ctx, next)
+	retConn, err := pgxpool.NewWithConfig(ctx, next)
 	if err != nil {
 		return nil, func() {}, err
 	}

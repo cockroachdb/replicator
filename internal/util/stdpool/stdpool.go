@@ -17,15 +17,16 @@ import (
 	"net"
 	"time"
 
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
 const (
-	defaultMaxLifetime = 10 * time.Minute
-	defaultMinConns    = 1
-	defaultMaxConns    = 128
+	defaultMaxLifetime       = 10 * time.Minute
+	defaultMaxLifetimeJitter = time.Minute
+	defaultMinConns          = 1
+	defaultMaxConns          = 128
 )
 
 // ParseConfig parses a pgxpool.Config with common defaults.
@@ -45,7 +46,12 @@ func ParseConfig(connectString string) (*pgxpool.Config, error) {
 	}
 
 	// Ensure connection diversity through long-lived loadbalancers.
-	cfg.MaxConnLifetime = defaultMaxLifetime
+	if cfg.MaxConnLifetime == 0 {
+		cfg.MaxConnLifetime = defaultMaxLifetime
+	}
+	if cfg.MaxConnLifetimeJitter == 0 {
+		cfg.MaxConnLifetimeJitter = defaultMaxLifetimeJitter
+	}
 	// Add reasonable bounds to pool size.
 	cfg.MinConns = defaultMinConns
 	if cfg.MaxConns < defaultMaxConns {

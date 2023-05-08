@@ -18,7 +18,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/jackc/pgtype/pgxtype"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 )
@@ -28,7 +27,7 @@ import (
 type fanWorkers struct {
 	appliers     types.Appliers
 	batchSize    int
-	pool         pgxtype.Querier
+	pool         types.Querier
 	stamp        stamp.Stamp
 	workerStatus func() error
 

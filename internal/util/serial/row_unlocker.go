@@ -13,7 +13,7 @@ package serial
 import (
 	"runtime"
 
-	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v5"
 )
 
 // rowUnlocker calls an Unlock method once it has been scanned.
