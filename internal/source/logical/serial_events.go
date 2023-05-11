@@ -33,13 +33,6 @@ type serialEvents struct {
 
 var _ Events = (*serialEvents)(nil)
 
-// AwaitConsistentPoint implements State.  It delegates to the loop.
-func (e *serialEvents) AwaitConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) (stamp.Stamp, error) {
-	return e.loop.AwaitConsistentPoint(ctx, comparison, point)
-}
-
 // Backfill implements Events. It delegates to the enclosing loop.
 func (e *serialEvents) Backfill(
 	ctx context.Context, source string, backfiller Backfiller, options ...Option,
@@ -47,11 +40,23 @@ func (e *serialEvents) Backfill(
 	return e.loop.doBackfill(ctx, source, backfiller, options...)
 }
 
+// Flush returns nil, since OnData() writes values immediately.
+func (e *serialEvents) Flush(context.Context) error {
+	return nil
+}
+
 // GetConsistentPoint implements State. It delegates to the loop.
 func (e *serialEvents) GetConsistentPoint() stamp.Stamp { return e.loop.GetConsistentPoint() }
 
 // GetTargetDB implements State. It delegates to the loop.
 func (e *serialEvents) GetTargetDB() ident.Ident { return e.loop.GetTargetDB() }
+
+// NotifyConsistentPoint implements State.  It delegates to the loop.
+func (e *serialEvents) NotifyConsistentPoint(
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
+) <-chan stamp.Stamp {
+	return e.loop.NotifyConsistentPoint(ctx, comparison, point)
+}
 
 // OnBegin implements Events.
 func (e *serialEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
@@ -90,16 +95,21 @@ func (e *serialEvents) OnData(
 	return app.Apply(ctx, e.tx, muts)
 }
 
-// OnRollback implements Events and delegates to stop.
+// OnRollback implements Events and delegates to drain.
 func (e *serialEvents) OnRollback(ctx context.Context, msg Message) error {
 	if !IsRollback(msg) {
 		return errors.New("the rollback message must be passed to OnRollback")
 	}
-	return e.stop(ctx)
+	return e.drain(ctx)
 }
 
-// stop implements Events.
-func (e *serialEvents) stop(_ context.Context) error {
+// Stopping implements State and delegates to the enclosing loop.
+func (e *serialEvents) Stopping() <-chan struct{} {
+	return e.loop.Stopping()
+}
+
+// drain implements Events.
+func (e *serialEvents) drain(_ context.Context) error {
 	if e.tx != nil {
 		_ = e.tx.Rollback(context.Background())
 	}

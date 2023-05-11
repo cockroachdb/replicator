@@ -125,6 +125,10 @@ func (g *generatorDialect) ReadInto(
 				g.readIntoMu.lastBatchSent = nextBatchNumber
 				g.readIntoMu.Unlock()
 
+			case <-state.Stopping():
+				// Graceful shutdown requested.
+				return nil
+
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -135,6 +139,8 @@ func (g *generatorDialect) ReadInto(
 		// Wait for more work or to be shut down
 		select {
 		case <-g.workRequested:
+		case <-state.Stopping():
+			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}

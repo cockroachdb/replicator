@@ -101,6 +101,14 @@ func (t *Tombstones) NotifyDeleted(ref *firestore.DocumentRef) {
 func (t *Tombstones) ReadInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
+	// Make call to snaps.Next() interruptable.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		<-state.Stopping()
+		cancel()
+	}()
+
 	cp, _ := state.GetConsistentPoint().(*consistentPoint)
 	q := t.coll.
 		OrderBy(t.cfg.UpdatedAtProperty.Raw(), firestore.Asc).
