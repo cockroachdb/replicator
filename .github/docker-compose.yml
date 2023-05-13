@@ -105,3 +105,14 @@ services:
       - postgres
       - -c
       - wal_level=logical
+  postgresql-v15:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: SoupOrSecret
+    ports:
+      - "5432:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+
