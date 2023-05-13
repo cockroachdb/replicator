@@ -178,23 +178,25 @@ func TestLeases(t *testing.T) {
 	t.Run("keepRenewed", func(t *testing.T) {
 		a := assert.New(t)
 
-		// Increase polling rate and lower lifetime.
-		oldCfg := l.cfg
-		l.cfg.Lifetime = 100 * time.Millisecond
-		l.cfg.Poll = 5 * time.Millisecond
-		defer func() { l.cfg = oldCfg }()
-
 		initial, ok, err := l.acquire(ctx, t.Name())
 		a.NoError(err)
 		a.True(ok)
 		a.NotZero(initial)
 
-		// Keep the
-		renewCtx, cancel := context.WithTimeout(ctx, 3*l.cfg.Lifetime)
-		defer cancel()
-		final := l.keepRenewed(renewCtx, initial)
+		// Time remaining on lease.
+		renewed, retry := l.keepRenewedOnce(ctx, initial, initial.expires.Add(-time.Millisecond))
+		a.True(retry)
+		a.Greater(renewed.expires, initial.expires)
 
-		a.Greater(final.expires, initial.expires)
+		// Context canceled
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		_, retry = l.keepRenewedOnce(canceled, initial, initial.expires.Add(-time.Millisecond))
+		a.False(retry)
+
+		// Already expired
+		_, retry = l.keepRenewedOnce(ctx, initial, initial.expires.Add(time.Millisecond))
+		a.False(retry)
 	})
 
 	// Verify that keepRenewed will return if the lease row in the
