@@ -265,50 +265,62 @@ func (l *leases) waitToAcquire(ctx context.Context, name string) (acquired lease
 // context is canceled. It returns the status of the lease at the last
 // successful renewal to aid in testing.
 func (l *leases) keepRenewed(ctx context.Context, tgt lease) lease {
+	var retry bool
 	for {
-		now := time.Now().UTC()
-		remaining := tgt.expires.Sub(now)
-		// We haven't been able to renew before hitting the guard
-		// duration, so return and allow the lease to be canceled.
-		if remaining < l.cfg.Guard {
+		tgt, retry = l.keepRenewedOnce(ctx, tgt, time.Now().UTC())
+		if !retry {
 			return tgt
 		}
-		// Wait up to half of the remaining validity time before
-		// attempting to renew, but rate-limit to the polling interval.
-		delay := remaining / 2
-		if delay < l.cfg.Poll {
-			delay = l.cfg.Poll
-		}
+	}
+}
 
-		// Wait until it's time to do something, or we're canceled.
-		select {
-		case <-ctx.Done():
-			return tgt
-		case <-time.After(delay):
-		}
+// keepRenewedOnce allows the keepRenewed behavior to be tested without
+// depending on the system clock.
+func (l *leases) keepRenewedOnce(
+	ctx context.Context, tgt lease, now time.Time,
+) (_ lease, retry bool) {
+	remaining := tgt.expires.Sub(now)
+	// We haven't been able to renew before hitting the guard
+	// duration, so return and allow the lease to be canceled.
+	if remaining < l.cfg.Guard {
+		return tgt, false
+	}
+	// Wait up to half of the remaining validity time before
+	// attempting to renew, but rate-limit to the polling interval.
+	delay := remaining / 2
+	if delay < l.cfg.Poll {
+		delay = l.cfg.Poll
+	}
 
-		var ok bool
-		var err error
-		tgt, ok, err = l.renew(ctx, tgt)
+	// Wait until it's time to do something, or we're canceled.
+	select {
+	case <-ctx.Done():
+		return tgt, false
+	case <-time.After(delay):
+	}
 
-		entry := log.WithFields(log.Fields{
-			"expires": tgt.expires, // Include renewed expiration time.
-			"lease":   tgt.name,
-		})
+	var ok bool
+	var err error
+	tgt, ok, err = l.renew(ctx, tgt)
 
-		switch {
-		case errors.Is(err, context.Canceled):
-			entry.Trace("context canceled")
-			return tgt
-		case err != nil:
-			entry.WithError(err).Warn("could not renew lease")
-			continue
-		case !ok:
-			entry.Debug("lease was hijacked")
-			return tgt
-		default:
-			entry.Trace("renewed successfully")
-		}
+	entry := log.WithFields(log.Fields{
+		"expires": tgt.expires, // Include renewed expiration time.
+		"lease":   tgt.name,
+	})
+
+	switch {
+	case errors.Is(err, context.Canceled):
+		entry.Trace("context canceled")
+		return tgt, false
+	case err != nil:
+		entry.WithError(err).Warn("could not renew lease")
+		return tgt, true
+	case !ok:
+		entry.Debug("lease was hijacked")
+		return tgt, false
+	default:
+		entry.Trace("renewed successfully")
+		return tgt, true
 	}
 }
 
