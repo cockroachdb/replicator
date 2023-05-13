@@ -146,6 +146,7 @@ jobs:
           - "postgresql-v12"
           - "postgresql-v13"
           - "postgresql-v14"
+          - "postgresql-v15"
         # The cockroachdb value in this include block will collide with
         # the value from the auto-expanded matrix. The net effect is
         # that we'll skip integration tests against older versions of
