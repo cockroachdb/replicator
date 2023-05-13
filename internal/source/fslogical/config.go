@@ -30,6 +30,9 @@ type Config struct {
 	// Copies the document id from the doc metadata into the mutation
 	// using this property name.
 	DocumentIDProperty ident.Ident
+	// Enable extra tracking to allow selective re-processing of
+	// documents in a source collection.
+	Idempotent bool
 	// The Firebase project id. Usually inferred from the credentials.
 	ProjectID string
 	// The name of a collection that contains tombstones for documents
@@ -62,6 +65,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	// NB: Keep default value in sync with doc on tombstones.
 	f.Var(ident.NewValue("id", &c.DocumentIDProperty), "docID",
 		"the column name (likely the primary key) to populate with the document id")
+	f.BoolVar(&c.Idempotent, "idempotent", true,
+		"track received document ids and server times to prevent reprocessing")
 	f.StringVar(&c.LoopName, "loopName", "fslogical",
 		"identifies the logical replication loops in metrics")
 	f.StringVar(&c.ProjectID, "projectID", "",

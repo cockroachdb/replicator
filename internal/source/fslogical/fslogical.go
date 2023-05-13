@@ -24,9 +24,12 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/iterator"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Dialect reads data from Google Cloud Firestore.
@@ -34,7 +37,10 @@ type Dialect struct {
 	backfillBatchSize int                      // Limit backfill query response size.
 	docIDProperty     string                   // Added to mutation properties.
 	fs                *firestore.Client        // Access to Firestore.
+	idempotent        bool                     // Detect reprocessing the same document.
 	loops             *logical.Factory         // Support dynamic nested collections.
+	memo              types.Memo               // Durable logging of processed doc ids.
+	pool              *pgxpool.Pool            // Database access.
 	query             firestore.Query          // The base query build from.
 	recurse           bool                     // Scan for dynamic, nested collections.
 	recurseFilter     map[ident.Ident]struct{} // Ignore nested collections with these names.
@@ -72,34 +78,26 @@ type (
 func (d *Dialect) BackfillInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
-	// From will either be the update time of the last streamed record,
-	// or the range that we were backfilling from before being
-	// interrupted. If we were in the middle of backfilling, then we
-	// also want to pick up from the last document that was processed.
-	cp, _ := state.GetConsistentPoint().(*consistentPoint)
-	log.Tracef("backfilling %s from %s", d.sourcePath, cp)
-
-	var moreWork bool
-	var err error
+	prev, _ := state.GetConsistentPoint().(*consistentPoint)
 	to := time.Now()
-
 	for {
-		cp, moreWork, err = d.backfillOneBatch(ctx, ch, to, cp)
+		log.Tracef("backfilling %s from %s", d.sourcePath, prev)
+
+		err := d.backfillOneBatch(ctx, ch, to, prev, state)
+
 		if err != nil {
 			return errors.Wrap(err, d.sourcePath)
 		}
-		if moreWork {
+
+		select {
+		case next := <-state.NotifyConsistentPoint(ctx, logical.AwaitGT, prev):
+			prev = next.(*consistentPoint)
 			continue
+		case <-state.Stopping():
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		// If we've spent a non-trivial amount of time to complete
-		// the backfill, we may want to start a second backfill
-		// to catch up closer to a streaming point.
-		if time.Since(to) >= time.Minute {
-			to = time.Now()
-			continue
-		}
-		log.Debugf("finished backfilling collection %s", d.sourcePath)
-		return nil
 	}
 }
 
@@ -107,8 +105,24 @@ func (d *Dialect) BackfillInto(
 // It will return the next incremental consistentPoint and whether the
 // backfill is expected to continue.
 func (d *Dialect) backfillOneBatch(
-	ctx context.Context, ch chan<- logical.Message, now time.Time, cp *consistentPoint,
-) (_ *consistentPoint, moreWork bool, err error) {
+	ctx context.Context,
+	ch chan<- logical.Message,
+	now time.Time,
+	cp *consistentPoint,
+	state logical.State,
+) error {
+	// We need to make the call to snaps.Next() interruptable.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-state.Stopping():
+			// Cancel early to interrupt call to snaps.Next() below.
+			cancel()
+		case <-ctx.Done():
+			// Expected path when backfillOneBatch exits.
+		}
+	}()
 
 	// Iterate over the collection by (updated_at, __doc_id__) using
 	// a cursor-like approach so that we can checkpoint along the way.
@@ -129,7 +143,11 @@ func (d *Dialect) backfillOneBatch(
 
 	snap, err := snaps.Next()
 	if err != nil {
-		return nil, false, errors.WithStack(err)
+		// Mask cancellation errors.
+		if status.Code(err) == codes.Canceled || errors.Is(err, iterator.Done) {
+			return nil
+		}
+		return errors.WithStack(err)
 	}
 
 	// We're going to call GetAll since we're running with a reasonable
@@ -138,7 +156,7 @@ func (d *Dialect) backfillOneBatch(
 	// this batch of docs.
 	docs, err := snap.Documents.GetAll()
 	if err != nil {
-		return cp, false, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 	log.Tracef("received %d documents from %s", len(docs), d.sourcePath)
 
@@ -149,7 +167,7 @@ func (d *Dialect) backfillOneBatch(
 	for len(docs) > 0 {
 		firstCP, err := d.backfillPoint(docs[0])
 		if err != nil {
-			return cp, false, err
+			return err
 		}
 		if stamp.Compare(firstCP, cp) > 0 {
 			break
@@ -173,25 +191,25 @@ func (d *Dialect) backfillOneBatch(
 	// to the server read-time.
 	if len(docs) == 0 {
 		cp = streamPoint(snap.ReadTime)
-		return cp, false, send(backfillEnd{cp})
+		return send(backfillEnd{cp})
 	}
 
 	// Move the proposed consistent point to the last document.
 	lastDoc := docs[len(docs)-1]
 	if cp, err = d.backfillPoint(lastDoc); err != nil {
-		return cp, false, err
+		return err
 	}
 
 	// Send a batch of messages downstream.  We use a non-blocking idiom
 	if err := send(batchStart{cp}); err != nil {
-		return cp, false, err
+		return err
 	}
 	for _, doc := range docs {
 		if err := send(batchDoc{doc}); err != nil {
-			return cp, false, err
+			return err
 		}
 	}
-	return cp, true, send(batchEnd{})
+	return send(batchEnd{})
 }
 
 // ReadInto implements logical.Dialect and subscribes to streaming
@@ -199,6 +217,19 @@ func (d *Dialect) backfillOneBatch(
 func (d *Dialect) ReadInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
+	// The call to snaps.Next() below needs to be made interruptable.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-state.Stopping():
+			// Cancel early to interrupt call to snaps.Next() below.
+			cancel()
+		case <-ctx.Done():
+			// Normal exit path when ReadInto exits.
+		}
+	}()
+
 	cp, _ := state.GetConsistentPoint().(*consistentPoint)
 	// Stream from the last updated time.
 	q := d.query.
@@ -221,6 +252,10 @@ func (d *Dialect) ReadInto(
 		log.Tracef("getting snapshot for %s", d.sourcePath)
 		snap, err := snaps.Next()
 		if err != nil {
+			// Mask cancellations errors.
+			if status.Code(err) == codes.Canceled || errors.Is(err, iterator.Done) {
+				return nil
+			}
 			return errors.WithStack(err)
 		}
 		log.Tracef("collection %s: %d events", d.sourcePath, len(snap.Changes))
@@ -259,6 +294,13 @@ func (d *Dialect) ReadInto(
 func (d *Dialect) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
+	// Only write idempotency mark when we've committed a db transaction.
+	type mark struct {
+		ref  *firestore.DocumentRef
+		time time.Time
+	}
+	var toMark []mark
+
 	for msg := range ch {
 		if logical.IsRollback(msg) {
 			if err := events.OnRollback(ctx, msg); err != nil {
@@ -278,12 +320,20 @@ func (d *Dialect) Process(
 			}
 
 		case batchStart:
+			toMark = toMark[:0]
 			if err := events.OnBegin(ctx, t.cp); err != nil {
 				return err
 			}
 
 		case batchDoc:
 			doc := t.doc
+
+			if ok, err := d.shouldProcess(ctx, doc.Ref, doc.UpdateTime); err != nil {
+				return err
+			} else if !ok {
+				continue
+			}
+
 			docUpdatedAt, err := d.docUpdatedAt(doc)
 			if err != nil {
 				return err
@@ -307,7 +357,17 @@ func (d *Dialect) Process(
 				}
 			}
 
+			if d.idempotent {
+				toMark = append(toMark, mark{doc.Ref, doc.UpdateTime})
+			}
+
 		case batchDelete:
+			if ok, err := d.shouldProcess(ctx, t.ref, t.ts); err != nil {
+				return err
+			} else if !ok {
+				continue
+			}
+
 			mut, err := marshalDeletion(t.ref, t.ts)
 			if err != nil {
 				return err
@@ -320,9 +380,19 @@ func (d *Dialect) Process(
 				return err
 			}
 
+			if d.idempotent {
+				toMark = append(toMark, mark{t.ref, t.ts})
+			}
+
 		case batchEnd:
 			if err := events.OnCommit(ctx); err != nil {
 				return err
+			}
+
+			for _, mark := range toMark {
+				if err := d.markProcessed(ctx, mark.ref, mark.time); err != nil {
+					return err
+				}
 			}
 
 		default:
@@ -466,4 +536,62 @@ func (d *Dialect) doRecurse(
 			return errors.WithMessage(err, coll.Path)
 		}
 	}
+}
+
+// markProcessed records an incoming document as having been processed.
+func (d *Dialect) markProcessed(
+	ctx context.Context, doc *firestore.DocumentRef, ts time.Time,
+) error {
+	payload := processedPayload{UpdatedAt: ts}
+	data, err := json.Marshal(&payload)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return d.memo.Put(ctx, d.pool, processedKey(doc), data)
+}
+
+// shouldProcess implements idempotent processing of document snapshots.
+// It ensures that the update-time of any given document always
+// advances.
+func (d *Dialect) shouldProcess(
+	ctx context.Context, doc *firestore.DocumentRef, ts time.Time,
+) (bool, error) {
+	if !d.idempotent {
+		return true, nil
+	}
+
+	data, err := d.memo.Get(ctx, d.pool, processedKey(doc))
+	if err != nil {
+		return false, err
+	}
+
+	// No data means we're seeing the document for the first time.
+	if data == nil {
+		log.Tracef("accepting document %s at %s", doc.ID, ts)
+		return true, nil
+	}
+
+	var payload processedPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	if ts.After(payload.UpdatedAt) {
+		log.Tracef("accepting document %s at %s > %s", doc.ID, ts, payload.UpdatedAt)
+		return true, nil
+	}
+
+	log.Tracef("ignoring document %s at %s <= %s", doc.ID, ts, payload.UpdatedAt)
+	return false, nil
+}
+
+// processedPayload is used by markProcessed and shouldProcess.
+type processedPayload struct {
+	UpdatedAt time.Time `json:"u,omitempty"`
+}
+
+// processedKey returns the memo key used by markProcessed and
+// shouldProcess.
+func processedKey(ref *firestore.DocumentRef) string {
+	return fmt.Sprintf("fs-doc-%s", ref.Path)
 }

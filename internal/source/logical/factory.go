@@ -16,14 +16,10 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
-
-type loopCancel struct {
-	loop   *Loop
-	cancel func()
-}
 
 // Factory supports uses cases where it is desirable to have multiple,
 // independent logical loops that share common resources.
@@ -37,7 +33,7 @@ type Factory struct {
 
 	mu struct {
 		sync.Mutex
-		loops map[string]*loopCancel
+		loops map[string]*Loop
 	}
 }
 
@@ -45,13 +41,14 @@ type Factory struct {
 func (f *Factory) Close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, hook := range f.mu.loops {
-		// These are just context-cancellations functions that return
-		// immediately, so we need to wait for the loops to stop below.
-		hook.cancel()
+	// Request stopping.
+	for _, facade := range f.mu.loops {
+		facade.loop.running.Stop(f.cfg.Base().ApplyTimeout)
 	}
-	for _, hook := range f.mu.loops {
-		<-hook.loop.Stopped()
+	// Wait for shutdown.
+	for key, facade := range f.mu.loops {
+		<-facade.loop.running.Done()
+		delete(f.mu.loops, key)
 	}
 }
 
@@ -72,10 +69,10 @@ func (f *Factory) Get(ctx context.Context, dialect Dialect, options ...Option) (
 	name := config.LoopName
 	if found, ok := f.mu.loops[name]; ok {
 		select {
-		case <-found.loop.Stopped():
+		case <-found.loop.running.Stopping():
 			// Re-create the stopped loop.
 		default:
-			return found.loop, nil
+			return found, nil
 		}
 	}
 
@@ -84,25 +81,8 @@ func (f *Factory) Get(ctx context.Context, dialect Dialect, options ...Option) (
 		return nil, err
 	}
 
-	// The loop runs in a background context so that we have better
-	// control over the lifecycle.
-	loopCtx, cancel := context.WithCancel(context.Background())
-
-	// Add the loop to the memo map and start a goroutine to clean up.
-	hook := &loopCancel{loop, cancel}
-	f.mu.loops[name] = hook
-	go func() {
-		<-loop.Stopped()
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		// Only delete the entry that we created.
-		if f.mu.loops[name] == hook {
-			delete(f.mu.loops, name)
-		}
-	}()
-
-	// Start the replication loop.
-	go loop.loop.run(loopCtx)
+	f.mu.loops[name] = loop
+	go loop.loop.run()
 
 	return loop, nil
 }
@@ -121,7 +101,7 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		dialect:    dialect,
 		factory:    f,
 		memo:       f.memo,
-		stopped:    make(chan struct{}),
+		running:    stopper.WithContext(ctx),
 		targetPool: f.pool,
 	}
 	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})

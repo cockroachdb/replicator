@@ -197,15 +197,21 @@ func (r *resolver) readInto(
 			// We have work to do, send it down the channel.
 			select {
 			case ch <- proposed:
+			case <-state.Stopping():
+				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 
 			// Wait for the proposed stamp to be processed before
 			// reading the next stamp.
-			_, err := state.AwaitConsistentPoint(ctx, logical.AwaitGTE, proposed)
-			if err != nil {
-				return err
+			select {
+			case <-state.NotifyConsistentPoint(ctx, logical.AwaitGTE, proposed):
+				continue
+			case <-state.Stopping():
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 
 		case errNoWork:
@@ -214,6 +220,10 @@ func (r *resolver) readInto(
 			case <-r.fastWakeup:
 				// Triggered by a calls to Mark and to OnConsistent.
 			case <-time.After(dbPollInterval):
+				// Backup polling interval.
+			case <-state.Stopping():
+				// Clean shutdown
+				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -357,8 +367,6 @@ func (r *resolver) process(
 			return err
 		}
 
-		flushCount := 0
-		previousGroupDirty := false
 		for _, tables := range targets {
 			for _, table := range tables {
 				muts := toApply[table]
@@ -366,30 +374,6 @@ func (r *resolver) process(
 					continue
 				}
 
-				// When using fan-mode, foreign keys, and we hit a group
-				// edge transition, we need to wait for all in-flight
-				// commits to parent tables before we can continue with
-				// child tables. We'll do this by committing the current
-				// resolvedStamp, waiting for it to be marked as
-				// complete, then starting a new batch with an
-				// incremented iteration number.
-				if rs.Backfill && r.cfg.ForeignKeysEnabled && previousGroupDirty {
-					previousGroupDirty = false
-					if err := events.OnCommit(ctx); err != nil {
-						return err
-					}
-					if _, err := events.AwaitConsistentPoint(ctx, logical.AwaitGTE, rs); err != nil {
-						return errors.Wrapf(err,
-							"consistent point failed to advance within %s", r.cfg.ApplyTimeout)
-					}
-					rs = rs.NewProgress(nil)
-					if err := events.OnBegin(ctx, rs); err != nil {
-						return err
-					}
-				}
-
-				flushCount += len(muts)
-				previousGroupDirty = true
 				if err := events.OnData(ctx, table.Table(), table, muts); err != nil {
 					return err
 				}
@@ -409,7 +393,6 @@ func (r *resolver) process(
 		rs = rs.NewProgress(cursor)
 
 		log.WithFields(log.Fields{
-			"count":    flushCount,
 			"duration": time.Since(flushStart),
 			"schema":   r.target,
 		}).Debugf("flushed mutations")
@@ -638,7 +621,9 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 		return ret, nil
 	}
 
-	loop, cleanup, err := logical.Start(ctx, cfg, ret)
+	// Run the logical loop in a background context, since it's going to
+	// outlive the request context.
+	loop, cleanup, err := logical.Start(context.Background(), cfg, ret)
 	if err != nil {
 		return nil, err
 	}

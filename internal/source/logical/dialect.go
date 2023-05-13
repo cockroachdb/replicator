@@ -31,7 +31,8 @@ type Backfiller interface {
 	// logical-replication messages that should be applied in a
 	// high-throughput manner. Implementations should treat BackfillInto
 	// as a signal to "catch up" with replication and then return once
-	// the backfill process has completed.
+	// the backfill process has completed or when [State.ShouldStop]
+	// returns true.
 	//
 	// See also discussion on Dialect.ReadInto.
 	BackfillInto(ctx context.Context, ch chan<- Message, state State) error
@@ -103,6 +104,10 @@ type Events interface {
 	// blocking fashion. This is useful when sources are discovered
 	// dynamically.
 	Backfill(ctx context.Context, loopName string, backfiller Backfiller, options ...Option) error
+	// Flush can be called after OnData() to ensure that any writes
+	// have been flushed to the database. This is necessary when
+	// using foreign keys and fan mode.
+	Flush(ctx context.Context) error
 	// OnBegin denotes the beginning of a transactional block in the
 	// underlying logical feed.
 	OnBegin(ctx context.Context, point stamp.Stamp) error
@@ -118,10 +123,10 @@ type Events interface {
 	// been resynchronized.
 	OnRollback(ctx context.Context, msg Message) error
 
-	// stop is called after any attempt to run a replication loop.
+	// drain is called after any attempt to run a replication loop.
 	// Implementations should block until any pending mutations have
 	// been committed.
-	stop(ctx context.Context) error
+	drain(ctx context.Context) error
 }
 
 // AwaitComparison is used with [State.AwaitConsistentPoint].
@@ -138,17 +143,22 @@ const (
 
 // State provides information about a replication loop.
 type State interface {
-	// AwaitConsistentPoint blocks until the current consistent point
-	// satisfies the comparison with the given stamp or until the
-	// context is cancelled. A consistent point that matches the
-	// condition will be returned.
-	AwaitConsistentPoint(ctx context.Context, comparison AwaitComparison, point stamp.Stamp) (stamp.Stamp, error)
 	// GetConsistentPoint returns the most recent consistent point that
 	// has been committed to the target database or the value returned
 	// from Dialect.ZeroStamp.
 	GetConsistentPoint() stamp.Stamp
 	// GetTargetDB returns the target database name.
 	GetTargetDB() ident.Ident
+	// NotifyConsistentPoint returns a channel that emits the next
+	// consistent point that satisfies the comparison with the given
+	// stamp. If the context is cancelled, the channel will be closed
+	// without emitting a value.
+	NotifyConsistentPoint(ctx context.Context, comparison AwaitComparison, point stamp.Stamp) <-chan stamp.Stamp
+	// Stopping returns a channel that will be closed to allow for
+	// graceful draining or to switch in and out of backfill mode. This
+	// should be checked  on occasion by [Dialect.ReadInto] and
+	// [Backfiller.BackfillInto].
+	Stopping() <-chan struct{}
 }
 
 // OffsetStamp is a Stamp which can represent itself as an absolute

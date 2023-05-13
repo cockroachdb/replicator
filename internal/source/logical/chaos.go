@@ -127,14 +127,6 @@ type chaosEvents struct {
 
 var _ Events = (*chaosEvents)(nil)
 
-// AwaitConsistentPoint implements State. It delegates to the loop and
-// never injects an error.
-func (e *chaosEvents) AwaitConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) (stamp.Stamp, error) {
-	return e.delegate.AwaitConsistentPoint(ctx, comparison, point)
-}
-
 func (e *chaosEvents) Backfill(
 	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
 ) error {
@@ -144,12 +136,27 @@ func (e *chaosEvents) Backfill(
 	return e.delegate.Backfill(ctx, loopName, backfiller, options...)
 }
 
+func (e *chaosEvents) Flush(ctx context.Context) error {
+	if rand.Float32() < e.prob {
+		return doChaos("Flush")
+	}
+	return e.delegate.Flush(ctx)
+}
+
 func (e *chaosEvents) GetConsistentPoint() stamp.Stamp {
 	return e.delegate.GetConsistentPoint()
 }
 
 func (e *chaosEvents) GetTargetDB() ident.Ident {
 	return e.delegate.GetTargetDB()
+}
+
+// NotifyConsistentPoint implements State. It delegates to the loop and
+// never injects an error.
+func (e *chaosEvents) NotifyConsistentPoint(
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
+) <-chan stamp.Stamp {
+	return e.delegate.NotifyConsistentPoint(ctx, comparison, point)
 }
 
 func (e *chaosEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
@@ -182,8 +189,12 @@ func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
 	return e.delegate.OnRollback(ctx, msg)
 }
 
-func (e *chaosEvents) stop(ctx context.Context) error {
-	return e.delegate.stop(ctx)
+func (e *chaosEvents) Stopping() <-chan struct{} {
+	return e.delegate.Stopping()
+}
+
+func (e *chaosEvents) drain(ctx context.Context) error {
+	return e.delegate.drain(ctx)
 }
 
 // doChaos is a convenient place to set a breakpoint.
