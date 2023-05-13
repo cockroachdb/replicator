@@ -14,6 +14,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/bobvawter/latch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -27,6 +28,7 @@ import (
 type fanWorkers struct {
 	appliers     types.Appliers
 	batchSize    int
+	pending      *latch.Counter
 	pool         types.Querier
 	stamp        stamp.Stamp
 	workerStatus func() error
@@ -45,6 +47,7 @@ func newFanWorkers(ctx context.Context, loop *loop, stamp stamp.Stamp) *fanWorke
 	ret := &fanWorkers{
 		appliers:  loop.factory.appliers,
 		batchSize: batches.Size(),
+		pending:   latch.New(),
 		pool:      loop.targetPool,
 		stamp:     stamp,
 	}
@@ -71,10 +74,23 @@ func (t *fanWorkers) Enqueue(table ident.Table, mut []types.Mutation) error {
 	if t.mu.drain {
 		return errors.New("Enqueue() after Wait()")
 	}
+	t.pending.Apply(len(mut))
 	t.mu.data[table] = append(t.mu.data[table], mut...)
 	// Wake one worker to act on the new data.
 	t.mu.wake.Signal()
 	return nil
+}
+
+// Flush returns nil when all in-flight mutations have been applied.
+// This is useful for ensuring that dependency ordering of mutations is
+// maintained.
+func (t *fanWorkers) Flush(ctx context.Context) error {
+	select {
+	case <-t.pending.Wait():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Stamp implement stamp.Stamped.
@@ -124,6 +140,7 @@ func (t *fanWorkers) loop(ctx context.Context) error {
 		if err := applier.Apply(ctx, t.pool, muts); err != nil {
 			return errors.Wrapf(err, "table %s", table)
 		}
+		t.pending.Apply(-len(muts))
 	}
 }
 

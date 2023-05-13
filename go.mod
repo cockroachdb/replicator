@@ -4,8 +4,9 @@ go 1.20
 
 require (
 	cloud.google.com/go/firestore v1.9.0
+	github.com/bobvawter/latch v1.0.1
 	github.com/cockroachdb/apd v1.1.0
-	github.com/cockroachdb/crlfmt v0.0.0-20220610162206-024b567ce87b
+	github.com/cockroachdb/crlfmt v0.0.0-20221214225007-b2fc5c302548
 	github.com/dop251/goja v0.0.0-20220915101355-d79e1b125a30
 	github.com/evanw/esbuild v0.17.17
 	github.com/go-mysql-org/go-mysql v1.6.0

@@ -29,13 +29,6 @@ type fanEvents struct {
 
 var _ Events = (*fanEvents)(nil)
 
-// AwaitConsistentPoint implements State.  It delegates to the loop.
-func (f *fanEvents) AwaitConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) (stamp.Stamp, error) {
-	return f.loop.AwaitConsistentPoint(ctx, comparison, point)
-}
-
 // Backfill implements Events. It delegates to the enclosing loop.
 func (f *fanEvents) Backfill(
 	ctx context.Context, source string, backfiller Backfiller, options ...Option,
@@ -43,11 +36,27 @@ func (f *fanEvents) Backfill(
 	return f.loop.doBackfill(ctx, source, backfiller, options...)
 }
 
+// Flush implements Events.
+func (f *fanEvents) Flush(ctx context.Context) error {
+	workers := f.workers
+	if workers == nil {
+		return errors.New("Flush() called without OnBegin()")
+	}
+	return workers.Flush(ctx)
+}
+
 // GetConsistentPoint implements State. It delegates to the loop.
 func (f *fanEvents) GetConsistentPoint() stamp.Stamp { return f.loop.GetConsistentPoint() }
 
 // GetTargetDB implements State. It delegates to the loop.
 func (f *fanEvents) GetTargetDB() ident.Ident { return f.loop.GetTargetDB() }
+
+// NotifyConsistentPoint implements State.  It delegates to the loop.
+func (f *fanEvents) NotifyConsistentPoint(
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
+) <-chan stamp.Stamp {
+	return f.loop.NotifyConsistentPoint(ctx, comparison, point)
+}
 
 // OnBegin implements Events.
 func (f *fanEvents) OnBegin(ctx context.Context, s stamp.Stamp) error {
@@ -94,8 +103,13 @@ func (f *fanEvents) OnRollback(ctx context.Context, msg Message) error {
 	return nil
 }
 
-// stop implements Events and gracefully drains any pending work.
-func (f *fanEvents) stop(ctx context.Context) error {
+// Stopping implements State and delegates to the enclosing loop.
+func (f *fanEvents) Stopping() <-chan struct{} {
+	return f.loop.Stopping()
+}
+
+// drain implements Events and gracefully drains any pending work.
+func (f *fanEvents) drain(ctx context.Context) error {
 	if workers := f.workers; workers != nil {
 		f.workers = nil
 		return workers.Wait(ctx, true /* graceful */)

@@ -64,7 +64,7 @@ func ProvideFactory(
 		watchers:   watchers,
 		userscript: userscript,
 	}
-	f.mu.loops = make(map[string]*loopCancel)
+	f.mu.loops = make(map[string]*Loop)
 	return f, f.Close
 }
 

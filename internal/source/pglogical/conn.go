@@ -145,7 +145,12 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	const standbyTimeout = time.Second * 10
 	standbyDeadline := time.Now().Add(standbyTimeout)
 
-	for ctx.Err() == nil {
+	for {
+		select {
+		case <-state.Stopping():
+			return nil
+		default:
+		}
 		if time.Now().After(standbyDeadline) {
 			standbyDeadline = time.Now().Add(standbyTimeout)
 			if cp, ok := state.GetConsistentPoint().(lsnStamp); ok {
@@ -219,6 +224,8 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 				}
 				select {
 				case ch <- logicalMsg:
+				case <-state.Stopping():
+					return nil
 				case <-ctx.Done():
 					return errors.WithStack(ctx.Err())
 				}

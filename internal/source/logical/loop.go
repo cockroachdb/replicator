@@ -17,15 +17,16 @@ import (
 	"encoding/json"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 )
 
 // Loop provides a common feature set for processing single-stream,
@@ -42,7 +43,7 @@ type Loop struct {
 func (l *Loop) AwaitConsistentPoint(
 	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
 ) (stamp.Stamp, error) {
-	return l.loop.AwaitConsistentPoint(ctx, comparison, point)
+	return <-l.loop.NotifyConsistentPoint(ctx, comparison, point), ctx.Err()
 }
 
 // Dialect returns the logical.Dialect in use.
@@ -65,7 +66,7 @@ func (l *Loop) GetInitialPoint() stamp.Stamp {
 
 // Stopped returns a channel that is closed when the Loop has shut down.
 func (l *Loop) Stopped() <-chan struct{} {
-	return l.loop.stopped
+	return l.loop.running.Done()
 }
 
 // loop is not internally synchronized; it assumes that it is being
@@ -84,8 +85,10 @@ type loop struct {
 	// The Factory that created the loop.
 	factory *Factory
 	// Optional checkpoint saved into the target database
-	memo    types.Memo
-	stopped chan struct{}
+	memo types.Memo
+	// This is controlled by the call to run. That is, when run exits,
+	// this Context will be stopped.
+	running *stopper.Context
 	// Used to update the consistentPoint in the target database.
 	targetPool types.Querier
 
@@ -158,46 +161,6 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	)
 }
 
-// AwaitConsistentPoint implements State.
-func (l *loop) AwaitConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) (stamp.Stamp, error) {
-	// Fast-path
-	if found := l.GetConsistentPoint(); stamp.Compare(found, point) >= int(comparison) {
-		return found, nil
-	}
-
-	// Use a separate goroutine to allow cancellation.
-	result := make(chan stamp.Stamp, 1)
-	go func() {
-		defer close(result)
-		l.consistentPoint.L.Lock()
-		defer l.consistentPoint.L.Unlock()
-		for ctx.Err() == nil {
-			found := l.consistentPoint.stamp
-			if stamp.Compare(found, point) >= int(comparison) {
-				result <- found
-				return
-			}
-			l.consistentPoint.Wait()
-		}
-	}()
-
-	select {
-	case found := <-result:
-		// We know that the goroutine above must have exited.
-		return found, nil
-
-	case <-ctx.Done():
-		// Ensure that the goroutine above can exit.
-		l.consistentPoint.L.Lock()
-		l.consistentPoint.Broadcast()
-		l.consistentPoint.L.Unlock()
-
-		return nil, ctx.Err()
-	}
-}
-
 // GetConsistentPoint implements State.
 func (l *loop) GetConsistentPoint() stamp.Stamp {
 	l.consistentPoint.L.Lock()
@@ -210,19 +173,63 @@ func (l *loop) GetTargetDB() ident.Ident {
 	return l.config.TargetDB
 }
 
+// NotifyConsistentPoint implements State.
+func (l *loop) NotifyConsistentPoint(
+	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
+) <-chan stamp.Stamp {
+	result := make(chan stamp.Stamp, 1)
+
+	// Fast-path
+	if found := l.GetConsistentPoint(); stamp.Compare(found, point) >= int(comparison) {
+		result <- found
+		close(result)
+		return result
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	needsWakeup := int32(1)
+	go func() {
+		defer cancel()
+		defer close(result)
+		l.consistentPoint.L.Lock()
+		defer l.consistentPoint.L.Unlock()
+		for ctx.Err() == nil {
+			found := l.consistentPoint.stamp
+			if stamp.Compare(found, point) >= int(comparison) {
+				result <- found
+				atomic.StoreInt32(&needsWakeup, 0)
+				return
+			}
+			l.consistentPoint.Wait()
+		}
+	}()
+
+	// Ensure the goroutine gets woken up if the context is cancelled.
+	go func() {
+		<-ctx.Done()
+		if atomic.LoadInt32(&needsWakeup) == 1 {
+			l.consistentPoint.L.Lock()
+			l.consistentPoint.Broadcast()
+			l.consistentPoint.L.Unlock()
+		}
+	}()
+
+	return result
+}
+
+// Stopping implements State. See also [stopperEvents], which is passed
+// to the Dialect implementations with a per-iteration stop channel.
+func (l *loop) Stopping() <-chan struct{} {
+	return l.running.Stopping()
+}
+
 // run blocks while the connection is processing messages.
-func (l *loop) run(ctx context.Context) {
+func (l *loop) run() {
 	defer log.Debugf("replication loop %q shut down", l.config.LoopName)
-	defer close(l.stopped)
 
 	for {
-		err := l.runOnce(ctx)
-
-		// If the outer context is done, just return.
-		if ctx.Err() != nil {
-			log.Tracef("loop %s outer context done", l.config.LoopName)
-			return
-		}
+		err := l.runOnce(l.running)
 
 		// Otherwise, log any error, and sleep for a bit.
 		if err != nil {
@@ -230,16 +237,21 @@ func (l *loop) run(ctx context.Context) {
 				l.config.LoopName, l.config.RetryDelay)
 		}
 
-		// On a clean exit, we still want to sleep for a bit.
 		select {
 		case <-time.After(l.config.RetryDelay):
-		case <-ctx.Done():
+			// On a clean exit, we still want to sleep for a bit before
+			// running a new iteration.
+			continue
+		case <-l.running.Stopping():
+			// If a clean shutdown is requested, just exit.
 			return
 		}
 	}
 }
 
-// runOnce is called by run.
+// runOnce is called by run. If the Dialect implements a leasing
+// behavior, a lease will be obtained before any further action is
+// taken.
 func (l *loop) runOnce(ctx context.Context) error {
 	if lessor, ok := l.dialect.(Lessor); ok {
 		// Loop until we can acquire a lease.
@@ -287,10 +299,8 @@ func (l *loop) runOnce(ctx context.Context) error {
 
 	// Determine how to perform the filling.
 	source, events, isBackfilling := l.chooseFillStrategy()
-	// Ensure that we're in a clear state when recovering.
-	defer events.stop(ctx)
 
-	if err := l.runOnceUsing(ctx, source, events, isBackfilling); err != nil {
+	if err := l.runOnceUsing(stopper.From(ctx), source, events, isBackfilling); err != nil {
 		return err
 	}
 
@@ -301,7 +311,7 @@ func (l *loop) runOnce(ctx context.Context) error {
 
 // runOnceUsing is called from runOnce or doBackfill.
 func (l *loop) runOnceUsing(
-	ctx context.Context, source fillFn, events Events, isBackfilling bool,
+	ctx *stopper.Context, source fillFn, events Events, isBackfilling bool,
 ) error {
 	if isBackfilling {
 		l.metrics.backfillStatus.Set(1)
@@ -309,77 +319,92 @@ func (l *loop) runOnceUsing(
 		l.metrics.backfillStatus.Set(0)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	group, ctx := errgroup.WithContext(ctx)
+	// Calls to the parent Stop() are automatically chained.
+	ctx = stopper.WithContext(ctx)
+
+	// Make the stopping channel available to the dialect.
+	events = &stopperEvents{events, ctx.Stopping()}
 
 	// Start a background goroutine to maintain the replication
 	// connection. This source goroutine is set up to be robust; if
 	// there's an error talking to the source database, we send a
 	// rollback message to the consumer and retry the connection.
 	ch := make(chan Message, 16)
-	group.Go(func() error {
+	ctx.Go(func() error {
 		defer close(ch)
-		for ctx.Err() == nil {
+
+		for {
 			err := source(ctx, ch, events)
 
-			// Return if the source closed cleanly (we may switch
-			// from backfill to streaming modes) or if the outer
-			// context is being shut down.
-			if err == nil || ctx.Err() != nil {
+			// Return if the source closed cleanly. This will close the
+			// communication channel, allowing the processor goroutine
+			// to exit gracefully.
+			if err == nil {
 				return nil
 			}
 
-			// Otherwise, we'll recover by injecting a new rollback
-			// message and then restarting the message stream from
-			// the previous consistent point.
-			log.WithError(err).Errorf(
-				"error from replication source %s; continuing",
-				l.config.LoopName)
 			select {
+			case <-ctx.Stopping():
+				return nil
 			case ch <- msgRollback:
+				// We'll recover by injecting a new rollback message and
+				// then restarting the message stream from the previous
+				// consistent point.
+				log.WithError(err).Errorf(
+					"error from replication source %s; continuing",
+					l.config.LoopName)
 				continue
 			case <-ctx.Done():
-				return nil
+				return ctx.Err()
+			default:
+				return errors.New("stopping loop due to consumer backpressure during rollback")
 			}
 		}
-		return nil
 	})
 
 	// This goroutine applies the incoming mutations to the target
-	// database. It is fragile, when it errors, we need to also
-	// restart the source goroutine.
-	group.Go(func() error {
+	// database.
+	ctx.Go(func() error {
 		err := l.dialect.Process(ctx, ch, events)
+		// It's an error for Process to return unless the channel
+		// has been closed (i.e. we're switching modes).
+		if err == nil && !ctx.IsStopping() {
+			err = errors.Errorf("%T.Process() returned unexpectedly", l.dialect)
+		}
+		err = errors.Wrap(err, "error while applying replication messages")
 
-		// As above.
-		if err == nil || ctx.Err() != nil {
-			return nil
+		// Ensure that any in-flight mutations are drained.
+		if drainErr := events.drain(ctx); drainErr != nil {
+			if err == nil {
+				err = drainErr
+			} else {
+				log.WithError(drainErr).Error("could not drain pending mutations")
+			}
 		}
 
-		log.WithError(err).Errorf(
-			"error while applying replication messages %s; stopping",
-			l.config.LoopName)
 		return err
 	})
 
-	// Toggle backfilling mode as necessary by canceling the work
-	// context. This will restart the loop, choosing the appropriate
+	// Toggle backfilling mode as necessary by triggering a drain.
+	// This will restart the loop, choosing the appropriate
 	// replication mode.
 	_, canBackfill := l.dialect.(Backfiller)
 	canBackfill = canBackfill && l.config.BackfillWindow > 0
 	if isBackfilling || canBackfill {
-		group.Go(func() error {
-			defer cancel()
-
+		ctx.Go(func() error {
 			point := l.dialect.ZeroStamp()
 			for {
 				// Wait for the consistent point to advance. This method
 				// only returns an error if the context has been
 				// canceled.
-				point, _ = l.AwaitConsistentPoint(ctx, AwaitGT, point)
-				if ctx.Err() != nil {
+				select {
+				case point = <-l.NotifyConsistentPoint(ctx, AwaitGT, point):
+				// OK
+				case <-ctx.Stopping():
+					// Graceful shutdown.
 					return nil
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 				ts, ok := point.(TimeStamp)
 				if !ok {
@@ -393,6 +418,7 @@ func (l *loop) runOnceUsing(
 							"loop": l.config.LoopName,
 							"ts":   ts,
 						}).Debug("backfill has caught up")
+						ctx.Stop(l.config.ApplyTimeout)
 						return nil
 					}
 				} else if canBackfill {
@@ -401,6 +427,7 @@ func (l *loop) runOnceUsing(
 							"loop": l.config.LoopName,
 							"ts":   ts,
 						}).Warn("replication has fallen behind, switching to backfill mode")
+						ctx.Stop(l.config.ApplyTimeout)
 						return nil
 					}
 				}
@@ -408,7 +435,8 @@ func (l *loop) runOnceUsing(
 		})
 	}
 
-	return group.Wait()
+	// Wait for graceful initialize or cancellation.
+	return errors.Wrapf(ctx.Wait(), "loop %s", l.config.LoopName)
 }
 
 type fillFn = func(context.Context, chan<- Message, State) error
@@ -466,5 +494,20 @@ func (l *loop) doBackfill(
 		return err
 	}
 
-	return filler.loop.runOnceUsing(ctx, backfiller.BackfillInto, filler.loop.events.fan, true)
+	return filler.loop.runOnceUsing(
+		stopper.From(ctx),
+		backfiller.BackfillInto,
+		filler.loop.events.fan,
+		true /* isBackfilling */)
+}
+
+// stopperEvents exposes the iteration stop signal to the Dialect.
+type stopperEvents struct {
+	Events
+	stopping <-chan struct{}
+}
+
+// Stopping returns the per-iteration stop signal.
+func (s *stopperEvents) Stopping() <-chan struct{} {
+	return s.stopping
 }

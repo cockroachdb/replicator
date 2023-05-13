@@ -63,20 +63,25 @@ func (e *orderedEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 			}
 		}
 	}
-	return e.Events.OnBegin(ctx, point)
+	return errors.Wrap(e.Events.OnBegin(ctx, point), "orderedEvents onBegin")
 }
 
 // OnCommit implements Events. It will flush any deferred updates.
 func (e *orderedEvents) OnCommit(ctx context.Context) error {
 	defer e.reset()
 	for _, defs := range e.deferred {
+		// Ensure that previous levels have been completely written out
+		// before we write the next level.
+		if err := e.Events.Flush(ctx); err != nil {
+			return errors.Wrap(err, "orderedEvents flush")
+		}
 		for _, def := range defs {
 			if err := e.Events.OnData(ctx, def.source, def.target, def.muts); err != nil {
-				return err
+				return errors.Wrap(err, "orderedEvents OnData")
 			}
 		}
 	}
-	return e.Events.OnCommit(ctx)
+	return errors.Wrap(e.Events.OnCommit(ctx), "orderedEvents OnCommit")
 }
 
 // OnData implements Events. Updates to root tables will pass through
@@ -90,7 +95,7 @@ func (e *orderedEvents) OnData(
 		return errors.Errorf("unknown destination table %s", target)
 	}
 	if destLevel == 0 {
-		return e.Events.OnData(ctx, source, target, muts)
+		return errors.Wrap(e.Events.OnData(ctx, source, target, muts), "orderedEvents OnData")
 	}
 	e.deferred[destLevel-1] = append(e.deferred[destLevel-1], deferredData{muts, source, target})
 	return nil

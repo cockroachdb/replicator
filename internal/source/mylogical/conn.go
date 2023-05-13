@@ -213,13 +213,26 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	// Send the initial consistent point we're reading from.
 	select {
 	case ch <- cp.(*consistentPoint):
-	case <-ctx.Done():
+	case <-state.Stopping():
 		return ctx.Err()
 	}
 
-	for ctx.Err() == nil {
-		ev, err := streamer.GetEvent(ctx)
-		if err != nil {
+	for {
+		// Make GetEvent interruptable.
+		eventCtx, cancelEventRead := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-eventCtx.Done():
+			case <-state.Stopping():
+			}
+			cancelEventRead()
+		}()
+
+		ev, err := streamer.GetEvent(eventCtx)
+		cancelEventRead()
+		if errors.Is(err, context.Canceled) {
+			return nil
+		} else if err != nil {
 			return errors.WithStack(err)
 		}
 		log.Tracef("received %T", ev.Event)
@@ -233,8 +246,8 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 			*replication.MariadbAnnotateRowsEvent:
 			select {
 			case ch <- *ev:
-			case <-ctx.Done():
-				return errors.Wrap(ctx.Err(), "error while receiving events")
+			case <-state.Stopping():
+				return nil
 			}
 		case *replication.GenericEvent,
 			*replication.RotateEvent,
@@ -257,7 +270,6 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 			}
 		}
 	}
-	return nil
 }
 
 // ZeroStamp implements logical.Dialect.

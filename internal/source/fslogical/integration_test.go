@@ -155,6 +155,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 		},
 		BackfillBatchSize:           10,
 		DocumentIDProperty:          ident.New("id"), // Map doc id metadata to target column.
+		Idempotent:                  true,
 		ProjectID:                   projectID,
 		TombstoneCollection:         "Tombstones",
 		TombstoneCollectionProperty: ident.New("collection"),
@@ -175,7 +176,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 			break
 		}
 		log.Infof("saw only %d documents in top level", ct)
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	log.Info("waiting for child-table backfill")
@@ -186,7 +187,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 			break
 		}
 		log.Infof("saw only %d documents in child table", ct)
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	log.Info("waiting for collection-group backfill")
@@ -199,7 +200,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 			break
 		}
 		log.Infof("saw only %d documents in sub-collection", ct)
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	log.Info("backfill done, sending document updates")
@@ -240,7 +241,8 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 		if ct == docCount {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		log.Infof("saw only %d updated documents", ct)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	log.Info("saw updates, writing tombstones")
@@ -285,7 +287,8 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 		if ct == 0 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		log.Infof("still have %d documents to delete", ct)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	log.Info("all deletes done")
