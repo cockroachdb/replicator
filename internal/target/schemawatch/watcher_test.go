@@ -53,7 +53,7 @@ func TestWatch(t *testing.T) {
 	defer cancel()
 
 	select {
-	case <-time.After(2 * delay):
+	case <-ctx.Done():
 		a.FailNow("timed out waiting for channel data")
 	case data := <-ch:
 		if a.Len(data, 1) {
@@ -68,7 +68,7 @@ func TestWatch(t *testing.T) {
 	}
 
 	select {
-	case <-time.After(2 * delay):
+	case <-ctx.Done():
 		a.FailNow("timed out waiting for channel data")
 	case data := <-ch:
 		if a.Len(data, 2) {
@@ -82,7 +82,7 @@ func TestWatch(t *testing.T) {
 		return
 	}
 	select {
-	case <-time.After(2 * delay):
+	case <-ctx.Done():
 		a.FailNow("timed out waiting for channel close")
 	case _, open := <-ch:
 		a.False(open)
