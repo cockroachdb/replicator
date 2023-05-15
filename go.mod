@@ -9,7 +9,7 @@ require (
 	github.com/cockroachdb/crlfmt v0.0.0-20221214225007-b2fc5c302548
 	github.com/dop251/goja v0.0.0-20220915101355-d79e1b125a30
 	github.com/evanw/esbuild v0.17.17
-	github.com/go-mysql-org/go-mysql v1.6.0
+	github.com/go-mysql-org/go-mysql v1.7.0
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.4.3
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
@@ -60,7 +60,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.0 // indirect
 	github.com/lib/pq v1.10.2 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
-	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3 // indirect
+	github.com/pingcap/errors v0.11.5-0.20210425183316-da1aaba5fb63 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
