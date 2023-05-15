@@ -13,7 +13,6 @@ package apply
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -39,11 +38,9 @@ func ProvideConfigs(
 		return nil, nil, errors.WithStack(err)
 	}
 
-	cfg := &Configs{
-		dataChanged: sync.NewCond(&sync.Mutex{}),
-		pool:        pool,
-	}
+	cfg := &Configs{pool: pool}
 	cfg.mu.data = make(map[ident.Table]*Config)
+	cfg.mu.updated = make(chan struct{})
 	cfg.sql.delete = fmt.Sprintf(deleteConfTemplate, target)
 	cfg.sql.loadAll = fmt.Sprintf(loadConfTemplate, target)
 	cfg.sql.upsert = fmt.Sprintf(upsertConfTemplate, target)

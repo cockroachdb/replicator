@@ -35,9 +35,9 @@ type fanWorkers struct {
 
 	mu struct {
 		sync.Mutex
-		data  map[ident.Table][]types.Mutation
-		drain bool       // Graceful drain condition.
-		wake  *sync.Cond // Locks on mu.
+		data    map[ident.Table][]types.Mutation
+		drain   bool          // Graceful drain condition.
+		updated chan struct{} // Closed and replaced when mu changes.
 	}
 }
 
@@ -52,7 +52,7 @@ func newFanWorkers(ctx context.Context, loop *loop, stamp stamp.Stamp) *fanWorke
 		stamp:     stamp,
 	}
 	ret.mu.data = make(map[ident.Table][]types.Mutation)
-	ret.mu.wake = sync.NewCond(&ret.mu.Mutex)
+	ret.mu.updated = make(chan struct{})
 
 	eg, egCtx := errgroup.WithContext(ctx)
 	for i := 0; i < loop.config.FanShards; i++ {
@@ -76,8 +76,8 @@ func (t *fanWorkers) Enqueue(table ident.Table, mut []types.Mutation) error {
 	}
 	t.pending.Apply(len(mut))
 	t.mu.data[table] = append(t.mu.data[table], mut...)
-	// Wake one worker to act on the new data.
-	t.mu.wake.Signal()
+	close(t.mu.updated)
+	t.mu.updated = make(chan struct{})
 	return nil
 }
 
@@ -108,11 +108,11 @@ func (t *fanWorkers) Wait(ctx context.Context, drain bool) error {
 	if !drain {
 		t.mu.data = nil
 	}
-	// Wake all workers to respond to the stopping signal.
-	t.mu.wake.Broadcast()
+	close(t.mu.updated)
+	t.mu.updated = make(chan struct{})
 	t.mu.Unlock()
 
-	// sync.Cond doesn't offer an interruptable wait, so fake one.
+	// Retrieve the worker status asynchronously.
 	ch := make(chan error, 1)
 	go func() {
 		ch <- t.workerStatus()
@@ -148,9 +148,10 @@ func (t *fanWorkers) loop(ctx context.Context) error {
 // remaining mutations and the fanWorkers is stopped, this method will
 // return false.
 func (t *fanWorkers) waitForWork() (table ident.Table, mut []types.Mutation, moreWork bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for {
+	tryDequeue := func() (waitFor chan struct{}) {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+
 		// Find a non-empty slice of mutations.
 		for table, mut = range t.mu.data {
 			if count := len(mut); count > 0 {
@@ -158,18 +159,30 @@ func (t *fanWorkers) waitForWork() (table ident.Table, mut []types.Mutation, mor
 				if count > t.batchSize {
 					t.mu.data[table] = mut[t.batchSize:]
 					mut = mut[:t.batchSize]
+					// Ensure another worker is woken to consume the
+					// remainder of the slice.
+					close(t.mu.updated)
+					t.mu.updated = make(chan struct{})
 				} else {
-					// Consuming all values, so delete the entry.
+					// Consuming all values.
 					delete(t.mu.data, table)
 				}
 				moreWork = true
-				return
+				return nil
 			}
 		}
 		// Shutdown flag set by Wait.
 		if t.mu.drain {
+			return nil
+		}
+		return t.mu.updated
+	}
+
+	for {
+		waitFor := tryDequeue()
+		if waitFor == nil {
 			return
 		}
-		t.mu.wake.Wait()
+		<-waitFor
 	}
 }

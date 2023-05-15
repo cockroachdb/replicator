@@ -104,7 +104,7 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		running:    stopper.WithContext(ctx),
 		targetPool: f.pool,
 	}
-	loop.consistentPoint.Cond = sync.NewCond(&sync.Mutex{})
+	loop.consistentPoint.updated = make(chan struct{})
 	initialPoint, err := loop.loadConsistentPoint(ctx)
 	if err != nil {
 		return nil, err
