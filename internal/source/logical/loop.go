@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -93,11 +92,10 @@ type loop struct {
 	targetPool types.Querier
 
 	// This represents a position in the source's transaction log.
-	// The value in this struct should only be accessed when holding
-	// the condition lock.
 	consistentPoint struct {
-		*sync.Cond
-		stamp stamp.Stamp
+		sync.RWMutex
+		stamp   stamp.Stamp
+		updated chan struct{} // Closed and replaced when updated.
 	}
 
 	metrics struct {
@@ -128,8 +126,8 @@ func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
 // setConsistentPoint is safe to call from any goroutine. It will
 // occasionally persist the consistent point to the memo table.
 func (l *loop) setConsistentPoint(p stamp.Stamp) error {
-	l.consistentPoint.L.Lock()
-	defer l.consistentPoint.L.Unlock()
+	l.consistentPoint.Lock()
+	defer l.consistentPoint.Unlock()
 
 	// Notify Dialect instances that have explicit coordination needs
 	// that the consistent point is about to advance.
@@ -141,7 +139,8 @@ func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 
 	log.Tracef("loop %s new consistent point %s -> %s", l.config.LoopName, l.consistentPoint.stamp, p)
 	l.consistentPoint.stamp = p
-	l.consistentPoint.Broadcast()
+	close(l.consistentPoint.updated)
+	l.consistentPoint.updated = make(chan struct{})
 
 	if err := l.storeConsistentPoint(p); err != nil {
 		return errors.Wrap(err, "could not persistent consistent point")
@@ -163,8 +162,8 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 
 // GetConsistentPoint implements State.
 func (l *loop) GetConsistentPoint() stamp.Stamp {
-	l.consistentPoint.L.Lock()
-	defer l.consistentPoint.L.Unlock()
+	l.consistentPoint.RLock()
+	defer l.consistentPoint.RUnlock()
 	return l.consistentPoint.stamp
 }
 
@@ -188,30 +187,26 @@ func (l *loop) NotifyConsistentPoint(
 
 	ctx, cancel := context.WithCancel(ctx)
 
-	needsWakeup := int32(1)
 	go func() {
 		defer cancel()
 		defer close(result)
-		l.consistentPoint.L.Lock()
-		defer l.consistentPoint.L.Unlock()
-		for ctx.Err() == nil {
+
+		for {
+			l.consistentPoint.RLock()
 			found := l.consistentPoint.stamp
+			updated := l.consistentPoint.updated
+			l.consistentPoint.RUnlock()
+
 			if stamp.Compare(found, point) >= int(comparison) {
 				result <- found
-				atomic.StoreInt32(&needsWakeup, 0)
 				return
 			}
-			l.consistentPoint.Wait()
-		}
-	}()
-
-	// Ensure the goroutine gets woken up if the context is cancelled.
-	go func() {
-		<-ctx.Done()
-		if atomic.LoadInt32(&needsWakeup) == 1 {
-			l.consistentPoint.L.Lock()
-			l.consistentPoint.Broadcast()
-			l.consistentPoint.L.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			case <-updated:
+				continue
+			}
 		}
 	}()
 
@@ -293,9 +288,12 @@ func (l *loop) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	l.consistentPoint.L.Lock()
+
+	l.consistentPoint.Lock()
 	l.consistentPoint.stamp = point
-	l.consistentPoint.L.Unlock()
+	close(l.consistentPoint.updated)
+	l.consistentPoint.updated = make(chan struct{})
+	l.consistentPoint.Unlock()
 
 	// Determine how to perform the filling.
 	source, events, isBackfilling := l.chooseFillStrategy()

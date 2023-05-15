@@ -39,10 +39,10 @@ type watcher struct {
 	dbName     ident.Ident
 	delay      time.Duration
 
-	cond sync.Cond // Condition on mu's RLocker.
-	mu   struct {
+	mu struct {
 		sync.RWMutex
-		data *types.SchemaData
+		data    *types.SchemaData
+		updated chan struct{} // Closed and replaced when data is updated.
 	}
 
 	sql struct {
@@ -65,7 +65,7 @@ func newWatcher(
 		delay:      *RefreshDelay,
 		dbName:     dbName,
 	}
-	w.cond.L = w.mu.RLocker()
+	w.mu.updated = make(chan struct{})
 	w.sql.tables = fmt.Sprintf(tableTemplate, dbName)
 
 	// Initial data load to sanity-check and make ready.
@@ -110,9 +110,14 @@ func (w *watcher) Refresh(ctx context.Context, tx types.Querier) error {
 	}
 
 	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	w.mu.data = data
-	w.mu.Unlock()
-	w.cond.Broadcast()
+
+	// Close and replace the channel to create a broadcast effect.
+	close(w.mu.updated)
+	w.mu.updated = make(chan struct{})
+
 	return nil
 }
 
@@ -164,13 +169,13 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 	go func() {
 		defer close(ch)
 
-		// All code below is read-locked, so we can't miss updates.
-		w.cond.L.Lock()
-		defer w.cond.L.Unlock()
-
 		var last []types.ColData
 		for {
+			w.mu.RLock()
 			next, ok := w.mu.data.Columns[table]
+			updated := w.mu.updated
+			w.mu.RUnlock()
+
 			// Respond to context cancellation or dropping the table.
 			if !ok || ctx.Err() != nil {
 				return
@@ -188,7 +193,12 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 				}
 			}
 
-			w.cond.Wait()
+			select {
+			case <-ctx.Done():
+				return
+			case <-updated:
+				continue
+			}
 		}
 	}()
 	return ch, cancel, nil

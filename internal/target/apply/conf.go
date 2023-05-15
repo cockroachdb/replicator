@@ -96,8 +96,7 @@ func (t *Config) IsZero() bool {
 // Configs provides a lookup service for per-destination-table
 // configurations.
 type Configs struct {
-	dataChanged *sync.Cond
-	pool        types.Querier
+	pool types.Querier
 
 	// Parent context of all watch behaviors. When the background
 	// refresh loop is stopped, we can cancel all watches as there will
@@ -105,8 +104,9 @@ type Configs struct {
 	watchCtx context.Context
 
 	mu struct {
-		sync.Mutex
-		data map[ident.Table]*Config
+		sync.RWMutex
+		data    map[ident.Table]*Config
+		updated chan struct{} // Closed and swapped when data is updated.
 	}
 
 	sql struct {
@@ -119,8 +119,8 @@ type Configs struct {
 // Get returns the configuration for the named table, or a non-nil, zero
 // value if no configuration has been provided.
 func (c *Configs) Get(tbl ident.Table) *Config {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if ret, ok := c.mu.data[tbl]; ok {
 		return ret
 	}
@@ -129,9 +129,9 @@ func (c *Configs) Get(tbl ident.Table) *Config {
 
 // GetAll returns a deep copy of all known table configurations.
 func (c *Configs) GetAll() map[ident.Table]*Config {
-	c.mu.Lock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	data := c.mu.data
-	c.mu.Unlock()
 
 	ret := make(map[ident.Table]*Config, len(data))
 	for k, v := range data {
@@ -257,17 +257,16 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 	}
 
 	c.mu.Lock()
-	old := c.mu.data
-	c.mu.Unlock()
+	defer c.mu.Unlock()
 
-	if reflect.DeepEqual(old, finalized) {
+	if reflect.DeepEqual(c.mu.data, finalized) {
 		return false, nil
 	}
-	c.mu.Lock()
+
 	c.mu.data = finalized
-	c.mu.Unlock()
 	// Wake all watches.
-	c.dataChanged.Broadcast()
+	close(c.mu.updated)
+	c.mu.updated = make(chan struct{})
 	return true, nil
 }
 
@@ -281,8 +280,6 @@ func (c *Configs) refreshLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// One final wakeup to force all watch goroutines to exit.
-			c.dataChanged.Broadcast()
 			return
 		case <-time.After(time.Minute):
 		case <-hupCh:
@@ -400,24 +397,31 @@ func (c *Configs) Watch(tbl ident.Table) (ch <-chan *Config, cancel func()) {
 // changed from the old value. This method returns the updated
 // configuration for the table, or nil on context cancellation.
 func (c *Configs) waitForUpdate(ctx context.Context, tbl ident.Table, last *Config) *Config {
-	c.dataChanged.L.Lock()
-	defer c.dataChanged.L.Unlock()
-
 	// Wait for the config pointer to have changed. This will indicate
 	// that a refresh took place. We also check for context
 	// cancellation, since the refresh loop will send one final
 	// broadcast when the parent watch context has been shut down.
-	// Deep compare the per-table data, since dataChanged fires
-	// whenever any table configuration is refreshed.
 	for {
-		if ctx.Err() != nil {
-			return nil
+		c.mu.RLock()
+		next, ok := c.mu.data[tbl]
+		if !ok {
+			next = configZero
 		}
-		next := c.Get(tbl)
+		waitFor := c.mu.updated
+		c.mu.RUnlock()
+
+		// Deep compare the per-table data, since the channel is
+		// replaced whenever any table configuration is refreshed.
 		if next != last && !reflect.DeepEqual(last, next) {
 			return next
 		}
 		last = next
-		c.dataChanged.Wait()
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-waitFor:
+			continue
+		}
 	}
 }
