@@ -24,13 +24,12 @@ services:
     image: cockroachdb/cockroach:latest-v22.1
     network_mode: host
     command: start-single-node --insecure --store type=mem,size=2G
-  # There is no latest-v22.2 tag available in the unstable repo.
   cockroachdb-v22.2:
     image: cockroachdb/cockroach:latest-v22.2
     network_mode: host
     command: start-single-node --insecure --store type=mem,size=2G
   cockroachdb-v23.1:
-    image: cockroachdb/cockroach-unstable:v23.1.0-beta.2
+    image: cockroachdb/cockroach:latest-v23.1
     network_mode: host
     command: start-single-node --insecure --store type=mem,size=2G
   firestore:
