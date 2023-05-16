@@ -1,0 +1,31 @@
+# Per https://docs.docker.com/build/ci/github-actions/update-dockerhub-desc/
+name: Hub
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - "master"
+    paths:
+      - "README.md"
+      - ".github/workflows/hub.yaml"
+  pull_request:
+    paths:
+      - "README.md"
+      - ".github/workflows/hub.yaml"
+
+jobs:
+  hub-description:
+    name: Update DockerHub image description
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - id: description
+        name: Update description
+        uses: peter-evans/dockerhub-description@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: cockroachdb/cdc-sink
+          short-description: ${{ github.event.repository.description }}
