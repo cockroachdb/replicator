@@ -63,7 +63,7 @@ jobs:
         # against. The matrix component names should use the target
         # names listed in the docker-compose.yml file in the parent
         # directory.
-        cockroachdb: [ v22.2 ]
+        cockroachdb: [ v23.1 ]
         integration:
           - "firestore"
           - "mysql-v8"
@@ -79,6 +79,10 @@ jobs:
         # CRDB. These tests are kept around to ensure that the target
         # package doesn't use any SQL that couldn't be run on older CRDB
         # versions.
+        #
+        # Refer to the CRDB support policy when determining how many
+        # older releases to support.
+        # https://www.cockroachlabs.com/docs/releases/release-support-policy.html
         include:
           - cockroachdb: v21.1
           - cockroachdb: v21.2
