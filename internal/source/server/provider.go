@@ -24,9 +24,9 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
+	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
-	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"

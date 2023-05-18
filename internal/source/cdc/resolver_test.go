@@ -13,8 +13,8 @@ package cdc
 import (
 	"testing"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
@@ -27,7 +27,7 @@ func TestResolverDeQueue(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	baseFixture, cancel, err := sinktest.NewFixture()
+	baseFixture, cancel, err := all.NewFixture()
 	r.NoError(err)
 	defer cancel()
 

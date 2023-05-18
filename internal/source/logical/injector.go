@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/google/wire"
 )
@@ -25,6 +26,7 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 	panic(wire.Build(
 		Set,
 		script.Set,
+		staging.Set,
 		target.Set,
 	))
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/google/wire"
 )
@@ -30,6 +31,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		Set,
 		logical.Set,
 		script.Set,
+		staging.Set,
 		target.Set,
 	))
 }

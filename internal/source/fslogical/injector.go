@@ -17,9 +17,11 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/google/wire"
 )
 
@@ -33,17 +35,18 @@ func Start(context.Context, *Config) ([]*logical.Loop, func(), error) {
 		ProvideTombstones,
 		logical.Set,
 		script.Set,
+		staging.Set,
 		target.Set,
 	))
 }
 
 // Build remaining testable components from a common fixture.
-func startLoopsFromFixture(*sinktest.Fixture, *Config) ([]*logical.Loop, func(), error) {
+func startLoopsFromFixture(*all.Fixture, *Config) ([]*logical.Loop, func(), error) {
 	panic(wire.Build(
 		wire.Bind(new(logical.Config), new(*Config)),
-		wire.FieldsOf(new(*sinktest.BaseFixture), "Context"),
-		wire.FieldsOf(new(*sinktest.Fixture),
-			"Appliers", "BaseFixture", "Configs", "Memo", "Watchers"),
+		wire.FieldsOf(new(*base.Fixture), "Context"),
+		wire.FieldsOf(new(*all.Fixture),
+			"Appliers", "Fixture", "Configs", "Memo", "Watchers"),
 		ProvideFirestoreClient,
 		ProvideLoops,
 		ProvideTombstones,

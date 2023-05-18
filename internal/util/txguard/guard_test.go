@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -25,7 +25,7 @@ import (
 func TestGuard(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := base.NewFixture()
 	r.NoError(err)
 	defer cancel()
 

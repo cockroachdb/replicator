@@ -14,7 +14,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,7 +25,7 @@ func TestGetDependencyOrder(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	r.NoError(err)
 	defer cancel()
 
@@ -154,7 +155,7 @@ func TestNoDeferrableConstraints(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := base.NewFixture()
 	r.NoError(err)
 	defer cancel()
 

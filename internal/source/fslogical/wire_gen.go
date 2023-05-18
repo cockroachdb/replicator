@@ -9,11 +9,11 @@ package fslogical
 import (
 	"context"
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 )
 
 // Injectors from injector.go:
@@ -106,8 +106,8 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 }
 
 // Build remaining testable components from a common fixture.
-func startLoopsFromFixture(fixture *sinktest.Fixture, config *Config) ([]*logical.Loop, func(), error) {
-	baseFixture := &fixture.BaseFixture
+func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loop, func(), error) {
+	baseFixture := fixture.Fixture
 	contextContext := baseFixture.Context
 	configs := fixture.Configs
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)

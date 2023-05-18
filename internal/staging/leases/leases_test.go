@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/uuid"
@@ -28,7 +28,7 @@ import (
 func TestLeases(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := base.NewFixture()
 	if !a.NoError(err) {
 		return
 	}

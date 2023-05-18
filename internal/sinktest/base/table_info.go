@@ -1,4 +1,4 @@
-// Copyright 2021 The Cockroach Authors.
+// Copyright 2023 The Cockroach Authors.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt.
@@ -8,12 +8,13 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package sinktest
+package base
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 )
@@ -55,3 +56,12 @@ func (ti TableInfo) RowCount(ctx context.Context) (int, error) {
 }
 
 func (ti TableInfo) String() string { return ti.name.String() }
+
+// GetRowCount returns the number of rows in the table.
+func GetRowCount(ctx context.Context, db types.Querier, name ident.Table) (int, error) {
+	var count int
+	err := retry.Retry(ctx, func(ctx context.Context) error {
+		return db.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", name)).Scan(&count)
+	})
+	return count, err
+}

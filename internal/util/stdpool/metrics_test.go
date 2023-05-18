@@ -13,7 +13,7 @@ package stdpool_test
 import (
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/stretchr/testify/require"
 )
@@ -23,7 +23,7 @@ import (
 func TestConcurrentRegistration(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := base.NewFixture()
 	r.NoError(err)
 	defer cancel()
 

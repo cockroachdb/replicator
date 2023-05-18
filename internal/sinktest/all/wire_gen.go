@@ -4,79 +4,43 @@
 //go:build !wireinject
 // +build !wireinject
 
-package sinktest
+package all
 
 import (
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
+	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 )
 
 // Injectors from injector.go:
 
-// NewFixture constructs a self-contained test fixture.
-func NewBaseFixture() (*BaseFixture, func(), error) {
-	context, cleanup, err := ProvideContext()
-	if err != nil {
-		return nil, nil, err
-	}
-	dbInfo, err := ProvideDBInfo(context)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	pool := ProvidePool(dbInfo)
-	stagingDB, cleanup2, err := ProvideStagingDB(context, pool)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	testDB, cleanup3, err := ProvideTestDB(context, pool)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	baseFixture := &BaseFixture{
-		Context:   context,
-		DBInfo:    dbInfo,
-		Pool:      pool,
-		StagingDB: stagingDB,
-		TestDB:    testDB,
-	}
-	return baseFixture, func() {
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
-}
-
 // NewFixture constructs a self-contained test fixture for all services
 // in the target sub-packages.
 func NewFixture() (*Fixture, func(), error) {
-	context, cleanup, err := ProvideContext()
+	context, cleanup, err := base.ProvideContext()
 	if err != nil {
 		return nil, nil, err
 	}
-	dbInfo, err := ProvideDBInfo(context)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	pool := ProvidePool(dbInfo)
-	stagingDB, cleanup2, err := ProvideStagingDB(context, pool)
+	dbInfo, err := base.ProvideDBInfo(context)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	testDB, cleanup3, err := ProvideTestDB(context, pool)
+	pool := base.ProvidePool(dbInfo)
+	stagingDB, cleanup2, err := base.ProvideStagingDB(context, pool)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	testDB, cleanup3, err := base.ProvideTestDB(context, pool)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	baseFixture := BaseFixture{
+	fixture := &base.Fixture{
 		Context:   context,
 		DBInfo:    dbInfo,
 		Pool:      pool,
@@ -113,16 +77,16 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	fixture := &Fixture{
-		BaseFixture: baseFixture,
-		Appliers:    appliers,
-		Configs:     configs,
-		Memo:        memoMemo,
-		Stagers:     stagers,
-		Watchers:    watchers,
-		Watcher:     watcher,
+	allFixture := &Fixture{
+		Fixture:  fixture,
+		Appliers: appliers,
+		Configs:  configs,
+		Memo:     memoMemo,
+		Stagers:  stagers,
+		Watchers: watchers,
+		Watcher:  watcher,
 	}
-	return fixture, func() {
+	return allFixture, func() {
 		cleanup6()
 		cleanup5()
 		cleanup4()

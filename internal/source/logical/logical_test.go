@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	log "github.com/sirupsen/logrus"
@@ -41,7 +41,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := base.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -166,7 +166,7 @@ func TestUserScript(t *testing.T) {
 	r := require.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := base.NewFixture()
 	r.NoError(err)
 	defer cancel()
 
@@ -258,7 +258,7 @@ api.configureTable("t_2", {
 	r.NoError(err)
 
 	for {
-		count, err := sinktest.GetRowCount(ctx, fixture.Pool, tgts[0])
+		count, err := base.GetRowCount(ctx, fixture.Pool, tgts[0])
 		r.NoError(err)
 		if count == 0 {
 			break
@@ -267,7 +267,7 @@ api.configureTable("t_2", {
 	}
 
 	// Verify that t_2 was unchanged.
-	count, err := sinktest.GetRowCount(ctx, fixture.Pool, tgts[1])
+	count, err := base.GetRowCount(ctx, fixture.Pool, tgts[1])
 	r.NoError(err)
 	a.Equal(100, count)
 

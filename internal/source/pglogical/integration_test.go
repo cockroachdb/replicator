@@ -21,8 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/uuid"
@@ -39,7 +40,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	sinktest.IntegrationMain(m, sinktest.PostgreSQLName)
+	all.IntegrationMain(m, all.PostgreSQLName)
 }
 
 // This is a general smoke-test of the logical replication feed.
@@ -59,7 +60,7 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 	a := assert.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := base.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -274,7 +275,7 @@ func TestDataTypes(t *testing.T) {
 	}
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewBaseFixture()
+	fixture, cancel, err := base.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -357,7 +358,7 @@ func TestDataTypes(t *testing.T) {
 			a := assert.New(t)
 			var count int
 			for count == 0 {
-				count, err = sinktest.GetRowCount(ctx, crdbPool, tgts[idx])
+				count, err = base.GetRowCount(ctx, crdbPool, tgts[idx])
 				if !a.NoError(err) {
 					return
 				}

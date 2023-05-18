@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/client"
@@ -43,7 +43,7 @@ func (f startStamp) MarshalText() (text []byte, err error) {
 	return []byte(strconv.FormatInt(int64(f), 10)), nil
 }
 func TestMain(m *testing.M) {
-	sinktest.IntegrationMain(m, sinktest.MySQLName)
+	all.IntegrationMain(m, all.MySQLName)
 }
 func TestMYLogical(t *testing.T) {
 	t.Run("backfill", func(t *testing.T) { testMYLogical(t, true, false) })
@@ -55,7 +55,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -321,7 +321,7 @@ func TestDataTypes(t *testing.T) {
 	}
 
 	// Create a basic test fixture.
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
