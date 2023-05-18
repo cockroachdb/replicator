@@ -7,7 +7,7 @@
 package script
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 )
 
 import (
@@ -16,8 +16,8 @@ import (
 
 // Injectors from injector.go:
 
-func newScriptFromFixture(fixture *sinktest.Fixture, config *Config, targetSchema TargetSchema) (*UserScript, error) {
-	baseFixture := &fixture.BaseFixture
+func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema TargetSchema) (*UserScript, error) {
+	baseFixture := fixture.Fixture
 	context := baseFixture.Context
 	configs := fixture.Configs
 	loader, err := ProvideLoader(config)

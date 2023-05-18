@@ -8,19 +8,20 @@ package server
 
 import (
 	"context"
-	"net"
-
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
+	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/leases"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/stage"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"net"
+)
 
+import (
 	_ "net/http/pprof"
 )
 

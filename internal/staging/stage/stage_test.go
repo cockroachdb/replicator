@@ -19,7 +19,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/mutations"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -31,7 +33,7 @@ import (
 func TestPutAndDrain(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -96,7 +98,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.NoError(err)
 
 	// Sanity-check table.
-	count, err := sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err := base.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(total, count)
 
@@ -104,7 +106,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.NoError(s.Store(ctx, fixture.Pool, muts))
 
 	// Sanity-check table.
-	count, err = sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(total, count)
 
@@ -119,7 +121,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.NoError(s.Store(ctx, fixture.Pool, older))
 
 	// Sanity-check table.
-	count, err = sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(2*total, count)
 
@@ -173,7 +175,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.Empty(ret)
 
 	// Check deletion. We have two timestamps for each
-	count, err = sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(2*total-2*limit, count)
 
@@ -181,7 +183,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.NoError(s.Retire(ctx, fixture.Pool, muts[len(muts)-1].Time))
 
 	// Should be empty now.
-	count, err = sinktest.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
 	a.NoError(err)
 	a.Equal(0, count)
 
@@ -197,7 +199,7 @@ func TestSelectMany(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -438,7 +440,7 @@ func BenchmarkStage(b *testing.B) {
 }
 
 func benchmarkStage(b *testing.B, batchSize int) {
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -456,7 +458,7 @@ func benchmarkStage(b *testing.B, batchSize int) {
 	}
 
 	allBytes := int64(0)
-	muts := sinktest.MutationGenerator(ctx, 100000, 0.5)
+	muts := mutations.Generator(ctx, 100000, 0.5)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

@@ -19,8 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/mutations"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -34,7 +36,7 @@ import (
 func TestApply(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -345,7 +347,7 @@ func TestAllDataTypes(t *testing.T) {
 			// changes in v23.1.
 			//
 			// https://github.com/cockroachdb/cockroach/issues/102259
-			fixture, cancel, err := sinktest.NewFixture()
+			fixture, cancel, err := all.NewFixture()
 			if !a.NoError(err) {
 				return
 			}
@@ -412,7 +414,7 @@ func TestConditionals(t *testing.T) {
 func testConditions(t *testing.T, cas, deadline bool) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -562,7 +564,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 func TestExpressionColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -607,7 +609,7 @@ func TestExpressionColumns(t *testing.T) {
 		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
 
-	count, err := sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	count, err := base.GetRowCount(ctx, fixture.Pool, tbl.Name())
 	a.NoError(err)
 	a.Equal(1, count)
 
@@ -624,7 +626,7 @@ func TestExpressionColumns(t *testing.T) {
 	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
 		Key: []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
-	count, err = sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	count, err = base.GetRowCount(ctx, fixture.Pool, tbl.Name())
 	a.Equal(0, count)
 	a.NoError(err)
 }
@@ -634,7 +636,7 @@ func TestExpressionColumns(t *testing.T) {
 func TestIgnoredColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -691,7 +693,7 @@ func TestIgnoredColumns(t *testing.T) {
 func TestRenamedColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -746,7 +748,7 @@ func TestRenamedColumns(t *testing.T) {
 func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -795,7 +797,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	// Verify insertion.
 	a.NoError(app.Apply(ctx, fixture.Pool, muts))
 
-	count, err := sinktest.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	count, err := base.GetRowCount(ctx, fixture.Pool, tbl.Name())
 	if a.NoError(err) && a.Equal(1, count) {
 		row := fixture.Pool.QueryRow(ctx,
 			fmt.Sprintf("SELECT val FROM %s WHERE pk0 = $1", tbl.Name()), 10)
@@ -809,7 +811,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 func TestUTDEnum(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	r.NoError(err)
 	defer cancel()
 
@@ -849,7 +851,7 @@ func TestUTDEnum(t *testing.T) {
 func TestVirtualColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -955,7 +957,7 @@ func BenchmarkApply(b *testing.B) {
 func benchConditions(b *testing.B, cfg benchConfig) {
 	a := assert.New(b)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
@@ -987,7 +989,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	}
 
 	// Create a source of Mutatation data.
-	muts := sinktest.MutationGenerator(ctx, 100000, 0)
+	muts := mutations.Generator(ctx, 100000, 0)
 
 	var loopTotal int64
 	b.ResetTimer()

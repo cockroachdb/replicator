@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
@@ -23,7 +23,7 @@ import (
 func TestJWT(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}

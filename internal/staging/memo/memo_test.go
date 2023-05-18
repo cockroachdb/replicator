@@ -13,12 +13,12 @@ package memo_test
 import (
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRoundtrip(t *testing.T) {
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !assert.NoError(t, err) {
 		return
 	}

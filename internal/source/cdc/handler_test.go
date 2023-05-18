@@ -20,9 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/auth/reject"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/staging/auth/reject"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
@@ -40,7 +41,7 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Helper()
 	r := require.New(t)
 
-	baseFixture, cancel, err := sinktest.NewFixture()
+	baseFixture, cancel, err := all.NewFixture()
 	r.NoError(err)
 	defer cancel()
 
@@ -251,7 +252,7 @@ func testMassBackfillWithForeignKeys(
 	const rowCount = 10_000
 	r := require.New(t)
 
-	baseFixture, cancel, err := sinktest.NewFixture()
+	baseFixture, cancel, err := all.NewFixture()
 	ctx := baseFixture.Context
 	r.NoError(err)
 	defer cancel()
@@ -357,7 +358,7 @@ func testMassBackfillWithForeignKeys(
 	// Wait for rows to appear.
 	for _, tbl := range []ident.Table{parent.Name(), child.Name(), grand.Name()} {
 		for {
-			count, err := sinktest.GetRowCount(ctx, baseFixture.Pool, tbl)
+			count, err := base.GetRowCount(ctx, baseFixture.Pool, tbl)
 			r.NoError(err)
 			log.Infof("saw %d of %d rows in %s", count, rowCount, tbl)
 			if count == rowCount {

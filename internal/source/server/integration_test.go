@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/auth/jwt"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	jwtAuth "github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	joonix "github.com/joonix/log"
 	"github.com/prometheus/client_golang/prometheus"
@@ -60,7 +60,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	}()
 
 	// Create a basic fixture to represent a source database.
-	sourceFixture, cancel, err := sinktest.NewBaseFixture()
+	sourceFixture, cancel, err := base.NewFixture()
 	r.NoError(err)
 	defer cancel()
 
@@ -72,7 +72,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	ctx := sourceFixture.Context
 
 	// Create a basic destination database connection.
-	destFixture, cancel, err := sinktest.NewBaseFixture()
+	destFixture, cancel, err := base.NewFixture()
 	r.NoError(err)
 	defer cancel()
 
@@ -117,10 +117,10 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	a.Equal(1, ct)
 
 	// Allow access.
-	method, priv, err := jwt.InsertTestingKey(ctx, targetPool, targetFixture.Authenticator, targetFixture.StagingDB)
+	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetPool, targetFixture.Authenticator, targetFixture.StagingDB)
 	r.NoError(err)
 
-	_, token, err := jwt.Sign(method, priv, []ident.Schema{target.AsSchema()})
+	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.AsSchema()})
 	r.NoError(err)
 
 	params := make(url.Values)
@@ -164,7 +164,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 
 	// Wait for the backfilled value.
 	for {
-		ct, err := sinktest.GetRowCount(ctx, targetPool, target)
+		ct, err := base.GetRowCount(ctx, targetPool, target)
 		r.NoError(err)
 		if ct >= 1 {
 			break
@@ -181,7 +181,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 
 	// Wait for the streamed value.
 	for {
-		ct, err := sinktest.GetRowCount(ctx, targetPool, target)
+		ct, err := base.GetRowCount(ctx, targetPool, target)
 		r.NoError(err)
 		if ct >= 2 {
 			break
@@ -195,14 +195,14 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	log.WithField("metrics", metrics).Debug()
 }
 
-func supportsMinCheckpoint(dbInfo *sinktest.DBInfo) bool {
+func supportsMinCheckpoint(dbInfo *base.DBInfo) bool {
 	if strings.Contains(dbInfo.Version(), "v20.") || strings.Contains(dbInfo.Version(), "v21.") {
 		return false
 	}
 	return true
 }
 
-func supportsWebhook(dbInfo *sinktest.DBInfo) bool {
+func supportsWebhook(dbInfo *base.DBInfo) bool {
 	// In older versions of CRDB, the webhook endpoint is not available so no
 	// self signed certificate is needed. This acts as a signal as to wether the
 	// webhook endpoint is available.

@@ -15,25 +15,26 @@ package cdc
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
-	"github.com/cockroachdb/cdc-sink/internal/target/leases"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
+	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/google/wire"
 )
 
 type testFixture struct {
-	*sinktest.Fixture
+	*all.Fixture
 	Handler   *Handler
 	Resolvers *Resolvers
 }
 
-func newTestFixture(*sinktest.Fixture, *Config) (*testFixture, func(), error) {
+func newTestFixture(*all.Fixture, *Config) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
-		wire.FieldsOf(new(*sinktest.BaseFixture), "Context"),
-		wire.FieldsOf(new(*sinktest.Fixture),
-			"Appliers", "BaseFixture", "Stagers", "Watchers"),
+		wire.FieldsOf(new(*base.Fixture), "Context"),
+		wire.FieldsOf(new(*all.Fixture),
+			"Appliers", "Fixture", "Stagers", "Watchers"),
 		leases.Set,
 		logical.Set,
 		script.Set,

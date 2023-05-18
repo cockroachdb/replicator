@@ -8,18 +8,18 @@ package cdc
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/auth/trust"
-	"github.com/cockroachdb/cdc-sink/internal/target/leases"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
+	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 )
 
 // Injectors from test_fixture.go:
 
-func newTestFixture(fixture *sinktest.Fixture, config *Config) (*testFixture, func(), error) {
+func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(), error) {
 	appliers := fixture.Appliers
 	authenticator := trust.New()
-	baseFixture := &fixture.BaseFixture
+	baseFixture := fixture.Fixture
 	context := baseFixture.Context
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
@@ -77,7 +77,7 @@ func newTestFixture(fixture *sinktest.Fixture, config *Config) (*testFixture, fu
 // test_fixture.go:
 
 type testFixture struct {
-	*sinktest.Fixture
+	*all.Fixture
 	Handler   *Handler
 	Resolvers *Resolvers
 }

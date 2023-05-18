@@ -1,4 +1,4 @@
-// Copyright 2022 The Cockroach Authors.
+// Copyright 2023 The Cockroach Authors.
 //
 // Use of this software is governed by the Business Source License
 // included in the file licenses/BSL.txt.
@@ -8,7 +8,10 @@
 // by the Apache License, Version 2.0, included in the file
 // licenses/APL.txt.
 
-package sinktest
+// Package base provides enough functionality to connect to a database,
+// but does not provide any other services. This package is primary used
+// to break dependency cycles in tests.
+package base
 
 import (
 	"context"
@@ -18,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
@@ -28,28 +30,45 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// TestSet contains providers to create a self-contained Fixture.
+// TestSet is used by wire.
 var TestSet = wire.NewSet(
-	target.Set,
-
 	ProvideContext,
 	ProvideDBInfo,
 	ProvidePool,
-	ProvideTestDB,
-	ProvideWatcher,
 	ProvideStagingDB,
+	ProvideTestDB,
 
-	wire.Bind(new(types.Querier), new(*pgxpool.Pool)),
-	wire.Struct(new(BaseFixture), "*"),
 	wire.Struct(new(Fixture), "*"),
+	wire.Bind(new(types.Querier), new(*pgxpool.Pool)),
 )
 
-// TestDB is an injection point that holds the name of a unique SQL DATABASE that holds
-// user-provided data.
-type TestDB ident.Ident
+// Fixture can be used for tests that "just need a database",
+// without the other services provided by the target package. One can be
+// constructed by calling NewFixture.
+type Fixture struct {
+	Context   context.Context // The context for the test.
+	DBInfo    *DBInfo         // TODO(bob): Extract version elsewhere?
+	Pool      *pgxpool.Pool   // Access to the database.
+	StagingDB ident.StagingDB // The _cdc_sink SQL DATABASE.
+	TestDB    TestDB          // A unique SQL DATABASE identifier.
+}
 
-// Ident returns the underlying database identifier.
-func (t TestDB) Ident() ident.Ident { return ident.Ident(t) }
+// A global counter for allocating all temp tables in a test run. We
+// know that the enclosing database has a unique name, but it's
+// convenient for all test table names to be unique as well.
+var tempTable int32
+
+// CreateTable creates a test table within the TestDB. The
+// schemaSpec parameter must have exactly one %s substitution parameter
+// for the database name and table name.
+func (f *Fixture) CreateTable(ctx context.Context, schemaSpec string) (TableInfo, error) {
+	tableNum := atomic.AddInt32(&tempTable, 1)
+	tableName := ident.New(fmt.Sprintf("_test_table_%d", tableNum))
+	table := ident.NewTable(f.TestDB.Ident(), ident.Public, tableName)
+
+	err := retry.Execute(ctx, f.Pool, fmt.Sprintf(schemaSpec, table))
+	return TableInfo{f.DBInfo, table}, errors.WithStack(err)
+}
 
 var caseTimout = flag.Duration(
 	"caseTimout",
@@ -81,37 +100,29 @@ func ProvideDBInfo(ctx context.Context) (*DBInfo, error) {
 	return info, nil
 }
 
-// ProvideWatcher is called by Wire to construct a Watcher
-// bound to the testing database.
-func ProvideWatcher(
-	ctx context.Context, testDB TestDB, watchers types.Watchers,
-) (types.Watcher, error) {
-	return watchers.Get(ctx, testDB.Ident())
-}
-
 // ProvidePool is a convenience provider for the pgx pool type.
 func ProvidePool(db *DBInfo) *pgxpool.Pool { return db.Pool() }
 
 // ProvideStagingDB create a globally-unique SQL database. The cancel
 // function will drop the database.
 func ProvideStagingDB(ctx context.Context, pool *pgxpool.Pool) (ident.StagingDB, func(), error) {
-	ret, cancel, err := provideTestDB(ctx, pool, "_cdc_sink")
+	ret, cancel, err := CreateDatabase(ctx, pool, "_cdc_sink")
 	return ident.StagingDB(ret), cancel, err
 }
 
 // ProvideTestDB create a globally-unique SQL database. The cancel
 // function will drop the database.
 func ProvideTestDB(ctx context.Context, pool *pgxpool.Pool) (TestDB, func(), error) {
-	ret, cancel, err := provideTestDB(ctx, pool, "_test_db")
+	ret, cancel, err := CreateDatabase(ctx, pool, "_test_db")
 	return TestDB(ret), cancel, err
 }
 
 // Ensure unique database identifiers within a test run.
 var dbIdentCounter int32
 
-// provideTestDB creates a SQL DATABASE with a unique name that will be
+// CreateDatabase creates a SQL DATABASE with a unique name that will be
 // dropped when the cancel function is called.
-func provideTestDB(
+func CreateDatabase(
 	ctx context.Context, pool types.Querier, prefix string,
 ) (ident.Ident, func(), error) {
 	dbNum := atomic.AddInt32(&dbIdentCounter, 1)
@@ -138,3 +149,10 @@ func provideTestDB(
 
 	return name, cancel, nil
 }
+
+// TestDB is an injection point that holds the name of a unique SQL DATABASE that holds
+// user-provided data.
+type TestDB ident.Ident
+
+// Ident returns the underlying database identifier.
+func (t TestDB) Ident() ident.Ident { return ident.Ident(t) }

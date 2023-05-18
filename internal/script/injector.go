@@ -14,14 +14,15 @@
 package script
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/google/wire"
 )
 
-func newScriptFromFixture(*sinktest.Fixture, *Config, TargetSchema) (*UserScript, error) {
+func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, error) {
 	panic(wire.Build(
 		Set,
-		wire.FieldsOf(new(*sinktest.Fixture), "BaseFixture", "Configs", "Watchers"),
-		wire.FieldsOf(new(*sinktest.BaseFixture), "Context", "Pool"),
+		wire.FieldsOf(new(*all.Fixture), "Fixture", "Configs", "Watchers"),
+		wire.FieldsOf(new(*base.Fixture), "Context", "Pool"),
 	))
 }

@@ -24,8 +24,8 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
@@ -35,7 +35,7 @@ import (
 
 func TestMain(m *testing.M) {
 	enableWipe = true
-	sinktest.IntegrationMain(m, sinktest.FirestoreName)
+	all.IntegrationMain(m, all.FirestoreName)
 }
 
 func TestSmoke(t *testing.T) {
@@ -49,7 +49,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 	const docCount = 200
 
 	// Create a target database.
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	r.NoError(err)
 	defer cancel()
 

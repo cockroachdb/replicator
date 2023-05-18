@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/target/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestWatch(t *testing.T) {
 	*schemawatch.RefreshDelay = delay
 	defer func() { *schemawatch.RefreshDelay = time.Minute }()
 
-	fixture, cancel, err := sinktest.NewFixture()
+	fixture, cancel, err := all.NewFixture()
 	if !a.NoError(err) {
 		return
 	}
