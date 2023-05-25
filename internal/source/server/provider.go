@@ -30,7 +30,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -52,7 +51,7 @@ var Set = wire.NewSet(
 // authenticator, or a no-op authenticator if Config.DisableAuth has
 // been set.
 func ProvideAuthenticator(
-	ctx context.Context, pool *pgxpool.Pool, config *Config, stagingDB ident.StagingDB,
+	ctx context.Context, pool types.StagingPool, config *Config, stagingDB ident.StagingDB,
 ) (types.Authenticator, func(), error) {
 	if config.DisableAuth {
 		log.Info("authentication disabled, any caller may write to the target database")
@@ -75,7 +74,12 @@ func ProvideListener(config *Config) (net.Listener, func(), error) {
 
 // ProvideMux is called by Wire to construct the http.ServeMux that
 // routes requests.
-func ProvideMux(handler *cdc.Handler, pool *pgxpool.Pool, applyConf *apply.Configs) *http.ServeMux {
+func ProvideMux(
+	handler *cdc.Handler,
+	applyConf *apply.Configs,
+	stagingPool types.StagingPool,
+	targetPool types.TargetPool,
+) *http.ServeMux {
 	mux := &http.ServeMux{}
 	// The pprof handlers attach themselves to the system-default mux.
 	// The index page also assumes that the handlers are reachable from
@@ -84,10 +88,17 @@ func ProvideMux(handler *cdc.Handler, pool *pgxpool.Pool, applyConf *apply.Confi
 	mux.Handle("/debug/pprof/", http.DefaultServeMux)
 	mux.Handle("/_/config/apply", apply.DebugHandler(applyConf))
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if err := pool.Ping(r.Context()); err != nil {
-			log.WithError(err).Warn("health check failed")
-			http.Error(w, "health check failed", http.StatusInternalServerError)
+		if err := stagingPool.Ping(r.Context()); err != nil {
+			log.WithError(err).Warn("health check failed for staging pool")
+			http.Error(w, "health check failed for staging", http.StatusInternalServerError)
 			return
+		}
+		if stagingPool.Pool != targetPool.Pool {
+			if err := targetPool.Ping(r.Context()); err != nil {
+				log.WithError(err).Warn("health check failed for target pool")
+				http.Error(w, "health check failed for target", http.StatusInternalServerError)
+				return
+			}
 		}
 		http.Error(w, "OK", http.StatusOK)
 	})

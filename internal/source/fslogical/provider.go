@@ -24,7 +24,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/golang/groupcache/lru"
-	"github.com/jackc/pgx/v5/pgxpool"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 )
@@ -51,7 +50,7 @@ func ProvideLoops(
 	fs *firestore.Client,
 	loops *logical.Factory,
 	memo types.Memo,
-	pool *pgxpool.Pool,
+	pool types.StagingPool,
 	st *Tombstones,
 	userscript *script.UserScript,
 ) ([]*logical.Loop, func(), error) {

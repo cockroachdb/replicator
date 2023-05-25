@@ -42,7 +42,7 @@ func TestLeases(t *testing.T) {
 	}
 
 	intf, err := New(ctx, Config{
-		Pool:   fixture.Pool,
+		Pool:   fixture.StagingPool,
 		Target: tbl.Name(),
 	})
 	l := intf.(*leases)

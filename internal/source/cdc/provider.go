@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -46,7 +45,7 @@ func ProvideResolvers(
 	cfg *Config,
 	leases types.Leases,
 	metaTable MetaTable,
-	pool *pgxpool.Pool,
+	pool types.StagingPool,
 	stagers types.Stagers,
 	watchers types.Watchers,
 ) (*Resolvers, func(), error) {

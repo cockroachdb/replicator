@@ -63,7 +63,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 
 	ctx := fixture.Context
 	dbName := fixture.TestDB.Ident()
-	crdbPool := fixture.Pool
+	crdbPool := fixture.TargetPool
 
 	config := &Config{
 		BaseConfig: logical.BaseConfig{
@@ -329,7 +329,7 @@ func TestDataTypes(t *testing.T) {
 
 	ctx := fixture.Context
 	dbName := fixture.TestDB.Ident()
-	crdbPool := fixture.Pool
+	crdbPool := fixture.TargetPool
 
 	config := &Config{
 		BaseConfig: logical.BaseConfig{

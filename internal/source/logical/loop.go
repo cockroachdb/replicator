@@ -88,8 +88,10 @@ type loop struct {
 	// This is controlled by the call to run. That is, when run exits,
 	// this Context will be stopped.
 	running *stopper.Context
-	// Used to update the consistentPoint in the target database.
-	targetPool types.Querier
+	// Used to update the consistentPoint in the staging database.
+	stagingPool types.StagingPool
+	// Destination for mutations.
+	targetPool types.TargetPool
 
 	// This represents a position in the source's transaction log.
 	consistentPoint struct {
@@ -107,7 +109,7 @@ type loop struct {
 // the value of Config.DefaultConsistentPoint, or Dialect.ZeroStamp.
 func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
 	ret := l.dialect.ZeroStamp()
-	data, err := l.memo.Get(ctx, l.targetPool, l.config.LoopName)
+	data, err := l.memo.Get(ctx, l.stagingPool, l.config.LoopName)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +158,7 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 		return errors.WithStack(err)
 	}
 	return l.memo.Put(context.Background(),
-		l.targetPool, l.config.LoopName, data,
+		l.stagingPool, l.config.LoopName, data,
 	)
 }
 

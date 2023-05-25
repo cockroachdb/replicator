@@ -180,7 +180,7 @@ func TestGetColumns(t *testing.T) {
 	}
 
 	// Verify user-defined types with mixed-case name.
-	if _, err := fixture.Pool.Exec(ctx, fmt.Sprintf(
+	if _, err := fixture.TargetPool.Exec(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
 		fixture.TestDB.Ident()),
 	); !a.NoError(err) {

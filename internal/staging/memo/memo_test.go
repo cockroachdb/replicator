@@ -26,7 +26,7 @@ func TestRoundtrip(t *testing.T) {
 
 	ctx := fixture.Context
 	memo := fixture.Memo
-	pool := fixture.Pool
+	pool := fixture.StagingPool
 
 	tests := []struct {
 		name     string

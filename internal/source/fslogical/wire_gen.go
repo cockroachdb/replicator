@@ -33,7 +33,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := logical.ProvidePool(contextContext, baseConfig)
+	targetPool, cleanup, err := logical.ProvideTargetPool(contextContext, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -42,14 +42,15 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup2, err := apply.ProvideConfigs(contextContext, pool, stagingDB)
+	configs, cleanup2, err := apply.ProvideConfigs(contextContext, targetPool, stagingDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
+	stagingPool := logical.ProvideStagingPool(targetPool)
 	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
-	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
-	userScript, err := script.ProvideUserScript(contextContext, configs, loader, pool, targetSchema, watchers)
+	watchers, cleanup3 := schemawatch.ProvideFactory(targetPool)
+	userScript, err := script.ProvideUserScript(contextContext, configs, loader, stagingPool, targetSchema, watchers)
 	if err != nil {
 		cleanup3()
 		cleanup2()
@@ -64,7 +65,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		return nil, nil, err
 	}
 	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
-	memoMemo, err := memo.ProvideMemo(contextContext, pool, stagingDB)
+	memoMemo, err := memo.ProvideMemo(contextContext, stagingPool, stagingDB)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -73,7 +74,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup6 := logical.ProvideFactory(appliers, config, memoMemo, pool, watchers, userScript)
+	factory, cleanup6 := logical.ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
 	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
 	if err != nil {
 		cleanup6()
@@ -84,7 +85,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	v, cleanup7, err := ProvideLoops(contextContext, config, client, factory, memoMemo, pool, tombstones, userScript)
+	v, cleanup7, err := ProvideLoops(contextContext, config, client, factory, memoMemo, stagingPool, tombstones, userScript)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -122,13 +123,14 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := logical.ProvidePool(contextContext, baseConfig)
+	targetPool, cleanup, err := logical.ProvideTargetPool(contextContext, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
+	stagingPool := logical.ProvideStagingPool(targetPool)
 	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
 	watchers := fixture.Watchers
-	userScript, err := script.ProvideUserScript(contextContext, configs, loader, pool, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(contextContext, configs, loader, stagingPool, targetSchema, watchers)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -140,7 +142,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	}
 	appliers := fixture.Appliers
 	typesMemo := fixture.Memo
-	factory, cleanup3 := logical.ProvideFactory(appliers, config, typesMemo, pool, watchers, userScript)
+	factory, cleanup3 := logical.ProvideFactory(appliers, config, typesMemo, stagingPool, targetPool, watchers, userScript)
 	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
 	if err != nil {
 		cleanup3()
@@ -148,7 +150,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		cleanup()
 		return nil, nil, err
 	}
-	v, cleanup4, err := ProvideLoops(contextContext, config, client, factory, typesMemo, pool, tombstones, userScript)
+	v, cleanup4, err := ProvideLoops(contextContext, config, client, factory, typesMemo, stagingPool, tombstones, userScript)
 	if err != nil {
 		cleanup3()
 		cleanup2()

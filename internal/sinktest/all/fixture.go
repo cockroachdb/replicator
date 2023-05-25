@@ -39,7 +39,7 @@ type Fixture struct {
 func (f *Fixture) CreateTable(ctx context.Context, schemaSpec string) (base.TableInfo, error) {
 	ti, err := f.Fixture.CreateTable(ctx, schemaSpec)
 	if err == nil {
-		err = f.Watcher.Refresh(ctx, f.Pool)
+		err = f.Watcher.Refresh(ctx, f.TargetPool)
 	}
 	return ti, err
 }

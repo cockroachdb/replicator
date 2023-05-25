@@ -17,15 +17,14 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
 // serialEvents is a transaction-preserving implementation of Events.
 type serialEvents struct {
-	appliers types.Appliers
-	loop     *loop
-	pool     *pgxpool.Pool
+	appliers   types.Appliers
+	loop       *loop
+	targetPool types.TargetPool
 
 	stamp stamp.Stamp // the latest value passed to OnCommit.
 	tx    pgx.Tx      // db transaction created by OnCommit.
@@ -65,7 +64,7 @@ func (e *serialEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 		return errors.Errorf("OnBegin already called at %s", e.stamp)
 	}
 	e.stamp = point
-	e.tx, err = e.pool.Begin(ctx)
+	e.tx, err = e.targetPool.Begin(ctx)
 	return errors.WithStack(err)
 }
 

@@ -23,6 +23,6 @@ func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, err
 	panic(wire.Build(
 		Set,
 		wire.FieldsOf(new(*all.Fixture), "Fixture", "Configs", "Watchers"),
-		wire.FieldsOf(new(*base.Fixture), "Context", "Pool"),
+		wire.FieldsOf(new(*base.Fixture), "Context", "StagingPool"),
 	))
 }

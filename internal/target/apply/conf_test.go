@@ -82,7 +82,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	a.True(cfgs.Get(tbl).IsZero())
 
 	// Verify that we can store the data.
-	tx, err := fixture.Pool.Begin(ctx)
+	tx, err := fixture.StagingPool.Begin(ctx)
 	a.NoError(err)
 	a.NoError(cfgs.Store(ctx, tx, tbl, cfg))
 	a.NoError(tx.Commit(ctx))
@@ -111,7 +111,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 
 	// Replace the data with an empty configuration, this will wind
 	// up deleting the config rows.
-	a.NoError(cfgs.Store(ctx, fixture.Pool, tbl, &apply.Config{}))
+	a.NoError(cfgs.Store(ctx, fixture.StagingPool, tbl, &apply.Config{}))
 	changed, err = fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)

@@ -25,14 +25,13 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type testFixture struct {
 	Authenticator types.Authenticator
 	Config        *Config
 	Listener      net.Listener
-	Pool          *pgxpool.Pool
+	StagingPool   types.StagingPool
 	Server        *Server
 	StagingDB     ident.StagingDB
 	Watcher       types.Watchers

@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -218,6 +219,16 @@ type SchemaData struct {
 	// for deferrable foreign-key constraints:
 	// https://github.com/cockroachdb/cockroach/issues/31632
 	Order [][]ident.Table
+}
+
+// StagingPool is an injection point for a connection to the staging database.
+type StagingPool struct {
+	*pgxpool.Pool
+}
+
+// TargetPool is an injection point for a connection to the target database.
+type TargetPool struct {
+	*pgxpool.Pool
 }
 
 // Watcher allows table metadata to be observed.

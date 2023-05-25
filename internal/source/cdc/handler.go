@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -34,9 +33,10 @@ type Handler struct {
 	Appliers      types.Appliers      // Update tables within TargetDb.
 	Authenticator types.Authenticator // Access checks.
 	Config        *Config             // Runtime options.
-	Pool          *pgxpool.Pool       // Access to the target cluster.
 	Resolvers     *Resolvers          // Process resolved timestamps.
+	StagingPool   types.StagingPool   // Access to the staging cluster.
 	Stores        types.Stagers       // Record incoming json blobs.
+	TargetPool    types.TargetPool    // Access to the target cluster.
 }
 
 // A request is configured by the various parseURL methods in Handler.

@@ -30,7 +30,7 @@ func TestJWT(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	pool := fixture.Pool
+	pool := fixture.StagingPool
 	stagingDB := fixture.StagingDB
 
 	auth, cancel, err := ProvideAuth(ctx, pool, stagingDB)

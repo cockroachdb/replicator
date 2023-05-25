@@ -32,7 +32,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -294,7 +293,7 @@ func (s *stage) Store(ctx context.Context, db types.Querier, mutations []types.M
 	// If we're working with a pool, and not a transaction, we'll stage
 	// the data in a concurrent manner.
 	var err error
-	if _, isPool := db.(*pgxpool.Pool); isPool {
+	if _, isPool := db.(types.StagingPool); isPool {
 		eg, errCtx := errgroup.WithContext(ctx)
 		err = batches.Batch(len(mutations), func(begin, end int) error {
 			eg.Go(func() error {

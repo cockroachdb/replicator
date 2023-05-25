@@ -27,9 +27,9 @@ func TestConcurrentRegistration(t *testing.T) {
 	r.NoError(err)
 	defer cancel()
 
-	c1 := stdpool.PublishMetrics(fixture.Pool)
+	c1 := stdpool.PublishMetrics(fixture.TargetPool.Pool)
 	defer c1()
 
-	c2 := stdpool.PublishMetrics(fixture.Pool)
+	c2 := stdpool.PublishMetrics(fixture.TargetPool.Pool)
 	defer c2()
 }

@@ -131,7 +131,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			RetryDelay:         time.Nanosecond,
 			StandbyTimeout:     10 * time.Millisecond,
 			StagingDB:          fixture.StagingDB.Ident(),
-			TargetConn:         fixture.Pool.Config().ConnString(),
+			TargetConn:         fixture.TargetPool.Config().ConnString(),
 			TargetDB:           fixture.TestDB.Ident(),
 
 			ScriptConfig: script.Config{
@@ -235,7 +235,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 	// Wait for updated values.
 	for {
 		var ct int
-		r.NoError(fixture.Pool.QueryRow(ctx,
+		r.NoError(fixture.TargetPool.QueryRow(ctx,
 			fmt.Sprintf("SELECT count(*) FROM %s WHERE v LIKE 'updated%%'",
 				destTable.Name())).Scan(&ct))
 		if ct == docCount {
@@ -281,7 +281,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 	// Wait for documents to be deleted.
 	for {
 		var ct int
-		r.NoError(fixture.Pool.QueryRow(ctx,
+		r.NoError(fixture.TargetPool.QueryRow(ctx,
 			fmt.Sprintf("SELECT count(*) FROM %s WHERE v LIKE 'updated%%'",
 				destTable.Name())).Scan(&ct))
 		if ct == 0 {

@@ -19,24 +19,26 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	pool := ProvidePool(dbInfo)
-	stagingDB, cleanup2, err := ProvideStagingDB(context, pool)
+	stagingPool := ProvideStagingPool(dbInfo)
+	targetPool := ProvideTargetPool(dbInfo)
+	stagingDB, cleanup2, err := ProvideStagingDB(context, stagingPool)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	testDB, cleanup3, err := ProvideTestDB(context, pool)
+	testDB, cleanup3, err := ProvideTestDB(context, targetPool)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	fixture := &Fixture{
-		Context:   context,
-		DBInfo:    dbInfo,
-		Pool:      pool,
-		StagingDB: stagingDB,
-		TestDB:    testDB,
+		Context:     context,
+		DBInfo:      dbInfo,
+		StagingPool: stagingPool,
+		TargetPool:  targetPool,
+		StagingDB:   stagingDB,
+		TestDB:      testDB,
 	}
 	return fixture, func() {
 		cleanup3()

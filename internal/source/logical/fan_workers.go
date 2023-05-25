@@ -29,7 +29,7 @@ type fanWorkers struct {
 	appliers     types.Appliers
 	batchSize    int
 	pending      *latch.Counter
-	pool         types.Querier
+	targetPool   types.TargetPool
 	stamp        stamp.Stamp
 	workerStatus func() error
 
@@ -45,11 +45,11 @@ type fanWorkers struct {
 // mutations to destination tables.
 func newFanWorkers(ctx context.Context, loop *loop, stamp stamp.Stamp) *fanWorkers {
 	ret := &fanWorkers{
-		appliers:  loop.factory.appliers,
-		batchSize: batches.Size(),
-		pending:   latch.New(),
-		pool:      loop.targetPool,
-		stamp:     stamp,
+		appliers:   loop.factory.appliers,
+		batchSize:  batches.Size(),
+		pending:    latch.New(),
+		targetPool: loop.targetPool,
+		stamp:      stamp,
 	}
 	ret.mu.data = make(map[ident.Table][]types.Mutation)
 	ret.mu.updated = make(chan struct{})
@@ -137,7 +137,7 @@ func (t *fanWorkers) loop(ctx context.Context) error {
 		if err != nil {
 			return errors.Wrapf(err, "table %s", table)
 		}
-		if err := applier.Apply(ctx, t.pool, muts); err != nil {
+		if err := applier.Apply(ctx, t.targetPool, muts); err != nil {
 			return errors.Wrapf(err, "table %s", table)
 		}
 		t.pending.Apply(-len(muts))

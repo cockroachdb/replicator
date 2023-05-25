@@ -52,17 +52,17 @@ func TestScript(t *testing.T) {
 	ctx := fixture.Context
 
 	// Create tables that will be referenced by the user-script.
-	_, err = fixture.Pool.Exec(ctx,
+	_, err = fixture.TargetPool.Exec(ctx,
 		fmt.Sprintf("CREATE TABLE %s.table1(msg TEXT PRIMARY KEY)", fixture.TestDB.Ident()))
 	r.NoError(err)
-	_, err = fixture.Pool.Exec(ctx,
+	_, err = fixture.TargetPool.Exec(ctx,
 		fmt.Sprintf("CREATE TABLE %s.table2(idx INT PRIMARY KEY)", fixture.TestDB.Ident()))
 	r.NoError(err)
-	_, err = fixture.Pool.Exec(ctx,
+	_, err = fixture.TargetPool.Exec(ctx,
 		fmt.Sprintf("CREATE TABLE %s.all_features(msg TEXT PRIMARY KEY)", fixture.TestDB.Ident()))
 	r.NoError(err)
 
-	r.NoError(fixture.Watcher.Refresh(ctx, fixture.Pool))
+	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
 
 	var opts mapOptions
 

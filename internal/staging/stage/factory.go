@@ -24,13 +24,12 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
 type factory struct {
-	db        *pgxpool.Pool
+	db        types.StagingPool
 	stagingDB ident.Ident
 
 	mu struct {

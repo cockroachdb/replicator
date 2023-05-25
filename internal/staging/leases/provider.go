@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Set is used by Wire.
@@ -32,7 +31,7 @@ var Set = wire.NewSet(
 //
 // https://github.com/cockroachdb/cockroach/issues/100194
 func ProvideLeases(
-	ctx context.Context, pool *pgxpool.Pool, stagingDB ident.StagingDB,
+	ctx context.Context, pool types.StagingPool, stagingDB ident.StagingDB,
 ) (types.Leases, error) {
 	return New(ctx, Config{
 		Guard:      time.Second,
