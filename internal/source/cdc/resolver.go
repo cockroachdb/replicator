@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -54,7 +53,7 @@ type resolver struct {
 	fastWakeup  chan struct{}
 	leases      types.Leases
 	loop        *logical.Loop // Reference to driving loop, for testing.
-	pool        *pgxpool.Pool
+	pool        types.StagingPool
 	retirements chan hlc.Time // Drives a goroutine to remove applied mutations.
 	stagers     types.Stagers
 	target      ident.Schema
@@ -78,7 +77,7 @@ func newResolver(
 	ctx context.Context,
 	cfg *Config,
 	leases types.Leases,
-	pool *pgxpool.Pool,
+	pool types.StagingPool,
 	metaTable ident.Table,
 	stagers types.Stagers,
 	target ident.Schema,
@@ -570,7 +569,7 @@ type Resolvers struct {
 	leases    types.Leases
 	noStart   bool // Set by test code to disable call to loop.Start()
 	metaTable ident.Table
-	pool      *pgxpool.Pool
+	pool      types.StagingPool
 	stagers   types.Stagers
 	watchers  types.Watchers
 

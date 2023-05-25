@@ -27,11 +27,11 @@ var Set = wire.NewSet(
 	ProvideFactory,
 	ProvideLoop,
 	ProvideBaseConfig,
-	ProvidePool,
 	ProvideStagingDB,
+	ProvideStagingPool,
+	ProvideTargetPool,
 	ProvideUserScriptConfig,
 	ProvideUserScriptTarget,
-	wire.Bind(new(types.Querier), new(*pgxpool.Pool)),
 )
 
 // ProvideBaseConfig is called by wire to extract the BaseConfig from
@@ -52,17 +52,19 @@ func ProvideFactory(
 	appliers types.Appliers,
 	config Config,
 	memo types.Memo,
-	pool *pgxpool.Pool,
+	stagingPool types.StagingPool,
+	targetPool types.TargetPool,
 	watchers types.Watchers,
 	userscript *script.UserScript,
 ) (*Factory, func()) {
 	f := &Factory{
-		appliers:   appliers,
-		cfg:        config,
-		memo:       memo,
-		pool:       pool,
-		watchers:   watchers,
-		userscript: userscript,
+		appliers:    appliers,
+		cfg:         config,
+		memo:        memo,
+		stagingPool: stagingPool,
+		targetPool:  targetPool,
+		watchers:    watchers,
+		userscript:  userscript,
 	}
 	f.mu.loops = make(map[string]*Loop)
 	return f, f.Close
@@ -73,14 +75,26 @@ func ProvideLoop(ctx context.Context, factory *Factory, dialect Dialect) (*Loop,
 	return factory.Get(ctx, dialect)
 }
 
-// ProvidePool is called by Wire to create a connection pool that
+// ProvideStagingDB is called by Wire to retrieve the name of the
+// _cdc_sink SQL DATABASE.
+func ProvideStagingDB(config *BaseConfig) (ident.StagingDB, error) {
+	return ident.StagingDB(config.StagingDB), nil
+}
+
+// ProvideStagingPool temporarily re-exports the target pool as the
+// staging database pool.
+func ProvideStagingPool(pool types.TargetPool) types.StagingPool {
+	return types.StagingPool(pool)
+}
+
+// ProvideTargetPool is called by Wire to create a connection pool that
 // accesses the target cluster. The pool will be closed by the cancel
 // function.
-func ProvidePool(ctx context.Context, config *BaseConfig) (*pgxpool.Pool, func(), error) {
+func ProvideTargetPool(ctx context.Context, config *BaseConfig) (types.TargetPool, func(), error) {
 	// Bring up connection to target database.
 	targetCfg, err := stdpool.ParseConfig(config.TargetConn)
 	if err != nil {
-		return nil, nil, err
+		return *new(types.TargetPool), nil, err
 	}
 
 	// We want to force our longest transaction time to respect the
@@ -98,19 +112,13 @@ func ProvidePool(ctx context.Context, config *BaseConfig) (*pgxpool.Pool, func()
 
 	targetPool, err := pgxpool.NewWithConfig(ctx, targetCfg)
 	cancelMetrics := stdpool.PublishMetrics(targetPool)
-	return targetPool, func() {
+	return types.TargetPool{Pool: targetPool}, func() {
 		cancelMetrics()
 		// Pool.Close is a blocking call, so it can wind up delaying
 		// shutdown indefinitely. Execute it from a goroutine, so that
 		// any future calls to Acquire will fail.
 		go targetPool.Close()
 	}, errors.Wrap(err, "could not connect to CockroachDB")
-}
-
-// ProvideStagingDB is called by Wire to retrieve the name of the
-// _cdc_sink SQL DATABASE.
-func ProvideStagingDB(config *BaseConfig) (ident.StagingDB, error) {
-	return ident.StagingDB(config.StagingDB), nil
 }
 
 // ProvideUserScriptConfig is called by Wire to extract the user-script

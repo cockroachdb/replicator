@@ -17,19 +17,19 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
 // Factory supports uses cases where it is desirable to have multiple,
 // independent logical loops that share common resources.
 type Factory struct {
-	appliers   types.Appliers
-	cfg        Config
-	memo       types.Memo
-	pool       *pgxpool.Pool
-	watchers   types.Watchers
-	userscript *script.UserScript
+	appliers    types.Appliers
+	cfg         Config
+	memo        types.Memo
+	stagingPool types.StagingPool
+	targetPool  types.TargetPool
+	watchers    types.Watchers
+	userscript  *script.UserScript
 
 	mu struct {
 		sync.Mutex
@@ -97,12 +97,13 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		dialect = WithChaos(dialect, config.ChaosProb)
 	}
 	loop := &loop{
-		config:     config,
-		dialect:    dialect,
-		factory:    f,
-		memo:       f.memo,
-		running:    stopper.WithContext(ctx),
-		targetPool: f.pool,
+		config:      config,
+		dialect:     dialect,
+		factory:     f,
+		memo:        f.memo,
+		running:     stopper.WithContext(ctx),
+		stagingPool: f.stagingPool,
+		targetPool:  f.targetPool,
 	}
 	loop.consistentPoint.updated = make(chan struct{})
 	initialPoint, err := loop.loadConsistentPoint(ctx)
@@ -116,9 +117,9 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 	}
 
 	loop.events.serial = &serialEvents{
-		appliers: f.appliers,
-		loop:     loop,
-		pool:     f.pool,
+		appliers:   f.appliers,
+		loop:       loop,
+		targetPool: f.targetPool,
 	}
 
 	if config.ForeignKeysEnabled {

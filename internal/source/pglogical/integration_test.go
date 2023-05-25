@@ -68,7 +68,7 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 
 	ctx := fixture.Context
 	dbName := fixture.TestDB.Ident()
-	crdbPool := fixture.Pool
+	crdbPool := fixture.TargetPool
 
 	pgPool, cancel, err := setupPGPool(dbName)
 	if !a.NoError(err) {
@@ -283,7 +283,7 @@ func TestDataTypes(t *testing.T) {
 
 	ctx := fixture.Context
 	dbName := fixture.TestDB.Ident()
-	crdbPool := fixture.Pool
+	crdbPool := fixture.TargetPool
 
 	pgPool, cancel, err := setupPGPool(dbName)
 	if !a.NoError(err) {

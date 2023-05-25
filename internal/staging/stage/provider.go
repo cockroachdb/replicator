@@ -14,7 +14,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Set is used by Wire.
@@ -23,7 +22,7 @@ var Set = wire.NewSet(
 )
 
 // ProvideFactory is called by Wire to construct the Stagers factory.
-func ProvideFactory(db *pgxpool.Pool, stagingDB ident.StagingDB) types.Stagers {
+func ProvideFactory(db types.StagingPool, stagingDB ident.StagingDB) types.Stagers {
 	f := &factory{
 		db:        db,
 		stagingDB: stagingDB.Ident(),

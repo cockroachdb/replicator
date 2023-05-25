@@ -17,7 +17,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"net"
 )
 
@@ -47,7 +46,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	pool, cleanup2, err := logical.ProvidePool(ctx, baseConfig)
+	targetPool, cleanup2, err := logical.ProvideTargetPool(ctx, baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -58,15 +57,16 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup3, err := apply.ProvideConfigs(ctx, pool, stagingDB)
+	configs, cleanup3, err := apply.ProvideConfigs(ctx, targetPool, stagingDB)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup4 := schemawatch.ProvideFactory(pool)
+	watchers, cleanup4 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
-	authenticator, cleanup6, err := ProvideAuthenticator(ctx, pool, config, stagingDB)
+	stagingPool := logical.ProvideStagingPool(targetPool)
+	authenticator, cleanup6, err := ProvideAuthenticator(ctx, stagingPool, config, stagingDB)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -76,7 +76,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	cdcConfig := &config.CDC
-	typesLeases, err := leases.ProvideLeases(ctx, pool, stagingDB)
+	typesLeases, err := leases.ProvideLeases(ctx, stagingPool, stagingDB)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -87,8 +87,8 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
-	stagers := stage.ProvideFactory(pool, stagingDB)
-	resolvers, cleanup7, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, metaTable, pool, stagers, watchers)
+	stagers := stage.ProvideFactory(stagingPool, stagingDB)
+	resolvers, cleanup7, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -102,11 +102,12 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		Appliers:      appliers,
 		Authenticator: authenticator,
 		Config:        cdcConfig,
-		Pool:          pool,
 		Resolvers:     resolvers,
+		StagingPool:   stagingPool,
 		Stores:        stagers,
+		TargetPool:    targetPool,
 	}
-	serveMux := ProvideMux(handler, pool, configs)
+	serveMux := ProvideMux(handler, configs, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
 		cleanup7()
@@ -148,16 +149,17 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := logical.ProvidePool(contextContext, baseConfig)
+	targetPool, cleanup, err := logical.ProvideTargetPool(contextContext, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
+	stagingPool := logical.ProvideStagingPool(targetPool)
 	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	authenticator, cleanup2, err := ProvideAuthenticator(contextContext, pool, config, stagingDB)
+	authenticator, cleanup2, err := ProvideAuthenticator(contextContext, stagingPool, config, stagingDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -168,17 +170,17 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup4, err := apply.ProvideConfigs(contextContext, pool, stagingDB)
+	configs, cleanup4, err := apply.ProvideConfigs(contextContext, targetPool, stagingDB)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
+	watchers, cleanup5 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
 	cdcConfig := &config.CDC
-	typesLeases, err := leases.ProvideLeases(contextContext, pool, stagingDB)
+	typesLeases, err := leases.ProvideLeases(contextContext, stagingPool, stagingDB)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -189,8 +191,8 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		return nil, nil, err
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
-	stagers := stage.ProvideFactory(pool, stagingDB)
-	resolvers, cleanup7, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, metaTable, pool, stagers, watchers)
+	stagers := stage.ProvideFactory(stagingPool, stagingDB)
+	resolvers, cleanup7, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -204,11 +206,12 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		Appliers:      appliers,
 		Authenticator: authenticator,
 		Config:        cdcConfig,
-		Pool:          pool,
 		Resolvers:     resolvers,
+		StagingPool:   stagingPool,
 		Stores:        stagers,
+		TargetPool:    targetPool,
 	}
-	serveMux := ProvideMux(handler, pool, configs)
+	serveMux := ProvideMux(handler, configs, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
 		cleanup7()
@@ -225,7 +228,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		Authenticator: authenticator,
 		Config:        config,
 		Listener:      listener,
-		Pool:          pool,
+		StagingPool:   stagingPool,
 		Server:        server,
 		StagingDB:     stagingDB,
 		Watcher:       watchers,
@@ -248,7 +251,7 @@ type testFixture struct {
 	Authenticator types.Authenticator
 	Config        *Config
 	Listener      net.Listener
-	Pool          *pgxpool.Pool
+	StagingPool   types.StagingPool
 	Server        *Server
 	StagingDB     ident.StagingDB
 	Watcher       types.Watchers

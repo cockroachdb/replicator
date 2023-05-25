@@ -24,7 +24,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/iterator"
@@ -40,7 +39,7 @@ type Dialect struct {
 	idempotent        bool                     // Detect reprocessing the same document.
 	loops             *logical.Factory         // Support dynamic nested collections.
 	memo              types.Memo               // Durable logging of processed doc ids.
-	pool              *pgxpool.Pool            // Database access.
+	pool              types.StagingPool        // Database access.
 	query             firestore.Query          // The base query build from.
 	recurse           bool                     // Scan for dynamic, nested collections.
 	recurseFilter     map[ident.Ident]struct{} // Ignore nested collections with these names.

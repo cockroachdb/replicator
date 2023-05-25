@@ -77,7 +77,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	defer cancel()
 
 	targetDB := destFixture.TestDB.Ident()
-	targetPool := destFixture.Pool
+	targetPool := destFixture.TargetPool
 
 	// The target fixture contains the cdc-sink server.
 	targetFixture, cancel, err := newTestFixture(ctx, &Config{
@@ -87,7 +87,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 				LoopName:   "changefeed",
 				StagingDB:  destFixture.StagingDB.Ident(),
 				TargetDB:   destFixture.TestDB.Ident(),
-				TargetConn: destFixture.Pool.Config().ConnString(),
+				TargetConn: destFixture.TargetPool.Config().ConnString(),
 			},
 			MetaTableName: ident.New("resolved_timestamps"),
 		},

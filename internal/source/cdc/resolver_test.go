@@ -35,7 +35,7 @@ func TestResolverDeQueue(t *testing.T) {
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
 			StagingDB:  baseFixture.StagingDB.Ident(),
-			TargetConn: baseFixture.Pool.Config().ConnString(),
+			TargetConn: baseFixture.TargetPool.Config().ConnString(),
 			TargetDB:   baseFixture.TestDB.Ident(),
 		},
 	})

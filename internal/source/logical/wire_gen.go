@@ -29,7 +29,7 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := ProvidePool(ctx, baseConfig)
+	targetPool, cleanup, err := ProvideTargetPool(ctx, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -38,14 +38,15 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup2, err := apply.ProvideConfigs(ctx, pool, stagingDB)
+	configs, cleanup2, err := apply.ProvideConfigs(ctx, targetPool, stagingDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup3 := schemawatch.ProvideFactory(pool)
+	watchers, cleanup3 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	memoMemo, err := memo.ProvideMemo(ctx, pool, stagingDB)
+	stagingPool := ProvideStagingPool(targetPool)
+	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingDB)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -54,7 +55,7 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		return nil, nil, err
 	}
 	targetSchema := ProvideUserScriptTarget(baseConfig)
-	userScript, err := script.ProvideUserScript(ctx, configs, loader, pool, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -62,7 +63,7 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup5 := ProvideFactory(appliers, config, memoMemo, pool, watchers, userScript)
+	factory, cleanup5 := ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
 	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
 	if err != nil {
 		cleanup5()

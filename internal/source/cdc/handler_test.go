@@ -51,7 +51,7 @@ func testHandler(t *testing.T, immediate bool) {
 			Immediate:  immediate,
 			LoopName:   "changefeed",
 			StagingDB:  baseFixture.StagingDB.Ident(),
-			TargetConn: baseFixture.Pool.Config().ConnString(),
+			TargetConn: baseFixture.TargetPool.Config().ConnString(),
 			TargetDB:   baseFixture.TestDB.Ident(),
 		},
 	})
@@ -287,7 +287,7 @@ func testMassBackfillWithForeignKeys(
 				LoopName:           "changefeed",
 				StagingDB:          baseFixture.StagingDB.Ident(),
 				RetryDelay:         time.Nanosecond,
-				TargetConn:         baseFixture.Pool.Config().ConnString(),
+				TargetConn:         baseFixture.TargetPool.Config().ConnString(),
 				TargetDB:           baseFixture.TestDB.Ident(),
 			},
 		})
@@ -358,7 +358,7 @@ func testMassBackfillWithForeignKeys(
 	// Wait for rows to appear.
 	for _, tbl := range []ident.Table{parent.Name(), child.Name(), grand.Name()} {
 		for {
-			count, err := base.GetRowCount(ctx, baseFixture.Pool, tbl)
+			count, err := base.GetRowCount(ctx, baseFixture.TargetPool, tbl)
 			r.NoError(err)
 			log.Infof("saw %d of %d rows in %s", count, rowCount, tbl)
 			if count == rowCount {

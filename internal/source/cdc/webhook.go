@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -121,7 +122,13 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 	}
 
 	return retry.Retry(ctx, func(ctx context.Context) error {
-		tx, err := h.Pool.Begin(ctx)
+		var pool *pgxpool.Pool
+		if h.Config.Immediate {
+			pool = h.TargetPool.Pool
+		} else {
+			pool = h.StagingPool.Pool
+		}
+		tx, err := pool.Begin(ctx)
 		if err != nil {
 			return err
 		}

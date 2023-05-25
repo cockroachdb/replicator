@@ -28,35 +28,37 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	pool := base.ProvidePool(dbInfo)
-	stagingDB, cleanup2, err := base.ProvideStagingDB(context, pool)
+	stagingPool := base.ProvideStagingPool(dbInfo)
+	targetPool := base.ProvideTargetPool(dbInfo)
+	stagingDB, cleanup2, err := base.ProvideStagingDB(context, stagingPool)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	testDB, cleanup3, err := base.ProvideTestDB(context, pool)
+	testDB, cleanup3, err := base.ProvideTestDB(context, targetPool)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	fixture := &base.Fixture{
-		Context:   context,
-		DBInfo:    dbInfo,
-		Pool:      pool,
-		StagingDB: stagingDB,
-		TestDB:    testDB,
+		Context:     context,
+		DBInfo:      dbInfo,
+		StagingPool: stagingPool,
+		TargetPool:  targetPool,
+		StagingDB:   stagingDB,
+		TestDB:      testDB,
 	}
-	configs, cleanup4, err := apply.ProvideConfigs(context, pool, stagingDB)
+	configs, cleanup4, err := apply.ProvideConfigs(context, targetPool, stagingDB)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup5 := schemawatch.ProvideFactory(pool)
+	watchers, cleanup5 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
-	memoMemo, err := memo.ProvideMemo(context, pool, stagingDB)
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingDB)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -66,7 +68,7 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	stagers := stage.ProvideFactory(pool, stagingDB)
+	stagers := stage.ProvideFactory(stagingPool, stagingDB)
 	watcher, err := ProvideWatcher(context, testDB, watchers)
 	if err != nil {
 		cleanup6()

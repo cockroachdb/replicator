@@ -62,7 +62,7 @@ func TestWatch(t *testing.T) {
 	}
 
 	// Add a column and expect to see it.
-	if !a.NoError(retry.Execute(ctx, fixture.Pool,
+	if !a.NoError(retry.Execute(ctx, fixture.TargetPool,
 		fmt.Sprintf("ALTER TABLE %s ADD COLUMN v STRING", tblInfo.Name()))) {
 		return
 	}

@@ -33,16 +33,17 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, cleanup, err := logical.ProvidePool(context, baseConfig)
+	targetPool, cleanup, err := logical.ProvideTargetPool(context, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
+	stagingPool := logical.ProvideStagingPool(targetPool)
 	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	typesLeases, err := leases.ProvideLeases(context, pool, stagingDB)
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -50,7 +51,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	metaTable := ProvideMetaTable(config)
 	stagers := fixture.Stagers
 	watchers := fixture.Watchers
-	resolvers, cleanup2, err := ProvideResolvers(context, config, typesLeases, metaTable, pool, stagers, watchers)
+	resolvers, cleanup2, err := ProvideResolvers(context, config, typesLeases, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -59,9 +60,10 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Appliers:      appliers,
 		Authenticator: authenticator,
 		Config:        config,
-		Pool:          pool,
 		Resolvers:     resolvers,
+		StagingPool:   stagingPool,
 		Stores:        stagers,
+		TargetPool:    targetPool,
 	}
 	cdcTestFixture := &testFixture{
 		Fixture:   fixture,

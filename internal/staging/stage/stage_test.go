@@ -41,7 +41,7 @@ func TestPutAndDrain(t *testing.T) {
 
 	ctx := fixture.Context
 	a.NotEmpty(fixture.DBInfo.Version())
-
+	pool := fixture.StagingPool
 	targetDB := fixture.TestDB.Ident()
 
 	dummyTarget := ident.NewTable(
@@ -69,15 +69,15 @@ func TestPutAndDrain(t *testing.T) {
 	maxTime := muts[len(muts)-1].Time
 
 	// Check TransactionTimes in empty state.
-	found, err := s.TransactionTimes(ctx, fixture.Pool, hlc.Zero(), maxTime)
+	found, err := s.TransactionTimes(ctx, pool, hlc.Zero(), maxTime)
 	a.Empty(found)
 	a.NoError(err)
 
 	// Insert.
-	a.NoError(s.Store(ctx, fixture.Pool, muts))
+	a.NoError(s.Store(ctx, pool, muts))
 
 	// We should find all timestamps now.
-	found, err = s.TransactionTimes(ctx, fixture.Pool, hlc.Zero(), maxTime)
+	found, err = s.TransactionTimes(ctx, pool, hlc.Zero(), maxTime)
 	if a.Len(found, len(muts)) {
 		a.Equal(muts[0].Time, found[0])
 		a.Equal(maxTime, found[len(found)-1])
@@ -85,7 +85,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.NoError(err)
 
 	// Advance once.
-	found, err = s.TransactionTimes(ctx, fixture.Pool, muts[0].Time, maxTime)
+	found, err = s.TransactionTimes(ctx, pool, muts[0].Time, maxTime)
 	if a.Len(found, len(muts)-1) {
 		a.Equal(muts[1].Time, found[0])
 		a.Equal(maxTime, found[len(found)-1])
@@ -93,20 +93,20 @@ func TestPutAndDrain(t *testing.T) {
 	a.NoError(err)
 
 	// Make sure we don't find the last value.
-	found, err = s.TransactionTimes(ctx, fixture.Pool, maxTime, maxTime)
+	found, err = s.TransactionTimes(ctx, pool, maxTime, maxTime)
 	a.Empty(found)
 	a.NoError(err)
 
 	// Sanity-check table.
-	count, err := base.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err := base.GetRowCount(ctx, pool, stagingTable)
 	a.NoError(err)
 	a.Equal(total, count)
 
 	// Ensure that data insertion is idempotent.
-	a.NoError(s.Store(ctx, fixture.Pool, muts))
+	a.NoError(s.Store(ctx, pool, muts))
 
 	// Sanity-check table.
-	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, pool, stagingTable)
 	a.NoError(err)
 	a.Equal(total, count)
 
@@ -118,10 +118,10 @@ func TestPutAndDrain(t *testing.T) {
 		older[i].Data = []byte(`"should not see this"`)
 		older[i].Time = hlc.New(older[i].Time.Nanos()-1, i)
 	}
-	a.NoError(s.Store(ctx, fixture.Pool, older))
+	a.NoError(s.Store(ctx, pool, older))
 
 	// Sanity-check table.
-	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, pool, stagingTable)
 	a.NoError(err)
 	a.Equal(2*total, count)
 
@@ -142,7 +142,7 @@ func TestPutAndDrain(t *testing.T) {
 	}
 
 	// Test retrieving all data.
-	ret, err := s.Select(ctx, fixture.Pool, hlc.Zero(), hlc.New(int64(1000*total+1), 0))
+	ret, err := s.Select(ctx, pool, hlc.Zero(), hlc.New(int64(1000*total+1), 0))
 	a.NoError(err)
 	a.Equal(mergedOrder, ret)
 
@@ -151,7 +151,7 @@ func TestPutAndDrain(t *testing.T) {
 	var tail types.Mutation
 	for i := 0; i < 10; i++ {
 		ret, err = s.SelectPartial(ctx,
-			fixture.Pool,
+			pool,
 			tail.Time,
 			muts[len(muts)-1].Time,
 			tail.Key,
@@ -161,11 +161,11 @@ func TestPutAndDrain(t *testing.T) {
 		a.Equalf(mergedOrder[i*limit:(i+1)*limit], ret, "at idx %d", i)
 		tail = ret[len(ret)-1]
 	}
-	a.NoError(s.Retire(ctx, fixture.Pool, muts[limit-1].Time))
+	a.NoError(s.Retire(ctx, pool, muts[limit-1].Time))
 
 	// Verify that reading from the end returns no results.
 	ret, err = s.SelectPartial(ctx,
-		fixture.Pool,
+		pool,
 		muts[len(muts)-1].Time,
 		hlc.New(math.MaxInt64, 0),
 		muts[len(muts)-1].Key,
@@ -175,22 +175,22 @@ func TestPutAndDrain(t *testing.T) {
 	a.Empty(ret)
 
 	// Check deletion. We have two timestamps for each
-	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, pool, stagingTable)
 	a.NoError(err)
 	a.Equal(2*total-2*limit, count)
 
 	// Dequeue remainder.
-	a.NoError(s.Retire(ctx, fixture.Pool, muts[len(muts)-1].Time))
+	a.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
 
 	// Should be empty now.
-	count, err = base.GetRowCount(ctx, fixture.Pool, stagingTable)
+	count, err = base.GetRowCount(ctx, pool, stagingTable)
 	a.NoError(err)
 	a.Equal(0, count)
 
 	// Verify various no-op calls are OK.
-	a.NoError(s.Retire(ctx, fixture.Pool, hlc.Zero()))
-	a.NoError(s.Retire(ctx, fixture.Pool, muts[len(muts)-1].Time))
-	a.NoError(s.Retire(ctx, fixture.Pool, hlc.New(muts[len(muts)-1].Time.Nanos()+1, 0)))
+	a.NoError(s.Retire(ctx, pool, hlc.Zero()))
+	a.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
+	a.NoError(s.Retire(ctx, pool, hlc.New(muts[len(muts)-1].Time.Nanos()+1, 0)))
 }
 
 func TestSelectMany(t *testing.T) {
@@ -279,7 +279,7 @@ func TestSelectMany(t *testing.T) {
 	for _, table := range tables {
 		stager, err := fixture.Stagers.Get(ctx, table)
 		r.NoError(err)
-		r.NoError(stager.Store(ctx, fixture.Pool, muts))
+		r.NoError(stager.Store(ctx, fixture.StagingPool, muts))
 	}
 
 	t.Run("transactional", func(t *testing.T) {
@@ -298,7 +298,7 @@ func TestSelectMany(t *testing.T) {
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
 				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
 				return nil
@@ -329,7 +329,7 @@ func TestSelectMany(t *testing.T) {
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
 				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
 				return nil
@@ -362,7 +362,7 @@ func TestSelectMany(t *testing.T) {
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
 				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
 
@@ -402,7 +402,7 @@ func TestSelectMany(t *testing.T) {
 		}
 
 		entriesByTable := make(map[ident.Table][]types.Mutation)
-		err := fixture.Stagers.SelectMany(ctx, fixture.Pool, q,
+		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
 				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
 
@@ -469,7 +469,7 @@ func benchmarkStage(b *testing.B, batchSize int) {
 				batch[i] = mut
 				atomic.AddInt64(&allBytes, int64(len(mut.Data)+len(mut.Key)))
 			}
-			if err := s.Store(ctx, fixture.Pool, batch); err != nil {
+			if err := s.Store(ctx, fixture.StagingPool, batch); err != nil {
 				b.Fatal(err)
 			}
 		}

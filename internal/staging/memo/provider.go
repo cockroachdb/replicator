@@ -18,7 +18,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Set is used by Wire.
@@ -28,7 +27,9 @@ var Set = wire.NewSet(
 )
 
 // ProvideMemo is called by Wire to construct the KV wrapper.
-func ProvideMemo(ctx context.Context, db *pgxpool.Pool, staging ident.StagingDB) (*Memo, error) {
+func ProvideMemo(
+	ctx context.Context, db types.StagingPool, staging ident.StagingDB,
+) (*Memo, error) {
 	target := ident.NewTable(staging.Ident(), ident.Public, ident.New("memo"))
 	if err := retry.Execute(ctx, db, fmt.Sprintf(schema, target)); err != nil {
 		return nil, err

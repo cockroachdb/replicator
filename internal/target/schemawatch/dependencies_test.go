@@ -112,7 +112,7 @@ func TestGetDependencyOrder(t *testing.T) {
 	}
 
 	ctx := fixture.Context
-	pool := fixture.Pool
+	pool := fixture.TargetPool
 
 	for idx, tc := range tcs {
 		sql := fmt.Sprintf(tc.schema, fixture.TestDB.Ident())
@@ -161,7 +161,7 @@ func TestNoDeferrableConstraints(t *testing.T) {
 
 	ctx := fixture.Context
 
-	_, err = fixture.Pool.Exec(ctx,
+	_, err = fixture.TargetPool.Exec(ctx,
 		"create table x (pk uuid primary key, ref uuid references x deferrable initially deferred)")
 	a.ErrorContains(err, "deferrable")
 	a.ErrorContains(err, "42601")

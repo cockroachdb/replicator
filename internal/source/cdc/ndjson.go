@@ -115,7 +115,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request) error {
 			return err
 		}
 		flush = func(muts []types.Mutation) {
-			eg.Go(func() error { return applier.Apply(egCtx, h.Pool, muts) })
+			eg.Go(func() error { return applier.Apply(egCtx, h.TargetPool, muts) })
 		}
 	} else {
 		store, err := h.Stores.Get(ctx, target)
@@ -123,7 +123,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request) error {
 			return err
 		}
 		flush = func(muts []types.Mutation) {
-			eg.Go(func() error { return store.Store(ctx, h.Pool, muts) })
+			eg.Go(func() error { return store.Store(ctx, h.StagingPool, muts) })
 		}
 	}
 

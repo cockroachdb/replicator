@@ -30,7 +30,7 @@ func TestGuard(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	db := fixture.Pool
+	db := fixture.TargetPool
 
 	const testPeriod = 10 * time.Millisecond
 

@@ -14,7 +14,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Set is used by Wire.
@@ -23,7 +22,7 @@ var Set = wire.NewSet(
 )
 
 // ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *pgxpool.Pool) (types.Watchers, func()) {
+func ProvideFactory(pool types.TargetPool) (types.Watchers, func()) {
 	w := &factory{pool: pool}
 	w.mu.data = make(map[ident.Ident]*watcher)
 	return w, w.close

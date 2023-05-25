@@ -76,13 +76,13 @@ func TestApply(t *testing.T) {
 		}
 
 		// Verify insertion
-		a.NoError(app.Apply(ctx, fixture.Pool, adds))
+		a.NoError(app.Apply(ctx, fixture.TargetPool, adds))
 		ct, err := tbl.RowCount(ctx)
 		a.Equal(count, ct)
 		a.NoError(err)
 
 		// Verify that they can be deleted.
-		a.NoError(app.Apply(ctx, fixture.Pool, dels))
+		a.NoError(app.Apply(ctx, fixture.TargetPool, dels))
 		ct, err = tbl.RowCount(ctx)
 		a.Equal(0, ct)
 		a.NoError(err)
@@ -91,7 +91,7 @@ func TestApply(t *testing.T) {
 	// Verify unexpected incoming column
 	t.Run("unexpected", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
+		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
 			{
 				Data: []byte(`{"pk0":1, "pk1":0, "no_good":true}`),
 				Key:  []byte(`[1, 0]`),
@@ -103,7 +103,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_upsert", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
+		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
 			{
 				Data: []byte(`{"pk0":1}`),
 				Key:  []byte(`[1]`),
@@ -115,7 +115,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_delete_too_few", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
+		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
 			{
 				Key: []byte(`[1]`),
 			},
@@ -126,7 +126,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_delete_too_many", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.Pool, []types.Mutation{
+		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
 			{
 				Key: []byte(`[1, 2, 3]`),
 			},
@@ -140,14 +140,14 @@ func TestApply(t *testing.T) {
 		a := assert.New(t)
 		cfg := apply.NewConfig()
 		cfg.Extras = ident.New("extras")
-		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), cfg))
+		a.NoError(fixture.Configs.Store(ctx, fixture.TargetPool, tbl.Name(), cfg))
 		changed, err := fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
 
 		// The config update is async, so we may need to try again.
 		for {
-			err := app.Apply(ctx, fixture.Pool, []types.Mutation{
+			err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
 				{
 					Data: []byte(`{"pk0":1, "pk1":0, "heretofore":"unseen", "are":"OK"}`),
 					Key:  []byte(`[1, 0]`),
@@ -169,7 +169,7 @@ func TestApply(t *testing.T) {
 		}
 
 		var extras map[string]string
-		a.NoError(fixture.Pool.QueryRow(ctx,
+		a.NoError(fixture.TargetPool.QueryRow(ctx,
 			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
 			1, "0",
 		).Scan(&extras))
@@ -178,7 +178,7 @@ func TestApply(t *testing.T) {
 		a.Equal("OK", extras["are"])
 
 		extras = nil
-		a.NoError(fixture.Pool.QueryRow(ctx,
+		a.NoError(fixture.TargetPool.QueryRow(ctx,
 			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
 			2, "0",
 		).Scan(&extras))
@@ -186,7 +186,7 @@ func TestApply(t *testing.T) {
 		a.Equal("multiple", extras["check"])
 		a.Equal("work", extras["mutations"])
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), nil))
+		a.NoError(fixture.Configs.Store(ctx, fixture.TargetPool, tbl.Name(), nil))
 		changed, err = fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
@@ -378,7 +378,7 @@ func TestAllDataTypes(t *testing.T) {
 				jsonValue = "null"
 			} else {
 				q := fmt.Sprintf("SELECT to_json($1::%s)::string", tc.columnType)
-				if !a.NoError(fixture.Pool.QueryRow(ctx, q, tc.columnValue).Scan(&jsonValue)) {
+				if !a.NoError(fixture.TargetPool.QueryRow(ctx, q, tc.columnValue).Scan(&jsonValue)) {
 					return
 				}
 			}
@@ -388,10 +388,10 @@ func TestAllDataTypes(t *testing.T) {
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
 				Key:  []byte(`[1]`),
 			}
-			a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{mut}))
+			a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
 
 			var jsonFound string
-			a.NoError(fixture.Pool.QueryRow(ctx,
+			a.NoError(fixture.TargetPool.QueryRow(ctx,
 				fmt.Sprintf("SELECT ifnull(to_json(val)::string, 'null') FROM %s", tbl),
 			).Scan(&jsonFound))
 			if alternate, ok := expectInstead[tc.name]; ok {
@@ -438,7 +438,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &apply.Config{
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &apply.Config{
 			CASColumns: []ident.Ident{ident.New("bad_column")},
 		}))
 		changed, err := fixture.Configs.Refresh(ctx)
@@ -454,7 +454,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), &apply.Config{
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &apply.Config{
 			Deadlines: types.Deadlines{ident.New("bad_column"): time.Second},
 		}))
 		changed, err := fixture.Configs.Refresh(ctx)
@@ -472,7 +472,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	// Utility function to retrieve the most recently set data.
 	getRow := func() (version int, ts time.Time, err error) {
-		err = fixture.Pool.QueryRow(ctx,
+		err = fixture.TargetPool.QueryRow(ctx,
 			fmt.Sprintf("SELECT ver, ts FROM %s WHERE pk = $1", tbl.Name()), id,
 		).Scan(&version, &ts)
 		return
@@ -486,7 +486,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	if deadline {
 		configData.Deadlines[ident.New("ts")] = 10 * time.Minute
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
@@ -538,7 +538,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		a.NoError(err)
 
 		// Applying a discarded mutation should never result in an error.
-		a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d]`, id)),
 		}}))
@@ -591,7 +591,7 @@ func TestExpressionColumns(t *testing.T) {
 		ident.New("val"):   "$0 || ' world!'",
 		ident.New("fixed"): "'constant'",
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
@@ -604,29 +604,29 @@ func TestExpressionColumns(t *testing.T) {
 	bytes, err := json.Marshal(p)
 	a.NoError(err)
 
-	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
 		Data: bytes,
 		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
 
-	count, err := base.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	count, err := base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
 	a.NoError(err)
 	a.Equal(1, count)
 
 	var key int
 	var val string
 	var fixed string
-	a.NoError(fixture.Pool.QueryRow(ctx,
+	a.NoError(fixture.TargetPool.QueryRow(ctx,
 		fmt.Sprintf("SELECT * from %s", tbl)).Scan(&key, &val, &fixed))
 	a.Equal(84, key)
 	a.Equal("Hello world!", val)
 	a.Equal("constant", fixed)
 
 	// Verify that deletes with expressions work.
-	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
 		Key: []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
-	count, err = base.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	count, err = base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
 	a.Equal(0, count)
 	a.NoError(err)
 }
@@ -665,7 +665,7 @@ func TestIgnoredColumns(t *testing.T) {
 		ident.New("val_ignored"):  true,
 		ident.New("not_required"): true,
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
@@ -678,13 +678,13 @@ func TestIgnoredColumns(t *testing.T) {
 	bytes, err := json.Marshal(p)
 	a.NoError(err)
 
-	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
 		Data: bytes,
 		Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.PK0, p.PK1)),
 	}}))
 
 	// Verify deletion.
-	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
 		Key: []byte(fmt.Sprintf(`[%d, %d]`, p.PK0, p.PK1)),
 	}}))
 }
@@ -718,7 +718,7 @@ func TestRenamedColumns(t *testing.T) {
 		ident.New("pk"):  ident.New("pk_source"),
 		ident.New("val"): ident.New("val_source"),
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
@@ -731,7 +731,7 @@ func TestRenamedColumns(t *testing.T) {
 	bytes, err := json.Marshal(p)
 	a.NoError(err)
 
-	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
 		Data: bytes,
 		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
@@ -767,7 +767,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 
 	// Detect hopeful future case where UPSERT has the desired behavior.
-	_, err = fixture.Pool.Exec(ctx,
+	_, err = fixture.TargetPool.Exec(ctx,
 		fmt.Sprintf("UPSERT INTO %s (pk0, val) VALUES ($1, $2), ($3, $4)", tbl.Name()),
 		1, "1", 1, "1")
 	if a.Error(err) {
@@ -795,11 +795,11 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 
 	// Verify insertion.
-	a.NoError(app.Apply(ctx, fixture.Pool, muts))
+	a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
 
-	count, err := base.GetRowCount(ctx, fixture.Pool, tbl.Name())
+	count, err := base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
 	if a.NoError(err) && a.Equal(1, count) {
-		row := fixture.Pool.QueryRow(ctx,
+		row := fixture.TargetPool.QueryRow(ctx,
 			fmt.Sprintf("SELECT val FROM %s WHERE pk0 = $1", tbl.Name()), 10)
 		var val string
 		a.NoError(row.Scan(&val))
@@ -822,7 +822,7 @@ func TestUTDEnum(t *testing.T) {
 		Val string `json:"val"`
 	}
 
-	_, err = fixture.Pool.Exec(ctx, fmt.Sprintf(
+	_, err = fixture.TargetPool.Exec(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
 		fixture.TestDB.Ident()))
 	r.NoError(err)
@@ -839,7 +839,7 @@ func TestUTDEnum(t *testing.T) {
 	bytes, err := json.Marshal(p)
 	r.NoError(err)
 
-	r.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+	r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
 		Data: bytes,
 		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
@@ -892,7 +892,7 @@ func TestVirtualColumns(t *testing.T) {
 			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
-		a.NoError(app.Apply(ctx, fixture.Pool, muts))
+		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
 	})
 
 	t.Run("unknown-still-breaks", func(t *testing.T) {
@@ -905,7 +905,7 @@ func TestVirtualColumns(t *testing.T) {
 			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
-		err = app.Apply(ctx, fixture.Pool, muts)
+		err = app.Apply(ctx, fixture.TargetPool, muts)
 		if a.Error(err) {
 			a.Contains(err.Error(), "unexpected columns")
 		}
@@ -919,7 +919,7 @@ func TestVirtualColumns(t *testing.T) {
 			Key: []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
-		a.NoError(app.Apply(ctx, fixture.Pool, muts))
+		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
 	})
 }
 
@@ -979,7 +979,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	if cfg.deadline {
 		configData.Deadlines[ident.New("ts")] = time.Hour
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
@@ -1005,7 +1005,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 			}
 
 			// Applying a discarded mutation should never result in an error.
-			if !a.NoError(app.Apply(context.Background(), fixture.Pool, batch)) {
+			if !a.NoError(app.Apply(context.Background(), fixture.TargetPool, batch)) {
 				return
 			}
 			loops++

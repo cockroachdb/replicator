@@ -49,7 +49,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 
 	ctx := fixture.Context
 	dbName := fixture.TestDB.Ident()
-	pool := fixture.Pool
+	pool := fixture.TargetPool
 
 	// Create some tables.
 	tgts := []ident.Table{
@@ -172,7 +172,7 @@ func TestUserScript(t *testing.T) {
 
 	ctx := fixture.Context
 	dbName := fixture.TestDB.Ident()
-	pool := fixture.Pool
+	pool := fixture.TargetPool
 
 	// Create some tables.
 	tgts := []ident.Table{
@@ -258,7 +258,7 @@ api.configureTable("t_2", {
 	r.NoError(err)
 
 	for {
-		count, err := base.GetRowCount(ctx, fixture.Pool, tgts[0])
+		count, err := base.GetRowCount(ctx, fixture.TargetPool, tgts[0])
 		r.NoError(err)
 		if count == 0 {
 			break
@@ -267,7 +267,7 @@ api.configureTable("t_2", {
 	}
 
 	// Verify that t_2 was unchanged.
-	count, err := base.GetRowCount(ctx, fixture.Pool, tgts[1])
+	count, err := base.GetRowCount(ctx, fixture.TargetPool, tgts[1])
 	r.NoError(err)
 	a.Equal(100, count)
 

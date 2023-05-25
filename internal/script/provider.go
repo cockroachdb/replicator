@@ -21,7 +21,6 @@ import (
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -111,7 +110,7 @@ func ProvideUserScript(
 	ctx context.Context,
 	applyConfigs *apply.Configs,
 	boot *Loader,
-	pool *pgxpool.Pool,
+	stagingPool types.StagingPool,
 	target TargetSchema,
 	watchers types.Watchers,
 ) (*UserScript, error) {
@@ -141,7 +140,7 @@ func ProvideUserScript(
 	}
 
 	err = retry.Retry(ctx, func(ctx context.Context) error {
-		tx, err := pool.Begin(ctx)
+		tx, err := stagingPool.Begin(ctx)
 		if err != nil {
 			return errors.WithStack(err)
 		}
