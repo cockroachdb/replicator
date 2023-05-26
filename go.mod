@@ -11,7 +11,7 @@ require (
 	github.com/evanw/esbuild v0.17.17
 	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/gofrs/uuid v4.4.0+incompatible
-	github.com/golang-jwt/jwt/v4 v4.4.3
+	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/google/uuid v1.3.0
 	github.com/google/wire v0.5.0
