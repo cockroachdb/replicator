@@ -1,0 +1,37 @@
+# This workflow creates a GitHUb Status object that summarizes the
+# outcome of other workflows. This allows status objects to drive
+# additional workflow automation (e.g. automatic merge queue).
+#
+# https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#running-a-workflow-based-on-the-conclusion-of-another-workflow
+# https://docs.github.com/en/rest/commits/statuses
+#
+name: Status
+permissions:
+  statuses: write
+on:
+  workflow_run:
+    workflows:
+      - Binaries
+      - Docker
+      - Golang
+    types:
+      - completed
+env:
+  STATUS_PREFIX: "Workflow"
+jobs:
+  status:
+    name: Create Status Object
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create status object
+        run: |
+          curl --request POST \
+          --fail \
+          --url https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.event.workflow_run.head_commit.id }} \
+          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          --header 'content-type: application/json' \
+          --data '{
+            "state": "${{ github.event.workflow_run.conclusion }}",
+            "context": "${{ env.STATUS_PREFIX }} ${{ github.event.workflow.name }}",
+            "target_url": "${{ github.event.workflow_run.html_url }}"
+            }'
