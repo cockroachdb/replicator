@@ -42,12 +42,10 @@ func (h *Handler) parseWebhookURL(url *url.URL, req *request) error {
 	if match == nil {
 		return errors.Errorf("can't parse url %s", url)
 	}
-
 	schema := ident.NewSchema(
 		ident.New(match[webhookTargetDB]),
 		ident.New(match[webhookTargetSchema]),
 	)
-
 	req.leaf = h.webhook
 	req.target = schema
 	return nil
@@ -111,10 +109,14 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			Key:  payload.Payload[i].Key,
 			Time: timestamp,
 		}
-
 		toProcess[table] = append(toProcess[table], mut)
 	}
+	return h.processMutations(ctx, toProcess)
+}
 
+func (h *Handler) processMutations(
+	ctx context.Context, toProcess map[ident.Table][]types.Mutation,
+) error {
 	// Create Store instances up front. The first time a target table is
 	// used, the Stager must create the staging table. We want to ensure
 	// that this happens before we create the transaction below.

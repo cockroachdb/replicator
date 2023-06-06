@@ -45,14 +45,6 @@ type Handler struct {
 	TargetPool    types.TargetPool    // Access to the target cluster.
 }
 
-// A request is configured by the various parseURL methods in Handler.
-type request struct {
-	body      io.Reader
-	leaf      func(ctx context.Context, req *request) error
-	target    ident.Schematic
-	timestamp hlc.Time
-}
-
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -105,11 +97,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing or invalid access token", http.StatusUnauthorized)
 		return false
 	}
-
+	log.Debugf("URL %s", r.URL.Path)
 	req := &request{}
 	switch {
+	case h.parseWebhookQueryURL(r.URL, req) == nil:
 	case h.parseWebhookURL(r.URL, req) == nil:
+	case h.parseNdjsonQueryURL(r.URL, req) == nil:
 	case h.parseNdjsonURL(r.URL, req) == nil:
+	case h.parseResolvedQueryURL(r.URL, req) == nil:
 	case h.parseResolvedURL(r.URL, req) == nil:
 	default:
 		http.NotFound(w, r)
@@ -122,4 +117,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	req.body = r.Body
 	sendErr(req.leaf(ctx, req))
+}
+
+// A request is configured by the various parseURL methods in Handler.
+type request struct {
+	body io.Reader
+	leaf func(ctx context.Context, req *request) error
+	// keys contains all the columns that make up the primary key
+	// for the target table and their ordinal position within the key.
+	keys      map[ident.Ident]int
+	target    ident.Schematic
+	timestamp hlc.Time
 }
