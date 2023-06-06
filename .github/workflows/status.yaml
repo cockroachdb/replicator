@@ -16,6 +16,7 @@ on:
       - Golang
     types:
       - completed
+      - requested
 env:
   STATUS_PREFIX: "Workflow"
 jobs:
@@ -23,6 +24,23 @@ jobs:
     name: Create Status Object
     runs-on: ubuntu-latest
     steps:
+      - name: Determine state
+        run: |
+          if [ "${{ github.event.workflow_run.status }}" = "requested" ]
+          then
+            STATE="pending"
+          else
+            STATE="${{ github.event.workflow_run.conclusion }}"
+          fi
+          
+          if [ -z "$STATE" ]
+          then
+            echo "Empty state"
+            exit 1
+          fi
+          
+          echo "STATE=$STATE" >> $GITHUB_ENV
+
       - name: Create status object
         run: |
           curl --request POST \
@@ -31,7 +49,7 @@ jobs:
           --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
           --header 'content-type: application/json' \
           --data '{
-            "state": "${{ github.event.workflow_run.conclusion }}",
+            "state": "${{ env.STATE }}",
             "context": "${{ env.STATUS_PREFIX }} ${{ github.event.workflow.name }}",
             "target_url": "${{ github.event.workflow_run.html_url }}"
             }'
