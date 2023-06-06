@@ -38,19 +38,14 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func TestHandler(t *testing.T) {
-	t.Run("deferred", func(t *testing.T) { testHandler(t, false) })
-	t.Run("immediate", func(t *testing.T) { testHandler(t, true) })
-}
-
-func testHandler(t *testing.T, immediate bool) {
+func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo) {
 	t.Helper()
 	r := require.New(t)
-
 	baseFixture, cancel, err := all.NewFixture()
+	t.Cleanup(func() {
+		cancel()
+	})
 	r.NoError(err)
-	defer cancel()
-
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
@@ -61,9 +56,182 @@ func testHandler(t *testing.T, immediate bool) {
 			TargetDB:   baseFixture.TestDB.Ident(),
 		},
 	})
+	t.Cleanup(func() {
+		cancel()
+	})
 	r.NoError(err)
-	defer cancel()
 
+	ctx := fixture.Context
+	tableInfo, err := fixture.CreateTable(ctx,
+		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
+	r.NoError(err)
+
+	return fixture, tableInfo
+}
+
+func TestQueryHandler(t *testing.T) {
+	t.Run("deferred", func(t *testing.T) { testQueryHandler(t, false) })
+	t.Run("immediate", func(t *testing.T) { testQueryHandler(t, true) })
+}
+
+func testQueryHandler(t *testing.T, immediate bool) {
+	t.Helper()
+	fixture, tableInfo := createFixture(t, immediate)
+	ctx := fixture.Context
+	h := fixture.Handler
+	// In async mode, we want to reach into the implementation to
+	// force the marked, resolved timestamp to be operated on.
+	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
+		if immediate {
+			return nil
+		}
+		resolver, err := h.Resolvers.get(ctx, target.AsSchema())
+		if err != nil {
+			return err
+		}
+		waitFor := &resolvedStamp{CommittedTime: expect}
+		resolver.fastWakeup <- struct{}{}
+		for resolver.loop.GetConsistentPoint().Less(waitFor) && ctx.Err() == nil {
+			time.Sleep(time.Millisecond)
+		}
+		return nil
+	}
+
+	// Validate the "classic" endpoints where files containing
+	// newline-delimited json and resolved timestamp markers are
+	// uploaded.
+	//
+	// The inner methods of Handler are called directly, to avoid the
+	// need to cook up fake http.Request instances.
+	t.Run("bulkStyleEndpoints", func(t *testing.T) {
+		a := assert.New(t)
+
+		// Stage two lines of data.
+		a.NoError(h.ndjson(ctx, &request{
+			target: tableInfo.Name(),
+			body: strings.NewReader(`
+{"__event__": "insert", "pk" : 42, "v" : 99, "__crdb__": {"updated": "1.0"}}
+{"__event__": "insert", "pk" : 99, "v" : 42, "__crdb__": {"updated": "1.0"}}
+`),
+		}, h.parseQueryMutation))
+
+		// Send the resolved timestamp request.
+		a.NoError(h.resolved(ctx, &request{
+			target:    tableInfo.Name(),
+			timestamp: hlc.New(2, 0),
+		}))
+		a.NoError(maybeFlush(tableInfo.Name(), hlc.New(2, 0)))
+
+		ct, err := tableInfo.RowCount(ctx)
+		a.NoError(err)
+		a.Equal(2, ct)
+
+		// Now, delete the data.
+		a.NoError(h.ndjson(ctx, &request{
+			target: tableInfo.Name(),
+			body: strings.NewReader(`
+{"__event__": "delete", "pk" : 42, "v" : null, "__crdb__": {"updated": "3.0"}}
+{"__event__": "delete", "pk" : 99, "v" : null, "__crdb__": {"updated": "3.0"}}
+`),
+		}, h.parseQueryMutation))
+
+		a.NoError(h.resolved(ctx, &request{
+			target:    tableInfo.Name(),
+			timestamp: hlc.New(5, 0),
+		}))
+		a.NoError(maybeFlush(tableInfo.Name(), hlc.New(5, 0)))
+
+		ct, err = tableInfo.RowCount(ctx)
+		a.NoError(err)
+		a.Equal(0, ct)
+	})
+
+	// This test validates the new webhook-https:// scheme introduced
+	// in CockroachDB v21.2. We insert rows and delete them.
+	t.Run("webhookEndpoints", func(t *testing.T) {
+		a := assert.New(t)
+		schema := ident.NewSchema(
+			tableInfo.Name().Database(),
+			tableInfo.Name().Schema())
+		table := ident.NewTable(
+			tableInfo.Name().Database(),
+			tableInfo.Name().Schema(),
+			tableInfo.Name().Table())
+
+		// Insert data and verify flushing.
+		a.NoError(h.webhookForQuery(ctx, &request{
+			target: table,
+			body: strings.NewReader(`
+{ "payload" : [
+	{"__event__": "insert", "pk" : 42, "v" : 99, "__crdb__": {"updated": "10.0"}},
+	{"__event__": "insert", "pk" : 99, "v" : 42, "__crdb__": {"updated": "10.0"}}
+] }
+`),
+		}))
+
+		a.NoError(h.webhookForQuery(ctx, &request{
+			target: table,
+			body:   strings.NewReader(`{ "__crdb__": {"resolved" : "20.0" }}`),
+		}))
+		a.NoError(maybeFlush(schema, hlc.New(20, 0)))
+
+		ct, err := tableInfo.RowCount(ctx)
+		a.NoError(err)
+		a.Equal(2, ct)
+
+		// Now, delete the data.
+		a.NoError(h.webhookForQuery(ctx, &request{
+			target: table,
+			body: strings.NewReader(`
+{ "payload" : [
+	{"__event__": "delete", "pk" : 42, "v" : null, "__crdb__": {"updated": "30.0"}},
+	{"__event__": "delete", "pk" : 99, "v" : null, "__crdb__": {"updated": "30.0"}}
+] }
+`),
+		}))
+
+		a.NoError(h.webhookForQuery(ctx, &request{
+			target: table,
+			body:   strings.NewReader(`{ "__crdb__": {"resolved" : "40.0" }}`),
+		}))
+		a.NoError(maybeFlush(schema, hlc.New(40, 0)))
+
+		ct, err = tableInfo.RowCount(ctx)
+		a.NoError(err)
+		a.Equal(0, ct)
+	})
+
+	// Verify that an empty post doesn't crash.
+	t.Run("empty-ndjson", func(t *testing.T) {
+		a := assert.New(t)
+		a.NoError(h.ndjson(ctx, &request{
+			target: tableInfo.Name(),
+			body:   strings.NewReader(""),
+		}, h.parseQueryMutation))
+	})
+
+	// Verify that an empty webhook post doesn't crash.
+	t.Run("empty-webhook", func(t *testing.T) {
+		a := assert.New(t)
+		table := ident.NewTable(
+			tableInfo.Name().Database(),
+			tableInfo.Name().Schema(),
+			tableInfo.Name().Table())
+		a.NoError(h.webhookForQuery(ctx, &request{
+			target: table,
+			body:   strings.NewReader(""),
+		}))
+	})
+}
+
+func TestHandler(t *testing.T) {
+	t.Run("deferred", func(t *testing.T) { testHandler(t, false) })
+	t.Run("immediate", func(t *testing.T) { testHandler(t, true) })
+}
+func testHandler(t *testing.T, immediate bool) {
+	t.Helper()
+	r := require.New(t)
+	fixture, tableInfo := createFixture(t, immediate)
 	ctx := fixture.Context
 	h := fixture.Handler
 
@@ -105,7 +273,7 @@ func testHandler(t *testing.T, immediate bool) {
 { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "updated" : "1.0" }
 { "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "updated" : "1.0" }
 `),
-		}))
+		}, h.parseMutation))
 
 		// Send the resolved timestamp request.
 		a.NoError(h.resolved(ctx, &request{
@@ -125,7 +293,7 @@ func testHandler(t *testing.T, immediate bool) {
 { "after" : null, "key" : [ 42 ], "updated" : "3.0" }
 { "key" : [ 99 ], "updated" : "3.0" }
 `),
-		}))
+		}, h.parseMutation))
 
 		a.NoError(h.resolved(ctx, &request{
 			target:    tableInfo.Name(),
@@ -193,7 +361,7 @@ func testHandler(t *testing.T, immediate bool) {
 		a.NoError(h.ndjson(ctx, &request{
 			target: tableInfo.Name(),
 			body:   strings.NewReader(""),
-		}))
+		}, h.parseMutation))
 	})
 
 	// Verify that an empty webhook post doesn't crash.
@@ -344,7 +512,7 @@ func testMassBackfillWithForeignKeys(
 { "after" : { "pk" : %[9]d, "v" : %[9]d }, "key" : [ %[9]d ], "updated" : "%[9]d.0" }
 { "after" : { "pk" : %[10]d, "v" : %[10]d }, "key" : [ %[10]d ], "updated" : "%[10]d.0" }`,
 						i+1, i+2, i+3, i+4, i+5, i+6, i+7, i+8, i+9, i+10)),
-				}); err != nil {
+				}, h().parseMutation); err != nil {
 					return err
 				}
 				return nil

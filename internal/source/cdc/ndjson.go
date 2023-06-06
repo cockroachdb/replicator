@@ -63,20 +63,23 @@ func (h *Handler) parseNdjsonURL(url *url.URL, req *request) error {
 		return err
 	}
 
-	req.leaf = h.ndjson
+	req.leaf = func(ctx context.Context, req *request) error {
+		return h.ndjson(ctx, req, h.parseMutation)
+	}
 	req.target = table
 	return nil
 }
 
 // parseMutation takes a single line from an ndjson and extracts enough
 // information to be able to persist it to the staging table.
-func parseMutation(rawBytes []byte) (types.Mutation, error) {
+func (h *Handler) parseMutation(
+	ctx context.Context, req *request, rawBytes []byte,
+) (types.Mutation, error) {
 	var payload struct {
 		After   json.RawMessage `json:"after"`
 		Key     json.RawMessage `json:"key"`
 		Updated string          `json:"updated"`
 	}
-
 	// Large numbers are not turned into strings, so the UseNumber option for
 	// the decoder is required.
 	dec := json.NewDecoder(bytes.NewReader(rawBytes))
@@ -84,7 +87,7 @@ func parseMutation(rawBytes []byte) (types.Mutation, error) {
 	if err := dec.Decode(&payload); err != nil {
 		return types.Mutation{}, err
 	}
-
+	// The updated timestamp could be at the top level or inside "__crdb__" (for CDC queries).
 	if payload.Updated == "" {
 		return types.Mutation{},
 			errors.New("CREATE CHANGEFEED must specify the 'WITH updated' option")
@@ -95,7 +98,6 @@ func parseMutation(rawBytes []byte) (types.Mutation, error) {
 	if err != nil {
 		return types.Mutation{}, err
 	}
-
 	return types.Mutation{
 		Time: ts,
 		Data: payload.After,
@@ -107,7 +109,11 @@ func parseMutation(rawBytes []byte) (types.Mutation, error) {
 // associated Mutations. This assumes that the underlying
 // Stager will store duplicate values in an idempotent manner,
 // should the request fail partway through.
-func (h *Handler) ndjson(ctx context.Context, req *request) error {
+func (h *Handler) ndjson(
+	ctx context.Context,
+	req *request,
+	parser func(ctx context.Context, req *request, rawBytes []byte) (types.Mutation, error),
+) error {
 	eg, egCtx := errgroup.WithContext(ctx)
 	target := req.target.(ident.Table)
 
@@ -142,7 +148,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request) error {
 		if len(buf) == 0 {
 			continue
 		}
-		mut, err := parseMutation(buf)
+		mut, err := parser(ctx, req, buf)
 		if err != nil {
 			return err
 		}

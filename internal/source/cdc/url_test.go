@@ -20,94 +20,174 @@ package cdc
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNdjsonURL(t *testing.T) {
-	tcs := []struct {
-		u         string
-		expect    string
-		expectErr bool
+func TestURL(t *testing.T) {
+	r := require.New(t)
+	a := assert.New(t)
+	fixture, tableInfo := createFixture(t, false)
+	tableName := tableInfo.Name().Table().Raw()
+	dbName := tableInfo.Name().Database().Raw()
+	schemaName := tableInfo.Name().Schema().Raw()
+	schema := ident.NewSchema(
+		ident.New(dbName),
+		ident.New(schemaName),
+	)
+	table := ident.NewTable(
+		ident.New(dbName),
+		ident.New(schemaName),
+		ident.New(tableName),
+	)
+	parseError := "can't parse url"
+	ndjson := strings.ReplaceAll(
+		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-TABLE-1.ndjson`,
+		"TABLE", tableName)
+	ndjsonFull := strings.ReplaceAll(
+		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.TABLE-1.ndjson`,
+		"TABLE", tableName)
+	resolved := `2020-04-04/202004042351304139680000000000000.RESOLVED`
+
+	handler := fixture.Handler
+	tests := []struct {
+		name      string
+		URL       string
+		f         func(*url.URL, *request) error
+		want      ident.Schematic
+		timestamp hlc.Time
+		wantErr   string
 	}{
 		{
-			u:      "/db/public/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-test_table-1f.ndjson",
-			expect: "db.public.test_table",
+			"webhook",
+			strings.Join([]string{"", dbName, schemaName}, "/"),
+			handler.parseWebhookURL,
+			schema,
+			hlc.Zero(),
+			"",
 		},
 		{
-			u:      "/db/public/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.test_table-1f.ndjson",
-			expect: "db.public.test_table",
+			"webhook fail",
+			strings.Join([]string{"", schemaName}, "/"),
+			handler.parseWebhookURL,
+			schema,
+			hlc.Zero(),
+			parseError,
 		},
 		{
-			u:         "/db/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.test_table-1f.ndjson",
-			expectErr: true,
+			"resolved",
+			strings.Join([]string{"", dbName, schemaName, resolved}, "/"),
+			handler.parseResolvedURL,
+			schema,
+			hlc.New(1586044290413968000, 0),
+			"",
 		},
 		{
-			u:         "/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.test_table-1f.ndjson",
-			expectErr: true,
+			"resolved fail",
+			strings.Join([]string{"", schemaName, resolved}, "/"),
+			handler.parseResolvedURL,
+			nil,
+			hlc.Zero(),
+			parseError,
+		},
+		{
+			"ndjson",
+			strings.Join([]string{"", dbName, schemaName, ndjson}, "/"),
+			handler.parseNdjsonURL,
+			table,
+			hlc.Zero(),
+			"",
+		},
+		{
+			"ndjson-full",
+			strings.Join([]string{"", dbName, schemaName, ndjsonFull}, "/"),
+			handler.parseNdjsonURL,
+			table,
+			hlc.Zero(),
+			"",
+		},
+		{
+			"ndjson no db",
+			strings.Join([]string{"", schemaName, ndjson}, "/"),
+			handler.parseNdjsonURL,
+			nil,
+			hlc.Zero(),
+			parseError,
+		},
+		{
+			"webhook-query",
+			strings.Join([]string{"", dbName, schemaName, tableName}, "/"),
+			handler.parseWebhookQueryURL,
+			table,
+			hlc.Zero(),
+			"",
+		},
+		{
+			"webhook-query fail",
+			strings.Join([]string{"", dbName, schemaName}, "/"),
+			handler.parseWebhookQueryURL,
+			nil,
+			hlc.Zero(),
+			parseError,
+		},
+		{
+			"resolved-query",
+			strings.Join([]string{"", dbName, schemaName, tableName, resolved}, "/"),
+			handler.parseResolvedQueryURL,
+			table,
+			hlc.New(1586044290413968000, 0),
+			"",
+		},
+		{
+			"resolved-query-error",
+			strings.Join([]string{"", dbName, schemaName, resolved}, "/"),
+			handler.parseResolvedQueryURL,
+			nil,
+			hlc.Zero(),
+			parseError,
+		},
+		{
+			"ndjson-query",
+			strings.Join([]string{"", dbName, schemaName, tableName, ndjson}, "/"),
+			handler.parseNdjsonQueryURL,
+			table,
+			hlc.Zero(),
+			"",
+		},
+		{
+			"ndjson-full-query",
+			strings.Join([]string{"", dbName, schemaName, tableName, ndjsonFull}, "/"),
+			handler.parseNdjsonQueryURL,
+			table,
+			hlc.Zero(),
+			"",
+		},
+		{
+			"ndjson-query error",
+			strings.Join([]string{"", dbName, schemaName, ndjson}, "/"),
+			handler.parseNdjsonQueryURL,
+			nil,
+			hlc.Zero(),
+			parseError,
 		},
 	}
-
-	for _, tc := range tcs {
-		t.Run(tc.u, func(t *testing.T) {
-			a := assert.New(t)
-			req := &request{}
-			u, err := url.Parse(tc.u)
-			a.NoError(err)
-
-			err = (&Handler{}).parseNdjsonURL(u, req)
-			if tc.expectErr {
-				a.Error(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &request{}
+			theURL, err := url.Parse(tt.URL)
+			r.NoError(err)
+			err = tt.f(theURL, request)
+			if tt.wantErr != "" {
+				a.ErrorContains(err, tt.wantErr)
 				return
 			}
-			if a.NoError(err) {
-				a.Equal(tc.expect, req.target.(ident.Table).Raw())
-			}
-		})
-	}
-}
-
-func TestResolvedURL(t *testing.T) {
-	tcs := []struct {
-		u         string
-		expect    string
-		expectErr bool
-		time      hlc.Time
-	}{
-		{
-			u:      "/db/public/2020-04-04/202011221122335555555556666666666.RESOLVED",
-			expect: "db.public",
-			time:   hlc.New(1606044153_555555555, 6666666666),
-		},
-		{
-			u:         "/db/2020-04-04/202004042351304139680000000000456.RESOLVED",
-			expectErr: true,
-		},
-		{
-			u:         "/2020-04-04/202004042351304139680000000000456.RESOLVED",
-			expectErr: true,
-		},
-	}
-
-	for _, tc := range tcs {
-		t.Run(tc.u, func(t *testing.T) {
-			a := assert.New(t)
-			req := &request{}
-			u, err := url.Parse(tc.u)
-			a.NoError(err)
-
-			err = (&Handler{}).parseResolvedURL(u, req)
-			if tc.expectErr {
-				a.Error(err)
-				return
-			}
-			if a.NoError(err) {
-				a.Equal(tc.expect, req.target.AsSchema().Raw())
-				a.Equal(tc.time, req.timestamp)
-			}
+			a.Equal(tt.want, request.target)
+			a.Equal(tt.timestamp, request.timestamp)
 		})
 	}
 }

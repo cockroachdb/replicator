@@ -45,14 +45,6 @@ type Handler struct {
 	TargetPool    types.TargetPool    // Access to the target cluster.
 }
 
-// A request is configured by the various parseURL methods in Handler.
-type request struct {
-	body      io.Reader
-	leaf      func(ctx context.Context, req *request) error
-	target    ident.Schematic
-	timestamp hlc.Time
-}
-
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -105,11 +97,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing or invalid access token", http.StatusUnauthorized)
 		return false
 	}
-
+	log.Debugf("URL %s", r.URL.Path)
 	req := &request{}
 	switch {
+	case h.parseWebhookQueryURL(r.URL, req) == nil:
 	case h.parseWebhookURL(r.URL, req) == nil:
+	case h.parseNdjsonQueryURL(r.URL, req) == nil:
 	case h.parseNdjsonURL(r.URL, req) == nil:
+	case h.parseResolvedQueryURL(r.URL, req) == nil:
 	case h.parseResolvedURL(r.URL, req) == nil:
 	default:
 		http.NotFound(w, r)
@@ -122,4 +117,36 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	req.body = r.Body
 	sendErr(req.leaf(ctx, req))
+}
+
+// A request is configured by the various parseURL methods in Handler.
+type request struct {
+	body      io.Reader
+	leaf      func(ctx context.Context, req *request) error
+	keys      map[ident.Ident]int
+	target    ident.Schematic
+	timestamp hlc.Time
+}
+
+// getPrimaryKey returns a map that contains all the columns
+// that comprise the primary key for the target table and
+// their relative ordering.
+func (r *request) getPrimaryKey(
+	ctx context.Context, watchers types.Watchers,
+) (map[ident.Ident]int, error) {
+	if r.keys == nil {
+		table := r.target.(ident.Table)
+		r.keys = make(map[ident.Ident]int)
+		watcher, err := watchers.Get(ctx, table.Database())
+		if err != nil {
+			return nil, err
+		}
+		columns := watcher.Get().Columns[table]
+		for i, col := range columns {
+			if col.Primary {
+				r.keys[col.Name] = i
+			}
+		}
+	}
+	return r.keys, nil
 }
