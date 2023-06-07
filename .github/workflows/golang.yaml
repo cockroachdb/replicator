@@ -3,6 +3,7 @@ permissions:
   contents: read
   packages: read
 on:
+  merge_group: # Enable merge queue
   push:
     branches: [ master ]
     tags: [ 'v*.*.*' ]
