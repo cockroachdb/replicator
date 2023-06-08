@@ -13,6 +13,7 @@ require (
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
+	github.com/google/addlicense v1.1.1
 	github.com/google/uuid v1.3.0
 	github.com/google/wire v0.5.0
 	github.com/jackc/pglogrepl v0.0.0-20230428004623-0c5b98f52784
@@ -41,6 +42,7 @@ require (
 	cloud.google.com/go/longrunning v0.4.2 // indirect
 	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/bmatcuk/doublestar/v4 v4.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/cockroachdb/gostdlib v1.19.0 // indirect
 	github.com/cockroachdb/ttycolor v0.0.0-20210902133924-c7d7dcdde4e8 // indirect
