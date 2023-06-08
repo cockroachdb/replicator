@@ -2,6 +2,9 @@
 name: Binaries
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 on:
   merge_group: # Build, but don't push
   push:
