@@ -43,12 +43,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - id: auth
-        name: Authenticate to GCP
-        uses: google-github-actions/auth@v1
-        with:
-          credentials_json: ${{ secrets.CDC_SINK_BINARIES_KEY }}
-
       # Pick up a symbolic name for the build (e.g. "v1.0.1") and a guaranteed SHA or tag value.
       - id: names
         name: Determine versions and names
@@ -123,9 +117,19 @@ jobs:
           xargs -rIQ find . -path ./Q  -print0 |
           xargs -r0 tar zcvf ${{ env.DISTRO_NAME }}.tgz --transform 's|^./|${{ env.DISTRO_NAME }}/|'
 
+      - id: auth
+        name: Authenticate to GCP
+        # Only authenticate if we're on the main repo (i.e. have access
+        # to the secret) and we're pushing to a branch. Manual runs are
+        # also allowed as a convenience.
+        if: ${{ !github.event.pull_request.head.repo.fork && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.CDC_SINK_BINARIES_KEY }}
+
       - id: upload
         uses: google-github-actions/upload-cloud-storage@v1
-        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.auth.outcome == 'success' }} # Not skipped
         with:
           path: ${{ env.DISTRO_NAME }}.tgz
           destination: ${{ vars.CDC_SINK_BUCKET }}/
@@ -133,5 +137,5 @@ jobs:
 
       - id: link
         name: Summary link
-        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.auth.outcome == 'success' }} # Not skipped
         run: echo "[${{ env.BUILDNAME }}](https://storage.googleapis.com/${{ vars.CDC_SINK_BUCKET }}/${{ env.DISTRO_NAME }}.tgz)" >> $GITHUB_STEP_SUMMARY
