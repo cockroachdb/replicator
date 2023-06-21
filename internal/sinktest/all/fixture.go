@@ -20,7 +20,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 )
 
@@ -31,7 +31,7 @@ type Fixture struct {
 	*base.Fixture
 
 	Appliers types.Appliers
-	Configs  *apply.Configs
+	Configs  *applycfg.Configs
 	Memo     types.Memo
 	Stagers  types.Stagers
 	Watchers types.Watchers

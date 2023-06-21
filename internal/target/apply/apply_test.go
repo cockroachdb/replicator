@@ -28,7 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/mutations"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -144,7 +144,7 @@ func TestApply(t *testing.T) {
 	// Verify that unknown columns can be saved.
 	t.Run("extras", func(t *testing.T) {
 		a := assert.New(t)
-		cfg := apply.NewConfig()
+		cfg := applycfg.NewConfig()
 		cfg.Extras = ident.New("extras")
 		a.NoError(fixture.Configs.Store(ctx, fixture.TargetPool, tbl.Name(), cfg))
 		changed, err := fixture.Configs.Refresh(ctx)
@@ -444,7 +444,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &apply.Config{
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &applycfg.Config{
 			CASColumns: []ident.Ident{ident.New("bad_column")},
 		}))
 		changed, err := fixture.Configs.Refresh(ctx)
@@ -460,7 +460,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &apply.Config{
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &applycfg.Config{
 			Deadlines: types.Deadlines{ident.New("bad_column"): time.Second},
 		}))
 		changed, err := fixture.Configs.Refresh(ctx)
@@ -485,7 +485,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	configData := apply.NewConfig()
+	configData := applycfg.NewConfig()
 	if cas {
 		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
@@ -591,8 +591,8 @@ func TestExpressionColumns(t *testing.T) {
 		return
 	}
 
-	configData := apply.NewConfig()
-	configData.Exprs = map[apply.TargetColumn]string{
+	configData := applycfg.NewConfig()
+	configData.Exprs = map[applycfg.TargetColumn]string{
 		ident.New("pk"):    "2 * $0",
 		ident.New("val"):   "$0 || ' world!'",
 		ident.New("fixed"): "'constant'",
@@ -665,8 +665,8 @@ func TestIgnoredColumns(t *testing.T) {
 		return
 	}
 
-	configData := apply.NewConfig()
-	configData.Ignore = map[apply.TargetColumn]bool{
+	configData := applycfg.NewConfig()
+	configData.Ignore = map[applycfg.TargetColumn]bool{
 		ident.New("pk_deleted"):   true,
 		ident.New("val_ignored"):  true,
 		ident.New("not_required"): true,
@@ -719,8 +719,8 @@ func TestRenamedColumns(t *testing.T) {
 		return
 	}
 
-	configData := apply.NewConfig()
-	configData.SourceNames = map[apply.TargetColumn]apply.SourceColumn{
+	configData := applycfg.NewConfig()
+	configData.SourceNames = map[applycfg.TargetColumn]applycfg.SourceColumn{
 		ident.New("pk"):  ident.New("pk_source"),
 		ident.New("val"): ident.New("val_source"),
 	}
@@ -978,7 +978,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	}
 
 	// Set up the apply instance, per the configuration.
-	configData := apply.NewConfig()
+	configData := applycfg.NewConfig()
 	if cfg.cas {
 		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}

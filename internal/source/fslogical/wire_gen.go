@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
@@ -37,17 +38,17 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 	if err != nil {
 		return nil, nil, err
 	}
+	stagingPool := logical.ProvideStagingPool(targetPool)
 	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup2, err := apply.ProvideConfigs(contextContext, targetPool, stagingDB)
+	configs, cleanup2, err := applycfg.ProvideConfigs(contextContext, stagingPool, stagingDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool := logical.ProvideStagingPool(targetPool)
 	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
 	watchers, cleanup3 := schemawatch.ProvideFactory(targetPool)
 	userScript, err := script.ProvideUserScript(contextContext, configs, loader, stagingPool, targetSchema, watchers)

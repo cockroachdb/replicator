@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
@@ -82,7 +83,7 @@ func ProvideListener(config *Config) (net.Listener, func(), error) {
 // routes requests.
 func ProvideMux(
 	handler *cdc.Handler,
-	applyConf *apply.Configs,
+	applyConf *applycfg.Configs,
 	stagingPool types.StagingPool,
 	targetPool types.TargetPool,
 ) *http.ServeMux {

@@ -14,23 +14,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package staging contains all services which interact with the staging
-// database.
-package staging
+package applycfg_test
 
 import (
+	"testing"
+
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
-	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
-	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
-	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
-	"github.com/google/wire"
+	"github.com/stretchr/testify/assert"
 )
 
-// Set is used by Wire and contains providers for all target
-// sub-packages.
-var Set = wire.NewSet(
-	applycfg.Set,
-	leases.Set,
-	memo.Set,
-	stage.Set,
-)
+func TestZero(t *testing.T) {
+	a := assert.New(t)
+
+	a.True(applycfg.NewConfig().IsZero())
+}

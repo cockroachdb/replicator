@@ -20,13 +20,14 @@ import (
 	"context"
 	"sync"
 
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
 // factory vends singleton instance of apply.
 type factory struct {
-	configs  *Configs
+	configs  *applycfg.Configs
 	watchers types.Watchers
 	mu       struct {
 		sync.RWMutex

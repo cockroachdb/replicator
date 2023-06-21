@@ -10,6 +10,7 @@ import (
 	"context"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
@@ -36,19 +37,19 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	stagingPool := logical.ProvideStagingPool(targetPool)
 	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup2, err := apply.ProvideConfigs(ctx, targetPool, stagingDB)
+	configs, cleanup2, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingDB)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
 	watchers, cleanup3 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
-	stagingPool := logical.ProvideStagingPool(targetPool)
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingDB)
 	if err != nil {
 		cleanup4()

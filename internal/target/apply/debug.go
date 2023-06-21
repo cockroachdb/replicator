@@ -19,11 +19,13 @@ package apply
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 )
 
 // DebugHandler returns a trivial http Handler that will dump the
 // current configuration as a JSON document.
-func DebugHandler(cfgs *Configs) http.Handler {
+func DebugHandler(cfgs *applycfg.Configs) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		w.WriteHeader(http.StatusOK)

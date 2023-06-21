@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package apply_test
+package applycfg_test
 
 import (
 	"encoding/json"
@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
@@ -46,20 +46,20 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	watch, cancel := cfgs.Watch(tbl)
 	defer cancel()
 	// Helper to perform a timed read from the watch channel.
-	readWatch := func() *apply.Config {
+	readWatch := func() *applycfg.Config {
 		select {
 		case ret := <-watch:
 			return ret
 		case <-time.After(time.Second):
 			a.Fail("timed out waiting for watch")
-			return &apply.Config{}
+			return &applycfg.Config{}
 		}
 	}
 
 	// We should see data immediately.
 	a.True(readWatch().IsZero())
 
-	cfg := &apply.Config{
+	cfg := &applycfg.Config{
 		CASColumns: []ident.Ident{
 			ident.New("cas1"),
 			ident.New("cas2"),
@@ -117,16 +117,10 @@ func TestPersistenceRoundTrip(t *testing.T) {
 
 	// Replace the data with an empty configuration, this will wind
 	// up deleting the config rows.
-	a.NoError(cfgs.Store(ctx, fixture.StagingPool, tbl, &apply.Config{}))
+	a.NoError(cfgs.Store(ctx, fixture.StagingPool, tbl, &applycfg.Config{}))
 	changed, err = fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
 	a.True(cfgs.Get(tbl).IsZero())
 	a.True(readWatch().IsZero())
-}
-
-func TestZero(t *testing.T) {
-	a := assert.New(t)
-
-	a.True(apply.NewConfig().IsZero())
 }
