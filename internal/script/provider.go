@@ -20,7 +20,7 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
@@ -114,7 +114,7 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 // target database.
 func ProvideUserScript(
 	ctx context.Context,
-	applyConfigs *apply.Configs,
+	applyConfigs *applycfg.Configs,
 	boot *Loader,
 	stagingPool types.StagingPool,
 	target TargetSchema,

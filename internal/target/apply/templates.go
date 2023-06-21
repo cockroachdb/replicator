@@ -23,6 +23,7 @@ import (
 	"sync"
 	"text/template"
 
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -101,7 +102,9 @@ type templates struct {
 // newTemplates constructs a new templates instance, performing some
 // pre-computations to identify primary keys and to filter out ignored
 // columns.
-func newTemplates(target ident.Table, cfgData *Config, colData []types.ColData) *templates {
+func newTemplates(
+	target ident.Table, cfgData *applycfg.Config, colData []types.ColData,
+) *templates {
 	// Map cas column names to their order in the comparison tuple.
 	casMap := make(map[ident.Ident]int, len(cfgData.CASColumns))
 	for idx, name := range cfgData.CASColumns {
@@ -175,7 +178,7 @@ func (t *templates) Vars() [][]varPair {
 
 			if pattern, ok := t.Exprs[col.Name]; ok {
 				vp.Expr = strings.ReplaceAll(
-					pattern, substitutionToken, fmt.Sprintf("$%d", vp.Index))
+					pattern, applycfg.SubstitutionToken, fmt.Sprintf("$%d", vp.Index))
 				// A constant expression doesn't occupy an index slot.
 				if vp.Expr == pattern {
 					vp.Index = 0

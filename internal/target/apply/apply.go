@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -49,7 +50,7 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
-		configData        *Config
+		configData        *applycfg.Config
 		expectedKeyLength int // Sanity-check "key" attribute
 		schemaData        []types.ColData
 		templates         *templates
@@ -60,7 +61,7 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	target ident.Table, cfgs *Configs, watchers types.Watchers,
+	target ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
 	labelValues := metrics.TableValues(target)
 	a := &apply{
@@ -98,7 +99,7 @@ func newApply(
 		}
 		defer cancelConfig()
 
-		var configData *Config
+		var configData *applycfg.Config
 		var schemaData []types.ColData
 		for {
 			select {
@@ -307,7 +308,7 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Querier, muts []types
 			// with the query. The templates will bake in the fixed
 			// expression.
 			if expr, ok := a.mu.configData.Exprs[col.Name]; ok {
-				if !strings.Contains(expr, substitutionToken) {
+				if !strings.Contains(expr, applycfg.SubstitutionToken) {
 					continue
 				}
 			}
@@ -396,7 +397,7 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Querier, muts []types
 }
 
 // refreshUnlocked updates the apply with new column information.
-func (a *apply) refreshUnlocked(configData *Config, schemaData []types.ColData) error {
+func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.ColData) error {
 	// We want to verify that the cas and deadline columns actually
 	// exist in the incoming column data.
 	allColNames := make(map[ident.Ident]struct{}, len(schemaData))

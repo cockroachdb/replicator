@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
@@ -85,7 +86,7 @@ func TestQueryTemplates(t *testing.T) {
 
 	tcs := []struct {
 		name   string
-		cfg    *Config
+		cfg    *applycfg.Config
 		delete string
 		upsert string
 	}{
@@ -99,7 +100,7 @@ func TestQueryTemplates(t *testing.T) {
 		},
 		{
 			name: "cas",
-			cfg: &Config{
+			cfg: &applycfg.Config{
 				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
 			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
@@ -122,7 +123,7 @@ SELECT * FROM action`,
 		},
 		{
 			name: "deadline",
-			cfg: &Config{
+			cfg: &applycfg.Config{
 				Deadlines: types.Deadlines{
 					ident.New("val1"): time.Second,
 					ident.New("val0"): time.Hour,
@@ -138,7 +139,7 @@ SELECT * FROM deadlined`,
 		},
 		{
 			name: "casDeadline",
-			cfg: &Config{
+			cfg: &applycfg.Config{
 				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
 				Deadlines: types.Deadlines{
 					ident.New("val0"): time.Hour,
@@ -166,8 +167,8 @@ SELECT * FROM action`,
 		},
 		{
 			name: "ignore",
-			cfg: &Config{
-				Ignore: map[SourceColumn]bool{
+			cfg: &applycfg.Config{
+				Ignore: map[applycfg.SourceColumn]bool{
 					ident.New("geom"): true,
 					ident.New("geog"): true,
 				},
@@ -183,8 +184,8 @@ SELECT * FROM action`,
 			// SQL that gets generated; we only care about the different
 			// value when looking up values in the incoming mutation.
 			name: "source names",
-			cfg: &Config{
-				SourceNames: map[TargetColumn]SourceColumn{
+			cfg: &applycfg.Config{
+				SourceNames: map[applycfg.TargetColumn]applycfg.SourceColumn{
 					ident.New("val1"):    ident.New("valRenamed"),
 					ident.New("geog"):    ident.New("george"),
 					ident.New("unknown"): ident.New("is ok"),
@@ -200,13 +201,13 @@ SELECT * FROM action`,
 			// Verify user-configured expressions, with zero, one, and
 			// multiple uses of the substitution position.
 			name: "expr",
-			cfg: &Config{
-				Exprs: map[TargetColumn]string{
+			cfg: &applycfg.Config{
+				Exprs: map[applycfg.TargetColumn]string{
 					ident.New("val0"): `'fixed'`, // Doesn't consume a parameter slot.
 					ident.New("val1"): `$0||'foobar'`,
 					ident.New("pk1"):  `$0+$0`,
 				},
-				Ignore: map[TargetColumn]bool{
+				Ignore: map[applycfg.TargetColumn]bool{
 					ident.New("geom"): true,
 					ident.New("geog"): true,
 				},
@@ -225,7 +226,7 @@ SELECT * FROM action`,
 		t.Run(tc.name, func(t *testing.T) {
 			a := assert.New(t)
 			if tc.cfg == nil {
-				tc.cfg = NewConfig()
+				tc.cfg = applycfg.NewConfig()
 			}
 			tmpls := newTemplates(tableID, tc.cfg, cols)
 

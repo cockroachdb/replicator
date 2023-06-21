@@ -8,6 +8,7 @@ package all
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
@@ -49,7 +50,7 @@ func NewFixture() (*Fixture, func(), error) {
 		StagingDB:   stagingDB,
 		TestDB:      testDB,
 	}
-	configs, cleanup4, err := apply.ProvideConfigs(context, targetPool, stagingDB)
+	configs, cleanup4, err := applycfg.ProvideConfigs(context, stagingPool, stagingDB)
 	if err != nil {
 		cleanup3()
 		cleanup2()

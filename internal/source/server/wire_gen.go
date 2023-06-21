@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
@@ -51,13 +52,14 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	stagingPool := logical.ProvideStagingPool(targetPool)
 	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup3, err := apply.ProvideConfigs(ctx, targetPool, stagingDB)
+	configs, cleanup3, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingDB)
 	if err != nil {
 		cleanup2()
 		cleanup()
@@ -65,7 +67,6 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	}
 	watchers, cleanup4 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
-	stagingPool := logical.ProvideStagingPool(targetPool)
 	authenticator, cleanup6, err := ProvideAuthenticator(ctx, stagingPool, config, stagingDB)
 	if err != nil {
 		cleanup5()
@@ -170,7 +171,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup4, err := apply.ProvideConfigs(contextContext, targetPool, stagingDB)
+	configs, cleanup4, err := applycfg.ProvideConfigs(contextContext, stagingPool, stagingDB)
 	if err != nil {
 		cleanup3()
 		cleanup2()

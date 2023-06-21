@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/dop251/goja"
@@ -73,7 +73,7 @@ type Source struct {
 // A Target holds user-provided configuration options
 // for a target table.
 type Target struct {
-	apply.Config
+	applycfg.Config
 	// A user-provided function to modify or filter mutations bound for
 	// the target table.
 	Map Map
@@ -135,7 +135,7 @@ func (s *UserScript) bind(loader *Loader) error {
 		if err != nil {
 			return errors.Wrapf(err, "configureTable(%q)", tableName)
 		}
-		tgt := &Target{Config: *apply.NewConfig()}
+		tgt := &Target{Config: *applycfg.NewConfig()}
 		s.Targets[table] = tgt
 
 		for _, cas := range bag.CASColumns {

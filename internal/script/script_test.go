@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
@@ -126,24 +126,24 @@ func TestScript(t *testing.T) {
 
 	tbl := ident.NewTable(fixture.TestDB.Ident(), ident.Public, ident.New("all_features"))
 	if cfg := s.Targets[tbl]; a.NotNil(cfg) {
-		expectedApply := apply.Config{
+		expectedApply := applycfg.Config{
 			CASColumns: []ident.Ident{ident.New("cas0"), ident.New("cas1")},
-			Deadlines: map[apply.TargetColumn]time.Duration{
+			Deadlines: map[applycfg.TargetColumn]time.Duration{
 				ident.New("dl0"): time.Hour,
 				ident.New("dl1"): time.Minute,
 			},
-			Exprs: map[apply.TargetColumn]string{
+			Exprs: map[applycfg.TargetColumn]string{
 				ident.New("expr0"): "fnv32($0::BYTES)",
 				ident.New("expr1"): "Hello Library!",
 			},
 			Extras: ident.New("overflow_column"),
-			Ignore: map[apply.TargetColumn]bool{
+			Ignore: map[applycfg.TargetColumn]bool{
 				ident.New("ign0"): true,
 				ident.New("ign1"): true,
 				// The false value is dropped.
 			},
 			// SourceName not used; that can be handled by the function.
-			SourceNames: map[apply.TargetColumn]apply.SourceColumn{},
+			SourceNames: map[applycfg.TargetColumn]applycfg.SourceColumn{},
 		}
 		a.Equal(expectedApply, cfg.Config)
 
