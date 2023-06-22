@@ -76,6 +76,10 @@ jobs:
         if: ${{ always() }}
         run: go run honnef.co/go/tools/cmd/staticcheck -checks all ./...
 
+      - name: Go Vet
+        if: ${{ always() }}
+        run: go vet ./...
+
   # Integration matrix tests for all supported CRDB and source DBs.
   tests:
     name: Integration Tests
