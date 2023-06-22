@@ -242,7 +242,6 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 			log.Debugf("unexpected payload message: %T", msg)
 		}
 	}
-	return nil
 }
 
 // ZeroStamp implements Dialect.
