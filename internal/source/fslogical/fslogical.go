@@ -45,7 +45,7 @@ type Dialect struct {
 	idempotent        bool                     // Detect reprocessing the same document.
 	loops             *logical.Factory         // Support dynamic nested collections.
 	memo              types.Memo               // Durable logging of processed doc ids.
-	pool              types.StagingPool        // Database access.
+	pool              *types.StagingPool       // Database access.
 	query             firestore.Query          // The base query build from.
 	recurse           bool                     // Scan for dynamic, nested collections.
 	recurseFilter     map[ident.Ident]struct{} // Ignore nested collections with these names.

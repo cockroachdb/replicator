@@ -67,7 +67,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 
 	for _, tgt := range tgts {
 		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
-		if _, err := pool.Exec(ctx, schema); !a.NoError(err) {
+		if _, err := pool.ExecContext(ctx, schema); !a.NoError(err) {
 			return
 		}
 	}
@@ -88,7 +88,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 		RetryDelay:     time.Nanosecond,
 		StagingDB:      fixture.StagingDB.Ident(),
 		StandbyTimeout: 5 * time.Millisecond,
-		TargetConn:     pool.Config().ConnString(),
+		TargetConn:     pool.ConnectionString,
 		TargetDB:       dbName,
 	}
 	if allowBackfill {
@@ -116,7 +116,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	for _, tgt := range tgts {
 		for {
 			var count int
-			if err := pool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
+			if err := pool.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
 				return
 			}
 			log.Tracef("backfill count %d", count)
@@ -188,7 +188,7 @@ func TestUserScript(t *testing.T) {
 
 	for _, tgt := range tgts {
 		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
-		_, err := pool.Exec(ctx, schema)
+		_, err := pool.ExecContext(ctx, schema)
 		r.NoError(err)
 	}
 
@@ -198,7 +198,7 @@ func TestUserScript(t *testing.T) {
 		Immediate:      false,
 		StagingDB:      fixture.StagingDB.Ident(),
 		StandbyTimeout: 5 * time.Millisecond,
-		TargetConn:     pool.Config().ConnString(),
+		TargetConn:     pool.ConnectionString,
 		TargetDB:       dbName,
 
 		ScriptConfig: script.Config{
@@ -249,7 +249,7 @@ api.configureTable("t_2", {
 		}
 		for {
 			var count int
-			r.NoError(pool.QueryRow(ctx, fmt.Sprintf(
+			r.NoError(pool.QueryRowContext(ctx, fmt.Sprintf(
 				"SELECT count(*) FROM %s WHERE v = $1", tgt), search).Scan(&count))
 			log.Tracef("backfill count %d", count)
 			if count == numEmits {
@@ -260,7 +260,7 @@ api.configureTable("t_2", {
 	}
 
 	// Ensure that deletes propagate correctly to t_1.
-	_, err = pool.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE TRUE", tgts[0]))
+	_, err = pool.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE TRUE", tgts[0]))
 	r.NoError(err)
 
 	for {

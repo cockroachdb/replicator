@@ -35,7 +35,7 @@ import (
 )
 
 type factory struct {
-	db        types.StagingPool
+	db        *types.StagingPool
 	stagingDB ident.Ident
 
 	mu struct {
@@ -77,7 +77,10 @@ func (f *factory) getUnlocked(table ident.Table) *stage {
 
 // SelectMany implements types.Stagers.
 func (f *factory) SelectMany(
-	ctx context.Context, tx types.Querier, q *types.SelectManyCursor, fn types.SelectManyCallback,
+	ctx context.Context,
+	tx types.StagingQuerier,
+	q *types.SelectManyCursor,
+	fn types.SelectManyCallback,
 ) error {
 	if q.Limit == 0 {
 		return errors.New("limit must be set")

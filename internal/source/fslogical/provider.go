@@ -56,7 +56,7 @@ func ProvideLoops(
 	fs *firestore.Client,
 	loops *logical.Factory,
 	memo types.Memo,
-	pool types.StagingPool,
+	pool *types.StagingPool,
 	st *Tombstones,
 	userscript *script.UserScript,
 ) ([]*logical.Loop, func(), error) {

@@ -32,8 +32,8 @@ type Factory struct {
 	appliers    types.Appliers
 	cfg         Config
 	memo        types.Memo
-	stagingPool types.StagingPool
-	targetPool  types.TargetPool
+	stagingPool *types.StagingPool
+	targetPool  *types.TargetPool
 	watchers    types.Watchers
 	userscript  *script.UserScript
 

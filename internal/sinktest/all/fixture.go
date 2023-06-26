@@ -42,7 +42,9 @@ type Fixture struct {
 // CreateTable creates a test table within the TestDB and refreshes the
 // target database's Watcher. The schemaSpec parameter must have exactly
 // one %s substitution parameter for the database name and table name.
-func (f *Fixture) CreateTable(ctx context.Context, schemaSpec string) (base.TableInfo, error) {
+func (f *Fixture) CreateTable(
+	ctx context.Context, schemaSpec string,
+) (base.TableInfo[*types.TargetPool], error) {
 	ti, err := f.Fixture.CreateTable(ctx, schemaSpec)
 	if err == nil {
 		err = f.Watcher.Refresh(ctx, f.TargetPool)

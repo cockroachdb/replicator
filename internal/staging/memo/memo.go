@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 )
 
 // Get retrieves a value given a key or nil if it does not exist.
-func (m *Memo) Get(ctx context.Context, tx types.Querier, key string) ([]byte, error) {
+func (m *Memo) Get(ctx context.Context, tx types.StagingQuerier, key string) ([]byte, error) {
 	var ret []byte
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		err := tx.QueryRow(
@@ -64,7 +64,7 @@ func (m *Memo) Get(ctx context.Context, tx types.Querier, key string) ([]byte, e
 }
 
 // Put stores the key-value in the target database
-func (m *Memo) Put(ctx context.Context, tx types.Querier, key string, value []byte) error {
+func (m *Memo) Put(ctx context.Context, tx types.StagingQuerier, key string, value []byte) error {
 	return retry.Retry(ctx, func(ctx context.Context) error {
 		_, err := tx.Exec(
 			ctx,

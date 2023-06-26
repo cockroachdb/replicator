@@ -146,7 +146,7 @@ func TestApply(t *testing.T) {
 		a := assert.New(t)
 		cfg := applycfg.NewConfig()
 		cfg.Extras = ident.New("extras")
-		a.NoError(fixture.Configs.Store(ctx, fixture.TargetPool, tbl.Name(), cfg))
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), cfg))
 		changed, err := fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
@@ -174,25 +174,20 @@ func TestApply(t *testing.T) {
 			return
 		}
 
-		var extras map[string]string
-		a.NoError(fixture.TargetPool.QueryRow(ctx,
+		var extrasRaw string
+		a.NoError(fixture.TargetPool.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
 			1, "0",
-		).Scan(&extras))
-		a.Len(extras, 2)
-		a.Equal("unseen", extras["heretofore"])
-		a.Equal("OK", extras["are"])
+		).Scan(&extrasRaw))
+		a.Equal(`{"are": "OK", "heretofore": "unseen"}`, extrasRaw)
 
-		extras = nil
-		a.NoError(fixture.TargetPool.QueryRow(ctx,
+		a.NoError(fixture.TargetPool.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
 			2, "0",
-		).Scan(&extras))
-		a.Len(extras, 2)
-		a.Equal("multiple", extras["check"])
-		a.Equal("work", extras["mutations"])
+		).Scan(&extrasRaw))
+		a.Equal(`{"check": "multiple", "mutations": "work"}`, extrasRaw)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.TargetPool, tbl.Name(), nil))
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), nil))
 		changed, err = fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
@@ -384,7 +379,7 @@ func TestAllDataTypes(t *testing.T) {
 				jsonValue = "null"
 			} else {
 				q := fmt.Sprintf("SELECT to_json($1::%s)::string", tc.columnType)
-				if !a.NoError(fixture.TargetPool.QueryRow(ctx, q, tc.columnValue).Scan(&jsonValue)) {
+				if !a.NoError(fixture.TargetPool.QueryRowContext(ctx, q, tc.columnValue).Scan(&jsonValue)) {
 					return
 				}
 			}
@@ -397,7 +392,7 @@ func TestAllDataTypes(t *testing.T) {
 			a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
 
 			var jsonFound string
-			a.NoError(fixture.TargetPool.QueryRow(ctx,
+			a.NoError(fixture.TargetPool.QueryRowContext(ctx,
 				fmt.Sprintf("SELECT ifnull(to_json(val)::string, 'null') FROM %s", tbl),
 			).Scan(&jsonFound))
 			if alternate, ok := expectInstead[tc.name]; ok {
@@ -478,7 +473,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	// Utility function to retrieve the most recently set data.
 	getRow := func() (version int, ts time.Time, err error) {
-		err = fixture.TargetPool.QueryRow(ctx,
+		err = fixture.TargetPool.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT ver, ts FROM %s WHERE pk = $1", tbl.Name()), id,
 		).Scan(&version, &ts)
 		return
@@ -622,7 +617,7 @@ func TestExpressionColumns(t *testing.T) {
 	var key int
 	var val string
 	var fixed string
-	a.NoError(fixture.TargetPool.QueryRow(ctx,
+	a.NoError(fixture.TargetPool.QueryRowContext(ctx,
 		fmt.Sprintf("SELECT * from %s", tbl)).Scan(&key, &val, &fixed))
 	a.Equal(84, key)
 	a.Equal("Hello world!", val)
@@ -773,7 +768,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 
 	// Detect hopeful future case where UPSERT has the desired behavior.
-	_, err = fixture.TargetPool.Exec(ctx,
+	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("UPSERT INTO %s (pk0, val) VALUES ($1, $2), ($3, $4)", tbl.Name()),
 		1, "1", 1, "1")
 	if a.Error(err) {
@@ -805,7 +800,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 
 	count, err := base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
 	if a.NoError(err) && a.Equal(1, count) {
-		row := fixture.TargetPool.QueryRow(ctx,
+		row := fixture.TargetPool.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT val FROM %s WHERE pk0 = $1", tbl.Name()), 10)
 		var val string
 		a.NoError(row.Scan(&val))
@@ -828,7 +823,7 @@ func TestUTDEnum(t *testing.T) {
 		Val string `json:"val"`
 	}
 
-	_, err = fixture.TargetPool.Exec(ctx, fmt.Sprintf(
+	_, err = fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
 		fixture.TestDB.Ident()))
 	r.NoError(err)

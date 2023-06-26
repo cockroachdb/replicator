@@ -46,7 +46,7 @@ func TestPutAndDrain(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	a.NotEmpty(fixture.DBInfo.Version())
+	a.NotEmpty(fixture.StagingPool.Version)
 	pool := fixture.StagingPool
 	targetDB := fixture.TestDB.Ident()
 
@@ -212,7 +212,7 @@ func TestSelectMany(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	a.NotEmpty(fixture.DBInfo.Version())
+	a.NotEmpty(fixture.StagingPool.Version)
 
 	// Create some fake table names.
 	targetDB := fixture.TestDB.Ident()

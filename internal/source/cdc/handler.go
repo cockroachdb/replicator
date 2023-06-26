@@ -40,9 +40,9 @@ type Handler struct {
 	Authenticator types.Authenticator // Access checks.
 	Config        *Config             // Runtime options.
 	Resolvers     *Resolvers          // Process resolved timestamps.
-	StagingPool   types.StagingPool   // Access to the staging cluster.
+	StagingPool   *types.StagingPool  // Access to the staging cluster.
 	Stores        types.Stagers       // Record incoming json blobs.
-	TargetPool    types.TargetPool    // Access to the target cluster.
+	TargetPool    *types.TargetPool   // Access to the target cluster.
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

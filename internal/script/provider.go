@@ -116,7 +116,7 @@ func ProvideUserScript(
 	ctx context.Context,
 	applyConfigs *applycfg.Configs,
 	boot *Loader,
-	stagingPool types.StagingPool,
+	stagingPool *types.StagingPool,
 	target TargetSchema,
 	watchers types.Watchers,
 ) (*UserScript, error) {

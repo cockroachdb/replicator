@@ -77,7 +77,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 			Immediate:    immediate,
 			RetryDelay:   10 * time.Second,
 			StagingDB:    fixture.StagingDB.Ident(),
-			TargetConn:   crdbPool.Config().ConnString(),
+			TargetConn:   crdbPool.ConnectionString,
 			TargetDB:     dbName,
 			LoopName:     loopName,
 		},
@@ -110,7 +110,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 		log.Fatal(err)
 		return
 	}
-	if _, err := crdbPool.Exec(ctx,
+	if _, err := crdbPool.ExecContext(ctx,
 		fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v string)`, tgt)); !a.NoError(err) {
 		return
 	}
@@ -159,7 +159,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 
 	for {
 		var count int
-		if err := crdbPool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
+		if err := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
 			return
 		}
 		log.Trace("backfill count", count)
@@ -187,7 +187,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	// Wait for the update to propagate.
 	for {
 		var count int
-		if err := crdbPool.QueryRow(ctx,
+		if err := crdbPool.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
 			return
 		}
@@ -216,7 +216,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 
 	for {
 		var count int
-		if err := crdbPool.QueryRow(ctx,
+		if err := crdbPool.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
 			return
 		}
@@ -343,7 +343,7 @@ func TestDataTypes(t *testing.T) {
 			Immediate:    false,           // we care about transaction semantics
 			RetryDelay:   10 * time.Second,
 			StagingDB:    fixture.StagingDB.Ident(),
-			TargetConn:   crdbPool.Config().ConnString(),
+			TargetConn:   crdbPool.ConnectionString,
 			TargetDB:     dbName,
 			LoopName:     loopName,
 		},
@@ -391,7 +391,7 @@ func TestDataTypes(t *testing.T) {
 		schema = fmt.Sprintf("CREATE TABLE %s (k INT PRIMARY KEY, v %s)",
 			tgt, tc.crdb)
 
-		if _, err := crdbPool.Exec(ctx, schema); !a.NoErrorf(err, "CRDB %s", tc.crdb) {
+		if _, err := crdbPool.ExecContext(ctx, schema); !a.NoErrorf(err, "CRDB %s", tc.crdb) {
 			return
 		}
 
@@ -436,7 +436,7 @@ func TestDataTypes(t *testing.T) {
 			a := assert.New(t)
 			var count int
 			for count == 0 {
-				if err := crdbPool.QueryRow(ctx,
+				if err := crdbPool.QueryRowContext(ctx,
 					fmt.Sprintf("SELECT count(*) FROM %s", tgts[idx])).Scan(&count); !a.NoError(err) {
 					return
 				}

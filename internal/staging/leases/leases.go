@@ -40,8 +40,8 @@ const (
 
 // Config is passed to New.
 type Config struct {
-	Pool   types.Querier // Database access.
-	Target ident.Table   // The lease table.
+	Pool   types.StagingQuerier // Database access.
+	Target ident.Table          // The lease table.
 
 	// Guard provides a quiescent period between when a lease is
 	// considered to be expired (i.e. a lease callback's context is

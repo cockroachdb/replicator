@@ -82,10 +82,12 @@ type BaseConfig struct {
 	ScriptConfig script.Config
 	// How often to commit the latest consistent point.
 	StandbyTimeout time.Duration
+	// Connection stsring for the staging cluster.
+	StagingConn string
 	// The name of a SQL database in the target cluster to store
 	// metadata in.
 	StagingDB ident.Ident
-	// Connection string for the target cluster.u
+	// Connection string for the target cluster.
 	TargetConn string
 	// The SQL database in the target cluster to write into.
 	TargetDB ident.Ident
@@ -123,7 +125,10 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"a SQL database to store metadata in")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
 		"how often to commit the consistent point")
-	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
+	f.StringVar(&c.StagingConn, "stagingConn", "",
+		"the staging CockroachDB cluster's connection string; required if target is other than CRDB")
+	f.StringVar(&c.TargetConn, "targetConn", "",
+		"the target database's connection string; always required")
 	f.Var(ident.NewValue("", &c.TargetDB), "targetDB",
 		"the SQL database in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
@@ -171,8 +176,11 @@ func (c *BaseConfig) Preflight() error {
 	if c.StandbyTimeout == 0 {
 		c.StandbyTimeout = defaultStandbyTimeout
 	}
+	if c.StagingConn == "" {
+		c.StagingConn = c.TargetConn // TargetConn is tested below.
+	}
 	if c.TargetConn == "" {
-		return errors.New("no target connection string specified")
+		return errors.New("targetConn must be set")
 	}
 	if c.TargetDB.IsEmpty() {
 		return errors.New("no target database specified")

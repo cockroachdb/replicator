@@ -40,7 +40,7 @@ var configZero = NewConfig()
 // Configs provides a lookup service for per-destination-table
 // configurations.
 type Configs struct {
-	pool types.StagingPool
+	pool *types.StagingPool
 
 	// Parent context of all watch behaviors. When the background
 	// refresh loop is stopped, we can cancel all watches as there will
@@ -242,7 +242,7 @@ func (c *Configs) refreshLoop(ctx context.Context) {
 // instead, call Refresh once the associated database transaction has
 // committed.
 func (c *Configs) Store(
-	ctx context.Context, tx types.Querier, table ident.Table, cfg *Config,
+	ctx context.Context, tx types.StagingQuerier, table ident.Table, cfg *Config,
 ) error {
 	// Delete existing configuration data for the table.
 	if _, err := tx.Exec(ctx,

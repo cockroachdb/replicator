@@ -26,7 +26,7 @@ import (
 
 // factory is a memoizing factory for watcher instances.
 type factory struct {
-	pool types.TargetPool
+	pool *types.TargetPool
 	mu   struct {
 		sync.RWMutex
 		cancels []func()

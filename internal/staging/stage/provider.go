@@ -28,7 +28,7 @@ var Set = wire.NewSet(
 )
 
 // ProvideFactory is called by Wire to construct the Stagers factory.
-func ProvideFactory(db types.StagingPool, stagingDB ident.StagingDB) types.Stagers {
+func ProvideFactory(db *types.StagingPool, stagingDB ident.StagingDB) types.Stagers {
 	f := &factory{
 		db:        db,
 		stagingDB: stagingDB.Ident(),

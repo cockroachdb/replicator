@@ -54,7 +54,7 @@ type Pool struct {
 	}
 }
 
-var _ types.Querier = (*Pool)(nil)
+var _ types.StagingQuerier = (*Pool)(nil)
 
 // Begin opens a new transaction to concentrate work into.
 func (s *Pool) Begin(ctx context.Context) error {
@@ -86,7 +86,7 @@ func (s *Pool) Commit(ctx context.Context) error {
 	return tx.Commit(ctx)
 }
 
-// Exec implements types.Querier and can only be called after Begin.
+// Exec implements types.StagingQuerier and can only be called after Begin.
 func (s *Pool) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,7 +98,7 @@ func (s *Pool) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.C
 	return tx.Exec(ctx, sql, arguments...)
 }
 
-// Query implements types.Querier and can only be called after Begin.
+// Query implements types.StagingQuerier and can only be called after Begin.
 // The Rows that are returned from this method must be closed, fully
 // consumed, or encounter an error before other query methods will be
 // allowed to proceed.
@@ -136,7 +136,7 @@ func (s *Pool) queryLocked(
 	return ret, err
 }
 
-// QueryRow implements types.Querier and can only be called after
+// QueryRow implements types.StagingQuerier and can only be called after
 // Begin. The Row that is returned must be scanned before any other
 // query methods wil be allowed to proceed.
 func (s *Pool) QueryRow(ctx context.Context, sql string, optionsAndArgs ...any) pgx.Row {

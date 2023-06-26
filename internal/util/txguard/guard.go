@@ -126,7 +126,7 @@ func (g *Guard) Rollback() {
 }
 
 // Use accesses the underlying transaction in a thread-safe manner.
-func (g *Guard) Use(fn func(tx types.Querier) error) error {
+func (g *Guard) Use(fn func(tx types.StagingQuerier) error) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 

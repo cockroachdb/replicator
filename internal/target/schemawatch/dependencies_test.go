@@ -122,7 +122,7 @@ func TestGetDependencyOrder(t *testing.T) {
 
 	for idx, tc := range tcs {
 		sql := fmt.Sprintf(tc.schema, fixture.TestDB.Ident())
-		_, err := pool.Exec(ctx, sql)
+		_, err := pool.ExecContext(ctx, sql)
 		r.NoError(err, idx)
 	}
 
@@ -142,7 +142,7 @@ func TestGetDependencyOrder(t *testing.T) {
 	a.Equal(expected, found)
 
 	// Ensure that we fail in a useful manner if there is a reference cycle.
-	_, err = pool.Exec(ctx, fmt.Sprintf(`
+	_, err = pool.ExecContext(ctx, fmt.Sprintf(`
 CREATE TABLE %[1]s.cycle_a (pk uuid primary key);
 CREATE TABLE %[1]s.cycle_b (pk uuid primary key, ref uuid references %[1]s.cycle_a);
 ALTER TABLE %[1]s.cycle_a ADD COLUMN ref uuid references %[1]s.cycle_b;
@@ -167,7 +167,7 @@ func TestNoDeferrableConstraints(t *testing.T) {
 
 	ctx := fixture.Context
 
-	_, err = fixture.TargetPool.Exec(ctx,
+	_, err = fixture.TargetPool.ExecContext(ctx,
 		"create table x (pk uuid primary key, ref uuid references x deferrable initially deferred)")
 	a.ErrorContains(err, "deferrable")
 	a.ErrorContains(err, "42601")

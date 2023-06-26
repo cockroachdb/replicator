@@ -14,22 +14,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package schemawatch
+package stdpool
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/google/wire"
+	"context"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideFactory,
-)
+// WithTransactionTimeout imposes a best-effort attempt at limiting the
+// duration of any given database transaction.
+func WithTransactionTimeout(d time.Duration) Option { return &withTransactionTimeout{d} }
 
-// ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *types.TargetPool) (types.Watchers, func()) {
-	w := &factory{pool: pool}
-	w.mu.data = make(map[ident.Ident]*watcher)
-	return w, w.close
+type withTransactionTimeout struct{ d time.Duration }
+
+func (o *withTransactionTimeout) option() {}
+func (o *withTransactionTimeout) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) error {
+	cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = o.d.String()
+	return nil
 }

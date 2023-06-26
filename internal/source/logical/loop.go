@@ -95,9 +95,9 @@ type loop struct {
 	// this Context will be stopped.
 	running *stopper.Context
 	// Used to update the consistentPoint in the staging database.
-	stagingPool types.StagingPool
+	stagingPool *types.StagingPool
 	// Destination for mutations.
-	targetPool types.TargetPool
+	targetPool *types.TargetPool
 
 	// This represents a position in the source's transaction log.
 	consistentPoint struct {

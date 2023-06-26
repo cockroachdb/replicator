@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -130,12 +129,28 @@ func (h *Handler) processMutations(
 	}
 
 	return retry.Retry(ctx, func(ctx context.Context) error {
-		var pool *pgxpool.Pool
 		if h.Config.Immediate {
-			pool = h.TargetPool.Pool
-		} else {
-			pool = h.StagingPool.Pool
+			tx, err := h.TargetPool.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+
+			// Stage or apply the per-target mutations.
+			for target, muts := range toProcess {
+				applier, err := h.Appliers.Get(ctx, target)
+				if err != nil {
+					return err
+				}
+				if err := applier.Apply(ctx, tx, muts); err != nil {
+					return err
+				}
+			}
+
+			return tx.Commit()
 		}
+
+		pool := h.StagingPool.Pool
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			return err
@@ -144,18 +159,8 @@ func (h *Handler) processMutations(
 
 		// Stage or apply the per-target mutations.
 		for target, muts := range toProcess {
-			if h.Config.Immediate {
-				applier, err := h.Appliers.Get(ctx, target)
-				if err != nil {
-					return err
-				}
-				if err := applier.Apply(ctx, tx, muts); err != nil {
-					return err
-				}
-			} else {
-				if err := stores[target].Store(ctx, tx, muts); err != nil {
-					return err
-				}
+			if err := stores[target].Store(ctx, tx, muts); err != nil {
+				return err
 			}
 		}
 

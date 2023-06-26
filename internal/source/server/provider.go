@@ -58,7 +58,7 @@ var Set = wire.NewSet(
 // authenticator, or a no-op authenticator if Config.DisableAuth has
 // been set.
 func ProvideAuthenticator(
-	ctx context.Context, pool types.StagingPool, config *Config, stagingDB ident.StagingDB,
+	ctx context.Context, pool *types.StagingPool, config *Config, stagingDB ident.StagingDB,
 ) (types.Authenticator, func(), error) {
 	if config.DisableAuth {
 		log.Info("authentication disabled, any caller may write to the target database")
@@ -84,8 +84,8 @@ func ProvideListener(config *Config) (net.Listener, func(), error) {
 func ProvideMux(
 	handler *cdc.Handler,
 	applyConf *applycfg.Configs,
-	stagingPool types.StagingPool,
-	targetPool types.TargetPool,
+	stagingPool *types.StagingPool,
+	targetPool *types.TargetPool,
 ) *http.ServeMux {
 	mux := &http.ServeMux{}
 	// The pprof handlers attach themselves to the system-default mux.
@@ -100,12 +100,10 @@ func ProvideMux(
 			http.Error(w, "health check failed for staging", http.StatusInternalServerError)
 			return
 		}
-		if stagingPool.Pool != targetPool.Pool {
-			if err := targetPool.Ping(r.Context()); err != nil {
-				log.WithError(err).Warn("health check failed for target pool")
-				http.Error(w, "health check failed for target", http.StatusInternalServerError)
-				return
-			}
+		if err := targetPool.PingContext(r.Context()); err != nil {
+			log.WithError(err).Warn("health check failed for target pool")
+			http.Error(w, "health check failed for target", http.StatusInternalServerError)
+			return
 		}
 		http.Error(w, "OK", http.StatusOK)
 	})
