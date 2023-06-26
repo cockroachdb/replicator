@@ -24,7 +24,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -40,21 +39,16 @@ func ProvideDialect(ctx context.Context, config *Config) (logical.Dialect, error
 	if err := config.Preflight(); err != nil {
 		return nil, err
 	}
-
-	cfg, err := stdpool.ParseConfig(config.SourceConn)
-	if err != nil {
-		return nil, err
-	}
-
 	// Verify that the publication and replication slots were configured
 	// by the user. We could create the replication slot ourselves, but
 	// we want to coordinate the timing of the backup, restore, and
 	// streaming operations.
-	source, err := pgx.ConnectConfig(ctx, cfg.ConnConfig)
+	source, cleanup, err := stdpool.OpenPgxAsConn(ctx, config.SourceConn)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not connect to source database")
 	}
-	defer source.Close(context.Background())
+	// We dial again when the logical loop asks us to run.
+	defer cleanup()
 
 	// Ensure that the requested publication exists.
 	var count int

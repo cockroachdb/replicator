@@ -35,7 +35,7 @@ import (
 // InsertTestingKey generates a new private key and updates the existing
 // Authenticator with the associated public key.
 func InsertTestingKey(
-	ctx context.Context, tx types.Querier, auth types.Authenticator, stagingDB ident.StagingDB,
+	ctx context.Context, tx types.StagingQuerier, auth types.Authenticator, stagingDB ident.StagingDB,
 ) (method jwt.SigningMethod, signer crypto.PrivateKey, err error) {
 	impl, ok := auth.(*authenticator)
 	if !ok {
@@ -60,7 +60,7 @@ func InsertTestingKey(
 
 // insertKey inserts a PEM-encoded key into the database.
 func insertKey(
-	ctx context.Context, tx types.Querier, stagingDB ident.Ident, pemBytes []byte,
+	ctx context.Context, tx types.StagingQuerier, stagingDB ident.Ident, pemBytes []byte,
 ) error {
 	keyTable := ident.NewTable(stagingDB, ident.Public, PublicKeysTable)
 	_, err := tx.Exec(ctx,
@@ -89,7 +89,7 @@ func makeKeyBytes() (jwt.SigningMethod, crypto.PrivateKey, []byte, error) {
 // Authenticator.
 func InsertRevokedToken(
 	ctx context.Context,
-	tx types.Querier,
+	tx types.StagingQuerier,
 	auth types.Authenticator,
 	stagingDB ident.StagingDB,
 	id string,

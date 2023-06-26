@@ -30,11 +30,10 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 	if err != nil {
 		return nil, nil, err
 	}
-	targetPool, cleanup, err := ProvideTargetPool(ctx, baseConfig)
+	stagingPool, cleanup, err := ProvideStagingPool(ctx, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingPool := ProvideStagingPool(targetPool)
 	stagingDB, err := ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
@@ -45,10 +44,17 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup3 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
+	targetPool, cleanup3, err := ProvideTargetPool(ctx, baseConfig)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup4 := schemawatch.ProvideFactory(targetPool)
+	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingDB)
 	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -58,15 +64,17 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 	targetSchema := ProvideUserScriptTarget(baseConfig)
 	userScript, err := script.ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
 	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup5 := ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
+	factory, cleanup6 := ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
 	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
 	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -75,6 +83,7 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		return nil, nil, err
 	}
 	return logicalLoop, func() {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()

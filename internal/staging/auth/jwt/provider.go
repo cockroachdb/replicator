@@ -38,7 +38,7 @@ var Set = wire.NewSet(ProvideAuth)
 // This provider will also start a background goroutine to look for
 // configuration changes in the database.
 func ProvideAuth(
-	ctx context.Context, db types.Querier, stagingDB ident.StagingDB,
+	ctx context.Context, db types.StagingQuerier, stagingDB ident.StagingDB,
 ) (auth types.Authenticator, cancel func(), err error) {
 	cancel = func() {}
 

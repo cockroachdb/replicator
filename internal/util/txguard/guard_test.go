@@ -36,7 +36,7 @@ func TestGuard(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	db := fixture.TargetPool
+	db := fixture.StagingPool
 
 	const testPeriod = 10 * time.Millisecond
 
@@ -61,7 +61,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "transaction not open")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(types.Querier) error { return nil }),
+			g.Use(func(types.StagingQuerier) error { return nil }),
 			"transaction not open")
 	})
 
@@ -86,7 +86,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "transaction not open")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(types.Querier) error { return nil }),
+			g.Use(func(types.StagingQuerier) error { return nil }),
 			"transaction not open")
 	})
 
@@ -104,7 +104,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "keepalive previously failed")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(types.Querier) error { return nil }),
+			g.Use(func(types.StagingQuerier) error { return nil }),
 			"keepalive previously failed")
 	})
 
@@ -119,7 +119,7 @@ func TestGuard(t *testing.T) {
 		a.NotNil(g.getTX())
 
 		// Do a bad thing and kill the network connection.
-		a.NoError(g.Use(func(tx types.Querier) error {
+		a.NoError(g.Use(func(tx types.StagingQuerier) error {
 			return tx.(pgx.Tx).Conn().Close(ctx)
 		}))
 
@@ -133,7 +133,7 @@ func TestGuard(t *testing.T) {
 		r.ErrorContains(g.Commit(ctx), "keepalive previously failed")
 		g.Rollback()
 		r.ErrorContains(
-			g.Use(func(types.Querier) error { return nil }),
+			g.Use(func(types.StagingQuerier) error { return nil }),
 			"keepalive previously failed")
 	})
 

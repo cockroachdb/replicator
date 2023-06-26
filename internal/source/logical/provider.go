@@ -18,13 +18,13 @@ package logical
 
 import (
 	"context"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 )
 
@@ -58,8 +58,8 @@ func ProvideFactory(
 	appliers types.Appliers,
 	config Config,
 	memo types.Memo,
-	stagingPool types.StagingPool,
-	targetPool types.TargetPool,
+	stagingPool *types.StagingPool,
+	targetPool *types.TargetPool,
 	watchers types.Watchers,
 	userscript *script.UserScript,
 ) (*Factory, func()) {
@@ -87,20 +87,43 @@ func ProvideStagingDB(config *BaseConfig) (ident.StagingDB, error) {
 	return ident.StagingDB(config.StagingDB), nil
 }
 
-// ProvideStagingPool temporarily re-exports the target pool as the
-// staging database pool.
-func ProvideStagingPool(pool types.TargetPool) types.StagingPool {
-	return types.StagingPool(pool)
+// ProvideStagingPool is called by Wire to create a connection pool that
+// accesses the staging cluster. The pool will be closed by the cancel
+// function.
+func ProvideStagingPool(
+	ctx context.Context, config *BaseConfig,
+) (*types.StagingPool, func(), error) {
+	options := []stdpool.Option{
+		stdpool.WithConnectionLifetime(5 * time.Minute),
+		stdpool.WithMetrics("staging"),
+		stdpool.WithPoolSize(128),
+		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
+	}
+
+	pool, cancel, err := stdpool.OpenPgxAsPool(ctx, config.StagingConn, options...)
+	ret := &types.StagingPool{
+		ConnectionString: pool.Config().ConnString(),
+		Pool:             pool,
+	}
+	if err != nil {
+		return ret, nil, err
+	}
+	if err := ret.QueryRow(ctx, "SELECT version()").Scan(&ret.Version); err != nil {
+		cancel()
+		return ret, nil, errors.WithStack(err)
+	}
+	return ret, cancel, nil
 }
 
 // ProvideTargetPool is called by Wire to create a connection pool that
 // accesses the target cluster. The pool will be closed by the cancel
 // function.
-func ProvideTargetPool(ctx context.Context, config *BaseConfig) (types.TargetPool, func(), error) {
-	// Bring up connection to target database.
-	targetCfg, err := stdpool.ParseConfig(config.TargetConn)
-	if err != nil {
-		return *new(types.TargetPool), nil, err
+func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPool, func(), error) {
+	options := []stdpool.Option{
+		stdpool.WithConnectionLifetime(5 * time.Minute),
+		stdpool.WithMetrics("target"),
+		stdpool.WithPoolSize(128),
+		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
 	}
 
 	// We want to force our longest transaction time to respect the
@@ -112,19 +135,21 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (types.TargetPoo
 		txTimeout = config.BackfillWindow
 	}
 	if txTimeout != 0 {
-		rp := targetCfg.ConnConfig.RuntimeParams
-		rp["idle_in_transaction_session_timeout"] = txTimeout.String()
+		options = append(options, stdpool.WithTransactionTimeout(txTimeout))
 	}
-
-	targetPool, err := pgxpool.NewWithConfig(ctx, targetCfg)
-	cancelMetrics := stdpool.PublishMetrics(targetPool)
-	return types.TargetPool{Pool: targetPool}, func() {
-		cancelMetrics()
-		// Pool.Close is a blocking call, so it can wind up delaying
-		// shutdown indefinitely. Execute it from a goroutine, so that
-		// any future calls to Acquire will fail.
-		go targetPool.Close()
-	}, errors.Wrap(err, "could not connect to CockroachDB")
+	pool, cancel, err := stdpool.OpenPgxAsDB(ctx, config.StagingConn, options...)
+	ret := &types.TargetPool{
+		ConnectionString: config.StagingConn,
+		DB:               pool,
+	}
+	if err != nil {
+		return ret, nil, err
+	}
+	if err := ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version); err != nil {
+		cancel()
+		return ret, nil, errors.WithStack(err)
+	}
+	return ret, cancel, nil
 }
 
 // ProvideUserScriptConfig is called by Wire to extract the user-script

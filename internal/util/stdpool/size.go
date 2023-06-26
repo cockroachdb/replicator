@@ -14,22 +14,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package schemawatch
+package stdpool
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/google/wire"
+	"context"
+	"database/sql"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideFactory,
-)
+// WithPoolSize sets the nominal size of the database pool.
+func WithPoolSize(size int) Option {
+	return &withPoolSize{size}
+}
 
-// ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *types.TargetPool) (types.Watchers, func()) {
-	w := &factory{pool: pool}
-	w.mu.data = make(map[ident.Ident]*watcher)
-	return w, w.close
+type withPoolSize struct {
+	size int
+}
+
+func (o *withPoolSize) option() {}
+func (o *withPoolSize) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) error {
+	cfg.MinConns = int32(o.size)
+	cfg.MaxConns = int32(o.size)
+	return nil
+}
+func (o *withPoolSize) sqlDB(_ context.Context, impl *sql.DB) error {
+	impl.SetMaxOpenConns(o.size)
+	impl.SetMaxIdleConns(o.size)
+	return nil
 }

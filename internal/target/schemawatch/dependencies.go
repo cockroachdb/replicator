@@ -85,14 +85,14 @@ ORDER BY 3, 1, 2
 // within the given database. The order of the slice will satisfy
 // the (acyclic) foreign-key dependency graph.
 func getDependencyOrder(
-	ctx context.Context, tx types.Querier, db ident.Ident,
+	ctx context.Context, tx *types.TargetPool, db ident.Ident,
 ) ([][]ident.Table, error) {
 	stmt := fmt.Sprintf(depOrderTemplate, db)
 
 	var cycles []ident.Table
 	var depOrder [][]ident.Table
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		rows, err := tx.Query(ctx, stmt)
+		rows, err := tx.QueryContext(ctx, stmt)
 		if err != nil {
 			return err
 		}

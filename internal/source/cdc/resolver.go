@@ -59,7 +59,7 @@ type resolver struct {
 	fastWakeup  chan struct{}
 	leases      types.Leases
 	loop        *logical.Loop // Reference to driving loop, for testing.
-	pool        types.StagingPool
+	pool        *types.StagingPool
 	retirements chan hlc.Time // Drives a goroutine to remove applied mutations.
 	stagers     types.Stagers
 	target      ident.Schema
@@ -83,7 +83,7 @@ func newResolver(
 	ctx context.Context,
 	cfg *Config,
 	leases types.Leases,
-	pool types.StagingPool,
+	pool *types.StagingPool,
 	metaTable ident.Table,
 	stagers types.Stagers,
 	target ident.Schema,
@@ -575,7 +575,7 @@ type Resolvers struct {
 	leases    types.Leases
 	noStart   bool // Set by test code to disable call to loop.Start()
 	metaTable ident.Table
-	pool      types.StagingPool
+	pool      *types.StagingPool
 	stagers   types.Stagers
 	watchers  types.Watchers
 
@@ -655,7 +655,7 @@ WHERE target_applied_at IS NULL
 // instance. This function is declared here to keep the sql queries in a
 // single file. It is exported to aid in testing.
 func ScanForTargetSchemas(
-	ctx context.Context, db types.Querier, metaTable ident.Table,
+	ctx context.Context, db types.StagingQuerier, metaTable ident.Table,
 ) ([]ident.Schema, error) {
 	rows, err := db.Query(ctx, fmt.Sprintf(scanForTargetTemplate, metaTable))
 	if err != nil {

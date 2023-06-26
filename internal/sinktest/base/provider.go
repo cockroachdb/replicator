@@ -30,15 +30,19 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
+var connString = flag.String("testConnect",
+	"postgresql://root@localhost:26257/defaultdb?sslmode=disable",
+	"the connection string to use for testing")
+
 // TestSet is used by wire.
 var TestSet = wire.NewSet(
 	ProvideContext,
-	ProvideDBInfo,
 	ProvideStagingDB,
 	ProvideStagingPool,
 	ProvideTargetPool,
@@ -51,12 +55,11 @@ var TestSet = wire.NewSet(
 // without the other services provided by the target package. One can be
 // constructed by calling NewFixture.
 type Fixture struct {
-	Context     context.Context   // The context for the test.
-	DBInfo      *DBInfo           // TODO(bob): Extract version elsewhere?
-	StagingPool types.StagingPool // Access to __cdc_sink database.
-	TargetPool  types.TargetPool  // Access to the destination. Same as StagingPool.
-	StagingDB   ident.StagingDB   // The _cdc_sink SQL DATABASE.
-	TestDB      TestDB            // A unique SQL DATABASE identifier.
+	Context     context.Context    // The context for the test.
+	StagingPool *types.StagingPool // Access to __cdc_sink database.
+	TargetPool  *types.TargetPool  // Access to the destination.
+	StagingDB   ident.StagingDB    // The _cdc_sink SQL DATABASE.
+	TestDB      TestDB             // A unique SQL DATABASE identifier.
 }
 
 // A global counter for allocating all temp tables in a test run. We
@@ -67,13 +70,15 @@ var tempTable int32
 // CreateTable creates a test table within the TestDB. The
 // schemaSpec parameter must have exactly one %s substitution parameter
 // for the database name and table name.
-func (f *Fixture) CreateTable(ctx context.Context, schemaSpec string) (TableInfo, error) {
+func (f *Fixture) CreateTable(
+	ctx context.Context, schemaSpec string,
+) (TableInfo[*types.TargetPool], error) {
 	tableNum := atomic.AddInt32(&tempTable, 1)
 	tableName := ident.New(fmt.Sprintf("_test_table_%d", tableNum))
 	table := ident.NewTable(f.TestDB.Ident(), ident.Public, tableName)
 
 	err := retry.Execute(ctx, f.TargetPool, fmt.Sprintf(schemaSpec, table))
-	return TableInfo{f.DBInfo, table}, errors.WithStack(err)
+	return TableInfo[*types.TargetPool]{f.TargetPool, table}, errors.WithStack(err)
 }
 
 var caseTimout = flag.Duration(
@@ -82,52 +87,111 @@ var caseTimout = flag.Duration(
 	"raise this value when debugging to allow individual tests to run longer",
 )
 
-// key is a typesafe context key used by Context().
-type key struct{}
-
 // ProvideContext returns an execution context that is associated with a
 // singleton connection to a CockroachDB cluster.
 func ProvideContext() (context.Context, func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), *caseTimout)
-	dbInfo, err := bootstrap(ctx)
-	if err != nil {
-		return nil, cancel, err
-	}
-	ctx = context.WithValue(ctx, key{}, dbInfo)
 	return ctx, cancel, nil
-}
-
-// ProvideDBInfo extracts the info from the given context.
-func ProvideDBInfo(ctx context.Context) (*DBInfo, error) {
-	info, ok := ctx.Value(key{}).(*DBInfo)
-	if !ok {
-		return nil, errors.New("enclosing context not created by ProvideContext")
-	}
-	return info, nil
 }
 
 // ProvideStagingDB create a globally-unique SQL database. The cancel
 // function will drop the database.
 func ProvideStagingDB(
-	ctx context.Context, pool types.StagingPool,
+	ctx context.Context, pool *types.StagingPool,
 ) (ident.StagingDB, func(), error) {
 	ret, cancel, err := CreateDatabase(ctx, pool, "_cdc_sink")
 	return ident.StagingDB(ret), cancel, err
 }
 
 // ProvideStagingPool exports the database connection.
-func ProvideStagingPool(db *DBInfo) types.StagingPool {
-	return types.StagingPool{Pool: db.Pool()}
+func ProvideStagingPool(ctx context.Context) (*types.StagingPool, func(), error) {
+	pool, cancel, err := stdpool.OpenPgxAsPool(ctx, *connString)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ret := &types.StagingPool{
+		ConnectionString: pool.Config().ConnString(),
+		Pool:             pool,
+	}
+
+	// Simplify error control flow below.
+	success := false
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
+
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		return ret.QueryRow(ctx, "SELECT version()").Scan(&ret.Version)
+	}); err != nil {
+		return nil, nil, errors.Wrap(err, "could not determine cluster version")
+	}
+
+	// Set the cluster settings once, if we need to.
+	var enabled bool
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		return pool.QueryRow(ctx, "SHOW CLUSTER SETTING kv.rangefeed.enabled").Scan(&enabled)
+	}); err != nil {
+		return nil, nil, errors.Wrap(err, "could not check cluster setting")
+	}
+	if !enabled {
+		if lic, ok := os.LookupEnv("COCKROACH_DEV_LICENSE"); ok {
+			if err := retry.Execute(ctx, ret,
+				"SET CLUSTER SETTING cluster.organization = $1",
+				"Cockroach Labs - Production Testing",
+			); err != nil {
+				return nil, nil, errors.Wrap(err, "could not set cluster.organization")
+			}
+			if err := retry.Execute(ctx, ret,
+				"SET CLUSTER SETTING enterprise.license = $1", lic,
+			); err != nil {
+				return nil, nil, errors.Wrap(err, "could not set enterprise.license")
+			}
+		}
+
+		if err := retry.Execute(ctx, ret,
+			"SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
+			return nil, nil, errors.Wrap(err, "could not enable rangefeeds")
+		}
+	}
+
+	success = true
+	return ret, cancel, nil
 }
 
-// ProvideTargetPool exports the database connection.
-func ProvideTargetPool(db *DBInfo) types.TargetPool {
-	return types.TargetPool{Pool: db.Pool()}
+// ProvideTargetPool connects to the target database (which is most
+// often the same as the staging database).
+func ProvideTargetPool(ctx context.Context) (*types.TargetPool, func(), error) {
+	pool, cancel, err := stdpool.OpenPgxAsDB(ctx, *connString)
+	if err != nil {
+		return nil, nil, err
+	}
+	ret := &types.TargetPool{
+		ConnectionString: *connString,
+		DB:               pool,
+	}
+	success := false
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
+
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		return ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version)
+	}); err != nil {
+		return nil, nil, errors.Wrap(err, "could not determine cluster version")
+	}
+
+	success = true
+	return ret, cancel, nil
 }
 
 // ProvideTestDB create a globally-unique SQL database. The cancel
 // function will drop the database.
-func ProvideTestDB(ctx context.Context, pool types.TargetPool) (TestDB, func(), error) {
+func ProvideTestDB(ctx context.Context, pool *types.TargetPool) (TestDB, func(), error) {
 	ret, cancel, err := CreateDatabase(ctx, pool, "_test_db")
 	return TestDB(ret), cancel, err
 }
@@ -137,8 +201,8 @@ var dbIdentCounter int32
 
 // CreateDatabase creates a SQL DATABASE with a unique name that will be
 // dropped when the cancel function is called.
-func CreateDatabase(
-	ctx context.Context, pool types.Querier, prefix string,
+func CreateDatabase[P types.AnyPool](
+	ctx context.Context, pool P, prefix string,
 ) (ident.Ident, func(), error) {
 	dbNum := atomic.AddInt32(&dbIdentCounter, 1)
 

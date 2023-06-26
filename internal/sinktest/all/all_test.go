@@ -14,22 +14,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package schemawatch
+package all
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/google/wire"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-// Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideFactory,
-)
+func TestAllSmoke(t *testing.T) {
+	r := require.New(t)
 
-// ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *types.TargetPool) (types.Watchers, func()) {
-	w := &factory{pool: pool}
-	w.mu.data = make(map[ident.Ident]*watcher)
-	return w, w.close
+	fixture, cleanup, err := NewFixture()
+	r.NoError(err)
+	defer cleanup()
+
+	r.NotEmpty(fixture.StagingPool.Version)
+	r.NotEmpty(fixture.TargetPool.Version)
 }

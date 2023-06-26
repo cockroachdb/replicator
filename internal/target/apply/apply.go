@@ -136,7 +136,7 @@ func newApply(
 }
 
 // Apply applies the mutations to the target table.
-func (a *apply) Apply(ctx context.Context, tx types.Querier, muts []types.Mutation) error {
+func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.Mutation) error {
 	start := time.Now()
 	deletes, r := batches.Mutation()
 	defer r()
@@ -195,7 +195,9 @@ func (a *apply) Apply(ctx context.Context, tx types.Querier, muts []types.Mutati
 	return nil
 }
 
-func (a *apply) deleteLocked(ctx context.Context, db types.Querier, muts []types.Mutation) error {
+func (a *apply) deleteLocked(
+	ctx context.Context, db types.TargetQuerier, muts []types.Mutation,
+) error {
 	if len(muts) == 0 {
 		return nil
 	}
@@ -232,21 +234,27 @@ func (a *apply) deleteLocked(ctx context.Context, db types.Querier, muts []types
 		}
 	}
 
-	tag, err := db.Exec(ctx, sql, allArgs...)
+	tag, err := db.ExecContext(ctx, sql, allArgs...)
 	if err != nil {
 		return errors.Wrap(err, sql)
 	}
+	affected, err := tag.RowsAffected()
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
-	a.deletes.Add(float64(tag.RowsAffected()))
+	a.deletes.Add(float64(affected))
 	log.WithFields(log.Fields{
-		"applied":  tag.RowsAffected(),
+		"applied":  affected,
 		"proposed": len(muts),
 		"target":   a.target,
 	}).Debug("deleted rows")
 	return nil
 }
 
-func (a *apply) upsertLocked(ctx context.Context, db types.Querier, muts []types.Mutation) error {
+func (a *apply) upsertLocked(
+	ctx context.Context, db types.TargetQuerier, muts []types.Mutation,
+) error {
 	if len(muts) == 0 {
 		return nil
 	}
@@ -381,14 +389,18 @@ func (a *apply) upsertLocked(ctx context.Context, db types.Querier, muts []types
 		}
 	}
 
-	tag, err := db.Exec(ctx, sql, allArgs...)
+	tag, err := db.ExecContext(ctx, sql, allArgs...)
 	if err != nil {
 		return errors.Wrap(err, sql)
 	}
+	affected, err := tag.RowsAffected()
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
-	a.upserts.Add(float64(tag.RowsAffected()))
+	a.upserts.Add(float64(affected))
 	log.WithFields(log.Fields{
-		"applied":  tag.RowsAffected(),
+		"applied":  affected,
 		"duration": time.Since(start),
 		"proposed": len(muts),
 		"target":   a.target,

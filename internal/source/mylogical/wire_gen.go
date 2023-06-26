@@ -33,11 +33,10 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	targetPool, cleanup, err := logical.ProvideTargetPool(ctx, baseConfig)
+	stagingPool, cleanup, err := logical.ProvideStagingPool(ctx, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingPool := logical.ProvideStagingPool(targetPool)
 	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
@@ -48,10 +47,17 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup3 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup4 := apply.ProvideFactory(configs, watchers)
+	targetPool, cleanup3, err := logical.ProvideTargetPool(ctx, baseConfig)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup4 := schemawatch.ProvideFactory(targetPool)
+	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingDB)
 	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -61,15 +67,17 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
 	userScript, err := script.ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
 	if err != nil {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup5 := logical.ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
+	factory, cleanup6 := logical.ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
 	dialect, err := ProvideDialect(config)
 	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -79,6 +87,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	}
 	loop, err := logical.ProvideLoop(ctx, factory, dialect)
 	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -87,6 +96,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		return nil, nil, err
 	}
 	return loop, func() {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()

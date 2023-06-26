@@ -33,11 +33,10 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	targetPool, cleanup, err := logical.ProvideTargetPool(context, baseConfig)
+	stagingPool, cleanup, err := logical.ProvideStagingPool(context, baseConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingPool := logical.ProvideStagingPool(targetPool)
 	stagingDB, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
@@ -56,6 +55,12 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		cleanup()
 		return nil, nil, err
 	}
+	targetPool, cleanup3, err := logical.ProvideTargetPool(context, baseConfig)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	handler := &Handler{
 		Appliers:      appliers,
 		Authenticator: authenticator,
@@ -71,6 +76,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
+		cleanup3()
 		cleanup2()
 		cleanup()
 	}, nil
