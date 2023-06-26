@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/reject"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	log "github.com/sirupsen/logrus"
@@ -38,24 +39,24 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo) {
+func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo[*types.TargetPool]) {
 	t.Helper()
 	r := require.New(t)
 	baseFixture, cancel, err := all.NewFixture()
-	t.Cleanup(cancel)
 	r.NoError(err)
+	t.Cleanup(cancel)
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
 			Immediate:  immediate,
 			LoopName:   "changefeed",
 			StagingDB:  baseFixture.StagingDB.Ident(),
-			TargetConn: baseFixture.TargetPool.Config().ConnString(),
+			TargetConn: baseFixture.TargetPool.ConnectionString,
 			TargetDB:   baseFixture.TestDB.Ident(),
 		},
 	})
-	t.Cleanup(cancel)
 	r.NoError(err)
+	t.Cleanup(cancel)
 
 	ctx := fixture.Context
 	tableInfo, err := fixture.CreateTable(ctx,
@@ -457,7 +458,7 @@ func testMassBackfillWithForeignKeys(
 				LoopName:           "changefeed",
 				StagingDB:          baseFixture.StagingDB.Ident(),
 				RetryDelay:         time.Nanosecond,
-				TargetConn:         baseFixture.TargetPool.Config().ConnString(),
+				TargetConn:         baseFixture.TargetPool.ConnectionString,
 				TargetDB:           baseFixture.TestDB.Ident(),
 			},
 		})

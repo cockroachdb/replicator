@@ -78,7 +78,7 @@ func TestPool(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	p := &Pool{Pool: fixture.TargetPool.Pool}
+	p := &Pool{Pool: fixture.StagingPool.Pool}
 
 	t.Run("begin commit rollback", func(t *testing.T) {
 		a := assert.New(t)

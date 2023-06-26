@@ -35,7 +35,7 @@ type fanWorkers struct {
 	appliers     types.Appliers
 	batchSize    int
 	pending      *latch.Counter
-	targetPool   types.TargetPool
+	targetPool   *types.TargetPool
 	stamp        stamp.Stamp
 	workerStatus func() error
 

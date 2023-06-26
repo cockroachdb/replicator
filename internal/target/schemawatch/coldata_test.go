@@ -172,7 +172,7 @@ func TestGetColumns(t *testing.T) {
 
 	// Virtual columns not supported before v21.1.
 	// Oldest target is v20.2.
-	if !strings.Contains(fixture.DBInfo.Version(), "v20.2.") {
+	if !strings.Contains(fixture.TargetPool.Version, "v20.2.") {
 		testcases = append(testcases,
 			testcase{
 				tableSchema: "a INT, b INT, " +
@@ -186,7 +186,7 @@ func TestGetColumns(t *testing.T) {
 	}
 
 	// Verify user-defined types with mixed-case name.
-	if _, err := fixture.TargetPool.Exec(ctx, fmt.Sprintf(
+	if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
 		fixture.TestDB.Ident()),
 	); !a.NoError(err) {
@@ -197,7 +197,16 @@ func TestGetColumns(t *testing.T) {
 		t.Run(fmt.Sprintf("%d:%s", i, test.tableSchema), func(t *testing.T) {
 			a := assert.New(t)
 
-			ti, err := fixture.CreateTable(ctx, fmt.Sprintf(`CREATE TABLE %%s ( %s )`, test.tableSchema))
+			cmd := fmt.Sprintf(`CREATE TABLE %%s ( %s )`, test.tableSchema)
+
+			// Hack to set session variable for hash-sharded indexes.
+			if strings.Contains(cmd, "USING HASH") &&
+				(strings.Contains(fixture.TargetPool.Version, "v20.") ||
+					strings.Contains(fixture.TargetPool.Version, "v21.")) {
+				cmd = "SET experimental_enable_hash_sharded_indexes='true';" + cmd
+			}
+
+			ti, err := fixture.CreateTable(ctx, cmd)
 			if !a.NoError(err) {
 				return
 			}

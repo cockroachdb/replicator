@@ -82,10 +82,12 @@ type BaseConfig struct {
 	ScriptConfig script.Config
 	// How often to commit the latest consistent point.
 	StandbyTimeout time.Duration
+	// Connection stsring for the staging cluster.
+	StagingConn string
 	// The name of a SQL database in the target cluster to store
 	// metadata in.
 	StagingDB ident.Ident
-	// Connection string for the target cluster.u
+	// Connection string for the target cluster.
 	TargetConn string
 	// The SQL database in the target cluster to write into.
 	TargetDB ident.Ident
@@ -123,7 +125,10 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"a SQL database to store metadata in")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
 		"how often to commit the consistent point")
-	f.StringVar(&c.TargetConn, "targetConn", "", "the target cluster's connection string")
+	f.StringVar(&c.StagingConn, "stagingConn", "",
+		"the staging cluster's connection string; inherits from targetConn if set")
+	f.StringVar(&c.TargetConn, "targetConn", "",
+		"the target cluster's connection string; inherits from stagingConn if set")
 	f.Var(ident.NewValue("", &c.TargetDB), "targetDB",
 		"the SQL database in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
@@ -171,8 +176,13 @@ func (c *BaseConfig) Preflight() error {
 	if c.StandbyTimeout == 0 {
 		c.StandbyTimeout = defaultStandbyTimeout
 	}
-	if c.TargetConn == "" {
-		return errors.New("no target connection string specified")
+	switch {
+	case c.TargetConn == "" && c.StagingConn == "":
+		return errors.New("at least one of stagingConn or targetConn must be set")
+	case c.TargetConn == "" && c.StagingConn != "":
+		c.TargetConn = c.StagingConn
+	case c.StagingConn == "" && c.TargetConn != "":
+		c.StagingConn = c.TargetConn
 	}
 	if c.TargetDB.IsEmpty() {
 		return errors.New("no target database specified")

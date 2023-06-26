@@ -22,6 +22,7 @@ package retry
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -38,9 +39,17 @@ func (m *Marker) Marked() bool { return bool(*m) }
 
 // Execute is a wrapper around Retry that can be used for sql
 // queries that don't have any return values.
-func Execute(ctx context.Context, db types.Querier, query string, args ...any) error {
+func Execute[P types.AnyPool](ctx context.Context, db P, query string, args ...any) error {
 	return Retry(ctx, func(ctx context.Context) error {
-		_, err := db.Exec(ctx, query, args...)
+		var err error
+		switch t := any(db).(type) {
+		case *types.StagingPool:
+			_, err = t.Exec(ctx, query, args...)
+		case *types.TargetPool:
+			_, err = t.ExecContext(ctx, query, args...)
+		default:
+			err = fmt.Errorf("unimplemented %T", t)
+		}
 		return err
 	})
 }

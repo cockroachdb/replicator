@@ -70,9 +70,9 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	r.NoError(err)
 	defer cancel()
 
-	supportsWebhook := supportsWebhook(sourceFixture.DBInfo)
+	supportsWebhook := supportsWebhook(sourceFixture.TargetPool.Version)
 	if webhook && !supportsWebhook {
-		t.Skipf("Webhook is not compatible with %s version of cockroach.", sourceFixture.DBInfo.Version())
+		t.Skipf("Webhook is not compatible with %s version of cockroach.", sourceFixture.TargetPool.Version)
 	}
 
 	ctx := sourceFixture.Context
@@ -93,7 +93,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 				LoopName:   "changefeed",
 				StagingDB:  destFixture.StagingDB.Ident(),
 				TargetDB:   destFixture.TestDB.Ident(),
-				TargetConn: destFixture.TargetPool.Config().ConnString(),
+				TargetConn: destFixture.TargetPool.ConnectionString,
 			},
 			MetaTableName: ident.New("resolved_timestamps"),
 		},
@@ -110,7 +110,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	// Since we're creating the target table without using the helper
 	// CreateTable(), we need to manually refresh the target's Watcher.
 	target := ident.NewTable(targetDB, ident.Public, source.Name().Table())
-	_, err = targetPool.Exec(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)", target))
+	_, err = targetPool.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)", target))
 	r.NoError(err)
 	watcher, err := targetFixture.Watcher.Get(ctx, targetDB)
 	r.NoError(err)
@@ -123,7 +123,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	a.Equal(1, ct)
 
 	// Allow access.
-	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetPool, targetFixture.Authenticator, targetFixture.StagingDB)
+	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetFixture.StagingPool, targetFixture.Authenticator, targetFixture.StagingDB)
 	r.NoError(err)
 
 	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.AsSchema()})
@@ -162,7 +162,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	}
 	// Don't wait the entire 30s. This options was introduced in the
 	// same versions as webhooks.
-	if supportsMinCheckpoint(sourceFixture.DBInfo) {
+	if supportsMinCheckpoint(sourceFixture.TargetPool.Version) {
 		createStmt += ",min_checkpoint_frequency='1s'"
 	}
 	log.Debugf("changefeed URL is %s", feedURL.String())
@@ -201,18 +201,18 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	log.WithField("metrics", metrics).Debug()
 }
 
-func supportsMinCheckpoint(dbInfo *base.DBInfo) bool {
-	if strings.Contains(dbInfo.Version(), "v20.") || strings.Contains(dbInfo.Version(), "v21.") {
+func supportsMinCheckpoint(version string) bool {
+	if strings.Contains(version, "v20.") || strings.Contains(version, "v21.") {
 		return false
 	}
 	return true
 }
 
-func supportsWebhook(dbInfo *base.DBInfo) bool {
+func supportsWebhook(version string) bool {
 	// In older versions of CRDB, the webhook endpoint is not available so no
 	// self signed certificate is needed. This acts as a signal as to wether the
 	// webhook endpoint is available.
-	if strings.Contains(dbInfo.Version(), "v20.2.") || strings.Contains(dbInfo.Version(), "v21.1.") {
+	if strings.Contains(version, "v20.2.") || strings.Contains(version, "v21.1.") {
 		return false
 	}
 	return true

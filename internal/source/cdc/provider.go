@@ -51,7 +51,7 @@ func ProvideResolvers(
 	cfg *Config,
 	leases types.Leases,
 	metaTable MetaTable,
-	pool types.StagingPool,
+	pool *types.StagingPool,
 	stagers types.Stagers,
 	watchers types.Watchers,
 ) (*Resolvers, func(), error) {

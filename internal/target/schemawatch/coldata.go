@@ -77,12 +77,14 @@ ORDER BY ordered.seq_in_index, cols.column_name
 // getColumns returns the column names for the primary key columns in
 // their index-order, followed by all other columns that should be
 // mutated.
-func getColumns(ctx context.Context, tx types.Querier, table ident.Table) ([]types.ColData, error) {
+func getColumns(
+	ctx context.Context, tx *types.TargetPool, table ident.Table,
+) ([]types.ColData, error) {
 	stmt := fmt.Sprintf(sqlColumnsQuery, table)
 
 	var columns []types.ColData
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		rows, err := tx.Query(ctx, stmt)
+		rows, err := tx.QueryContext(ctx, stmt)
 		if err != nil {
 			return err
 		}

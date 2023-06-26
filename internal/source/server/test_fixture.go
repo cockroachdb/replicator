@@ -37,7 +37,7 @@ type testFixture struct {
 	Authenticator types.Authenticator
 	Config        *Config
 	Listener      net.Listener
-	StagingPool   types.StagingPool
+	StagingPool   *types.StagingPool
 	Server        *Server
 	StagingDB     ident.StagingDB
 	Watcher       types.Watchers

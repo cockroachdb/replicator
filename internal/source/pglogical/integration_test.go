@@ -93,7 +93,7 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 		if _, err := pgPool.Exec(ctx, schema); !a.NoError(err) {
 			return
 		}
-		if _, err := crdbPool.Exec(ctx, schema); !a.NoError(err) {
+		if _, err := crdbPool.ExecContext(ctx, schema); !a.NoError(err) {
 			return
 		}
 	}
@@ -126,7 +126,7 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 			LoopName:     "pglogicaltest",
 			RetryDelay:   time.Nanosecond,
 			StagingDB:    fixture.StagingDB.Ident(),
-			TargetConn:   crdbPool.Config().ConnString(),
+			TargetConn:   crdbPool.ConnectionString,
 			TargetDB:     dbName,
 		},
 		Publication: dbName.Raw(),
@@ -145,7 +145,8 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 	for _, tgt := range tgts {
 		for {
 			var count int
-			if err := crdbPool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
+			if err := crdbPool.QueryRowContext(ctx,
+				fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
 				return
 			}
 			log.Trace("backfill count", count)
@@ -174,7 +175,7 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 	for _, tgt := range tgts {
 		for {
 			var count int
-			if err := crdbPool.QueryRow(ctx,
+			if err := crdbPool.QueryRowContext(ctx,
 				fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
 				return
 			}
@@ -204,7 +205,7 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 	for _, tgt := range tgts {
 		for {
 			var count int
-			if err := crdbPool.QueryRow(ctx,
+			if err := crdbPool.QueryRowContext(ctx,
 				fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
 				return
 			}
@@ -347,7 +348,7 @@ func TestDataTypes(t *testing.T) {
 			LoopName:   "pglogicaltest",
 			RetryDelay: time.Nanosecond,
 			StagingDB:  fixture.StagingDB.Ident(),
-			TargetConn: crdbPool.Config().ConnString(),
+			TargetConn: crdbPool.ConnectionString,
 			TargetDB:   dbName,
 		},
 		Publication: dbName.Raw(),

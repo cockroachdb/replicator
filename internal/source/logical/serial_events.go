@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 )
 
@@ -30,10 +29,10 @@ import (
 type serialEvents struct {
 	appliers   types.Appliers
 	loop       *loop
-	targetPool types.TargetPool
+	targetPool *types.TargetPool
 
-	stamp stamp.Stamp // the latest value passed to OnCommit.
-	tx    pgx.Tx      // db transaction created by OnCommit.
+	stamp stamp.Stamp    // the latest value passed to OnCommit.
+	tx    types.TargetTx // db transaction created by OnCommit.
 }
 
 var _ Events = (*serialEvents)(nil)
@@ -65,22 +64,27 @@ func (e *serialEvents) NotifyConsistentPoint(
 
 // OnBegin implements Events.
 func (e *serialEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
-	var err error
 	if e.tx != nil {
 		return errors.Errorf("OnBegin already called at %s", e.stamp)
 	}
 	e.stamp = point
-	e.tx, err = e.targetPool.Begin(ctx)
-	return errors.WithStack(err)
+
+	// Avoid storing TargetTx(nil) into struct field.
+	tx, err := e.targetPool.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	e.tx = tx
+	return nil
 }
 
 // OnCommit implements Events.
-func (e *serialEvents) OnCommit(ctx context.Context) error {
+func (e *serialEvents) OnCommit(_ context.Context) error {
 	if e.tx == nil {
 		return errors.New("OnCommit called without matching OnBegin")
 	}
 
-	err := e.tx.Commit(ctx)
+	err := e.tx.Commit()
 	e.tx = nil
 	if err != nil {
 		return errors.WithStack(err)
@@ -116,7 +120,7 @@ func (e *serialEvents) Stopping() <-chan struct{} {
 // drain implements Events.
 func (e *serialEvents) drain(_ context.Context) error {
 	if e.tx != nil {
-		_ = e.tx.Rollback(context.Background())
+		_ = e.tx.Rollback()
 	}
 	e.stamp = nil
 	e.tx = nil

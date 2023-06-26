@@ -16,16 +16,24 @@
 
 package base
 
-import "github.com/jackc/pgx/v5/pgxpool"
+import (
+	"testing"
 
-// DBInfo encapsulates metadata and a connection to a database.
-type DBInfo struct {
-	db      *pgxpool.Pool
-	version string
+	"github.com/stretchr/testify/require"
+)
+
+func TestBaseSmoke(t *testing.T) {
+	r := require.New(t)
+
+	fixture, cleanup, err := NewFixture()
+	r.NoError(err)
+	defer cleanup()
+
+	r.NotNil(fixture.StagingPool.Pool)
+	r.NotEmpty(fixture.StagingPool.ConnectionString)
+	r.NotEmpty(fixture.StagingPool.Version)
+
+	r.NotNil(fixture.TargetPool.DB)
+	r.NotEmpty(fixture.TargetPool.ConnectionString)
+	r.NotEmpty(fixture.TargetPool.Version)
 }
-
-// Pool returns the underlying database connection.
-func (di DBInfo) Pool() *pgxpool.Pool { return di.db }
-
-// Version returns the database version.
-func (di DBInfo) Version() string { return di.version }

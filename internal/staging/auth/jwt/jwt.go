@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS %s (
 
 // refresh will load PEM-encoded public keys from the database table
 // as well as a list of revoked JWT token ids.
-func (a *authenticator) refresh(ctx context.Context, tx types.Querier) error {
+func (a *authenticator) refresh(ctx context.Context, tx types.StagingQuerier) error {
 	var nextKeys []crypto.PublicKey
 	nextRevoked := make(map[string]struct{})
 
