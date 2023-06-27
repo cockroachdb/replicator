@@ -207,6 +207,44 @@ jobs:
             ${{ env.TEST_OUT }}
           retention-days: 7
 
+  # Aggregate the results of multiple jobs within this workflow into a
+  # single status object that we can use for branch protection.
+  #
+  # https://docs.github.com/en/rest/commits/statuses
+  status:
+    name: Create status objects
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    needs: # Update failure case below
+      - code-quality
+      - tests
+    if: ${{ always() }}
+    env:
+      CONTEXT: Workflow Golang
+      GH_TOKEN: ${{ github.token }}
+      MERGE_SHA: ${{ github.event.merge_group.head_sha }}
+      STATE: success
+    steps:
+      - name: Failure
+        if: ${{ needs.code-quality.result != 'success' ||  needs.tests.result != 'success' }}
+        run: echo "STATE=failure" >> $GITHUB_ENV
+      - name: Report
+        run: |
+          set -eo pipefail
+
+          gh api \
+             repos/${{ github.repository }}/statuses/${{ github.sha }} \
+             -f "state=$STATE" \
+             -f "context=$CONTEXT"
+
+          if [ ! -z "$MERGE_SHA" ]; then
+            gh api \
+              repos/${{ github.repository }}/statuses/$MERGE_SHA \
+              -f "state=$STATE" \
+              -f "context=$CONTEXT"
+          fi
+
   # This job downloads the test log files generated in the integration
   # job and summarizes them into the GitHub Actions UI.
   summarize-tests:
