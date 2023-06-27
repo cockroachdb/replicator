@@ -22,15 +22,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 on:
+  # Since we use the merge queue to push and there are no observable
+  # side-effects of running a test-only workflow, we don't respond to
+  # push events.
   merge_group: # Enable merge queue
-  push:
-    branches: [ master ]
-    tags: [ 'v*.*.*' ]
-    paths:
-      - 'go.mod'
-      - 'go.sum'
-      - '**/*.go'
-      - '.github/workflows/golang.yaml'
   pull_request:
     paths:
       - 'go.mod'
