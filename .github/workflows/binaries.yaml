@@ -172,6 +172,7 @@ jobs:
       CONTEXT: Workflow Binaries
       GH_TOKEN: ${{ github.token }}
       MERGE_SHA: ${{ github.event.merge_group.head_sha }}
+      PR_SHA: ${{ github.event.pull_request.head.sha }}
       STATE: success
     steps:
       - name: Failure
@@ -181,10 +182,12 @@ jobs:
         run: |
           set -eo pipefail
 
-          gh api \
-             repos/${{ github.repository }}/statuses/${{ github.sha }} \
-             -f "state=$STATE" \
-             -f "context=$CONTEXT"
+          if [ ! -z "$PR_SHA" ]; then
+            gh api \
+               repos/${{ github.repository }}/statuses/$PR_SHA \
+               -f "state=$STATE" \
+               -f "context=$CONTEXT"
+          fi
           
           if [ ! -z "$MERGE_SHA" ]; then
             gh api \
