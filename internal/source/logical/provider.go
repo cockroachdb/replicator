@@ -93,26 +93,13 @@ func ProvideStagingDB(config *BaseConfig) (ident.StagingDB, error) {
 func ProvideStagingPool(
 	ctx context.Context, config *BaseConfig,
 ) (*types.StagingPool, func(), error) {
-	options := []stdpool.Option{
-		stdpool.WithConnectionLifetime(5 * time.Minute),
+	return stdpool.OpenPgxAsStaging(ctx,
+		config.StagingConn,
+		stdpool.WithConnectionLifetime(5*time.Minute),
 		stdpool.WithMetrics("staging"),
 		stdpool.WithPoolSize(128),
 		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
-	}
-
-	pool, cancel, err := stdpool.OpenPgxAsPool(ctx, config.StagingConn, options...)
-	ret := &types.StagingPool{
-		ConnectionString: pool.Config().ConnString(),
-		Pool:             pool,
-	}
-	if err != nil {
-		return ret, nil, err
-	}
-	if err := ret.QueryRow(ctx, "SELECT version()").Scan(&ret.Version); err != nil {
-		cancel()
-		return ret, nil, errors.WithStack(err)
-	}
-	return ret, cancel, nil
+	)
 }
 
 // ProvideTargetPool is called by Wire to create a connection pool that
@@ -137,19 +124,12 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPo
 	if txTimeout != 0 {
 		options = append(options, stdpool.WithTransactionTimeout(txTimeout))
 	}
-	pool, cancel, err := stdpool.OpenPgxAsDB(ctx, config.StagingConn, options...)
-	ret := &types.TargetPool{
-		ConnectionString: config.StagingConn,
-		DB:               pool,
-	}
-	if err != nil {
-		return ret, nil, err
-	}
-	if err := ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version); err != nil {
+	ret, cancel, err := stdpool.OpenTarget(ctx, config.StagingConn, options...)
+	if ret.Product != types.ProductCockroachDB {
 		cancel()
-		return ret, nil, errors.WithStack(err)
+		return nil, nil, errors.Errorf("only CockroachDB is a supported target at this time; have %s", ret.Product)
 	}
-	return ret, cancel, nil
+	return ret, cancel, err
 }
 
 // ProvideUserScriptConfig is called by Wire to extract the user-script

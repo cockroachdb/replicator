@@ -20,8 +20,11 @@ package stdpool
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -46,12 +49,12 @@ func OpenPgxAsConn(
 		})
 }
 
-// OpenPgxAsPool uses pgx to open a database connection, returning it as
-// a pool.
-func OpenPgxAsPool(
+// OpenPgxAsStaging uses pgx to open a database connection, returning it as
+// a [types.StagingPool].
+func OpenPgxAsStaging(
 	ctx context.Context, connectString string, options ...Option,
-) (*pgxpool.Pool, func(), error) {
-	return openPgx(ctx, connectString, options,
+) (*types.StagingPool, func(), error) {
+	db, cancel, err := openPgx(ctx, connectString, options,
 		func(ctx *stopper.Context, cfg *pgxpool.Config) (*pgxpool.Pool, func() error, error) {
 			impl, err := pgxpool.NewWithConfig(ctx, cfg)
 			if err != nil {
@@ -60,23 +63,85 @@ func OpenPgxAsPool(
 			closeDB := func() error { impl.Close(); return nil }
 			return impl, closeDB, nil
 		})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
+
+	ret := &types.StagingPool{
+		Pool:             db,
+		ConnectionString: connectString,
+		Product:          types.ProductCockroachDB,
+	}
+
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		return ret.QueryRow(ctx, "SELECT version()").Scan(&ret.Version)
+	}); err != nil {
+		return nil, nil, errors.Wrap(err, "could not determine cluster version")
+	}
+
+	if !strings.HasPrefix(ret.Version, "CockroachDB") {
+		return nil, nil, errors.Errorf("only CockroachDB is supported as a staging server; saw %q", ret.Version)
+	}
+
+	success = true
+	return ret, cancel, err
 }
 
-// OpenPgxAsDB uses pgx to open a database connection, returning it as a
+// OpenPgxAsTarget uses pgx to open a database connection, returning it as a
 // stdlib pool.
-func OpenPgxAsDB(
+func OpenPgxAsTarget(
 	ctx context.Context, connectString string, options ...Option,
-) (*sql.DB, func(), error) {
-	return openPgx(ctx, connectString, options,
+) (*types.TargetPool, func(), error) {
+	db, cancel, err := openPgx(ctx, connectString, options,
 		func(ctx *stopper.Context, cfg *pgxpool.Config) (*sql.DB, func() error, error) {
 			impl := stdlib.OpenDB(*cfg.ConnConfig)
 			closeDB := impl.Close
 			return impl, closeDB, nil
 		})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
+
+	ret := &types.TargetPool{
+		ConnectionString: connectString,
+		DB:               db,
+	}
+
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		return ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version)
+	}); err != nil {
+		return nil, nil, errors.Wrap(err, "could not determine cluster version")
+	}
+
+	switch {
+	case strings.HasPrefix(ret.Version, "CockroachDB"):
+		ret.Product = types.ProductCockroachDB
+	case strings.HasPrefix(ret.Version, "PostgreSQL"):
+		ret.Product = types.ProductPostgreSQL
+	default:
+		return nil, nil, errors.Errorf("unknown product for version: %s", ret.Version)
+	}
+
+	success = true
+	return ret, cancel, nil
 }
 
 // openPgx contains the bulk of the behaviors for the various OpenPgx functions.
-func openPgx[P any](
+func openPgx[P attachable](
 	ctx context.Context,
 	connectString string,
 	options []Option,

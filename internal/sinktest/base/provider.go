@@ -36,9 +36,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var connString = flag.String("testConnect",
-	"postgresql://root@localhost:26257/defaultdb?sslmode=disable",
-	"the connection string to use for testing")
+var (
+	connString = flag.String("testConnect",
+		"postgresql://root@localhost:26257/defaultdb?sslmode=disable",
+		"the connection string to use for testing")
+
+	targetString = flag.String("testTarget", "", "use an alternate connection string for the target database")
+)
 
 // TestSet is used by wire.
 var TestSet = wire.NewSet(
@@ -103,19 +107,16 @@ func ProvideStagingDB(
 	return ident.StagingDB(ret), cancel, err
 }
 
-// ProvideStagingPool exports the database connection.
+// ProvideStagingPool opens a connection to the CockroachDB staging
+// cluster under test. This function will also configure the rangefeed
+// and license cluster settings if they have not been previously
+// configured.
 func ProvideStagingPool(ctx context.Context) (*types.StagingPool, func(), error) {
-	pool, cancel, err := stdpool.OpenPgxAsPool(ctx, *connString)
+	ret, cancel, err := stdpool.OpenPgxAsStaging(ctx, *connString)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	ret := &types.StagingPool{
-		ConnectionString: pool.Config().ConnString(),
-		Pool:             pool,
-	}
-
-	// Simplify error control flow below.
 	success := false
 	defer func() {
 		if !success {
@@ -123,16 +124,10 @@ func ProvideStagingPool(ctx context.Context) (*types.StagingPool, func(), error)
 		}
 	}()
 
-	if err := retry.Retry(ctx, func(ctx context.Context) error {
-		return ret.QueryRow(ctx, "SELECT version()").Scan(&ret.Version)
-	}); err != nil {
-		return nil, nil, errors.Wrap(err, "could not determine cluster version")
-	}
-
 	// Set the cluster settings once, if we need to.
 	var enabled bool
 	if err := retry.Retry(ctx, func(ctx context.Context) error {
-		return pool.QueryRow(ctx, "SHOW CLUSTER SETTING kv.rangefeed.enabled").Scan(&enabled)
+		return ret.QueryRow(ctx, "SHOW CLUSTER SETTING kv.rangefeed.enabled").Scan(&enabled)
 	}); err != nil {
 		return nil, nil, errors.Wrap(err, "could not check cluster setting")
 	}
@@ -164,36 +159,31 @@ func ProvideStagingPool(ctx context.Context) (*types.StagingPool, func(), error)
 // ProvideTargetPool connects to the target database (which is most
 // often the same as the staging database).
 func ProvideTargetPool(ctx context.Context) (*types.TargetPool, func(), error) {
-	pool, cancel, err := stdpool.OpenPgxAsDB(ctx, *connString)
-	if err != nil {
-		return nil, nil, err
+	target := *targetString
+	if target == "" {
+		target = *connString
 	}
-	ret := &types.TargetPool{
-		ConnectionString: *connString,
-		DB:               pool,
-	}
-	success := false
-	defer func() {
-		if !success {
-			cancel()
-		}
-	}()
-
-	if err := retry.Retry(ctx, func(ctx context.Context) error {
-		return ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version)
-	}); err != nil {
-		return nil, nil, errors.Wrap(err, "could not determine cluster version")
-	}
-
-	success = true
-	return ret, cancel, nil
+	return stdpool.OpenTarget(ctx, target)
 }
 
 // ProvideTestDB create a globally-unique SQL database. The cancel
 // function will drop the database.
 func ProvideTestDB(ctx context.Context, pool *types.TargetPool) (TestDB, func(), error) {
-	ret, cancel, err := CreateDatabase(ctx, pool, "_test_db")
-	return TestDB(ret), cancel, err
+	switch pool.Product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		ret, cancel, err := CreateDatabase(ctx, pool, "_test_db")
+		return TestDB(ret), cancel, err
+	case types.ProductOracle:
+		// We aren't able to create new database objects in Oracle XE,
+		// so return whatever we're connected to.
+		var name string
+		if err := pool.QueryRowContext(ctx, "SELECT ora_database_name FROM dual").Scan(&name); err != nil {
+			return *new(TestDB), nil, errors.WithStack(err)
+		}
+		return TestDB(ident.New(name)), func() {}, nil
+	default:
+		return *new(TestDB), nil, errors.Errorf("cannot create test db for %s", pool.Product)
+	}
 }
 
 // Ensure unique database identifiers within a test run.
