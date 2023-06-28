@@ -216,6 +216,20 @@ type SchemaData struct {
 	Order [][]ident.Table
 }
 
+// Product is an enum type to make it easy to switch on the underlying
+// database.
+type Product int
+
+//go:generate go run golang.org/x/tools/cmd/stringer -type=Product -trimprefix Product
+
+// These are various product types that we support.
+const (
+	ProductUnknown Product = iota
+	ProductCockroachDB
+	ProductOracle
+	ProductPostgreSQL
+)
+
 // AnyPool is a generic type constraint for any database pool type
 // that we support.
 type AnyPool interface {
@@ -243,6 +257,7 @@ var (
 type StagingPool struct {
 	*pgxpool.Pool
 	ConnectionString string
+	Product          Product
 	Version          string
 	_                noCopy
 }
@@ -251,6 +266,7 @@ type StagingPool struct {
 type TargetPool struct {
 	*sql.DB
 	ConnectionString string
+	Product          Product
 	Version          string
 	_                noCopy
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
+	ora "github.com/sijms/go-ora/v2"
 )
 
 // Option abstracts over driver-specific configuration.
@@ -33,6 +34,15 @@ type Option interface {
 // These types are capability interfaces to receive objects that can be
 // configured.
 type (
+	// attachable are all types on which attachOptions can operate.
+	attachable interface {
+		*ora.OracleConnector | *pgx.Conn | *pgxpool.Config | *pgxpool.Pool | *sql.DB
+	}
+
+	oraConnector interface {
+		oraConnector(ctx context.Context, conn *ora.OracleConnector) error
+	}
+
 	pgxConnOption interface {
 		pgxConn(ctx context.Context, conn *pgx.Conn) error
 	}
@@ -52,11 +62,20 @@ type (
 
 // attachOptions loops over the provided options to compose their
 // functionality.
-func attachOptions(ctx context.Context, target any, options []Option) error {
+func attachOptions[T attachable](ctx context.Context, target T, options []Option) error {
 	// Prepend reasonable defaults.
 	options = append([]Option{&withConnectionLifetime{}}, options...)
 
-	switch t := target.(type) {
+	switch t := any(target).(type) {
+	case *ora.OracleConnector:
+		for _, option := range options {
+			if x, ok := option.(oraConnector); ok {
+				if err := x.oraConnector(ctx, t); err != nil {
+					return err
+				}
+			}
+		}
+
 	case *pgx.Conn:
 		for _, option := range options {
 			if x, ok := option.(pgxConnOption); ok {

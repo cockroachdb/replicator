@@ -80,6 +80,22 @@ services:
       --binlog-row-metadata=full
     ports:
       - "3306:3306"
+  oracle-v18.4:
+    image: container-registry.oracle.com/database/express:18.4.0-xe
+    platform: linux/x86_64
+    environment:
+      ORACLE_PWD: SoupOrSecret
+    ports:
+      - "1521:1521"
+      - "5500:5500"
+  oracle-v21.3:
+    image: container-registry.oracle.com/database/express:21.3.0-xe
+    platform: linux/x86_64
+    environment:
+      ORACLE_PWD: SoupOrSecret
+    ports:
+      - "1521:1521"
+      - "5500:5500"
   postgresql-v11:
     image: postgres:11
     environment:
