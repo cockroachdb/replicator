@@ -86,14 +86,14 @@ type BaseConfig struct {
 	StagingConn string
 	// The name of a SQL database in the target cluster to store
 	// metadata in.
-	StagingDB ident.Ident
+	StagingDB ident.Schema
 	// Connection string for the target cluster.
 	TargetConn string
-	// The SQL database in the target cluster to write into.
-	TargetDB ident.Ident
 	// The number of connections to the target database. If zero, a
 	// default value will be used.
 	TargetDBConns int
+	// The SQL schema in the target cluster to write into.
+	TargetSchema ident.Schema
 }
 
 // Base returns the BaseConfig.
@@ -121,16 +121,17 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"re-order updates to satisfy foreign key constraints")
 	f.DurationVar(&c.RetryDelay, "retryDelay", defaultRetryDelay,
 		"the amount of time to sleep between replication retries")
-	f.Var(ident.NewValue("_cdc_sink", &c.StagingDB), "stagingDB",
-		"a SQL database to store metadata in")
+	c.StagingDB = ident.MustSchema(ident.New("_cdc_sink"))
+	f.Var(ident.NewSchemaFlag(&c.StagingDB), "stagingDB",
+		"a SQL database schema to store metadata in")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
 		"how often to commit the consistent point")
 	f.StringVar(&c.StagingConn, "stagingConn", "",
 		"the staging CockroachDB cluster's connection string; required if target is other than CRDB")
 	f.StringVar(&c.TargetConn, "targetConn", "",
 		"the target database's connection string; always required")
-	f.Var(ident.NewValue("", &c.TargetDB), "targetDB",
-		"the SQL database in the target cluster to update")
+	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetDB",
+		"the SQL database schema in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
 		"the maximum pool size to the target cluster")
 }
@@ -170,7 +171,7 @@ func (c *BaseConfig) Preflight() error {
 	if c.RetryDelay == 0 {
 		c.RetryDelay = defaultRetryDelay
 	}
-	if c.StagingDB.IsEmpty() {
+	if c.StagingDB.Empty() {
 		return errors.New("no staging database specified")
 	}
 	if c.StandbyTimeout == 0 {
@@ -182,7 +183,7 @@ func (c *BaseConfig) Preflight() error {
 	if c.TargetConn == "" {
 		return errors.New("targetConn must be set")
 	}
-	if c.TargetDB.IsEmpty() {
+	if c.TargetSchema.Empty() {
 		return errors.New("no target database specified")
 	}
 	if c.TargetDBConns == 0 {

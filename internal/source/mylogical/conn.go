@@ -290,8 +290,8 @@ func (c *conn) onDataTuple(
 	if !ok {
 		return errors.Errorf("unknown relation id %d", tuple.TableID)
 	}
-	if tbl.Database() != events.GetTargetDB() {
-		log.Tracef("Skipping update on %s", tbl.Database())
+	if !events.GetTargetDB().Contains(tbl) {
+		log.Tracef("Skipping update on %s because it is not in the target schema", tbl)
 		return nil
 	}
 	targetCols, ok := c.columns[tbl]
@@ -356,8 +356,7 @@ func (c *conn) onDataTuple(
 // set global binlog_row_metadata = full;
 func (c *conn) onRelation(msg *replication.TableMapEvent) error {
 	tbl := ident.NewTable(
-		ident.New(string(msg.Schema)),
-		ident.Public,
+		ident.MustSchema(ident.New(string(msg.Schema)), ident.Public),
 		ident.New(string(msg.Table)))
 	log.Tracef("Learned %+v", tbl)
 	c.relations[msg.TableID] = tbl

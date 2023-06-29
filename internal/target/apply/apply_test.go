@@ -825,12 +825,12 @@ func TestUTDEnum(t *testing.T) {
 
 	_, err = fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
-		fixture.TestDB.Ident()))
+		fixture.TestDB.Schema()))
 	r.NoError(err)
 
 	tbl, err := fixture.CreateTable(ctx,
 		fmt.Sprintf(`CREATE TABLE %%s (pk INT PRIMARY KEY, val %s."MyEnum")`,
-			fixture.TestDB.Ident()))
+			fixture.TestDB.Schema()))
 	r.NoError(err)
 
 	app, err := fixture.Appliers.Get(ctx, tbl.Name())

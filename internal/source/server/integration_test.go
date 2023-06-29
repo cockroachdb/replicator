@@ -19,7 +19,6 @@ package server
 import (
 	"fmt"
 	"net/url"
-	"path"
 	"strings"
 	"testing"
 	"time"
@@ -82,18 +81,18 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	r.NoError(err)
 	defer cancel()
 
-	targetDB := destFixture.TestDB.Ident()
+	targetDB := destFixture.TestDB.Schema()
 	targetPool := destFixture.TargetPool
 
 	// The target fixture contains the cdc-sink server.
 	targetFixture, cancel, err := newTestFixture(ctx, &Config{
 		CDC: cdc.Config{
 			BaseConfig: logical.BaseConfig{
-				Immediate:  immediate,
-				LoopName:   "changefeed",
-				StagingDB:  destFixture.StagingDB.Ident(),
-				TargetDB:   destFixture.TestDB.Ident(),
-				TargetConn: destFixture.TargetPool.ConnectionString,
+				Immediate:    immediate,
+				LoopName:     "changefeed",
+				StagingDB:    destFixture.StagingDB.Schema(),
+				TargetSchema: destFixture.TestDB.Schema(),
+				TargetConn:   destFixture.TargetPool.ConnectionString,
 			},
 			MetaTableName: ident.New("resolved_timestamps"),
 		},
@@ -109,7 +108,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 
 	// Since we're creating the target table without using the helper
 	// CreateTable(), we need to manually refresh the target's Watcher.
-	target := ident.NewTable(targetDB, ident.Public, source.Name().Table())
+	target := ident.NewTable(targetDB, source.Name().Table())
 	_, err = targetPool.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)", target))
 	r.NoError(err)
 	watcher, err := targetFixture.Watcher.Get(ctx, targetDB)
@@ -126,7 +125,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetFixture.StagingPool, targetFixture.Authenticator, targetFixture.StagingDB)
 	r.NoError(err)
 
-	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.AsSchema()})
+	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.Schema()})
 	r.NoError(err)
 
 	params := make(url.Values)
@@ -138,7 +137,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 		feedURL = url.URL{
 			Scheme:   "webhook-https",
 			Host:     targetFixture.Listener.Addr().String(),
-			Path:     path.Join(target.Database().Raw(), target.Schema().Raw()),
+			Path:     ident.Join(target.Schema(), true /* raw */, '/'),
 			RawQuery: params.Encode(),
 		}
 		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
@@ -153,7 +152,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 		feedURL = url.URL{
 			Scheme:   "experimental-http",
 			Host:     targetFixture.Listener.Addr().String(),
-			Path:     path.Join(target.Database().Raw(), target.Schema().Raw()),
+			Path:     ident.Join(target.Schema(), true /* raw */, '/'),
 			RawQuery: params.Encode(),
 		}
 		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +

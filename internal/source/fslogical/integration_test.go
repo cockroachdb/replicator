@@ -61,7 +61,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 
 	ctx := fixture.Context
 	// Mangle our DB ident into something the emulator will accept.
-	projectID := strings.ReplaceAll(fixture.TestDB.Ident().Raw(), "_", "")
+	projectID := strings.NewReplacer("_", "", ".", "").Replace(fixture.TestDB.Schema().Raw())
 
 	// Create the target schema.
 	destTable, err := fixture.CreateTable(ctx,
@@ -136,9 +136,9 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			LoopName:           "fslogicaltest",
 			RetryDelay:         time.Nanosecond,
 			StandbyTimeout:     10 * time.Millisecond,
-			StagingDB:          fixture.StagingDB.Ident(),
+			StagingDB:          fixture.StagingDB.Schema(),
 			TargetConn:         fixture.TargetPool.ConnectionString,
-			TargetDB:           fixture.TestDB.Ident(),
+			TargetSchema:       fixture.TestDB.Schema(),
 
 			ScriptConfig: script.Config{
 				MainPath: "/main.ts",

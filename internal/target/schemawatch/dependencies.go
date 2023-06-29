@@ -59,7 +59,7 @@ WITH RECURSIVE
  refs AS (
    SELECT
     constraint_schema AS child_sch, table_name AS child_tbl, referenced_table_name AS parent_tbl
-   FROM %[1]s.information_schema.referential_constraints
+   FROM %[2]s.information_schema.referential_constraints
    WHERE table_name != referenced_table_name
  ),
  roots AS (
@@ -85,16 +85,17 @@ ORDER BY 3, 1, 2
 // within the given database. The order of the slice will satisfy
 // the (acyclic) foreign-key dependency graph.
 func getDependencyOrder(
-	ctx context.Context, tx *types.TargetPool, db ident.Ident,
+	ctx context.Context, tx *types.TargetPool, db ident.Schema,
 ) ([][]ident.Table, error) {
-	stmt := fmt.Sprintf(depOrderTemplate, db)
+	// Extract just the database name to refer to information_schema.
+	stmt := fmt.Sprintf(depOrderTemplate, db, db.Idents(nil)[0])
 
 	var cycles []ident.Table
 	var depOrder [][]ident.Table
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		rows, err := tx.QueryContext(ctx, stmt)
 		if err != nil {
-			return err
+			return errors.Wrap(err, stmt)
 		}
 		defer rows.Close()
 
@@ -107,7 +108,7 @@ func getDependencyOrder(
 				return err
 			}
 
-			tbl := ident.NewTable(db, ident.New(schemaName), ident.New(tableName))
+			tbl := ident.NewTable(db, ident.New(tableName))
 
 			// Table has no well-defined ordering.
 			if nextOrder < 0 {

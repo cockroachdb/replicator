@@ -135,10 +135,18 @@ func getColumns(
 				column.Type = parts[0].Raw()
 			case 2:
 				// UDT for CRDB <= 22.1 only includes schema and name.
-				column.Type = ident.NewUDT(table.Database(), parts[0], parts[1])
+				relSchema, _, err := table.Schema().Relative(parts[0])
+				if err != nil {
+					return err
+				}
+				column.Type = ident.NewUDT(relSchema, parts[1])
 			case 3:
 				// Fully-qualified UDT.
-				column.Type = ident.NewUDT(parts[0], parts[1], parts[2])
+				relSchema, _, err := table.Schema().Relative(parts[0], parts[1])
+				if err != nil {
+					return err
+				}
+				column.Type = ident.NewUDT(relSchema, parts[2])
 			default:
 				return errors.Errorf("unexpected type name %q", rawColType)
 			}

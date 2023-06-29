@@ -14,25 +14,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package stage
+package ident
 
-import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/google/wire"
-)
+// StagingDB is a type alias for the name of the "_cdc_sink" database.
+// It serves as an injection point for uniquely naming the staging
+// database in test cases.
+type StagingDB Schema
 
-// Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideFactory,
-)
-
-// ProvideFactory is called by Wire to construct the Stagers factory.
-func ProvideFactory(db *types.StagingPool, stagingDB ident.StagingDB) types.Stagers {
-	f := &factory{
-		db:        db,
-		stagingDB: stagingDB.Schema(),
-	}
-	f.mu.instances = make(map[ident.Table]*stage)
-	return f
-}
+// Schema returns the underying database identifier.
+func (s StagingDB) Schema() Schema { return Schema(s) }

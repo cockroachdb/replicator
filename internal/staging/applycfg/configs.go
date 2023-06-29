@@ -87,7 +87,6 @@ func (c *Configs) GetAll() map[ident.Table]*Config {
 const (
 	confSchema = `
 CREATE TABLE IF NOT EXISTS %[1]s (
-  target_db     STRING CHECK ( length(target_db) > 0 ),
   target_schema STRING CHECK ( length(target_schema) > 0 ),
   target_table  STRING CHECK ( length(target_table) > 0 ),
   target_column STRING CHECK ( length(target_column) > 0 ),
@@ -99,20 +98,20 @@ CREATE TABLE IF NOT EXISTS %[1]s (
   ignore    BOOL       NOT NULL DEFAULT false,
   src_name  STRING     NOT NULL DEFAULT '',
 
-  PRIMARY KEY (target_db, target_schema, target_table, target_column)
+  PRIMARY KEY (target_schema, target_table, target_column)
 )
 `
 	deleteConfTemplate = `
-DELETE FROM %[1]s WHERE target_db = $1 AND target_schema = $2 AND target_table = $3`
+DELETE FROM %[1]s WHERE target_schema = $1 AND target_table = $2`
 	loadConfTemplate = `
-SELECT target_db, target_schema, target_table, target_column,
+SELECT target_schema, target_table, target_column,
        cas_order, deadline, expr, extras, ignore, src_name
 FROM %[1]s`
 	upsertConfTemplate = `
-UPSERT INTO %[1]s (target_db, target_schema, target_table, target_column,
+UPSERT INTO %[1]s (target_schema, target_table, target_column,
   cas_order, deadline, expr, extras, ignore, src_name)
 VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+  $1, $2, $3, $4, $5, $6, $7, $8, $9
 )`
 )
 
@@ -134,7 +133,7 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 	nextConfigs := make(map[ident.Table]*tempConfig)
 
 	for rows.Next() {
-		var targetDB, targetSchema, targetTable, targetColumn string
+		var targetSchema, targetTable, targetColumn string
 		var cas int // 1-based index; 0 == regular column
 		var deadline time.Duration
 		var expr string
@@ -143,14 +142,18 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 		var rename string
 
 		err := rows.Scan(
-			&targetDB, &targetSchema, &targetTable, &targetColumn,
+			&targetSchema, &targetTable, &targetColumn,
 			&cas, &deadline, &expr, &extras, &ignore, &rename)
 		if err != nil {
 			return false, errors.WithStack(err)
 		}
 
-		targetTableIdent := ident.NewTable(
-			ident.New(targetDB), ident.New(targetSchema), ident.New(targetTable))
+		sch, err := ident.ParseSchema(targetSchema)
+		if err != nil {
+			return false, err
+		}
+
+		targetTableIdent := ident.NewTable(sch, ident.New(targetTable))
 		targetColIdent := ident.New(targetColumn)
 
 		tableData, found := nextConfigs[targetTableIdent]
@@ -170,7 +173,7 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 			tableData.Exprs[targetColIdent] = expr
 		}
 		if extras {
-			if !tableData.Extras.IsEmpty() {
+			if !tableData.Extras.Empty() {
 				return false, errors.Errorf(
 					"column %s already configured as extras column",
 					tableData.Extras)
@@ -247,7 +250,6 @@ func (c *Configs) Store(
 	// Delete existing configuration data for the table.
 	if _, err := tx.Exec(ctx,
 		c.sql.delete,
-		table.Database().Raw(),
 		table.Schema().Raw(),
 		table.Table().Raw(),
 	); err != nil {
@@ -276,7 +278,7 @@ func (c *Configs) Store(
 			refs[col] = struct{}{}
 		}
 	}
-	if !cfg.Extras.IsEmpty() {
+	if !cfg.Extras.Empty() {
 		refs[cfg.Extras] = struct{}{}
 	}
 	for col, val := range cfg.Ignore {
@@ -285,7 +287,7 @@ func (c *Configs) Store(
 		}
 	}
 	for col, val := range cfg.SourceNames {
-		if !val.IsEmpty() {
+		if !val.Empty() {
 			refs[col] = struct{}{}
 		}
 	}
@@ -295,7 +297,6 @@ func (c *Configs) Store(
 	for col := range refs {
 		if _, err := tx.Exec(ctx,
 			c.sql.upsert,
-			table.Database().Raw(),
 			table.Schema().Raw(),
 			table.Table().Raw(),
 			col.Raw(),

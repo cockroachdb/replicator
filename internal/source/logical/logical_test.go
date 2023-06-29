@@ -54,15 +54,15 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Ident()
+	dbName := fixture.TestDB.Schema()
 	pool := fixture.TargetPool
 
 	// Create some tables.
 	tgts := []ident.Table{
-		ident.NewTable(dbName, ident.Public, ident.New("t1")),
-		ident.NewTable(dbName, ident.Public, ident.New("t2")),
-		ident.NewTable(dbName, ident.Public, ident.New("t3")),
-		ident.NewTable(dbName, ident.Public, ident.New("t4")),
+		ident.NewTable(dbName, ident.New("t1")),
+		ident.NewTable(dbName, ident.New("t2")),
+		ident.NewTable(dbName, ident.New("t3")),
+		ident.NewTable(dbName, ident.New("t4")),
 	}
 
 	for _, tgt := range tgts {
@@ -86,10 +86,10 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 		LoopName:       "generator",
 		Immediate:      immediate,
 		RetryDelay:     time.Nanosecond,
-		StagingDB:      fixture.StagingDB.Ident(),
+		StagingDB:      fixture.StagingDB.Schema(),
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.ConnectionString,
-		TargetDB:       dbName,
+		TargetSchema:   dbName,
 	}
 	if allowBackfill {
 		cfg.BackfillWindow = time.Minute
@@ -177,13 +177,13 @@ func TestUserScript(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Ident()
+	dbName := fixture.TestDB.Schema()
 	pool := fixture.TargetPool
 
 	// Create some tables.
 	tgts := []ident.Table{
-		ident.NewTable(dbName, ident.Public, ident.New("t_1")),
-		ident.NewTable(dbName, ident.Public, ident.New("t_2")),
+		ident.NewTable(dbName, ident.New("t_1")),
+		ident.NewTable(dbName, ident.New("t_2")),
 	}
 
 	for _, tgt := range tgts {
@@ -196,10 +196,10 @@ func TestUserScript(t *testing.T) {
 		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
 		LoopName:       "generator",
 		Immediate:      false,
-		StagingDB:      fixture.StagingDB.Ident(),
+		StagingDB:      fixture.StagingDB.Schema(),
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.ConnectionString,
-		TargetDB:       dbName,
+		TargetSchema:   dbName,
 
 		ScriptConfig: script.Config{
 			MainPath: "/main.ts",
@@ -229,7 +229,7 @@ api.configureTable("t_2", {
 
 	// Create a generator for the upstream names.
 	gen := newGenerator([]ident.Table{
-		ident.NewTable(dbName, ident.Public, ident.New("t1")),
+		ident.NewTable(dbName, ident.New("t1")),
 	})
 	const numEmits = 100
 	gen.emit(numEmits)

@@ -117,10 +117,30 @@ func TestParseIdent(t *testing.T) {
 	}
 }
 
+func TestParseSchema(t *testing.T) {
+	tcs := []struct {
+		input    string
+		expected Schema
+	}{
+		{"", MustSchema()},
+		{"foo", MustSchema(New("foo"))},
+		{"foo.bar", MustSchema(New("foo"), New("bar"))},
+	}
+
+	for idx, tc := range tcs {
+		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
+			a := assert.New(t)
+			s, err := ParseSchema(tc.input)
+			a.NoError(err)
+			a.Equal(tc.expected, s)
+		})
+	}
+}
+
 func TestParseTable(t *testing.T) {
 	base := New("base")
-	schema := New("schema")
-	relTo := NewSchema(base, schema)
+	sch := New("schema")
+	relTo := MustSchema(base, sch)
 	tcs := []struct {
 		input string
 		table Table
@@ -129,22 +149,22 @@ func TestParseTable(t *testing.T) {
 	}{
 		{
 			input: "table",
-			table: NewTable(base, schema, New("table")),
+			table: NewTable(MustSchema(base, sch), New("table")),
 			qual:  TableOnly,
 		},
 		{
-			input: "db.table",
-			table: NewTable(New("db"), Public, New("table")),
-			qual:  TableAndDatabase,
+			input: "s2.table",
+			table: NewTable(MustSchema(base, New("s2")), New("table")),
+			qual:  PartialSchema,
 		},
 		{
 			input: "db.s2.table",
-			table: NewTable(New("db"), New("s2"), New("table")),
+			table: NewTable(MustSchema(New("db"), New("s2")), New("table")),
 			qual:  FullyQualified,
 		},
 		{
 			input: `db.s2."Foo.Bar.Baz"`,
-			table: NewTable(New("db"), New("s2"), New("Foo.Bar.Baz")),
+			table: NewTable(MustSchema(New("db"), New("s2")), New("Foo.Bar.Baz")),
 			qual:  FullyQualified,
 		},
 		{
@@ -161,7 +181,7 @@ func TestParseTable(t *testing.T) {
 		},
 		{
 			input: "this.is.too.long",
-			err:   "too many name parts in input",
+			err:   "expecting no more than 2 schema parts, saw 3",
 		},
 	}
 
@@ -169,13 +189,13 @@ func TestParseTable(t *testing.T) {
 		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
 			a := assert.New(t)
 
-			tbl, qual, err := ParseTable(tc.input, relTo)
+			tbl, qual, err := ParseTableRelative(tc.input, relTo)
 			if tc.err == "" {
 				a.Equal(tc.table, tbl)
 				a.Equal(tc.qual, qual)
 				a.NoError(err)
 
-				reparsed, qual, err := ParseTable(tbl.String(), relTo)
+				reparsed, qual, err := ParseTableRelative(tbl.String(), relTo)
 				a.Equal(tbl, reparsed)
 				a.NoError(err)
 				a.Equal(FullyQualified, qual)

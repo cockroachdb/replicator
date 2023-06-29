@@ -34,3 +34,27 @@ func (v *Value) String() string { return (*Ident)(v).Raw() }
 
 // Type implements Value.
 func (v *Value) Type() string { return "ident" }
+
+// SchemaFlag allows Schema fields to be used with the spf13 flags package.
+type SchemaFlag Schema
+
+// NewSchemaFlag wraps the given Schema so that it can be used with the
+// spf13 flags package.
+func NewSchemaFlag(id *Schema) *SchemaFlag {
+	return (*SchemaFlag)(id)
+}
+
+// Set implements Value.
+func (v *SchemaFlag) Set(s string) error {
+	parsed, err := ParseSchema(s)
+	if err == nil {
+		*(*Schema)(v) = parsed
+	}
+	return err
+}
+
+// String returns the raw value of the underlying Ident.
+func (v *SchemaFlag) String() string { return v.Raw() }
+
+// Type implements Value.
+func (v *SchemaFlag) Type() string { return "atom" }

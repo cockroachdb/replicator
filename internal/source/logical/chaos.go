@@ -153,7 +153,7 @@ func (e *chaosEvents) GetConsistentPoint() stamp.Stamp {
 	return e.delegate.GetConsistentPoint()
 }
 
-func (e *chaosEvents) GetTargetDB() ident.Ident {
+func (e *chaosEvents) GetTargetDB() ident.Schema {
 	return e.delegate.GetTargetDB()
 }
 

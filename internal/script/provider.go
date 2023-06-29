@@ -128,7 +128,7 @@ func ProvideUserScript(
 		}, nil
 	}
 
-	watcher, err := watchers.Get(ctx, target.AsSchema().Database())
+	watcher, err := watchers.Get(ctx, target.AsSchema())
 	if err != nil {
 		return nil, err
 	}

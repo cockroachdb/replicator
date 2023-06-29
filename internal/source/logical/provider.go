@@ -142,5 +142,5 @@ func ProvideUserScriptConfig(config Config) (*script.Config, error) {
 // ProvideUserScriptTarget is called by Wire and returns the public
 // schema of the target database.
 func ProvideUserScriptTarget(config *BaseConfig) script.TargetSchema {
-	return script.TargetSchema(ident.NewSchema(config.TargetDB, ident.Public))
+	return script.TargetSchema(config.TargetSchema)
 }

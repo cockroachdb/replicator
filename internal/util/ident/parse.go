@@ -101,7 +101,7 @@ loop:
 	return New(s[:idx]), s[idx:], nil
 }
 
-// Qualification is a return value from ParseTable, indicating how many
+// Qualification is a return value from ParseTableRelative, indicating how many
 // name parts were present in the initial input.
 type Qualification int
 
@@ -110,63 +110,87 @@ type Qualification int
 // Various levels of table-identifier qualification.
 const (
 	TableOnly Qualification = iota + 1
-	TableAndDatabase
+	PartialSchema
 	FullyQualified
 )
 
-// ParseTable parses a table name, relative to a base schema.
-// The string must have one to three parts, separated by a dot.
-func ParseTable(s string, relativeTo Schema) (Table, Qualification, error) {
-	var err error
-	parts := make([]Ident, 0, 3)
-	for s != "" {
+// ParseSchema parses a dot-separated schema name.
+func ParseSchema(s string) (Schema, error) {
+	parts, err := parseDottedIdent(s)
+	if err != nil {
+		return Schema{}, errors.Wrapf(err, "could not parse %q as a schema name", s)
+	}
+	return NewSchema(parts...)
+}
+
+// ParseTable parses a table name.
+func ParseTable(s string) (Table, error) {
+	parts, err := parseDottedIdent(s)
+	if err != nil {
+		return Table{}, errors.Wrapf(err, "could not parse %q as a table name", s)
+	}
+	if len(parts) == 0 {
+		return Table{}, nil
+	}
+
+	sch, err := NewSchema(parts[:len(parts)-1]...)
+	if err != nil {
+		return Table{}, errors.Wrapf(err, "could not parse %q as a table name", s)
+	}
+	last := parts[len(parts)-1]
+
+	return Table{qualifieds.Get(qualifiedKey{
+		namespace: sch.array,
+		ident:     last.atom,
+	})}, nil
+}
+
+// ParseTableRelative parses a table name, relative to a base schema.
+// The string must have no more than the number of name parts in
+// relativeTo, plus one for the table name itself.
+func ParseTableRelative(s string, relativeTo Schema) (Table, Qualification, error) {
+	parts, err := parseDottedIdent(s)
+	if err != nil {
+		return Table{}, 0, errors.Wrapf(err, "could not parse %q as a table name", s)
+	}
+
+	if len(parts) == 0 {
+		return Table{}, 0, errors.New("empty table name")
+	}
+
+	// Typical case, only a table name was specified.
+	if len(parts) == 1 {
+		return NewTable(relativeTo, parts[0]), TableOnly, nil
+	}
+
+	// Save off the last part as the table name.
+	tableIdent := parts[len(parts)-1]
+	nextSchema, qual, err := relativeTo.Relative(parts[:len(parts)-1]...)
+	if err != nil {
+		return Table{}, 0, err
+	}
+	return NewTable(nextSchema, tableIdent), qual, nil
+}
+
+func parseDottedIdent(str string) ([]Ident, error) {
+	parts := make([]Ident, 0, maxArrayLength+1)
+	for str != "" {
 		var part Ident
 
-		part, s, err = ParseIdent(s)
+		part, remaining, err := ParseIdent(str)
 		if err != nil {
-			return Table{}, 0, err
+			return nil, err
 		}
 		parts = append(parts, part)
 
 		// Skip next dot, if any.
-		if s == "" {
+		if remaining == "" {
 			break
 		}
-		if rune(s[0]) != separator {
-			return Table{}, 0, errors.New("expecting separator")
+		if rune(remaining[0]) != separator {
+			return nil, errors.New("expecting separator")
 		}
-		s = s[1:]
+		str = remaining[1:]
 	}
-
-	switch len(parts) {
-	case 0:
-		return Table{}, 0, errors.New("empty table name")
-
-	case 1:
-		return NewTable(
-				relativeTo.Database(),
-				relativeTo.Schema(),
-				parts[0]),
-			TableOnly,
-			nil
-
-	case 2:
-		return NewTable(
-				parts[0],
-				Public,
-				parts[1]),
-			TableAndDatabase,
-			nil
-
-	case 3:
-		return NewTable(
-				parts[0],
-				parts[1],
-				parts[2]),
-			FullyQualified,
-			nil
-
-	default:
-		return Table{}, 0, errors.New("too many name parts in input")
-	}
+	return parts, nil
 }

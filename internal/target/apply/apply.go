@@ -79,7 +79,7 @@ func newApply(
 	go func(ctx context.Context, errs chan<- error) {
 		defer cancel()
 
-		w, err := watchers.Get(ctx, target.Database())
+		w, err := watchers.Get(ctx, target.Schema())
 		if err != nil {
 			errs <- err
 			return
@@ -348,7 +348,7 @@ func (a *apply) upsertLocked(
 		// Collect unknown / unmapped columns into the extras blob,
 		// or error out if we have no place to store extras.
 		if extraCount := len(incomingColumnData) - len(knownColumnsInPayload); extraCount > 0 {
-			if a.mu.configData.Extras.IsEmpty() {
+			if a.mu.configData.Extras.Empty() {
 				var unmapped []string
 				for key := range incomingColumnData {
 					if _, seen := knownColumnsInPayload[key]; !seen {

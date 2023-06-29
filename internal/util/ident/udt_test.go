@@ -14,25 +14,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package stage
+package ident
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/google/wire"
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideFactory,
-)
+func TestUDTJson(t *testing.T) {
+	a := assert.New(t)
 
-// ProvideFactory is called by Wire to construct the Stagers factory.
-func ProvideFactory(db *types.StagingPool, stagingDB ident.StagingDB) types.Stagers {
-	f := &factory{
-		db:        db,
-		stagingDB: stagingDB.Schema(),
-	}
-	f.mu.instances = make(map[ident.Table]*stage)
-	return f
+	id := NewUDT(MustSchema(New("db"), New("schema")), New("my_enum"))
+	data, err := json.Marshal(id)
+	a.NoError(err)
+
+	var id2 UDT
+	a.NoError(json.Unmarshal(data, &id2))
+	a.Equal(id, id2)
+	a.Same(id.namespace, id2.namespace)
+	a.Same(id.ident, id2.ident)
 }

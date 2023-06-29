@@ -55,7 +55,7 @@ func (f *fanEvents) Flush(ctx context.Context) error {
 func (f *fanEvents) GetConsistentPoint() stamp.Stamp { return f.loop.GetConsistentPoint() }
 
 // GetTargetDB implements State. It delegates to the loop.
-func (f *fanEvents) GetTargetDB() ident.Ident { return f.loop.GetTargetDB() }
+func (f *fanEvents) GetTargetDB() ident.Schema { return f.loop.GetTargetDB() }
 
 // NotifyConsistentPoint implements State.  It delegates to the loop.
 func (f *fanEvents) NotifyConsistentPoint(

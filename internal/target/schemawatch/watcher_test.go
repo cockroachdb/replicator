@@ -43,7 +43,7 @@ func TestWatch(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Ident()
+	dbName := fixture.TestDB.Schema()
 	w := fixture.Watcher
 
 	// Bootstrap column.
@@ -95,7 +95,7 @@ func TestWatch(t *testing.T) {
 	}
 
 	// Check that we error out quickly on unknown tables.
-	ch, cancel, err = w.Watch(ident.NewTable(dbName, ident.Public, ident.New("blah")))
+	ch, cancel, err = w.Watch(ident.NewTable(dbName, ident.New("blah")))
 	a.Nil(ch)
 	a.Nil(cancel)
 	a.Error(err)
