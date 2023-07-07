@@ -22,6 +22,7 @@ package main
 import (
 	_ "github.com/cockroachdb/crlfmt"
 	_ "github.com/google/addlicense"
+	_ "github.com/google/go-licenses"
 	_ "github.com/google/wire/cmd/wire"
 	_ "github.com/jstemmer/go-junit-report/v2"
 	_ "golang.org/x/lint/golint"

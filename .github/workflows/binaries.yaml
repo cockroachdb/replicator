@@ -109,6 +109,10 @@ jobs:
           cache: true
           cache-dependency-path: CACHE_KEY
 
+      - id: licenses
+        name: Bundle license files
+        run: go generate ./internal/cmd/licenses
+
       - id: build
         name: Build
         run: >
