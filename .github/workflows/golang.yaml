@@ -75,6 +75,14 @@ jobs:
         if: ${{ always() }}
         run: go vet ./...
 
+      # Check that all dependencies have licenses and that those
+      # licenses are reasonably permissive. License files for modules
+      # reachable from the entry point will be bundled and are visible
+      # through the licenses subcommand.
+      - name: License Checks
+        if: ${{ always() }}
+        run: go run github.com/google/go-licenses check .
+
   # Integration matrix tests for all supported CRDB and source DBs.
   tests:
     name: Integration Tests
