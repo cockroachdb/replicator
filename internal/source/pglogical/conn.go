@@ -331,14 +331,11 @@ func (c *conn) onDataTuple(
 }
 
 // learn updates the source database namespace mappings.
-func (c *conn) onRelation(msg *pglogrepl.RelationMessage, targetDB ident.Ident) {
+func (c *conn) onRelation(msg *pglogrepl.RelationMessage, targetDB ident.Schema) {
 	// The replication protocol says that we'll see these
 	// descriptors before any use of the relation id in the
 	// stream. We'll map the int value to our table identifiers.
-	tbl := ident.NewTable(
-		targetDB,
-		ident.New(msg.Namespace),
-		ident.New(msg.RelationName))
+	tbl := ident.NewTable(targetDB, ident.New(msg.RelationName))
 	c.relations[msg.RelationID] = tbl
 
 	colNames := make([]types.ColData, len(msg.Columns))

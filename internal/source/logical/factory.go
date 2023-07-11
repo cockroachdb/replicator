@@ -95,7 +95,7 @@ func (f *Factory) Get(ctx context.Context, dialect Dialect, options ...Option) (
 
 // newLoop constructs a loop, but does not start or memoize it.
 func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Dialect) (*Loop, error) {
-	watcher, err := f.watchers.Get(ctx, config.TargetDB)
+	watcher, err := f.watchers.Get(ctx, config.TargetSchema)
 	if err != nil {
 		return nil, err
 	}

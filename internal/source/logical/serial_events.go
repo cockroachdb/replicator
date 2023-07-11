@@ -53,7 +53,7 @@ func (e *serialEvents) Flush(context.Context) error {
 func (e *serialEvents) GetConsistentPoint() stamp.Stamp { return e.loop.GetConsistentPoint() }
 
 // GetTargetDB implements State. It delegates to the loop.
-func (e *serialEvents) GetTargetDB() ident.Ident { return e.loop.GetTargetDB() }
+func (e *serialEvents) GetTargetDB() ident.Schema { return e.loop.GetTargetDB() }
 
 // NotifyConsistentPoint implements State.  It delegates to the loop.
 func (e *serialEvents) NotifyConsistentPoint(

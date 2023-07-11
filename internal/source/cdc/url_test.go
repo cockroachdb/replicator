@@ -16,177 +16,160 @@
 
 package cdc
 
-// This file contains code repackaged from url_test.go.
-
 import (
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestURL(t *testing.T) {
-	r := require.New(t)
-	a := assert.New(t)
-	fixture, tableInfo := createFixture(t, false)
-	tableName := tableInfo.Name().Table().Raw()
-	dbName := tableInfo.Name().Database().Raw()
-	schemaName := tableInfo.Name().Schema().Raw()
-	schema := ident.NewSchema(
-		ident.New(dbName),
-		ident.New(schemaName),
-	)
-	table := ident.NewTable(
-		ident.New(dbName),
-		ident.New(schemaName),
-		ident.New(tableName),
-	)
-	parseError := "can't parse url"
+func TestParseChangefeedURL(t *testing.T) {
+	schemaIdent := ident.MustSchema(ident.New("database"), ident.New("schema"))
+	tableIdent := ident.NewTable(schemaIdent, ident.New("table"))
+	nameParts := tableIdent.Idents(nil)
+	require.Len(t, nameParts, 3)
+	dbName := nameParts[0].Raw()
+	schemaName := nameParts[1].Raw()
+	tableName := nameParts[2].Raw()
 	ndjson := strings.ReplaceAll(
-		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-TABLE-1.ndjson`,
+		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-REAL-1.ndjson`,
 		"TABLE", tableName)
 	ndjsonFull := strings.ReplaceAll(
-		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.TABLE-1.ndjson`,
+		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.REAL-1.ndjson`,
 		"TABLE", tableName)
 	resolved := `2020-04-04/202004042351304139680000000000000.RESOLVED`
 
-	handler := fixture.Handler
 	tests := []struct {
 		name      string
-		URL       string
-		f         func(*url.URL, *request) error
-		want      ident.Schematic
+		decision  string
 		timestamp hlc.Time
+		target    ident.Schematic
+		url       string
 		wantErr   string
 	}{
 		{
-			"webhook",
-			strings.Join([]string{"", dbName, schemaName}, "/"),
-			handler.parseWebhookURL,
-			schema,
-			hlc.Zero(),
-			"",
+			name:    "empty",
+			target:  schemaIdent,
+			wantErr: "expecting at least 2 path segments",
 		},
 		{
-			"webhook fail",
-			strings.Join([]string{"", schemaName}, "/"),
-			handler.parseWebhookURL,
-			schema,
-			hlc.Zero(),
-			parseError,
+			name:    "root",
+			target:  schemaIdent,
+			url:     "/",
+			wantErr: "expecting at least 2 path segments",
 		},
 		{
-			"resolved",
-			strings.Join([]string{"", dbName, schemaName, resolved}, "/"),
-			handler.parseResolvedURL,
-			schema,
-			hlc.New(1586044290413968000, 0),
-			"",
+			name:    "too short",
+			target:  schemaIdent,
+			url:     strings.Join([]string{"", schemaName}, "/"),
+			wantErr: "expecting at least 2 path segments",
 		},
 		{
-			"resolved fail",
-			strings.Join([]string{"", schemaName, resolved}, "/"),
-			handler.parseResolvedURL,
-			nil,
-			hlc.Zero(),
-			parseError,
+			name:    "too long",
+			target:  schemaIdent,
+			url:     strings.Join([]string{"", "1", "2", "3", "4", "5", "6", "7", "8"}, "/"),
+			wantErr: "request path exceeded maximum of 8 segments",
 		},
 		{
-			"ndjson",
-			strings.Join([]string{"", dbName, schemaName, ndjson}, "/"),
-			handler.parseNdjsonURL,
-			table,
-			hlc.Zero(),
-			"",
+			name:     "webhook to schema",
+			decision: "webhook schema",
+			target:   schemaIdent,
+			url:      strings.Join([]string{"", dbName, schemaName}, "/"),
 		},
 		{
-			"ndjson-full",
-			strings.Join([]string{"", dbName, schemaName, ndjsonFull}, "/"),
-			handler.parseNdjsonURL,
-			table,
-			hlc.Zero(),
-			"",
+			name:     "webhook to table",
+			decision: "webhook table",
+			target:   tableIdent,
+			url:      strings.Join([]string{"", dbName, schemaName, tableName}, "/"),
 		},
 		{
-			"ndjson no db",
-			strings.Join([]string{"", schemaName, ndjson}, "/"),
-			handler.parseNdjsonURL,
-			nil,
-			hlc.Zero(),
-			parseError,
+			name:      "resolved to schema",
+			decision:  "resolved",
+			target:    schemaIdent,
+			timestamp: hlc.New(1586044290413968000, 0),
+			url:       strings.Join([]string{"", dbName, schemaName, resolved}, "/"),
 		},
 		{
-			"webhook-query",
-			strings.Join([]string{"", dbName, schemaName, tableName}, "/"),
-			handler.parseWebhookQueryURL,
-			table,
-			hlc.Zero(),
-			"",
+			name:      "resolved to table",
+			decision:  "resolved",
+			target:    tableIdent,
+			timestamp: hlc.New(1586044290413968000, 0),
+			url:       strings.Join([]string{"", dbName, schemaName, tableName, resolved}, "/"),
 		},
 		{
-			"webhook-query fail",
-			strings.Join([]string{"", dbName, schemaName}, "/"),
-			handler.parseWebhookQueryURL,
-			nil,
-			hlc.Zero(),
-			parseError,
+			name:    "resolved too short",
+			url:     strings.Join([]string{"", dbName, resolved}, "/"),
+			wantErr: "expecting the first 2 path segments to be schema names",
 		},
 		{
-			"resolved-query",
-			strings.Join([]string{"", dbName, schemaName, tableName, resolved}, "/"),
-			handler.parseResolvedQueryURL,
-			table,
-			hlc.New(1586044290413968000, 0),
-			"",
+			name:    "resolved too long",
+			url:     strings.Join([]string{"", dbName, schemaName, "too", "much", resolved}, "/"),
+			wantErr: "path did not match any expected patterns",
 		},
 		{
-			"resolved-query-error",
-			strings.Join([]string{"", dbName, schemaName, resolved}, "/"),
-			handler.parseResolvedQueryURL,
-			nil,
-			hlc.Zero(),
-			parseError,
+			name:     "ndjson to schema",
+			decision: "ndjson schema",
+			target:   ident.NewTable(schemaIdent, ident.New("REAL")), // Use topic name from query.
+			url:      strings.Join([]string{"", dbName, schemaName, ndjson}, "/"),
 		},
 		{
-			"ndjson-query",
-			strings.Join([]string{"", dbName, schemaName, tableName, ndjson}, "/"),
-			handler.parseNdjsonQueryURL,
-			table,
-			hlc.Zero(),
-			"",
+			name:     "ndjson full to schema",
+			decision: "ndjson schema",
+			target:   ident.NewTable(schemaIdent, ident.New("REAL")), // Use topic name from query.
+			url:      strings.Join([]string{"", dbName, schemaName, ndjsonFull}, "/"),
 		},
 		{
-			"ndjson-full-query",
-			strings.Join([]string{"", dbName, schemaName, tableName, ndjsonFull}, "/"),
-			handler.parseNdjsonQueryURL,
-			table,
-			hlc.Zero(),
-			"",
+			name:    "ndjson too short",
+			url:     strings.Join([]string{"", dbName, ndjson}, "/"),
+			wantErr: "expecting the first 2 path segments to be schema names",
 		},
 		{
-			"ndjson-query error",
-			strings.Join([]string{"", dbName, schemaName, ndjson}, "/"),
-			handler.parseNdjsonQueryURL,
-			nil,
-			hlc.Zero(),
-			parseError,
+			name:    "ndjson too long",
+			url:     strings.Join([]string{"", dbName, schemaName, "too", "much", ndjson}, "/"),
+			wantErr: "path did not match any expected patterns",
+		},
+		{
+			name:     "ndjson to table",
+			decision: "ndjson table",
+			target:   tableIdent,
+			url:      strings.Join([]string{"", dbName, schemaName, tableName, ndjson}, "/"),
+		},
+		{
+			name:     "ndjson full to table",
+			decision: "ndjson table",
+			target:   tableIdent,
+			url:      strings.Join([]string{"", dbName, schemaName, tableName, ndjsonFull}, "/"),
 		},
 	}
+
+	h := &Handler{
+		TargetPool: &types.TargetPool{Product: types.ProductCockroachDB},
+	}
+	var leafDecision string
+	requestParsingTestCallback = func(decision string) { leafDecision = decision }
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			request := &request{}
-			theURL, err := url.Parse(tt.URL)
+			a := assert.New(t)
+			r := require.New(t)
+
+			theURL, err := url.Parse(tt.url)
 			r.NoError(err)
-			err = tt.f(theURL, request)
+
+			request, err := h.newRequest(&http.Request{URL: theURL})
 			if tt.wantErr != "" {
 				a.ErrorContains(err, tt.wantErr)
 				return
 			}
-			a.Equal(tt.want, request.target)
+			a.NoError(err)
+			a.Equal(tt.decision, leafDecision)
+			a.Equalf(tt.target, request.target, "%s vs %s", tt.target, request.target)
 			a.Equal(tt.timestamp, request.timestamp)
 		})
 	}

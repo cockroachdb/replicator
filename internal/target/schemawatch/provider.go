@@ -30,6 +30,6 @@ var Set = wire.NewSet(
 // ProvideFactory is called by Wire to construct the Watchers factory.
 func ProvideFactory(pool *types.TargetPool) (types.Watchers, func()) {
 	w := &factory{pool: pool}
-	w.mu.data = make(map[ident.Ident]*watcher)
+	w.mu.data = make(map[ident.Schema]*watcher)
 	return w, w.close
 }

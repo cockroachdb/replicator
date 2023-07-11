@@ -83,7 +83,7 @@ func (t *Config) IsZero() bool {
 	return len(t.CASColumns) == 0 &&
 		len(t.Deadlines) == 0 &&
 		len(t.Exprs) == 0 &&
-		t.Extras.IsEmpty() &&
+		t.Extras.Empty() &&
 		len(t.Ignore) == 0 &&
 		len(t.SourceNames) == 0
 }

@@ -49,7 +49,7 @@ func InsertTestingKey(
 		return
 	}
 
-	err = insertKey(ctx, tx, stagingDB.Ident(), bytes)
+	err = insertKey(ctx, tx, stagingDB.Schema(), bytes)
 	if err != nil {
 		return
 	}
@@ -60,9 +60,9 @@ func InsertTestingKey(
 
 // insertKey inserts a PEM-encoded key into the database.
 func insertKey(
-	ctx context.Context, tx types.StagingQuerier, stagingDB ident.Ident, pemBytes []byte,
+	ctx context.Context, tx types.StagingQuerier, stagingDB ident.Schema, pemBytes []byte,
 ) error {
-	keyTable := ident.NewTable(stagingDB, ident.Public, PublicKeysTable)
+	keyTable := ident.NewTable(stagingDB, PublicKeysTable)
 	_, err := tx.Exec(ctx,
 		fmt.Sprintf("INSERT INTO %s (public_key) VALUES ($1)", keyTable),
 		pemBytes,
@@ -99,7 +99,7 @@ func InsertRevokedToken(
 		return errors.Errorf("unexpected Authenticator type %t", auth)
 	}
 
-	keyTable := ident.NewTable(stagingDB.Ident(), ident.Public, RevokedIdsTable)
+	keyTable := ident.NewTable(stagingDB.Schema(), RevokedIdsTable)
 	_, err := tx.Exec(ctx,
 		fmt.Sprintf("INSERT INTO %s (id) VALUES ($1)", keyTable),
 		id,

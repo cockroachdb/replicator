@@ -22,12 +22,10 @@ package cdc
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -67,65 +65,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// checkAccess returns true if the request should continue.
-	checkAccess := func(target ident.Schematic) bool {
-		var token string
-		if raw := r.Header.Get("Authorization"); raw != "" {
-			if strings.HasPrefix(raw, "Bearer ") {
-				token = raw[7:]
-			}
-		} else if token = r.URL.Query().Get("access_token"); token != "" {
-			// Delete the token query parameter to prevent logging later
-			// on. This doesn't take care of issues with L7
-			// loadbalancers, but this param is used by other
-			// OAuth-style implementations and will hopefully be
-			// discarded without logging.
-			values := r.URL.Query()
-			values.Del("access_token")
-			r.URL.RawQuery = values.Encode()
-		}
-		// It's OK if token is empty here, we might be using a trivial
-		// Authenticator.
-		ok, err := h.Authenticator.Check(ctx, target.AsSchema(), token)
-		if err != nil {
-			sendErr(err)
-			return false
-		}
-		if ok {
-			return true
-		}
-		http.Error(w, "missing or invalid access token", http.StatusUnauthorized)
-		return false
-	}
 	log.Debugf("URL %s", r.URL.Path)
-	req := &request{}
-	switch {
-	case h.parseWebhookQueryURL(r.URL, req) == nil:
-	case h.parseWebhookURL(r.URL, req) == nil:
-	case h.parseNdjsonQueryURL(r.URL, req) == nil:
-	case h.parseNdjsonURL(r.URL, req) == nil:
-	case h.parseResolvedQueryURL(r.URL, req) == nil:
-	case h.parseResolvedURL(r.URL, req) == nil:
-	default:
+	req, err := h.newRequest(r)
+	if err != nil {
+		log.WithError(err).Tracef("could not match URL: %s", r.URL)
 		http.NotFound(w, r)
 		return
 	}
 
-	if !checkAccess(req.target) {
-		return
+	allowed, err := h.checkAccess(ctx, r, req.target.Schema())
+	switch {
+	case err != nil:
+		sendErr(err)
+	case !allowed:
+		http.Error(w, "missing or invalid access token", http.StatusUnauthorized)
+	default:
+		sendErr(req.leaf(ctx, req))
 	}
-
-	req.body = r.Body
-	sendErr(req.leaf(ctx, req))
 }
 
-// A request is configured by the various parseURL methods in Handler.
-type request struct {
-	body io.Reader
-	leaf func(ctx context.Context, req *request) error
-	// keys contains all the columns that make up the primary key
-	// for the target table and their ordinal position within the key.
-	keys      map[ident.Ident]int
-	target    ident.Schematic
-	timestamp hlc.Time
+func (h *Handler) checkAccess(
+	ctx context.Context, r *http.Request, target ident.Schema,
+) (bool, error) {
+	var token string
+	if raw := r.Header.Get("Authorization"); raw != "" {
+		if strings.HasPrefix(raw, "Bearer ") {
+			token = raw[7:]
+		}
+	} else if token = r.URL.Query().Get("access_token"); token != "" {
+		// Delete the token query parameter to prevent logging later
+		// on. This doesn't take care of issues with L7
+		// loadbalancers, but this param is used by other
+		// OAuth-style implementations and will hopefully be
+		// discarded without logging.
+		values := r.URL.Query()
+		values.Del("access_token")
+		r.URL.RawQuery = values.Encode()
+	}
+	// It's OK if token is empty here, we might be using a trivial
+	// Authenticator.
+	ok, err := h.Authenticator.Check(ctx, target, token)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return true, nil
+	}
+	return false, nil
 }

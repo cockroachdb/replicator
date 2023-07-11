@@ -36,7 +36,7 @@ import (
 
 type factory struct {
 	db        *types.StagingPool
-	stagingDB ident.Ident
+	stagingDB ident.Schema
 
 	mu struct {
 		sync.RWMutex

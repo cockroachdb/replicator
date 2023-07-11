@@ -153,8 +153,8 @@ type State interface {
 	// has been committed to the target database or the value returned
 	// from Dialect.ZeroStamp.
 	GetConsistentPoint() stamp.Stamp
-	// GetTargetDB returns the target database name.
-	GetTargetDB() ident.Ident
+	// GetTargetDB returns the target database schema name.
+	GetTargetDB() ident.Schema
 	// NotifyConsistentPoint returns a channel that emits the next
 	// consistent point that satisfies the comparison with the given
 	// stamp. If the context is cancelled, the channel will be closed

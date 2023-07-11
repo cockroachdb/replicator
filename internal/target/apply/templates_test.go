@@ -70,15 +70,13 @@ func TestQueryTemplates(t *testing.T) {
 		{
 			Name: ident.New("enum"),
 			Type: ident.NewUDT(
-				ident.New("database"),
-				ident.New("schema"),
+				ident.MustSchema(ident.New("database"), ident.New("schema")),
 				ident.New("MyEnum")),
 		},
 	}
 
 	tableID := ident.NewTable(
-		ident.New("database"),
-		ident.New("schema"),
+		ident.MustSchema(ident.New("database"), ident.New("schema")),
 		ident.New("table"))
 
 	const typicalDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1","ignored_pk")IN(($1::STRING,$2::INT8,$3::STRING),
