@@ -42,13 +42,12 @@ import (
 // invariants when marking new timestamps.
 const schema = `
 CREATE TABLE IF NOT EXISTS %[1]s (
-  target_db         STRING  NOT NULL,
   target_schema     STRING  NOT NULL,
   source_nanos      INT     NOT NULL,
   source_logical    INT     NOT NULL,
   target_applied_at TIMESTAMP,
-  PRIMARY KEY (target_db, target_schema, source_nanos, source_logical),
-  INDEX (target_db, target_schema, source_nanos DESC, source_logical DESC)    
+  PRIMARY KEY (target_schema, source_nanos, source_logical),
+  INDEX (target_schema, source_nanos DESC, source_logical DESC)    
 )`
 
 // A resolver is an implementation of a logical.Dialect which records
@@ -89,7 +88,7 @@ func newResolver(
 	target ident.Schema,
 	watchers types.Watchers,
 ) (*resolver, error) {
-	watcher, err := watchers.Get(ctx, target.Database())
+	watcher, err := watchers.Get(ctx, target)
 	if err != nil {
 		return nil, err
 	}
@@ -120,29 +119,27 @@ func (r *resolver) Acquire(ctx context.Context) (types.Lease, error) {
 // there is no previous mark or if the proposed mark is after the
 // latest-known mark for the target schema.
 //
-// $1 = target_db
-// $2 = target_schema
-// $3 = source_nanos
-// $4 = source_logical
+// $1 = target_schema
+// $2 = source_nanos
+// $3 = source_logical
 const markTemplate = `
 WITH
 not_before AS (
   SELECT source_nanos, source_logical FROM %[1]s
-  WHERE target_db=$1 AND target_schema=$2
+  WHERE target_schema=$1
   ORDER BY source_nanos desc, source_logical desc
   FOR UPDATE
   LIMIT 1),
 to_insert AS (
-  SELECT $1::STRING, $2::STRING, $3::INT, $4::INT
+  SELECT $1::STRING, $2::INT, $3::INT
   WHERE (SELECT count(*) FROM not_before) = 0
-     OR ($3::INT, $4::INT) > (SELECT (source_nanos, source_logical) FROM not_before))
-INSERT INTO %[1]s (target_db, target_schema, source_nanos, source_logical)
+     OR ($2::INT, $3::INT) > (SELECT (source_nanos, source_logical) FROM not_before))
+INSERT INTO %[1]s (target_schema, source_nanos, source_logical)
 SELECT * FROM to_insert`
 
 func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
 	tag, err := r.pool.Exec(ctx,
 		r.sql.mark,
-		r.target.Database().Raw(),
 		r.target.Schema().Raw(),
 		// The sql driver gets the wrong type back from CRDB v20.2
 		fmt.Sprintf("%d", ts.Nanos()),
@@ -289,8 +286,8 @@ func (r *resolver) Process(
 }
 
 const recordTemplate = `
-UPSERT INTO %s (target_db, target_schema, source_nanos, source_logical, target_applied_at)
-VALUES ($1, $2, $3, $4, now())`
+UPSERT INTO %s (target_schema, source_nanos, source_logical, target_applied_at)
+VALUES ($1, $2, $3, now())`
 
 // Record is a no-op version of Mark. It simply records an incoming
 // resolved timestamp as though it had been processed by the resolver.
@@ -300,7 +297,6 @@ VALUES ($1, $2, $3, $4, now())`
 func (r *resolver) Record(ctx context.Context, ts hlc.Time) error {
 	_, err := r.pool.Exec(ctx,
 		r.sql.record,
-		r.target.Database().Raw(),
 		r.target.Schema().Raw(),
 		ts.Nanos(),
 		ts.Logical(),
@@ -348,7 +344,7 @@ func (r *resolver) process(
 	ctx context.Context, rs *resolvedStamp, events logical.Events,
 ) (*resolvedStamp, error) {
 	start := time.Now()
-	targets := r.watcher.Snapshot(r.target).Order
+	targets := r.watcher.Get().Order
 
 	cursor := &types.SelectManyCursor{
 		Backfill:    rs.Backfill,
@@ -464,16 +460,14 @@ func (r *resolver) process(
 	return rs, nil
 }
 
-// $1 target_db
-// $2 target_schema
-// $3 last_known_nanos
-// $4 last_known_logical
+// $1 target_schema
+// $2 last_known_nanos
+// $3 last_known_logical
 const selectTimestampTemplate = `
 SELECT source_nanos, source_logical
   FROM %[1]s
- WHERE target_db=$1
-   AND target_schema=$2
-   AND (source_nanos, source_logical)>=($3, $4)
+ WHERE target_schema=$1
+   AND (source_nanos, source_logical)>=($2, $3)
    AND target_applied_at IS NULL
  ORDER BY source_nanos, source_logical
  LIMIT 1
@@ -492,7 +486,6 @@ func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Tim
 	var sourceLogical int
 	if err := r.pool.QueryRow(ctx,
 		r.sql.selectTimestamp,
-		r.target.Database().Raw(),
 		r.target.Schema().Raw(),
 		after.Nanos(),
 		after.Logical(),
@@ -540,7 +533,7 @@ func (r *resolver) retireLoop(ctx context.Context) {
 			next := toRetire.Load().(hlc.Time)
 			log.Tracef("retiring mutations in %s <= %s", r.target, next)
 
-			targetTables := r.watcher.Snapshot(r.target).Columns
+			targetTables := r.watcher.Get().Columns
 			for table := range targetTables {
 				stager, err := r.stagers.Get(ctx, table)
 				if err != nil {
@@ -619,7 +612,7 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 	// Start a new logical loop using a fresh configuration.
 	cfg := r.cfg.Base().Copy()
 	cfg.LoopName = "changefeed-" + target.Raw()
-	cfg.TargetDB = target.Database()
+	cfg.TargetSchema = target
 
 	// For testing, we sometimes want to drive the resolver directly.
 	if r.noStart {
@@ -645,7 +638,7 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 }
 
 const scanForTargetTemplate = `
-SELECT DISTINCT target_db, target_schema
+SELECT DISTINCT target_schema
 FROM %[1]s
 WHERE target_applied_at IS NULL
 `
@@ -664,12 +657,17 @@ func ScanForTargetSchemas(
 	defer rows.Close()
 	var ret []ident.Schema
 	for rows.Next() {
-		var db, schema string
-		if err := rows.Scan(&db, &schema); err != nil {
+		var db, schemaRaw string
+		if err := rows.Scan(&db, &schemaRaw); err != nil {
 			return nil, errors.WithStack(err)
 		}
 
-		ret = append(ret, ident.NewSchema(ident.New(db), ident.New(schema)))
+		sch, err := ident.ParseSchema(schemaRaw)
+		if err != nil {
+			return nil, err
+		}
+
+		ret = append(ret, sch)
 	}
 
 	return ret, nil

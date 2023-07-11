@@ -108,7 +108,7 @@ func (s *UserScript) bind(loader *Loader) error {
 		switch {
 		case bag.Dispatch != nil:
 			if bag.DeletesTo != "" {
-				src.DeletesTo, _, err = ident.ParseTable(bag.DeletesTo, s.target)
+				src.DeletesTo, _, err = ident.ParseTableRelative(bag.DeletesTo, s.target)
 				if err != nil {
 					return errors.Wrapf(err, "configureSource(%q).deletesTo", sourceName)
 				}
@@ -116,7 +116,7 @@ func (s *UserScript) bind(loader *Loader) error {
 			src.Dispatch = s.bindDispatch(sourceName, bag.Dispatch)
 
 		case bag.Target != "":
-			dest, _, err := ident.ParseTable(bag.Target, s.target)
+			dest, _, err := ident.ParseTableRelative(bag.Target, s.target)
 			if err != nil {
 				return errors.Wrapf(err, "configureSource(%q).target", sourceName)
 			}
@@ -131,7 +131,7 @@ func (s *UserScript) bind(loader *Loader) error {
 	// Evaluate calls to api.configureTarget(). As above, we implement a
 	// a last-one-wins approach.
 	for tableName, bag := range loader.targets {
-		table, _, err := ident.ParseTable(tableName, s.target)
+		table, _, err := ident.ParseTableRelative(tableName, s.target)
 		if err != nil {
 			return errors.Wrapf(err, "configureTable(%q)", tableName)
 		}
@@ -199,7 +199,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 		// Serialize mutations back to JSON.
 		ret := make(map[ident.Table][]types.Mutation, len(dispatches))
 		for tblName, jsDocs := range dispatches {
-			tbl, _, err := ident.ParseTable(tblName, s.target)
+			tbl, _, err := ident.ParseTableRelative(tblName, s.target)
 			if err != nil {
 				return nil, errors.Wrapf(err,
 					"dispatch function returned unparsable table name %q", tblName)
@@ -207,7 +207,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 			tblMuts := make([]types.Mutation, len(jsDocs))
 			ret[tbl] = tblMuts
 			for idx, jsDoc := range jsDocs {
-				colData, ok := s.watcher.Snapshot(s.target).Columns[tbl]
+				colData, ok := s.watcher.Get().Columns[tbl]
 				if !ok {
 					return nil, errors.Errorf(
 						"dispatch function %s returned unknown table %s", fnName, tbl)
@@ -281,7 +281,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		}
 
 		// Refresh the primary-key values in the mutation.
-		colData, ok := s.watcher.Snapshot(s.target).Columns[table]
+		colData, ok := s.watcher.Get().Columns[table]
 		if !ok {
 			return mut, false, errors.Errorf("map missing schema data for %s", table)
 		}

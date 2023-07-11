@@ -20,8 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/url"
-	"regexp"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -29,26 +27,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/pkg/errors"
 )
-
-var (
-	webhookRegex        = regexp.MustCompile(`^/(?P<targetDB>[^/]+)/(?P<targetSchema>[^/]+)$`)
-	webhookTargetDB     = webhookRegex.SubexpIndex("targetDB")
-	webhookTargetSchema = webhookRegex.SubexpIndex("targetSchema")
-)
-
-func (h *Handler) parseWebhookURL(url *url.URL, req *request) error {
-	match := webhookRegex.FindStringSubmatch(url.Path)
-	if match == nil {
-		return errors.Errorf("can't parse url %s", url)
-	}
-	schema := ident.NewSchema(
-		ident.New(match[webhookTargetDB]),
-		ident.New(match[webhookTargetSchema]),
-	)
-	req.leaf = h.webhook
-	req.target = schema
-	return nil
-}
 
 // webhook responds to the v21.2 webhook scheme.
 // https://www.cockroachlabs.com/docs/stable/create-changefeed.html#responses
@@ -94,13 +72,13 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			return err
 		}
 
-		table, qual, err := ident.ParseTable(payload.Payload[i].Topic, target)
+		table, qual, err := ident.ParseTableRelative(payload.Payload[i].Topic, target)
 		if err != nil {
 			return err
 		}
 		// Ensure the destination table is in the target schema.
 		if qual != ident.TableOnly {
-			table = ident.NewTable(target.Database(), target.Schema(), table.Table())
+			table = ident.NewTable(target, table.Table())
 		}
 
 		mut := types.Mutation{

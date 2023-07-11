@@ -48,10 +48,9 @@ func TestPutAndDrain(t *testing.T) {
 	ctx := fixture.Context
 	a.NotEmpty(fixture.StagingPool.Version)
 	pool := fixture.StagingPool
-	targetDB := fixture.TestDB.Ident()
+	targetDB := fixture.TestDB.Schema()
 
-	dummyTarget := ident.NewTable(
-		targetDB, ident.Public, ident.New("target"))
+	dummyTarget := ident.NewTable(targetDB, ident.New("target"))
 
 	s, err := fixture.Stagers.Get(ctx, dummyTarget)
 	if !a.NoError(err) {
@@ -215,11 +214,10 @@ func TestSelectMany(t *testing.T) {
 	a.NotEmpty(fixture.StagingPool.Version)
 
 	// Create some fake table names.
-	targetDB := fixture.TestDB.Ident()
+	targetDB := fixture.TestDB.Schema()
 	tables := make([]ident.Table, tableCount)
 	for idx := range tables {
-		tables[idx] = ident.NewTable(
-			targetDB, ident.Public, ident.New(fmt.Sprintf("target_%d", idx)))
+		tables[idx] = ident.NewTable(targetDB, ident.New(fmt.Sprintf("target_%d", idx)))
 	}
 	// Set up table groupings, to simulate FK use-cases.
 	tableGroups := [][]ident.Table{
@@ -453,10 +451,9 @@ func benchmarkStage(b *testing.B, batchSize int) {
 	defer cancel()
 
 	ctx := fixture.Context
-	targetDB := fixture.TestDB.Ident()
+	targetDB := fixture.TestDB.Schema()
 
-	dummyTarget := ident.NewTable(
-		targetDB, ident.Public, ident.New("target"))
+	dummyTarget := ident.NewTable(targetDB, ident.New("target"))
 
 	s, err := fixture.Stagers.Get(ctx, dummyTarget)
 	if err != nil {

@@ -57,7 +57,7 @@ func TestJWT(t *testing.T) {
 
 	a.Len(impl.mu.publicKeys, 1)
 
-	target := ident.NewSchema(ident.New("database"), ident.New("target"))
+	target := ident.MustSchema(ident.New("database"), ident.New("target"))
 	inserted, tkn, err := Sign(method, priv, []ident.Schema{target})
 	if !a.NoError(err) {
 		return
@@ -78,16 +78,16 @@ func TestJWT(t *testing.T) {
 
 func TestMatches(t *testing.T) {
 	dbA := ident.New("databaseA")
-	schA1 := ident.NewSchema(dbA, ident.New("schema1"))
-	schA2 := ident.NewSchema(dbA, ident.New("schema2"))
+	schA1 := ident.MustSchema(dbA, ident.New("schema1"))
+	schA2 := ident.MustSchema(dbA, ident.New("schema2"))
 
 	dbB := ident.New("databaseB")
-	schB1 := ident.NewSchema(dbB, ident.New("schema1"))
-	schB2 := ident.NewSchema(dbB, ident.New("schema2"))
+	schB1 := ident.MustSchema(dbB, ident.New("schema1"))
+	schB2 := ident.MustSchema(dbB, ident.New("schema2"))
 
-	wildA := ident.NewSchema(dbA, wildcard)
-	wild1 := ident.NewSchema(wildcard, ident.New("schema1"))
-	world := ident.NewSchema(wildcard, wildcard)
+	wildA := ident.MustSchema(dbA, wildcard)
+	wild1 := ident.MustSchema(wildcard, ident.New("schema1"))
+	world := ident.MustSchema(wildcard, wildcard)
 
 	tcs := []struct {
 		allowed, requested ident.Schema
