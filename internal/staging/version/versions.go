@@ -40,6 +40,7 @@ import (
 // Versions contains breaking changes to the cdc-sink metadata tables.
 var Versions = []Version{
 	{"Add versions table", 400},
+	{"Support single-level schema namespaces", 389},
 }
 
 // A Version describes a breaking change in the cdc-sink metadata

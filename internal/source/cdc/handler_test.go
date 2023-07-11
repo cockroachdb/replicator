@@ -48,11 +48,11 @@ func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo[*
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
-			Immediate:  immediate,
-			LoopName:   "changefeed",
-			StagingDB:  baseFixture.StagingDB.Ident(),
-			TargetConn: baseFixture.TargetPool.ConnectionString,
-			TargetDB:   baseFixture.TestDB.Ident(),
+			Immediate:    immediate,
+			LoopName:     "changefeed",
+			StagingDB:    baseFixture.StagingDB.Schema(),
+			TargetConn:   baseFixture.TargetPool.ConnectionString,
+			TargetSchema: baseFixture.TestDB.Schema(),
 		},
 	})
 	r.NoError(err)
@@ -82,7 +82,7 @@ func testQueryHandler(t *testing.T, immediate bool) {
 		if immediate {
 			return nil
 		}
-		resolver, err := h.Resolvers.get(ctx, target.AsSchema())
+		resolver, err := h.Resolvers.get(ctx, target.Schema())
 		if err != nil {
 			return err
 		}
@@ -147,17 +147,9 @@ func testQueryHandler(t *testing.T, immediate bool) {
 	// in CockroachDB v21.2. We insert rows and delete them.
 	t.Run("webhookEndpoints", func(t *testing.T) {
 		a := assert.New(t)
-		schema := ident.NewSchema(
-			tableInfo.Name().Database(),
-			tableInfo.Name().Schema())
-		table := ident.NewTable(
-			tableInfo.Name().Database(),
-			tableInfo.Name().Schema(),
-			tableInfo.Name().Table())
-
 		// Insert data and verify flushing.
 		a.NoError(h.webhookForQuery(ctx, &request{
-			target: table,
+			target: tableInfo.Name(),
 			body: strings.NewReader(`
 { "payload" : [
 	{"__event__": "insert", "pk" : 42, "v" : 99, "__crdb__": {"updated": "10.0"}},
@@ -167,10 +159,10 @@ func testQueryHandler(t *testing.T, immediate bool) {
 		}))
 
 		a.NoError(h.webhookForQuery(ctx, &request{
-			target: table,
+			target: tableInfo.Name(),
 			body:   strings.NewReader(`{ "__crdb__": {"resolved" : "20.0" }}`),
 		}))
-		a.NoError(maybeFlush(schema, hlc.New(20, 0)))
+		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(20, 0)))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -178,7 +170,7 @@ func testQueryHandler(t *testing.T, immediate bool) {
 
 		// Now, delete the data.
 		a.NoError(h.webhookForQuery(ctx, &request{
-			target: table,
+			target: tableInfo.Name(),
 			body: strings.NewReader(`
 { "payload" : [
 	{"__event__": "delete", "pk" : 42, "v" : null, "__crdb__": {"updated": "30.0"}},
@@ -188,10 +180,10 @@ func testQueryHandler(t *testing.T, immediate bool) {
 		}))
 
 		a.NoError(h.webhookForQuery(ctx, &request{
-			target: table,
+			target: tableInfo.Name(),
 			body:   strings.NewReader(`{ "__crdb__": {"resolved" : "40.0" }}`),
 		}))
-		a.NoError(maybeFlush(schema, hlc.New(40, 0)))
+		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(40, 0)))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -210,12 +202,8 @@ func testQueryHandler(t *testing.T, immediate bool) {
 	// Verify that an empty webhook post doesn't crash.
 	t.Run("empty-webhook", func(t *testing.T) {
 		a := assert.New(t)
-		table := ident.NewTable(
-			tableInfo.Name().Database(),
-			tableInfo.Name().Schema(),
-			tableInfo.Name().Table())
 		a.NoError(h.webhookForQuery(ctx, &request{
-			target: table,
+			target: tableInfo.Name(),
 			body:   strings.NewReader(""),
 		}))
 	})
@@ -242,7 +230,7 @@ func testHandler(t *testing.T, immediate bool) {
 		if immediate {
 			return nil
 		}
-		resolver, err := h.Resolvers.get(ctx, target.AsSchema())
+		resolver, err := h.Resolvers.get(ctx, target.Schema())
 		if err != nil {
 			return err
 		}
@@ -307,11 +295,10 @@ func testHandler(t *testing.T, immediate bool) {
 	// in CockroachDB v21.2. We insert rows and delete them.
 	t.Run("webhookEndpoints", func(t *testing.T) {
 		a := assert.New(t)
-		schema := ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema())
 
 		// Insert data and verify flushing.
 		a.NoError(h.webhook(ctx, &request{
-			target: schema,
+			target: tableInfo.Name().Schema(),
 			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "topic" : %[1]s, "updated" : "10.0" },
@@ -321,10 +308,10 @@ func testHandler(t *testing.T, immediate bool) {
 		}))
 
 		a.NoError(h.webhook(ctx, &request{
-			target: schema,
+			target: tableInfo.Name().Schema(),
 			body:   strings.NewReader(`{ "resolved" : "20.0" }`),
 		}))
-		a.NoError(maybeFlush(schema, hlc.New(20, 0)))
+		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(20, 0)))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -332,7 +319,7 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Now, delete the data.
 		a.NoError(h.webhook(ctx, &request{
-			target: schema,
+			target: tableInfo.Name().Schema(),
 			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "key" : [ 42 ], "topic" : %[1]s, "updated" : "30.0" },
@@ -342,10 +329,10 @@ func testHandler(t *testing.T, immediate bool) {
 		}))
 
 		a.NoError(h.webhook(ctx, &request{
-			target: schema,
+			target: tableInfo.Name().Schema(),
 			body:   strings.NewReader(`{ "resolved" : "40.0" }`),
 		}))
-		a.NoError(maybeFlush(schema, hlc.New(40, 0)))
+		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(40, 0)))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -365,7 +352,7 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Run("empty-webhook", func(t *testing.T) {
 		a := assert.New(t)
 		a.NoError(h.webhook(ctx, &request{
-			target: ident.NewSchema(tableInfo.Name().Database(), tableInfo.Name().Schema()),
+			target: tableInfo.Name().Schema(),
 			body:   strings.NewReader(""),
 		}))
 	})
@@ -375,6 +362,7 @@ func TestRejectedAuth(t *testing.T) {
 	// Verify that auth checks don't require other services.
 	h := &Handler{
 		Authenticator: reject.New(),
+		TargetPool:    &types.TargetPool{Product: types.ProductCockroachDB},
 	}
 
 	tcs := []struct {
@@ -456,10 +444,10 @@ func testMassBackfillWithForeignKeys(
 				FanShards:          16,
 				ForeignKeysEnabled: true,
 				LoopName:           "changefeed",
-				StagingDB:          baseFixture.StagingDB.Ident(),
+				StagingDB:          baseFixture.StagingDB.Schema(),
 				RetryDelay:         time.Nanosecond,
 				TargetConn:         baseFixture.TargetPool.ConnectionString,
-				TargetDB:           baseFixture.TestDB.Ident(),
+				TargetSchema:       baseFixture.TestDB.Schema(),
 			},
 		})
 		r.NoError(err)

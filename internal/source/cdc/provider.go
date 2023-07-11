@@ -42,7 +42,7 @@ func (t MetaTable) Table() ident.Table { return ident.Table(t) }
 // ProvideMetaTable is called by wire. It returns the
 // "_cdc_sink.public.resolved_timestamps" table per the flags.
 func ProvideMetaTable(cfg *Config) MetaTable {
-	return MetaTable(ident.NewTable(cfg.StagingDB, ident.Public, cfg.MetaTableName))
+	return MetaTable(ident.NewTable(cfg.StagingDB, cfg.MetaTableName))
 }
 
 // ProvideResolvers is called by Wire.

@@ -214,7 +214,17 @@ func (a *authenticator) refresh(ctx context.Context, tx types.StagingQuerier) er
 }
 
 func matches(allowed, requested ident.Schema) bool {
-	dbMatches := allowed.Database() == requested.Database() || allowed.Database() == wildcard
-	schemaMatches := allowed.Schema() == requested.Schema() || allowed.Schema() == wildcard
-	return dbMatches && schemaMatches
+	allowedParts := allowed.Idents(nil)
+	requestedParts := requested.Idents(nil)
+
+	for len(allowedParts) > 0 && len(requestedParts) > 0 {
+		partMatches := allowedParts[0] == requestedParts[0] || allowedParts[0] == wildcard
+		if !partMatches {
+			return false
+		}
+		allowedParts = allowedParts[1:]
+		requestedParts = requestedParts[1:]
+	}
+
+	return len(allowedParts) == 0 && len(requestedParts) == 0
 }

@@ -75,7 +75,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 // Preflight implements logical.Config.
 func (c *Config) Preflight() error {
 	c.BaseConfig.LoopName = "changefeed"
-	c.BaseConfig.TargetDB = ident.New("__filled_in_later__")
+	c.BaseConfig.TargetSchema = ident.MustSchema(ident.New("__filled_in_later__"))
 
 	if err := c.Base().Preflight(); err != nil {
 		return err
@@ -87,7 +87,7 @@ func (c *Config) Preflight() error {
 	if c.NDJsonBuffer == 0 {
 		c.NDJsonBuffer = defaultNDJsonBuffer
 	}
-	if c.MetaTableName.IsEmpty() {
+	if c.MetaTableName.Empty() {
 		return errors.New("no metadata table specified")
 	}
 	if c.SelectBatchSize == 0 {

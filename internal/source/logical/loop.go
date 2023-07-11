@@ -176,8 +176,8 @@ func (l *loop) GetConsistentPoint() stamp.Stamp {
 }
 
 // GetTargetDB implements State.
-func (l *loop) GetTargetDB() ident.Ident {
-	return l.config.TargetDB
+func (l *loop) GetTargetDB() ident.Schema {
+	return l.config.TargetSchema
 }
 
 // NotifyConsistentPoint implements State.

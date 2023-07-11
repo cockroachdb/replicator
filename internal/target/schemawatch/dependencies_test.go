@@ -22,7 +22,6 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -121,13 +120,13 @@ func TestGetDependencyOrder(t *testing.T) {
 	pool := fixture.TargetPool
 
 	for idx, tc := range tcs {
-		sql := fmt.Sprintf(tc.schema, fixture.TestDB.Ident())
+		sql := fmt.Sprintf(tc.schema, fixture.TestDB.Schema())
 		_, err := pool.ExecContext(ctx, sql)
 		r.NoError(err, idx)
 	}
 
 	r.NoError(fixture.Watcher.Refresh(ctx, pool))
-	snap := fixture.Watcher.Snapshot(ident.NewSchema(fixture.TestDB.Ident(), ident.Public))
+	snap := fixture.Watcher.Get()
 
 	tableCount := 0
 	found := make(map[string]int, len(expected))
@@ -146,7 +145,7 @@ func TestGetDependencyOrder(t *testing.T) {
 CREATE TABLE %[1]s.cycle_a (pk uuid primary key);
 CREATE TABLE %[1]s.cycle_b (pk uuid primary key, ref uuid references %[1]s.cycle_a);
 ALTER TABLE %[1]s.cycle_a ADD COLUMN ref uuid references %[1]s.cycle_b;
-`, fixture.TestDB.Ident()))
+`, fixture.TestDB.Schema()))
 	r.NoError(err)
 	err = fixture.Watcher.Refresh(ctx, pool)
 	a.ErrorContains(err, "cycle_a")

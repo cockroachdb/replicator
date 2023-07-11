@@ -73,7 +73,8 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Ident()
+	dbSchema := fixture.TestDB.Schema()
+	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
 
 	pgPool, cancel, err := setupPGPool(dbName)
@@ -84,8 +85,8 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 
 	// Create the schema in both locations.
 	tgts := []ident.Table{
-		ident.NewTable(dbName, ident.Public, ident.New("t1")),
-		ident.NewTable(dbName, ident.Public, ident.New("t2")),
+		ident.NewTable(dbSchema, ident.New("t1")),
+		ident.NewTable(dbSchema, ident.New("t2")),
 	}
 
 	for _, tgt := range tgts {
@@ -125,9 +126,9 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 			Immediate:    immediate,
 			LoopName:     "pglogicaltest",
 			RetryDelay:   time.Nanosecond,
-			StagingDB:    fixture.StagingDB.Ident(),
+			StagingDB:    fixture.StagingDB.Schema(),
 			TargetConn:   crdbPool.ConnectionString,
-			TargetDB:     dbName,
+			TargetSchema: dbSchema,
 		},
 		Publication: dbName.Raw(),
 		Slot:        dbName.Raw(),
@@ -291,7 +292,8 @@ func TestDataTypes(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Ident()
+	dbSchema := fixture.TestDB.Schema()
+	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
 
 	pgPool, cancel, err := setupPGPool(dbName)
@@ -347,11 +349,11 @@ func TestDataTypes(t *testing.T) {
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	loop, cancelLoop, err := Start(ctx, &Config{
 		BaseConfig: logical.BaseConfig{
-			LoopName:   "pglogicaltest",
-			RetryDelay: time.Nanosecond,
-			StagingDB:  fixture.StagingDB.Ident(),
-			TargetConn: crdbPool.ConnectionString,
-			TargetDB:   dbName,
+			LoopName:     "pglogicaltest",
+			RetryDelay:   time.Nanosecond,
+			StagingDB:    fixture.StagingDB.Schema(),
+			TargetConn:   crdbPool.ConnectionString,
+			TargetSchema: dbSchema,
 		},
 		Publication: dbName.Raw(),
 		Slot:        dbName.Raw(),

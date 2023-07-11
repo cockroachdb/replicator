@@ -30,14 +30,14 @@ type factory struct {
 	mu   struct {
 		sync.RWMutex
 		cancels []func()
-		data    map[ident.Ident]*watcher
+		data    map[ident.Schema]*watcher
 	}
 }
 
 var _ types.Watchers = (*factory)(nil)
 
 // Get creates or returns a memoized watcher for the given database.
-func (f *factory) Get(ctx context.Context, db ident.Ident) (types.Watcher, error) {
+func (f *factory) Get(ctx context.Context, db ident.Schema) (types.Watcher, error) {
 	if ret := f.getUnlocked(db); ret != nil {
 		return ret, nil
 	}
@@ -52,10 +52,10 @@ func (f *factory) close() {
 		cancel()
 	}
 	f.mu.cancels = nil
-	f.mu.data = make(map[ident.Ident]*watcher)
+	f.mu.data = make(map[ident.Schema]*watcher)
 }
 
-func (f *factory) createUnlocked(ctx context.Context, db ident.Ident) (*watcher, error) {
+func (f *factory) createUnlocked(ctx context.Context, db ident.Schema) (*watcher, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -73,7 +73,7 @@ func (f *factory) createUnlocked(ctx context.Context, db ident.Ident) (*watcher,
 	return ret, nil
 }
 
-func (f *factory) getUnlocked(db ident.Ident) *watcher {
+func (f *factory) getUnlocked(db ident.Schema) *watcher {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.mu.data[db]

@@ -21,37 +21,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/url"
-	"regexp"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 )
-
-var (
-	webhookQueryRegex        = regexp.MustCompile(`^/(?P<targetDB>[^/]+)/(?P<targetSchema>[^/]+)/(?P<targetTable>[^/]+)$`)
-	webhookQueryTargetDB     = webhookQueryRegex.SubexpIndex("targetDB")
-	webhookQueryTargetSchema = webhookQueryRegex.SubexpIndex("targetSchema")
-	webhookQueryTargetTable  = webhookQueryRegex.SubexpIndex("targetTable")
-)
-
-func (h *Handler) parseWebhookQueryURL(url *url.URL, req *request) error {
-	match := webhookQueryRegex.FindStringSubmatch(url.Path)
-	if match == nil {
-		return errors.Errorf("can't parse url %s", url)
-	}
-
-	table := ident.NewTable(
-		ident.New(match[webhookQueryTargetDB]),
-		ident.New(match[webhookQueryTargetSchema]),
-		ident.New(match[webhookQueryTargetTable]),
-	)
-	req.leaf = h.webhookForQuery
-	req.target = table
-	return nil
-}
 
 // webhookForQuery responds to the v23.1 webhook scheme for cdc feeds with queries.
 // we expect the select statement in the CREATE CHANGE FEED to use the following convention:
