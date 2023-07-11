@@ -31,7 +31,7 @@ var Set = wire.NewSet(
 func ProvideFactory(db *types.StagingPool, stagingDB ident.StagingDB) types.Stagers {
 	f := &factory{
 		db:        db,
-		stagingDB: stagingDB.Ident(),
+		stagingDB: stagingDB.Schema(),
 	}
 	f.mu.instances = make(map[ident.Table]*stage)
 	return f

@@ -315,7 +315,7 @@ func TestSanitize(t *testing.T) {
 	cfg.Pool = &pgxpool.Pool{}
 	a.EqualError(cfg.sanitize(), "target must be set")
 
-	cfg.Target = ident.NewTable(ident.New("db"), ident.Public, ident.New("tbl"))
+	cfg.Target = ident.NewTable(ident.MustSchema(ident.New("db"), ident.Public), ident.New("tbl"))
 	a.NoError(cfg.sanitize())
 
 	a.Zero(cfg.Guard)

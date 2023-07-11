@@ -42,8 +42,8 @@ func ProvideAuth(
 ) (auth types.Authenticator, cancel func(), err error) {
 	cancel = func() {}
 
-	keyTable := ident.NewTable(stagingDB.Ident(), ident.Public, PublicKeysTable)
-	revokedTable := ident.NewTable(stagingDB.Ident(), ident.Public, RevokedIdsTable)
+	keyTable := ident.NewTable(stagingDB.Schema(), PublicKeysTable)
+	revokedTable := ident.NewTable(stagingDB.Schema(), RevokedIdsTable)
 
 	// Boostrap the schema.
 	if _, err = db.Exec(ctx, fmt.Sprintf(ensureKeysTemplate, keyTable)); err != nil {

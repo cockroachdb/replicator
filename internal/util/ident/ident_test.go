@@ -23,35 +23,59 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFlagVar(t *testing.T) {
-	a := assert.New(t)
-
-	var id Ident
-	a.True(id.IsEmpty())
-
-	value := NewValue("default", &id)
-	a.Equal(New("default"), id)
-
-	a.NoError(value.Set("different"))
-	a.Equal(New("different"), id)
-}
-
 func TestIdent(t *testing.T) {
-	a := assert.New(t)
+	t.Run("zero", func(t *testing.T) {
+		a := assert.New(t)
+		var id Ident
+		a.Empty(id.Idents(nil))
+		a.Equal(`""`, id.String())
+		a.Equal("", id.Raw())
+		a.True(id.Empty())
 
-	a.True(New("").IsEmpty())
+		first, remainder := id.Split()
+		a.True(first.Empty())
+		a.True(remainder.Empty())
+	})
 
-	id := New("table")
-	a.Equal("table", id.Raw())
-	a.Equal(`"table"`, id.String())
-	a.False(id.IsEmpty())
+	t.Run("empty", func(t *testing.T) {
+		a := assert.New(t)
+		id := New("")
+		a.Same(id.atom, id.Idents(nil)[0].atom)
+		a.Equal(`""`, id.String())
+		a.Equal("", id.Raw())
+		a.True(id.Empty())
 
-	a.Equal(id, New("table"))
+		first, remainder := id.Split()
+		a.True(first.Empty())
+		a.True(remainder.Empty())
+	})
 
-	a.Equal(`"foo!bar"`, New("foo!bar").String())
+	t.Run("typical", func(t *testing.T) {
+		a := assert.New(t)
+		id := New("table")
+		a.Same(id.atom, id.Idents(nil)[0].atom)
+		a.Equal("table", id.Raw())
+		a.Equal(`"table"`, id.String())
+		a.False(id.Empty())
+
+		first, remainder := id.Split()
+		a.Equal(id, first)
+		a.True(remainder.Empty())
+	})
+
+	t.Run("canonical", func(t *testing.T) {
+		a := assert.New(t)
+
+		id := New("table")
+		id2 := New("table")
+		id3 := New("other")
+
+		a.Same(id.atom, id2.atom)
+		a.NotSame(id.atom, id3.atom)
+	})
 }
 
-func TestIdentJson(t *testing.T) {
+func TestIdentMarshal(t *testing.T) {
 	tcs := []struct {
 		raw string
 	}{
@@ -61,8 +85,15 @@ func TestIdentJson(t *testing.T) {
 		{"null"},
 	}
 
+	t.Run("zero", func(t *testing.T) {
+		a := assert.New(t)
+		buf, err := Ident{}.MarshalJSON()
+		a.NoError(err)
+		a.Equal([]byte(`""`), buf)
+	})
+
 	for _, tc := range tcs {
-		t.Run(tc.raw, func(t *testing.T) {
+		t.Run(tc.raw+"-json", func(t *testing.T) {
 			a := assert.New(t)
 
 			id := New(tc.raw)
@@ -72,49 +103,19 @@ func TestIdentJson(t *testing.T) {
 			var id2 Ident
 			a.NoError(json.Unmarshal(data, &id2))
 			a.Equal(id, id2)
+			a.Same(id.atom, id2.atom)
+		})
+		t.Run(tc.raw+"-text", func(t *testing.T) {
+			a := assert.New(t)
+
+			id := New(tc.raw)
+			data, err := id.MarshalText()
+			a.NoError(err)
+
+			var id2 Ident
+			a.NoError(id2.UnmarshalText(data))
+			a.Equal(id, id2)
+			a.Same(id.atom, id2.atom)
 		})
 	}
-}
-
-func TestQualified(t *testing.T) {
-	a := assert.New(t)
-
-	id := NewTable(New("database"), New("schema"), New("table"))
-	a.Equal(`"database"."schema"."table"`, id.String())
-}
-
-func TestSchemaJson(t *testing.T) {
-	a := assert.New(t)
-
-	id := NewSchema(New("db"), New("schema"))
-	data, err := json.Marshal(id)
-	a.NoError(err)
-
-	var id2 Schema
-	a.NoError(json.Unmarshal(data, &id2))
-	a.Equal(id, id2)
-}
-
-func TestTableJson(t *testing.T) {
-	a := assert.New(t)
-
-	id := NewTable(New("db"), New("schema"), New("table"))
-	data, err := json.Marshal(id)
-	a.NoError(err)
-
-	var id2 Table
-	a.NoError(json.Unmarshal(data, &id2))
-	a.Equal(id, id2)
-}
-
-func TestUDTJson(t *testing.T) {
-	a := assert.New(t)
-
-	id := NewUDT(New("db"), New("schema"), New("my_enum"))
-	data, err := json.Marshal(id)
-	a.NoError(err)
-
-	var id2 UDT
-	a.NoError(json.Unmarshal(data, &id2))
-	a.Equal(id, id2)
 }

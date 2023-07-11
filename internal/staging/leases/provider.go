@@ -45,6 +45,6 @@ func ProvideLeases(
 		RetryDelay: time.Second,
 		Poll:       time.Second,
 		Pool:       pool,
-		Target:     ident.NewTable(stagingDB.Ident(), ident.Public, ident.New("leases")),
+		Target:     ident.NewTable(stagingDB.Schema(), ident.New("leases")),
 	})
 }

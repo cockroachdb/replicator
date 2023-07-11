@@ -68,7 +68,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Ident()
+	dbName := fixture.TestDB.Schema()
 	crdbPool := fixture.TargetPool
 
 	config := &Config{
@@ -76,9 +76,9 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 			Immediate:    immediate,
 			RetryDelay:   10 * time.Second,
-			StagingDB:    fixture.StagingDB.Ident(),
+			StagingDB:    fixture.StagingDB.Schema(),
 			TargetConn:   crdbPool.ConnectionString,
-			TargetDB:     dbName,
+			TargetSchema: dbName,
 			LoopName:     loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
@@ -101,7 +101,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	defer cancel()
 
 	// Create the schema in both locations.
-	tgt := ident.NewTable(dbName, ident.Public, ident.New("t"))
+	tgt := ident.NewTable(dbName, ident.New("t"))
 
 	// MySQL only has a single-level namespace; that is, no user-defined schemas.
 	if _, err := myExec(ctx, myPool,
@@ -334,7 +334,7 @@ func TestDataTypes(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Ident()
+	dbName := fixture.TestDB.Schema()
 	crdbPool := fixture.TargetPool
 
 	config := &Config{
@@ -342,9 +342,9 @@ func TestDataTypes(t *testing.T) {
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 			Immediate:    false,           // we care about transaction semantics
 			RetryDelay:   10 * time.Second,
-			StagingDB:    fixture.StagingDB.Ident(),
+			StagingDB:    fixture.StagingDB.Schema(),
 			TargetConn:   crdbPool.ConnectionString,
-			TargetDB:     dbName,
+			TargetSchema: dbName,
 			LoopName:     loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
@@ -375,7 +375,7 @@ func TestDataTypes(t *testing.T) {
 	tgts := make([]ident.Table, len(tcs))
 	for idx, tc := range tcs {
 		tn := strings.ReplaceAll(tc.mysql, " ", "_")
-		tgt := ident.NewTable(dbName, ident.Public, ident.New(fmt.Sprintf("tgt_%s_%d", tn, idx)))
+		tgt := ident.NewTable(dbName, ident.New(fmt.Sprintf("tgt_%s_%d", tn, idx)))
 		tgts[idx] = tgt
 
 		// Create the schema in both locations.
@@ -479,7 +479,7 @@ func myExec(
 	})
 }
 func setupMYPool(config *Config) (*client.Pool, func(), error) {
-	database := config.TargetDB
+	database := config.TargetSchema.Idents(nil)[0] // Extract database name.
 	addr := fmt.Sprintf("%s:%d", config.host, config.port)
 	var baseConn *client.Conn
 	var err error

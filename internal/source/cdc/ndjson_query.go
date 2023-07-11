@@ -22,42 +22,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/url"
-	"regexp"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 )
-
-// See https://www.cockroachlabs.com/docs/stable/create-changefeed.html#general-file-format
-// Example: /targetDB/targetSchema/targetTable/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-test_table-1.ndjson
-// Format is: /[endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
-var (
-	ndjsonQueryRegex        = regexp.MustCompile(`^/(?P<targetDB>[^/]+)/(?P<targetSchema>[^/]+)/(?P<targetTable>[^/]+)/(?P<date>\d{4}-\d{2}-\d{2})/(?P<uniquer>.+)-(?P<topic>[^-]+)-(?P<schema_id>[^-]+).ndjson$`)
-	ndjsonQueryTargetDB     = ndjsonQueryRegex.SubexpIndex("targetDB")
-	ndjsonQueryTargetSchema = ndjsonQueryRegex.SubexpIndex("targetSchema")
-	ndjsonQueryTargetTable  = ndjsonQueryRegex.SubexpIndex("targetTable")
-)
-
-func (h *Handler) parseNdjsonQueryURL(url *url.URL, req *request) error {
-	match := ndjsonQueryRegex.FindStringSubmatch(url.Path)
-	if match == nil {
-		return errors.Errorf("can't parse url %s", url)
-	}
-	// for CDC queries, we rely on table from the URL Path, for consistency with webhook
-	table := ident.NewTable(
-		ident.New(match[ndjsonQueryTargetDB]),
-		ident.New(match[ndjsonQueryTargetSchema]),
-		ident.New(match[ndjsonQueryTargetTable]),
-	)
-	req.leaf = func(ctx context.Context, req *request) error {
-		return h.ndjson(ctx, req, h.parseNdjsonQueryMutation)
-	}
-	req.target = table
-	return nil
-
-}
 
 // parseNdjsonQueryMutation is a parseMutation function.
 // When using CDC queries the SELECT Statement must include the event (as "__event__")
@@ -92,7 +61,7 @@ func (h *Handler) getPrimaryKey(ctx context.Context, req *request) (map[ident.Id
 		return nil, errors.Errorf("expecting ident.Table, got %T", req.target)
 	}
 	req.keys = make(map[ident.Ident]int)
-	watcher, err := h.Resolvers.watchers.Get(ctx, table.Database())
+	watcher, err := h.Resolvers.watchers.Get(ctx, table.Schema())
 	if err != nil {
 		return nil, err
 	}

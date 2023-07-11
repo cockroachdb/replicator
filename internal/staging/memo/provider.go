@@ -36,7 +36,7 @@ var Set = wire.NewSet(
 func ProvideMemo(
 	ctx context.Context, db *types.StagingPool, staging ident.StagingDB,
 ) (*Memo, error) {
-	target := ident.NewTable(staging.Ident(), ident.Public, ident.New("memo"))
+	target := ident.NewTable(staging.Schema(), ident.New("memo"))
 	if err := retry.Execute(ctx, db, fmt.Sprintf(schema, target)); err != nil {
 		return nil, err
 	}

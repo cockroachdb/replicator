@@ -36,7 +36,7 @@ var Set = wire.NewSet(
 func ProvideConfigs(
 	ctx context.Context, pool *types.StagingPool, targetDB ident.StagingDB,
 ) (*Configs, func(), error) {
-	target := ident.NewTable(targetDB.Ident(), ident.Public, ident.New("apply_config"))
+	target := ident.NewTable(targetDB.Schema(), ident.New("apply_config"))
 
 	if _, err := pool.Exec(ctx, fmt.Sprintf(confSchema, target)); err != nil {
 		return nil, nil, errors.WithStack(err)

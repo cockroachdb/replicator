@@ -20,51 +20,12 @@ package cdc
 
 import (
 	"context"
-	"net/url"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 )
-
-// Example: /test/public/2020-04-04/202004042351304139680000000000000.RESOLVED
-// Format is: /[targetDB]/[targetSchema]/[date]/[timestamp].RESOLVED
-var (
-	resolvedRegex = regexp.MustCompile(
-		`^/(?P<targetDB>[^/]+)/(?P<targetSchema>[^/]+)/(?P<date>\d{4}-\d{2}-\d{2})/(?P<timestamp>\d{33}).RESOLVED$`)
-	resolvedDB        = resolvedRegex.SubexpIndex("targetDB")
-	resolvedSchema    = resolvedRegex.SubexpIndex("targetSchema")
-	resolvedTimestamp = resolvedRegex.SubexpIndex("timestamp")
-)
-
-func (h *Handler) parseResolvedURL(url *url.URL, req *request) error {
-	match := resolvedRegex.FindStringSubmatch(url.Path)
-	if len(match) != resolvedRegex.NumSubexp()+1 {
-		return errors.Errorf("can't parse url %s", url)
-	}
-
-	target := ident.NewSchema(ident.New(match[resolvedDB]), ident.New(match[resolvedSchema]))
-
-	tsText := match[resolvedTimestamp]
-	if len(tsText) != 33 {
-		return errors.Errorf(
-			"expected timestamp to be 33 characters long, got %d: %s",
-			len(tsText), tsText,
-		)
-	}
-	timestamp, err := parseResolvedTimestamp(tsText[:23], tsText[23:])
-	if err != nil {
-		return err
-	}
-
-	req.leaf = h.resolved
-	req.target = target
-	req.timestamp = timestamp
-	return nil
-}
 
 // This is the timestamp format:  YYYYMMDDHHMMSSNNNNNNNNNLLLLLLLLLL
 // Formatting const stolen from https://github.com/cockroachdb/cockroach/blob/master/pkg/ccl/changefeedccl/sink_cloudstorage.go#L48
@@ -102,8 +63,7 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 
 // resolved acts upon a resolved timestamp message.
 func (h *Handler) resolved(ctx context.Context, req *request) error {
-	target := req.target.AsSchema()
-	resolver, err := h.Resolvers.get(ctx, target)
+	resolver, err := h.Resolvers.get(ctx, req.target.Schema())
 	if err != nil {
 		return err
 	}

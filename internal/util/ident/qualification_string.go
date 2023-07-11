@@ -9,13 +9,13 @@ func _() {
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
 	_ = x[TableOnly-1]
-	_ = x[TableAndDatabase-2]
+	_ = x[PartialSchema-2]
 	_ = x[FullyQualified-3]
 }
 
-const _Qualification_name = "TableOnlyTableAndDatabaseFullyQualified"
+const _Qualification_name = "TableOnlyPartialSchemaFullyQualified"
 
-var _Qualification_index = [...]uint8{0, 9, 25, 39}
+var _Qualification_index = [...]uint8{0, 9, 22, 36}
 
 func (i Qualification) String() string {
 	i -= 1
