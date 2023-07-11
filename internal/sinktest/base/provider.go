@@ -79,7 +79,7 @@ func (f *Fixture) CreateTable(
 ) (TableInfo[*types.TargetPool], error) {
 	tableNum := atomic.AddInt32(&tempTable, 1)
 	tableName := ident.New(fmt.Sprintf("_test_table_%d", tableNum))
-	table := ident.NewTable(f.TestDB.Ident(), ident.Public, tableName)
+	table := ident.NewTable(f.TestDB.Schema(), tableName)
 
 	err := retry.Execute(ctx, f.TargetPool, fmt.Sprintf(schemaSpec, table))
 	return TableInfo[*types.TargetPool]{f.TargetPool, table}, errors.WithStack(err)
@@ -103,7 +103,7 @@ func ProvideContext() (context.Context, func(), error) {
 func ProvideStagingDB(
 	ctx context.Context, pool *types.StagingPool,
 ) (ident.StagingDB, func(), error) {
-	ret, cancel, err := CreateDatabase(ctx, pool, "_cdc_sink")
+	ret, cancel, err := CreateSchema(ctx, pool, "_cdc_sink")
 	return ident.StagingDB(ret), cancel, err
 }
 
@@ -171,16 +171,11 @@ func ProvideTargetPool(ctx context.Context) (*types.TargetPool, func(), error) {
 func ProvideTestDB(ctx context.Context, pool *types.TargetPool) (TestDB, func(), error) {
 	switch pool.Product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
-		ret, cancel, err := CreateDatabase(ctx, pool, "_test_db")
+		ret, cancel, err := CreateSchema(ctx, pool, "_test_db")
 		return TestDB(ret), cancel, err
 	case types.ProductOracle:
-		// We aren't able to create new database objects in Oracle XE,
-		// so return whatever we're connected to.
-		var name string
-		if err := pool.QueryRowContext(ctx, "SELECT ora_database_name FROM dual").Scan(&name); err != nil {
-			return *new(TestDB), nil, errors.WithStack(err)
-		}
-		return TestDB(ident.New(name)), func() {}, nil
+		panic(errors.New("TODO(bob): create a new user and return its schema"))
+
 	default:
 		return *new(TestDB), nil, errors.Errorf("cannot create test db for %s", pool.Product)
 	}
@@ -189,11 +184,11 @@ func ProvideTestDB(ctx context.Context, pool *types.TargetPool) (TestDB, func(),
 // Ensure unique database identifiers within a test run.
 var dbIdentCounter int32
 
-// CreateDatabase creates a SQL DATABASE with a unique name that will be
+// CreateSchema creates a schema with a unique name that will be
 // dropped when the cancel function is called.
-func CreateDatabase[P types.AnyPool](
+func CreateSchema[P types.AnyPool](
 	ctx context.Context, pool P, prefix string,
-) (ident.Ident, func(), error) {
+) (ident.Schema, func(), error) {
 	dbNum := atomic.AddInt32(&dbIdentCounter, 1)
 
 	// Each package tests run in a separate binary, so we need a
@@ -206,22 +201,36 @@ func CreateDatabase[P types.AnyPool](
 		log.WithError(err).WithField("target", name).Debug("dropped database")
 	}
 
+	// Clean up if anything below fails.
+	success := false
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
+
 	if err := retry.Execute(ctx, pool, fmt.Sprintf(
 		"CREATE DATABASE %s", name)); err != nil {
-		return ident.Ident{}, cancel, errors.WithStack(err)
+		return ident.Schema{}, cancel, errors.WithStack(err)
 	}
 
 	if err := retry.Execute(ctx, pool, fmt.Sprintf(
 		`ALTER DATABASE %s CONFIGURE ZONE USING gc.ttlseconds = 600`, name)); err != nil {
-		return ident.Ident{}, cancel, errors.WithStack(err)
+		return ident.Schema{}, cancel, errors.WithStack(err)
 	}
 
-	return name, cancel, nil
+	sch, err := ident.NewSchema(name, ident.Public)
+	if err != nil {
+		return ident.Schema{}, cancel, err
+	}
+
+	success = true
+	return sch, cancel, nil
 }
 
-// TestDB is an injection point that holds the name of a unique SQL DATABASE that holds
-// user-provided data.
-type TestDB ident.Ident
+// TestDB is an injection point that holds the name of a unique database
+// schema in which to store user data.
+type TestDB ident.Schema
 
-// Ident returns the underlying database identifier.
-func (t TestDB) Ident() ident.Ident { return ident.Ident(t) }
+// Schema returns the underlying database identifier.
+func (t TestDB) Schema() ident.Schema { return ident.Schema(t) }

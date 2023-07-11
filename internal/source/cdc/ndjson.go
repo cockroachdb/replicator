@@ -23,8 +23,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/url"
-	"regexp"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
@@ -34,45 +32,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// See https://www.cockroachlabs.com/docs/stable/create-changefeed.html#general-file-format
-// Example: /targetDB/targetSchema/2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-test_table-1.ndjson
-// Format is: /[endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
-var (
-	ndjsonRegex        = regexp.MustCompile(`^/(?P<targetDB>[^/]+)/(?P<targetSchema>[^/]+)/(?P<date>\d{4}-\d{2}-\d{2})/(?P<uniquer>.+)-(?P<topic>[^-]+)-(?P<schema_id>[^-]+).ndjson$`)
-	ndjsonTargetDB     = ndjsonRegex.SubexpIndex("targetDB")
-	ndjsonTargetSchema = ndjsonRegex.SubexpIndex("targetSchema")
-	ndjsonTopic        = ndjsonRegex.SubexpIndex("topic")
-)
-
 // parseMutation takes a single line from an ndjson and extracts enough
 // information to be able to persist it to the staging table.
 type parseMutation func(context.Context, *request, []byte) (types.Mutation, error)
-
-func (h *Handler) parseNdjsonURL(url *url.URL, req *request) error {
-	match := ndjsonRegex.FindStringSubmatch(url.Path)
-	if match == nil {
-		return errors.Errorf("can't parse url %s", url)
-	}
-
-	db := ident.New(match[ndjsonTargetDB])
-	schema := ident.New(match[ndjsonTargetSchema])
-	// The topic contains a possibly-qualified table name, but we want
-	// to ensure that we always wind up with a table in the target
-	// schema.
-	table, qual, err := ident.ParseTable(match[ndjsonTopic], ident.NewSchema(db, schema))
-	if qual != ident.TableOnly {
-		table = ident.NewTable(db, schema, table.Table())
-	}
-	if err != nil {
-		return err
-	}
-
-	req.leaf = func(ctx context.Context, req *request) error {
-		return h.ndjson(ctx, req, parseNdjsonMutation)
-	}
-	req.target = table
-	return nil
-}
 
 // parseNdjsonMutation is a parseMutation function
 func parseNdjsonMutation(_ context.Context, _ *request, rawBytes []byte) (types.Mutation, error) {

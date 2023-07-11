@@ -42,8 +42,8 @@ var RefreshDelay = flag.Duration("schemaRefresh", time.Minute,
 type watcher struct {
 	// All goroutines used by Watch use this as a parent context.
 	background context.Context
-	dbName     ident.Ident
 	delay      time.Duration
+	schema     ident.Schema
 
 	mu struct {
 		sync.RWMutex
@@ -62,17 +62,17 @@ var _ types.Watcher = (*watcher)(nil)
 // named database. The returned watcher will internally refresh
 // until the cancel callback is executed.
 func newWatcher(
-	ctx context.Context, tx *types.TargetPool, dbName ident.Ident,
+	ctx context.Context, tx *types.TargetPool, schema ident.Schema,
 ) (_ *watcher, cancel func(), _ error) {
 	background, cancel := context.WithCancel(context.Background())
 
 	w := &watcher{
 		background: background,
 		delay:      *RefreshDelay,
-		dbName:     dbName,
+		schema:     schema,
 	}
 	w.mu.updated = make(chan struct{})
-	w.sql.tables = fmt.Sprintf(tableTemplate, dbName)
+	w.sql.tables = fmt.Sprintf(tableTemplate, schema)
 
 	// Initial data load to sanity-check and make ready.
 	data, err := w.getTables(ctx, tx)
@@ -91,7 +91,7 @@ func newWatcher(
 				case <-time.After(w.delay):
 				}
 				if err := w.Refresh(background, tx); err != nil {
-					log.WithError(err).WithField("target", dbName).Warn("schema refresh failed")
+					log.WithError(err).WithField("target", schema).Warn("schema refresh failed")
 				}
 			}
 		}()
@@ -159,6 +159,11 @@ func (w *watcher) Snapshot(in ident.Schema) *types.SchemaData {
 	return ret
 }
 
+// String is for debugging use only.
+func (w *watcher) String() string {
+	return fmt.Sprintf("Watcher(%s)", w.schema)
+}
+
 // Watch will send updated column data for the given table until the
 // watch is canceled. The requested table must already be known to the
 // watcher.
@@ -210,7 +215,7 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 	return ch, cancel, nil
 }
 
-const tableTemplate = `SELECT schema_name, table_name FROM [SHOW TABLES FROM %s] WHERE type = 'table'`
+const tableTemplate = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE type = 'table'`
 
 func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.SchemaData, error) {
 	ret := &types.SchemaData{
@@ -219,16 +224,16 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		rows, err := tx.QueryContext(ctx, w.sql.tables)
 		if err != nil {
-			return err
+			return errors.Wrap(err, w.sql.tables)
 		}
 		defer rows.Close()
 
 		for rows.Next() {
-			var schema, table string
-			if err := rows.Scan(&schema, &table); err != nil {
+			var table string
+			if err := rows.Scan(&table); err != nil {
 				return err
 			}
-			tbl := ident.NewTable(w.dbName, ident.New(schema), ident.New(table))
+			tbl := ident.NewTable(w.schema, ident.New(table))
 			cols, err := getColumns(ctx, tx, tbl)
 			if err != nil {
 				return err
@@ -237,9 +242,9 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 
 		}
 
-		ret.Order, err = getDependencyOrder(ctx, tx, w.dbName)
+		ret.Order, err = getDependencyOrder(ctx, tx, w.schema)
 		return err
 	})
 
-	return ret, errors.Wrap(err, w.sql.tables)
+	return ret, err
 }

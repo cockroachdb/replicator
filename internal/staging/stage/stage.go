@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"io"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -46,10 +45,9 @@ import (
 
 // stagingTable returns the staging table name that will store mutations
 // for the given target table.
-func stagingTable(stagingDB ident.Ident, target ident.Table) ident.Table {
-	tblName := strings.Join(
-		[]string{target.Database().Raw(), target.Schema().Raw(), target.Table().Raw()}, "_")
-	return ident.NewTable(stagingDB, ident.Public, ident.New(tblName))
+func stagingTable(stagingDB ident.Schema, target ident.Table) ident.Table {
+	mangled := ident.Join(target, ident.Raw, '_')
+	return ident.NewTable(stagingDB, ident.New(mangled))
 }
 
 // stage implements a storage and retrieval mechanism for staging
@@ -83,7 +81,7 @@ var _ types.Stager = (*stage)(nil)
 // newStore constructs a new mutation stage that will track pending
 // mutations to be applied to the given target table.
 func newStore(
-	ctx context.Context, db *types.StagingPool, stagingDB ident.Ident, target ident.Table,
+	ctx context.Context, db *types.StagingPool, stagingDB ident.Schema, target ident.Table,
 ) (*stage, error) {
 	table := stagingTable(stagingDB, target)
 

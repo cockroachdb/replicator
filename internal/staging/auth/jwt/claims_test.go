@@ -46,16 +46,15 @@ func TestClaims(t *testing.T) {
 	}
 }`,
 		},
-		// As previous, but a malformed ident
+		// As previous, but only a single-part schema name.
 		{
 			json: `
 {
 	"jti": "foobar",
 	"https://github.com/cockroachdb/cdc-sink": {
-		"schemas": [ ["missing" ]]
+		"schemas": [ ["one_segment" ]]
 	}
 }`,
-			err: "expecting 2 parts, had 1",
 		},
 		// Bad expiration date
 		{

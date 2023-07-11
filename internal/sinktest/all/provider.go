@@ -43,5 +43,5 @@ var TestSet = wire.NewSet(
 func ProvideWatcher(
 	ctx context.Context, testDB base.TestDB, watchers types.Watchers,
 ) (types.Watcher, error) {
-	return watchers.Get(ctx, testDB.Ident())
+	return watchers.Get(ctx, testDB.Schema())
 }

@@ -71,11 +71,11 @@ killall -HUP cdc-sink
 
 			schemas := make([]ident.Schema, len(allow))
 			for idx, input := range allow {
-				parts := strings.Split(input, ".")
-				if len(parts) != 2 {
-					return errors.Errorf("could not interpret %q as schema name", input)
+				var err error
+				schemas[idx], err = ident.ParseSchema(input)
+				if err != nil {
+					return err
 				}
-				schemas[idx] = ident.NewSchema(ident.New(parts[0]), ident.New(parts[1]))
 			}
 
 			if claimOnly {

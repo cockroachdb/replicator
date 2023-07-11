@@ -26,7 +26,6 @@ import (
 )
 
 const (
-	dbLabel     = "database"
 	schemaLabel = "schema"
 	tableLabel  = "table"
 )
@@ -36,12 +35,9 @@ var (
 	// for latency metrics. The values in this slice assume that the
 	// metric's base units are measured in seconds.
 	LatencyBuckets = Buckets(time.Millisecond.Seconds(), time.Minute.Seconds())
-	// SchemaLabels are the labels to be applied to schema-specific,
-	// vector metrics.
-	SchemaLabels = []string{dbLabel, schemaLabel}
 	// TableLabels are the labels to be applied to table-specific,
 	// vector metrics.
-	TableLabels = []string{dbLabel, schemaLabel, tableLabel}
+	TableLabels = []string{schemaLabel, tableLabel}
 )
 
 // Buckets computes a linear log10 sequence of buckets, starting
@@ -63,14 +59,8 @@ func Buckets(base, max float64) []float64 {
 	}
 }
 
-// SchemaValues returns the values to plug into a vector metric
-// that expects SchemaLabels.
-func SchemaValues(schema ident.Schema) []string {
-	return []string{schema.Database().Raw(), schema.Schema().Raw()}
-}
-
 // TableValues returns the values to plug into a vector metric
 // that expects TableLabels.
 func TableValues(table ident.Table) []string {
-	return []string{table.Database().Raw(), table.Schema().Raw(), table.Table().Raw()}
+	return []string{table.Schema().Raw(), table.Table().Raw()}
 }

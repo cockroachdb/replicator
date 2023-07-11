@@ -41,7 +41,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	ctx := fixture.Context
 	cfgs := fixture.Configs
 
-	tbl := ident.NewTable(ident.New("db"), ident.New("public"), ident.New("target"))
+	tbl := ident.NewTable(ident.MustSchema(ident.New("db"), ident.Public), ident.New("target"))
 
 	watch, cancel := cfgs.Watch(tbl)
 	defer cancel()

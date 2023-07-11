@@ -113,17 +113,17 @@ func (c *Config) Preflight() error {
 	}
 
 	// Require a property to store the underlying doc id in.
-	if c.DocumentIDProperty.IsEmpty() {
+	if c.DocumentIDProperty.Empty() {
 		return errors.New("no document id property was configured")
 	}
 
 	if c.TombstoneCollection != "" {
-		if c.TombstoneCollectionProperty.IsEmpty() {
+		if c.TombstoneCollectionProperty.Empty() {
 			return errors.New("if Tombstones are enabled, a collection property name must be set")
 		}
 	}
 
-	if c.UpdatedAtProperty.IsEmpty() {
+	if c.UpdatedAtProperty.Empty() {
 		return errors.New("no updated_at property name given")
 	}
 

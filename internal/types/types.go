@@ -305,9 +305,6 @@ type Watcher interface {
 	// for updated schema information. This is intended for testing and
 	// does not need to be called in the general case.
 	Refresh(context.Context, *TargetPool) error
-	// Snapshot returns the tables known to be part of the given
-	// user-defined schema.
-	Snapshot(in ident.Schema) *SchemaData
 	// Watch returns a channel that emits updated column data for the
 	// given table.  The channel will be closed if there
 	Watch(table ident.Table) (_ <-chan []ColData, cancel func(), _ error)
@@ -315,7 +312,7 @@ type Watcher interface {
 
 // Watchers is a factory for Watcher instances.
 type Watchers interface {
-	Get(ctx context.Context, db ident.Ident) (Watcher, error)
+	Get(ctx context.Context, db ident.Schema) (Watcher, error)
 }
 
 type noCopy struct{}

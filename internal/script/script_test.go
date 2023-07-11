@@ -56,23 +56,23 @@ func TestScript(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
+	schema := fixture.TestDB.Schema()
 
 	// Create tables that will be referenced by the user-script.
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.table1(msg TEXT PRIMARY KEY)", fixture.TestDB.Ident()))
+		fmt.Sprintf("CREATE TABLE %s.table1(msg TEXT PRIMARY KEY)", schema))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.table2(idx INT PRIMARY KEY)", fixture.TestDB.Ident()))
+		fmt.Sprintf("CREATE TABLE %s.table2(idx INT PRIMARY KEY)", schema))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.all_features(msg TEXT PRIMARY KEY)", fixture.TestDB.Ident()))
+		fmt.Sprintf("CREATE TABLE %s.all_features(msg TEXT PRIMARY KEY)", schema))
 	r.NoError(err)
 
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
 
 	var opts mapOptions
 
-	schema := ident.NewSchema(fixture.TestDB.Ident(), ident.Public)
 	s, err := newScriptFromFixture(fixture, &Config{
 		FS:       testData,
 		MainPath: "/testdata/main.ts",
@@ -83,9 +83,9 @@ func TestScript(t *testing.T) {
 	a.Len(s.Targets, 2)
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
-	tbl1 := ident.NewTable(schema.Database(), schema.Schema(), ident.New("table1"))
-	tbl2 := ident.NewTable(schema.Database(), schema.Schema(), ident.New("table2"))
-	tblS := ident.NewTable(schema.Database(), schema.Schema(), ident.New("some_table"))
+	tbl1 := ident.NewTable(schema, ident.New("table1"))
+	tbl2 := ident.NewTable(schema, ident.New("table2"))
+	tblS := ident.NewTable(schema, ident.New("some_table"))
 
 	if cfg := s.Sources[ident.New("expander")]; a.NotNil(cfg) {
 		a.Equal(tbl1, cfg.DeletesTo)
@@ -112,7 +112,7 @@ func TestScript(t *testing.T) {
 		mut := types.Mutation{Data: []byte(`{"passthrough":true}`)}
 		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
-			tbl := ident.NewTable(schema.Database(), schema.Schema(), ident.New("some_table"))
+			tbl := ident.NewTable(schema, ident.New("some_table"))
 			expanded := mapped[tbl]
 			if a.Len(expanded, 1) {
 				a.Equal(mut, expanded[0])
@@ -124,7 +124,7 @@ func TestScript(t *testing.T) {
 		a.True(cfg.Recurse)
 	}
 
-	tbl := ident.NewTable(fixture.TestDB.Ident(), ident.Public, ident.New("all_features"))
+	tbl := ident.NewTable(schema, ident.New("all_features"))
 	if cfg := s.Targets[tbl]; a.NotNil(cfg) {
 		expectedApply := applycfg.Config{
 			CASColumns: []ident.Ident{ident.New("cas0"), ident.New("cas1")},
@@ -155,7 +155,7 @@ func TestScript(t *testing.T) {
 		}
 	}
 
-	tbl = ident.NewTable(fixture.TestDB.Ident(), ident.Public, ident.New("drop_all"))
+	tbl = ident.NewTable(schema, ident.New("drop_all"))
 	if cfg := s.Targets[tbl]; a.NotNil(cfg) {
 		if filter := cfg.Map; a.NotNil(filter) {
 			_, keep, err := filter(context.Background(), types.Mutation{Data: []byte(`{"hello":"world!"}`)})

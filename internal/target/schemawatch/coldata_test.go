@@ -155,7 +155,7 @@ func TestGetColumns(t *testing.T) {
 			nil,
 		},
 		{
-			fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TestDB.Ident()),
+			fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TestDB.Schema()),
 			[]string{"a"},
 			nil,
 			func(t *testing.T, data []types.ColData) {
@@ -163,7 +163,7 @@ func TestGetColumns(t *testing.T) {
 				if a.Len(data, 1) {
 					col := data[0]
 					a.Equal(
-						ident.NewUDT(fixture.TestDB.Ident(), ident.Public, ident.New("MyEnum")),
+						ident.NewUDT(fixture.TestDB.Schema(), ident.New("MyEnum")),
 						col.Type)
 				}
 			},
@@ -188,7 +188,7 @@ func TestGetColumns(t *testing.T) {
 	// Verify user-defined types with mixed-case name.
 	if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
-		fixture.TestDB.Ident()),
+		fixture.TestDB.Schema()),
 	); !a.NoError(err) {
 		return
 	}
@@ -211,7 +211,7 @@ func TestGetColumns(t *testing.T) {
 				return
 			}
 			tableName := ti.Name()
-			colData, ok := fixture.Watcher.Snapshot(tableName.AsSchema()).Columns[tableName]
+			colData, ok := fixture.Watcher.Get().Columns[tableName]
 			if !a.Truef(ok, "Snapshot() did not return info for %s", tableName) {
 				return
 			}
@@ -261,11 +261,11 @@ func TestColDataIgnoresViews(t *testing.T) {
 	}
 	viewName := vi.Name()
 
-	colData, ok := fixture.Watcher.Snapshot(tableName.AsSchema()).Columns[tableName]
+	colData, ok := fixture.Watcher.Get().Columns[tableName]
 	a.True(ok)
 	a.NotNil(colData)
 
-	viewData, ok := fixture.Watcher.Snapshot(tableName.AsSchema()).Columns[viewName]
+	viewData, ok := fixture.Watcher.Get().Columns[viewName]
 	a.False(ok)
 	a.Nil(viewData)
 }
