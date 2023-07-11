@@ -28,6 +28,7 @@ import (
 
 const (
 	defaultApplyTimeout   = 30 * time.Second
+	defaultBackfillWindow = 10 * time.Minute
 	defaultFanShards      = 16
 	defaultRetryDelay     = 10 * time.Second
 	defaultStandbyTimeout = 5 * time.Second
@@ -107,8 +108,8 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 
 	f.DurationVar(&c.ApplyTimeout, "applyTimeout", defaultApplyTimeout,
 		"the maximum amount of time to wait for an update to be applied")
-	f.DurationVar(&c.BackfillWindow, "backfillWindow", 0,
-		"use a high-throughput, but non-transactional mode if replication is this far behind")
+	f.DurationVar(&c.BackfillWindow, "backfillWindow", defaultBackfillWindow,
+		"use a high-throughput, but non-transactional mode if replication is this far behind (0 disables this feature)")
 	f.IntVar(&c.BytesInFlight, "bytesInFlight", defaultBytesInFlight,
 		"apply backpressure when amount of in-flight mutation data reaches this limit")
 	// LoopName bound by dialect packages.

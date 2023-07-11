@@ -62,7 +62,7 @@ func TestPGLogical(t *testing.T) {
 	t.Run("immediate-chaos", func(t *testing.T) { testPGLogical(t, false, true, 0.0005) })
 }
 
-func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb float32) {
+func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb float32) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -133,8 +133,10 @@ func testPGLogical(t *testing.T, enableBackfill, immediate bool, withChaosProb f
 		Slot:        dbName.Raw(),
 		SourceConn:  *pgConnString + dbName.Raw(),
 	}
-	if enableBackfill {
+	if allowBackfill {
 		cfg.BackfillWindow = time.Minute
+	} else {
+		cfg.BackfillWindow = 0
 	}
 	loop, cancelLoop, err := Start(ctx, cfg)
 	if !a.NoError(err) {
