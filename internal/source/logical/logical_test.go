@@ -93,6 +93,8 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	}
 	if allowBackfill {
 		cfg.BackfillWindow = time.Minute
+	} else {
+		cfg.BackfillWindow = 0
 	}
 
 	loop, cancelLoop, err := logical.Start(ctx, cfg, dialect)
