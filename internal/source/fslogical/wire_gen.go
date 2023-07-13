@@ -13,6 +13,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
+	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 )
@@ -83,7 +84,17 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup7 := logical.ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	factory, cleanup7, err := logical.ProvideFactory(contextContext, appliers, config, memoMemo, stagingPool, targetPool, userScript, watchers, checker)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
 	if err != nil {
 		cleanup7()
@@ -159,7 +170,14 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup4 := logical.ProvideFactory(appliers, config, typesMemo, stagingPool, targetPool, watchers, userScript)
+	checker := fixture.VersionChecker
+	factory, cleanup4, err := logical.ProvideFactory(contextContext, appliers, config, typesMemo, stagingPool, targetPool, userScript, watchers, checker)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
 	if err != nil {
 		cleanup4()

@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
+	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 )
@@ -71,7 +72,16 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	factory, cleanup6 := ProvideFactory(appliers, config, memoMemo, stagingPool, targetPool, watchers, userScript)
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	factory, cleanup6, err := ProvideFactory(ctx, appliers, config, memoMemo, stagingPool, targetPool, userScript, watchers, checker)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
 	if err != nil {
 		cleanup6()
