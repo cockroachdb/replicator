@@ -21,6 +21,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 )
 
@@ -30,11 +31,12 @@ import (
 type Fixture struct {
 	*base.Fixture
 
-	Appliers types.Appliers
-	Configs  *applycfg.Configs
-	Memo     types.Memo
-	Stagers  types.Stagers
-	Watchers types.Watchers
+	Appliers       types.Appliers
+	Configs        *applycfg.Configs
+	Memo           types.Memo
+	Stagers        types.Stagers
+	VersionChecker *version.Checker
+	Watchers       types.Watchers
 
 	Watcher types.Watcher // A watcher for TestDB.
 }

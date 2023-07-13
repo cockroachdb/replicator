@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
+	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 )
@@ -81,6 +82,7 @@ func NewFixture() (*Fixture, func(), error) {
 		return nil, nil, err
 	}
 	stagers := stage.ProvideFactory(stagingPool, stagingDB)
+	checker := version.ProvideChecker(stagingPool, memoMemo)
 	watcher, err := ProvideWatcher(context, testDB, watchers)
 	if err != nil {
 		cleanup8()
@@ -94,13 +96,14 @@ func NewFixture() (*Fixture, func(), error) {
 		return nil, nil, err
 	}
 	allFixture := &Fixture{
-		Fixture:  fixture,
-		Appliers: appliers,
-		Configs:  configs,
-		Memo:     memoMemo,
-		Stagers:  stagers,
-		Watchers: watchers,
-		Watcher:  watcher,
+		Fixture:        fixture,
+		Appliers:       appliers,
+		Configs:        configs,
+		Memo:           memoMemo,
+		Stagers:        stagers,
+		VersionChecker: checker,
+		Watchers:       watchers,
+		Watcher:        watcher,
 	}
 	return allFixture, func() {
 		cleanup8()
