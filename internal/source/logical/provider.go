@@ -21,11 +21,13 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // Set is used by Wire.
@@ -55,14 +57,27 @@ func ProvideBaseConfig(config Config, _ *script.Loader) (*BaseConfig, error) {
 // ProvideFactory returns a utility which can create multiple logical
 // loops.
 func ProvideFactory(
+	ctx context.Context,
 	appliers types.Appliers,
 	config Config,
 	memo types.Memo,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
-	watchers types.Watchers,
 	userscript *script.UserScript,
-) (*Factory, func()) {
+	watchers types.Watchers,
+	versionCheck *version.Checker,
+) (*Factory, func(), error) {
+	warnings, err := versionCheck.Check(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(warnings) > 0 {
+		for _, w := range warnings {
+			log.Warn(w)
+		}
+		return nil, nil, errors.New("manual schema change required")
+	}
+
 	f := &Factory{
 		appliers:    appliers,
 		cfg:         config,
@@ -73,7 +88,7 @@ func ProvideFactory(
 		userscript:  userscript,
 	}
 	f.mu.loops = make(map[string]*Loop)
-	return f, f.Close
+	return f, f.Close, nil
 }
 
 // ProvideLoop is called by Wire to create a singleton replication loop.
