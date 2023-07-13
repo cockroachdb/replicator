@@ -428,7 +428,7 @@ func getFlavor(config *Config) (string, error) {
 			}
 		}
 		return mysql.MariaDBFlavor, nil
-	} else if strings.Contains(version, "MySQL") {
+	} else if strings.Contains(version, "MySQL") || version == "Source distribution" {
 		for _, v := range mySQLSystemSettings {
 			err = checkSystemSetting(c, v[0], v[1])
 			if err != nil {
