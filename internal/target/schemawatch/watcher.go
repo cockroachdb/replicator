@@ -52,7 +52,8 @@ type watcher struct {
 	}
 
 	sql struct {
-		tables string
+		tables     string
+		tablesArgs []any
 	}
 }
 
@@ -72,7 +73,16 @@ func newWatcher(
 		schema:     schema,
 	}
 	w.mu.updated = make(chan struct{})
-	w.sql.tables = fmt.Sprintf(tableTemplate, schema)
+	switch tx.Product {
+	case types.ProductCockroachDB:
+		w.sql.tables = fmt.Sprintf(tableTemplateCrdb, schema)
+	case types.ProductOracle:
+		w.sql.tables = tableTemplateOracle
+		w.sql.tablesArgs = []any{schema.Raw()}
+	default:
+		cancel()
+		return nil, nil, errors.Errorf("unimplemented %s", tx.Product)
+	}
 
 	// Initial data load to sanity-check and make ready.
 	data, err := w.getTables(ctx, tx)
@@ -215,14 +225,18 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 	return ch, cancel, nil
 }
 
-const tableTemplate = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE type = 'table'`
+const (
+	tableTemplateCrdb   = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE type = 'table'`
+	tableTemplateOracle = `SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :owner`
+)
 
 func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.SchemaData, error) {
 	ret := &types.SchemaData{
 		Columns: make(map[ident.Table][]types.ColData),
 	}
+
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		rows, err := tx.QueryContext(ctx, w.sql.tables)
+		rows, err := tx.QueryContext(ctx, w.sql.tables, w.sql.tablesArgs...)
 		if err != nil {
 			return errors.Wrap(err, w.sql.tables)
 		}

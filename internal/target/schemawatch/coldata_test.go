@@ -41,124 +41,122 @@ func TestGetColumns(t *testing.T) {
 	ctx := fixture.Context
 
 	type testcase struct {
-		tableSchema string
-		primaryKeys []string
-		dataCols    []string
-		check       func(*testing.T, []types.ColData)
+		check       func(*testing.T, []types.ColData) // Optional extra test code
+		dataCols    []string                          // Expected non-PK columns, in order
+		products    []types.Product                   // Skip if not applicable to current product
+		primaryKeys []string                          // Primary key columns, in order
+		skip        bool                              // Extra logic to disable case
+		sqlPost     []string                          // Additional SQL, table name is %s
+		tableSchema string                            // Column definitions only
 	}
 	testcases := []testcase{
 		{
-			"", // It's legal to create a table with no columns.
-			[]string{"rowid"},
-			nil,
-			nil,
+			// It's legal to create a table with no columns.
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			primaryKeys: []string{"rowid"},
 		},
 		{
-			"a INT",
-			[]string{"rowid"},
-			[]string{"a"},
-			nil,
+			tableSchema: "a INT",
+			primaryKeys: []string{"rowid"},
+			dataCols:    []string{"a"},
 		},
 		{
-			"a INT PRIMARY KEY",
-			[]string{"a"},
-			nil,
-			nil,
+			tableSchema: "a INT PRIMARY KEY",
+			primaryKeys: []string{"a"},
 		},
 		{
-			"a INT, b INT",
-			[]string{"rowid"},
-			[]string{"a", "b"},
-			nil,
+			tableSchema: "a INT, b INT",
+			primaryKeys: []string{"rowid"},
+			dataCols:    []string{"a", "b"},
 		},
 		{
-			"a INT, b INT, PRIMARY KEY (a,b)",
-			[]string{"a", "b"},
-			nil,
-			nil,
+			tableSchema: "a INT, b INT, PRIMARY KEY (a,b)",
+			primaryKeys: []string{"a", "b"},
 		},
 		{
-			"a INT, b INT, PRIMARY KEY (b,a)",
-			[]string{"b", "a"},
-			nil,
-			nil,
+			tableSchema: "a INT, b INT, PRIMARY KEY (b,a)",
+			primaryKeys: []string{"b", "a"},
 		},
 		{
-			"a INT, b INT, c INT, PRIMARY KEY (b,a,c)",
-			[]string{"b", "a", "c"},
-			nil,
-			nil,
+			tableSchema: "a INT, b INT, c INT, PRIMARY KEY (b,a,c)",
+			primaryKeys: []string{"b", "a", "c"},
 		},
 		{
-			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c)",
-			[]string{"b", "a", "c"},
-			[]string{"q", "r"},
-			nil,
+			tableSchema: "a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c)",
+			primaryKeys: []string{"b", "a", "c"},
+			dataCols:    []string{"q", "r"},
 		},
 		{
-			"a INT, b INT, r INT, c INT, q INT, PRIMARY KEY (b,a,c) USING HASH WITH BUCKET_COUNT = 8",
-			[]string{"ignored_crdb_internal_a_b_c_shard_8", "b", "a", "c"},
-			[]string{"q", "r"},
-			nil,
+			products:    []types.Product{types.ProductCockroachDB},
+			tableSchema: "a INT, b INT, r INT, c INT, q INT, PRIMARY KEY (b,a,c) USING HASH WITH BUCKET_COUNT = 8",
+			primaryKeys: []string{"ignored_crdb_internal_a_b_c_shard_8", "b", "a", "c"},
+			dataCols:    []string{"q", "r"},
 		},
 		// Ensure that computed data columns are ignored.
 		{
-			"a INT, b INT, " +
-				"c INT AS (a + b) STORED, " +
+			tableSchema: "a INT, b INT, " +
+				"c INT AS (a + b) VIRTUAL, " +
 				"PRIMARY KEY (a,b)",
-			[]string{"a", "b"},
-			[]string{"ignored_c"},
-			nil,
+			primaryKeys: []string{"a", "b"},
+			dataCols:    []string{"ignored_c"},
 		},
 		// Ensure that computed pk columns are retained.
 		{
-			"a INT, b INT, " +
-				"c INT AS (a + b) STORED, " +
+			tableSchema: "a INT, b INT, " +
+				"c INT AS (a + b) VIRTUAL, " +
 				"PRIMARY KEY (a,c,b)",
-			[]string{"a", "ignored_c", "b"},
-			nil,
-			nil,
+			primaryKeys: []string{"a", "ignored_c", "b"},
+			// Virtual PK columns not supported before 22.X releases.
+			skip: fixture.TargetPool.Product == types.ProductCockroachDB &&
+				strings.Contains(fixture.TargetPool.Version, "v21."),
+		},
+		{
+			products: []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			tableSchema: "a INT, b INT, " +
+				"c INT AS (a + b) STORED, " +
+				"d INT AS (a + b) VIRTUAL, " +
+				"PRIMARY KEY (a,b)",
+			primaryKeys: []string{"a", "b"},
+			dataCols:    []string{"ignored_c", "ignored_d"},
 		},
 		// Ensure that the PK constraint may have an arbitrary name.
 		{
-			"a INT, b INT, CONSTRAINT foobar_pk PRIMARY KEY (a,b)",
-			[]string{"a", "b"},
-			nil,
-			nil,
+			tableSchema: "a INT, b INT, CONSTRAINT foobar_pk PRIMARY KEY (a,b)",
+			primaryKeys: []string{"a", "b"},
 		},
 		// Check non-interference from secondary index.
 		{
-			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c), INDEX (c,a,b)",
-			[]string{"b", "a", "c"},
-			[]string{"q", "r"},
-			nil,
+			tableSchema: "a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c)",
+			primaryKeys: []string{"b", "a", "c"},
+			dataCols:    []string{"q", "r"},
+			sqlPost:     []string{"CREATE INDEX ind_cab1 ON %s (c,a,b)"},
 		},
 		// Check non-interference from unique secondary index.
 		{
-			"a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c), UNIQUE INDEX (c,a,b)",
-			[]string{"b", "a", "c"},
-			[]string{"q", "r"},
-			nil,
+			tableSchema: "a INT, b INT, q INT, c INT, r INT, PRIMARY KEY (b,a,c)",
+			primaryKeys: []string{"b", "a", "c"},
+			dataCols:    []string{"q", "r"},
+			sqlPost:     []string{"CREATE UNIQUE INDEX ind_cab2 ON %s (c,a,b)"},
 		},
 		// Check no-PK, but with a secondary index.
 		{
-			"a INT, b INT, q INT, c INT, r INT, INDEX (c,a,b)",
-			[]string{"rowid"},
-			[]string{"a", "b", "c", "q", "r"},
-			nil,
+			tableSchema: "a INT, b INT, q INT, c INT, r INT",
+			primaryKeys: []string{"rowid"},
+			dataCols:    []string{"a", "b", "c", "q", "r"},
+			sqlPost:     []string{"CREATE INDEX ind_cab3 ON %s (c,a,b)"},
 		},
 		// Check no-PK, but with a unique secondary index.
 		{
-			"a INT, b INT, q INT, c INT, r INT, UNIQUE INDEX (c,a,b)",
-			[]string{"rowid"},
-			[]string{"a", "b", "c", "q", "r"},
-			nil,
+			tableSchema: "a INT, b INT, q INT, c INT, r INT",
+			primaryKeys: []string{"rowid"},
+			dataCols:    []string{"a", "b", "c", "q", "r"},
+			sqlPost:     []string{"CREATE UNIQUE INDEX ind_cab4 ON %s (c,a,b)"},
 		},
 		{
-			fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TestDB.Schema()),
-			[]string{"a"},
-			nil,
-			func(t *testing.T, data []types.ColData) {
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			tableSchema: fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TestDB.Schema()),
+			primaryKeys: []string{"a"},
+			check: func(t *testing.T, data []types.ColData) {
 				a := assert.New(t)
 				if a.Len(data, 1) {
 					col := data[0]
@@ -168,21 +166,6 @@ func TestGetColumns(t *testing.T) {
 				}
 			},
 		},
-	}
-
-	// Virtual columns not supported before v21.1.
-	// Oldest target is v20.2.
-	if !strings.Contains(fixture.TargetPool.Version, "v20.2.") {
-		testcases = append(testcases,
-			testcase{
-				tableSchema: "a INT, b INT, " +
-					"c INT AS (a + b) STORED, " +
-					"d INT AS (a + b) VIRTUAL, " +
-					"PRIMARY KEY (a,b)",
-				primaryKeys: []string{"a", "b"},
-				dataCols:    []string{"ignored_c", "ignored_d"},
-			},
-		)
 	}
 
 	// Verify user-defined types with mixed-case name.
@@ -195,6 +178,21 @@ func TestGetColumns(t *testing.T) {
 
 	for i, test := range testcases {
 		t.Run(fmt.Sprintf("%d:%s", i, test.tableSchema), func(t *testing.T) {
+			if test.skip {
+				t.Skip("not applicable")
+			}
+			if len(test.products) > 0 {
+				productMatches := false
+				for _, product := range test.products {
+					if product == fixture.TargetPool.Product {
+						productMatches = true
+						break
+					}
+				}
+				if !productMatches {
+					t.Skipf("testcase not relevant for current product")
+				}
+			}
 			a := assert.New(t)
 
 			cmd := fmt.Sprintf(`CREATE TABLE %%s ( %s )`, test.tableSchema)
@@ -211,6 +209,14 @@ func TestGetColumns(t *testing.T) {
 				return
 			}
 			tableName := ti.Name()
+
+			for _, cmd := range test.sqlPost {
+				_, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(cmd, tableName))
+				if !a.NoError(err, cmd) {
+					return
+				}
+			}
+
 			colData, ok := fixture.Watcher.Get().Columns[tableName]
 			if !a.Truef(ok, "Snapshot() did not return info for %s", tableName) {
 				return
