@@ -18,6 +18,7 @@ package schemawatch
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -38,6 +39,27 @@ func colSliceEqual(a, b []types.ColData) bool {
 	return true
 }
 
+// Retrieve the primary key columns in their index-order.
+//
+// Parts of the CTE:
+// * atc: basic information about all columns
+// * acc: look for the ids of constraints applied to the columns
+// * ac:  extract primary-key constraints
+const sqlColumnsQueryOra = `
+WITH atc AS (SELECT OWNER, TABLE_NAME, COLUMN_NAME, DATA_TYPE, VIRTUAL_COLUMN FROM ALL_TAB_COLS),
+     acc AS (SELECT OWNER, TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, POSITION FROM ALL_CONS_COLUMNS),
+     ac  AS (SELECT CONSTRAINT_NAME, 't' IS_PK FROM ALL_CONSTRAINTS WHERE CONSTRAINT_TYPE='P')
+SELECT lower(COLUMN_NAME),
+       COALESCE(ac.IS_PK, 'f'),
+       atc.DATA_TYPE,
+       CASE WHEN atc.VIRTUAL_COLUMN = 'YES' THEN 't' ELSE 'f' END
+FROM atc
+LEFT JOIN acc USING (OWNER, TABLE_NAME, COLUMN_NAME)
+LEFT JOIN ac  USING (CONSTRAINT_NAME)
+WHERE (OWNER = :owner AND TABLE_NAME = :tbl_name)
+ORDER BY POSITION, COLUMN_NAME
+`
+
 // Retrieve the primary key columns in their index-order, then append
 // any remaining non-generated columns.
 //
@@ -51,7 +73,7 @@ func colSliceEqual(a, b []types.ColData) bool {
 // * ordered: adds a synthetic seq_in_index to the non-PK columns.
 // * SELECT: aggregates the above, sorting the PK columns in-order
 // before the non-PK columns.
-const sqlColumnsQuery = `
+const sqlColumnsQueryPg = `
 WITH
 pk_name AS (
 	SELECT constraint_name FROM [SHOW CONSTRAINTS FROM %[1]s]
@@ -80,11 +102,28 @@ ORDER BY ordered.seq_in_index, cols.column_name
 func getColumns(
 	ctx context.Context, tx *types.TargetPool, table ident.Table,
 ) ([]types.ColData, error) {
-	stmt := fmt.Sprintf(sqlColumnsQuery, table)
+	var args []any
+	var stmt string
+	switch tx.Product {
+	case types.ProductCockroachDB:
+		stmt = fmt.Sprintf(sqlColumnsQueryPg, table)
+	case types.ProductOracle:
+		parts := table.Idents(make([]ident.Ident, 0, 2))
+		if len(parts) != 2 {
+			return nil, errors.Errorf("expecting two table name parts, had %d", len(parts))
+		}
+		stmt = sqlColumnsQueryOra
+		args = []any{
+			sql.Named("owner", parts[0].Raw()),
+			sql.Named("tbl_name", parts[1].Raw()),
+		}
+	default:
+		return nil, errors.Errorf("unimplemented: %s", tx.Product)
+	}
 
 	var columns []types.ColData
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		rows, err := tx.QueryContext(ctx, stmt)
+		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return err
 		}
@@ -173,7 +212,7 @@ func getColumns(
 		if !foundPrimay {
 			rowID := ident.New("rowid")
 
-			next := make([]types.ColData, len(columns))
+			next := make([]types.ColData, 1, len(columns)+1)
 			next[0] = types.ColData{
 				Ignored: false,
 				Name:    rowID,
@@ -181,11 +220,9 @@ func getColumns(
 				Type:    "INT8",
 			}
 
-			nextIdx := 1
 			for _, col := range columns {
 				if col.Name != rowID {
-					next[nextIdx] = col
-					nextIdx++
+					next = append(next, col)
 				}
 			}
 			columns = next

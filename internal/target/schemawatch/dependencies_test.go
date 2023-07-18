@@ -22,6 +22,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,73 +43,73 @@ func TestGetDependencyOrder(t *testing.T) {
 		{
 			"parent",
 			0,
-			"create table %[1]s.parent (pk uuid primary key)",
+			"create table %[1]s.parent (pk int primary key)",
 		},
 		{
 			"parent_2",
 			0,
-			"create table %[1]s.parent_2 (pk uuid primary key)",
+			"create table %[1]s.parent_2 (pk int primary key)",
 		},
 		{
 			"unreferenced",
 			0,
-			"create table %[1]s.unreferenced (pk uuid primary key)",
+			"create table %[1]s.unreferenced (pk int primary key)",
 		},
 		{
 			"child",
 			1,
-			"create table %[1]s.child (pk uuid primary key, parent uuid references %[1]s.parent)",
+			"create table %[1]s.child (pk int primary key, parent int references %[1]s.parent)",
 		},
 		{
 			"child_2",
 			1,
-			"create table %[1]s.child_2 (pk uuid primary key, parent_2 uuid references %[1]s.parent_2)",
+			"create table %[1]s.child_2 (pk int primary key, parent_2 int references %[1]s.parent_2)",
 		},
 		{
 			"grandchild",
 			2,
-			"create table %[1]s.grandchild (pk uuid primary key, child uuid references %[1]s.child)",
+			"create table %[1]s.grandchild (pk int primary key, child int references %[1]s.child)",
 		},
 		{
 			"grandchild_2",
 			2,
-			"create table %[1]s.grandchild_2 (pk uuid primary key, child_2 uuid references %[1]s.child_2)",
+			"create table %[1]s.grandchild_2 (pk int primary key, child_2 int references %[1]s.child_2)",
 		},
 		{
 			"grandchild_multi",
 			2,
-			"create table %[1]s.grandchild_multi (pk uuid primary key, child uuid references %[1]s.child, child_2 uuid references %[1]s.child_2)",
+			"create table %[1]s.grandchild_multi (pk int primary key, child int references %[1]s.child, child_2 int references %[1]s.child_2)",
 		},
 		{
 			"three",
 			3,
-			"create table %[1]s.three (pk uuid primary key, parent uuid references %[1]s.parent, gc uuid references %[1]s.grandchild)",
+			"create table %[1]s.three (pk int primary key, parent int references %[1]s.parent, gc int references %[1]s.grandchild)",
 		},
 		{
 			"four",
 			4,
-			"create table %[1]s.four (pk uuid primary key, parent uuid references %[1]s.parent, three uuid references %[1]s.three)",
+			"create table %[1]s.four (pk int primary key, parent int references %[1]s.parent, three int references %[1]s.three)",
 		},
 		{
 			"five",
 			5,
-			"create table %[1]s.five (pk uuid primary key, parent uuid references %[1]s.parent, three uuid references %[1]s.four)",
+			"create table %[1]s.five (pk int primary key, parent int references %[1]s.parent, three int references %[1]s.four)",
 		},
 		{
 			"six",
 			6,
-			"create table %[1]s.six (pk uuid primary key, parent uuid references %[1]s.parent, three uuid references %[1]s.five)",
+			"create table %[1]s.six (pk int primary key, parent int references %[1]s.parent, three int references %[1]s.five)",
 		},
 		// Verify that a self-referential table returns reasonable values.
 		{
 			"self",
 			0,
-			"create table %[1]s.self (pk uuid primary key, ref uuid references %[1]s.self)",
+			"create table %[1]s.self (pk int primary key, ref int references %[1]s.self)",
 		},
 		{
 			"self_child",
 			1,
-			"create table %[1]s.self_child (pk uuid primary key, self uuid references %[1]s.self, self_child uuid references %[1]s.self_child)",
+			"create table %[1]s.self_child (pk int primary key, self int references %[1]s.self, self_child int references %[1]s.self_child)",
 		},
 	}
 	expected := make(map[string]int, len(tcs))
@@ -141,12 +142,32 @@ func TestGetDependencyOrder(t *testing.T) {
 	a.Equal(expected, found)
 
 	// Ensure that we fail in a useful manner if there is a reference cycle.
-	_, err = pool.ExecContext(ctx, fmt.Sprintf(`
-CREATE TABLE %[1]s.cycle_a (pk uuid primary key);
-CREATE TABLE %[1]s.cycle_b (pk uuid primary key, ref uuid references %[1]s.cycle_a);
-ALTER TABLE %[1]s.cycle_a ADD COLUMN ref uuid references %[1]s.cycle_b;
+	switch pool.Product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		_, err = pool.ExecContext(ctx, fmt.Sprintf(`
+CREATE TABLE %[1]s.cycle_a (pk int primary key);
+CREATE TABLE %[1]s.cycle_b (pk int primary key, ref int references %[1]s.cycle_a);
+ALTER TABLE %[1]s.cycle_a ADD COLUMN ref int references %[1]s.cycle_b;
 `, fixture.TestDB.Schema()))
-	r.NoError(err)
+		r.NoError(err)
+
+	case types.ProductOracle:
+		_, err = pool.ExecContext(ctx, fmt.Sprintf(
+			`CREATE TABLE %[1]s.cycle_a (pk int primary key)`, fixture.TestDB.Schema()))
+		r.NoError(err)
+
+		_, err = pool.ExecContext(ctx, fmt.Sprintf(
+			`CREATE TABLE %[1]s.cycle_b (pk int primary key, ref int references %[1]s.cycle_a)`,
+			fixture.TestDB.Schema()))
+		r.NoError(err)
+
+		_, err = pool.ExecContext(ctx, fmt.Sprintf(
+			`ALTER TABLE %[1]s.cycle_a ADD (ref int references %[1]s.cycle_b)`, fixture.TestDB.Schema()))
+		r.NoError(err)
+
+	default:
+		r.FailNow("unsupported product")
+	}
 	err = fixture.Watcher.Refresh(ctx, pool)
 	a.ErrorContains(err, "cycle_a")
 	a.ErrorContains(err, "cycle_b")
@@ -164,10 +185,13 @@ func TestNoDeferrableConstraints(t *testing.T) {
 	r.NoError(err)
 	defer cancel()
 
+	if fixture.TargetPool.Product != types.ProductCockroachDB {
+		t.Skip("only for CRDB")
+	}
 	ctx := fixture.Context
 
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		"create table x (pk uuid primary key, ref uuid references x deferrable initially deferred)")
+		"create table x (pk int primary key, ref int references x deferrable initially deferred)")
 	a.ErrorContains(err, "deferrable")
 	a.ErrorContains(err, "42601")
 }
