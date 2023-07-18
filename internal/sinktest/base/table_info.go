@@ -43,9 +43,9 @@ func (ti TableInfo[P]) DeleteAll(ctx context.Context) error {
 	return retry.Execute(ctx, ti.db, fmt.Sprintf("DELETE FROM %s WHERE true", ti.name))
 }
 
-// DropTable drops the table if it exists.
+// DropTable drops the table.
 func (ti TableInfo[P]) DropTable(ctx context.Context) error {
-	return retry.Execute(ctx, ti.db, fmt.Sprintf("DROP TABLE IF EXISTS %s", ti.name))
+	return retry.Execute(ctx, ti.db, fmt.Sprintf("DROP TABLE %s", ti.name))
 }
 
 // Exec executes a single SQL statement. The sql string must include

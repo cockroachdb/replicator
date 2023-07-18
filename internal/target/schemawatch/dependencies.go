@@ -18,6 +18,7 @@ package schemawatch
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -26,7 +27,59 @@ import (
 	"github.com/pkg/errors"
 )
 
-// depOrderTemplate computes the "referential depth" of tables based on
+// depOrderTemplateOra computes the "referential depth" of tables based on
+// foreign-key constraints.
+//
+// The query is structured as follows:
+//   - parent_refs: Identifies all index References as a mapping of
+//     (owner, table) -> (owner, constraint).
+//   - ref_to_tbl: Resolves the constraint name references to Primary or
+//     Unique indexes to parent table names.
+//   - tbl_to_parent: Joins parent_refs and ref_to_tbl to produce
+//     child(owner, table) -> parent(owner, table) mappings.
+//   - root: Any table that is not referenced in tbl_to_parent. Contains
+//     extra columns to be column-compatible with tbl_to_parent.
+//   - combo: A union of root and tbl_to_parent. This serves as the
+//     source of data for the recursive query.
+//   - levels: A recursive query that computes the level by finding the
+//     child tables of the previous level. The START WITH clause selects
+//     tables which have no parent or which are self-referential.
+//   - cyclic: Adds a dummy level for every table to detect any cyclic
+//     structures which were excluded by levels.
+//   - The top-level query finds the maximum depth for each table.  We
+//     subtract one from the magic LEVEL value to align with the PG query
+//     below.
+const depOrderTemplateOra = `
+WITH parent_refs AS (SELECT OWNER tbl_owner, TABLE_NAME tbl_name, R_OWNER parent_owner, R_CONSTRAINT_NAME ref_name
+                     FROM ALL_CONSTRAINTS
+                     WHERE CONSTRAINT_TYPE = 'R'),
+     ref_to_tbl AS (SELECT CONSTRAINT_NAME ref_name, OWNER parent_owner, TABLE_NAME parent_name
+                    FROM ALL_CONSTRAINTS
+                    WHERE CONSTRAINT_TYPE IN ('P', 'U')),
+     tbl_to_parent AS (SELECT tbl_owner, tbl_name, parent_owner, parent_name
+                       FROM parent_refs
+                       JOIN ref_to_tbl USING (parent_owner, ref_name)),
+     roots AS (SELECT OWNER tbl_owner, TABLE_NAME tbl_name, NULL parent_owner, NULL parent_name
+               FROM ALL_TABLES
+               WHERE (OWNER, TABLE_NAME) NOT IN (SELECT tbl_owner, tbl_name FROM tbl_to_parent)),
+     combo AS (SELECT * FROM roots UNION ALL SELECT * from tbl_to_parent),
+     levels AS (SELECT LEVEL lvl, tbl_owner, tbl_name, parent_owner, parent_name
+                FROM combo
+                START WITH (parent_owner IS NULL AND parent_name IS NULL)
+                        OR (tbl_owner = parent_owner AND tbl_name = parent_name)
+                CONNECT BY NOCYCLE (parent_owner, parent_name) = ((PRIOR tbl_owner, PRIOR tbl_name))),
+     cyclic AS (SELECT 0 lvl, OWNER tbl_owner, TABLE_NAME tbl_name
+                FROM ALL_TABLES
+                UNION ALL
+                SELECT lvl, tbl_owner, tbl_name
+                FROM levels)
+SELECT lower(tbl_owner), lower(tbl_name), max(lvl) - 1 lvl
+FROM cyclic
+WHERE tbl_owner = (:owner)
+GROUP BY tbl_owner, tbl_name
+ORDER BY 3, 1, 2`
+
+// depOrderTemplatePg computes the "referential depth" of tables based on
 // foreign-key constraints. Note that this only works with acyclic FK
 // dependency graphs. This is ok because CRDB's lack of deferrable
 // constraints means that a cyclic dependency graph would be unusable.
@@ -51,7 +104,7 @@ import (
 // One limitation in this query is that the information_schema doesn't
 // appear to provide any way to know about the schema in which the
 // referenced table is defined.
-const depOrderTemplate = `
+const depOrderTemplatePg = `
 WITH RECURSIVE
  tables AS (
    SELECT schema_name AS sch, table_name AS tbl
@@ -87,14 +140,22 @@ ORDER BY 3, 1, 2
 func getDependencyOrder(
 	ctx context.Context, tx *types.TargetPool, db ident.Schema,
 ) ([][]ident.Table, error) {
-	// Extract just the database name to refer to information_schema.
-	dbName, _ := db.Split()
-	stmt := fmt.Sprintf(depOrderTemplate, db, dbName)
+	var args []any
+	var stmt string
+	switch tx.Product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		// Extract just the database name to refer to information_schema.
+		dbName, _ := db.Split()
+		stmt = fmt.Sprintf(depOrderTemplatePg, db, dbName)
+	case types.ProductOracle:
+		stmt = depOrderTemplateOra
+		args = []any{sql.Named("owner", db.Raw())}
+	}
 
 	var cycles []ident.Table
 	var depOrder [][]ident.Table
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		rows, err := tx.QueryContext(ctx, stmt)
+		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return errors.Wrap(err, stmt)
 		}
