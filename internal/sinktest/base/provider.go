@@ -78,7 +78,7 @@ func (f *Fixture) CreateTable(
 	ctx context.Context, schemaSpec string,
 ) (TableInfo[*types.TargetPool], error) {
 	tableNum := atomic.AddInt32(&tempTable, 1)
-	tableName := ident.New(fmt.Sprintf("_test_table_%d", tableNum))
+	tableName := ident.New(fmt.Sprintf("tbl_%d", tableNum))
 	table := ident.NewTable(f.TestDB.Schema(), tableName)
 
 	err := retry.Execute(ctx, f.TargetPool, fmt.Sprintf(schemaSpec, table))
@@ -173,8 +173,26 @@ func ProvideTestDB(ctx context.Context, pool *types.TargetPool) (TestDB, func(),
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		ret, cancel, err := CreateSchema(ctx, pool, "_test_db")
 		return TestDB(ret), cancel, err
+
 	case types.ProductOracle:
-		panic(errors.New("TODO(bob): create a new user and return its schema"))
+		// Each package tests run in a separate binary, so we need a
+		// "globally" unique ID.  While PIDs do recycle, they're highly
+		// unlikely to do so during a single run of the test suite.
+		name := ident.New(fmt.Sprintf("target_%d_%d", os.Getpid(), atomic.AddInt32(&dbIdentCounter, 1)))
+
+		_, err := pool.ExecContext(ctx, fmt.Sprintf("CREATE USER %s", name))
+		if err != nil {
+			return TestDB{}, nil, errors.Wrapf(err, "could not create user %s", name)
+		}
+
+		cancel := func() {
+			_, err := pool.ExecContext(ctx, fmt.Sprintf("DROP USER %s CASCADE", name))
+			if err != nil {
+				log.WithError(err).Warnf("could not clean up schema %s", name)
+			}
+		}
+
+		return TestDB(ident.MustSchema(name)), cancel, nil
 
 	default:
 		return *new(TestDB), nil, errors.Errorf("cannot create test db for %s", pool.Product)

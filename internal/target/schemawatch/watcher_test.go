@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/stretchr/testify/assert"
@@ -68,9 +69,21 @@ func TestWatch(t *testing.T) {
 	}
 
 	// Add a column and expect to see it.
-	if !a.NoError(retry.Execute(ctx, fixture.TargetPool,
-		fmt.Sprintf("ALTER TABLE %s ADD COLUMN v STRING", tblInfo.Name()))) {
-		return
+	switch fixture.TargetPool.Product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		if !a.NoError(retry.Execute(ctx, fixture.TargetPool,
+			fmt.Sprintf("ALTER TABLE %s ADD COLUMN v STRING", tblInfo.Name()))) {
+			return
+		}
+
+	case types.ProductOracle:
+		if !a.NoError(retry.Execute(ctx, fixture.TargetPool,
+			fmt.Sprintf("ALTER TABLE %s ADD (v INT)", tblInfo.Name()))) {
+			return
+		}
+
+	default:
+		a.FailNow("unsupported product")
 	}
 
 	select {
