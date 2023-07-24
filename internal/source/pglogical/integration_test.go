@@ -73,7 +73,7 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 	defer cancel()
 
 	ctx := fixture.Context
-	dbSchema := fixture.TestDB.Schema()
+	dbSchema := fixture.TargetSchema.Schema()
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
 
@@ -292,7 +292,7 @@ func TestDataTypes(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbSchema := fixture.TestDB.Schema()
+	dbSchema := fixture.TargetSchema.Schema()
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
 
@@ -308,7 +308,7 @@ func TestDataTypes(t *testing.T) {
 
 		// Create the schema in both locations.
 		var schema = fmt.Sprintf("CREATE TABLE %%s (k INT PRIMARY KEY, v %s)", tc.name)
-		ti, err := fixture.CreateTable(ctx, schema)
+		ti, err := fixture.CreateTargetTable(ctx, schema)
 		if !a.NoErrorf(err, "CRDB %s", tc.name) {
 			return
 		}

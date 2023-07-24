@@ -48,9 +48,11 @@ func OpenOracleAsTarget(
 		}
 
 		ret := &types.TargetPool{
-			ConnectionString: connectString,
-			DB:               sql.OpenDB(connector),
-			Product:          types.ProductOracle,
+			DB: sql.OpenDB(connector),
+			PoolInfo: types.PoolInfo{
+				ConnectionString: connectString,
+				Product:          types.ProductOracle,
+			},
 		}
 
 		ctx.Go(func() error {

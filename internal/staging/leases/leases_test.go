@@ -28,33 +28,32 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
 func TestLeases(t *testing.T) {
-	a := assert.New(t)
+	r := require.New(t)
 
 	fixture, cancel, err := base.NewFixture()
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	defer cancel()
 
 	ctx := fixture.Context
 
-	tbl, err := fixture.CreateTable(ctx, schema)
-	if !a.NoError(err) {
-		return
-	}
+	enclosing, cancel, err := base.CreateSchema(ctx, fixture.StagingPool, "leases_")
+	r.NoError(err)
+	defer cancel()
+
+	tbl, err := base.CreateTable(ctx, fixture.StagingPool, enclosing, schema)
+	r.NoError(err)
 
 	intf, err := New(ctx, Config{
 		Pool:   fixture.StagingPool,
 		Target: tbl.Name(),
 	})
+	r.NoError(err)
 	l := intf.(*leases)
-	if !a.NoError(err) {
-		return
-	}
 
 	now := time.Now().UTC()
 

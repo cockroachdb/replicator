@@ -98,8 +98,8 @@ func ProvideLoop(ctx context.Context, factory *Factory, dialect Dialect) (*Loop,
 
 // ProvideStagingDB is called by Wire to retrieve the name of the
 // _cdc_sink SQL DATABASE.
-func ProvideStagingDB(config *BaseConfig) (ident.StagingDB, error) {
-	return ident.StagingDB(config.StagingDB), nil
+func ProvideStagingDB(config *BaseConfig) (ident.StagingSchema, error) {
+	return ident.StagingSchema(config.StagingDB), nil
 }
 
 // ProvideStagingPool is called by Wire to create a connection pool that
@@ -139,7 +139,7 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPo
 	if txTimeout != 0 {
 		options = append(options, stdpool.WithTransactionTimeout(txTimeout))
 	}
-	ret, cancel, err := stdpool.OpenTarget(ctx, config.StagingConn, options...)
+	ret, cancel, err := stdpool.OpenTarget(ctx, config.TargetConn, options...)
 	if ret.Product != types.ProductCockroachDB {
 		cancel()
 		return nil, nil, errors.Errorf("only CockroachDB is a supported target at this time; have %s", ret.Product)

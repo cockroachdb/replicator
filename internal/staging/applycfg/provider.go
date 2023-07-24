@@ -34,7 +34,7 @@ var Set = wire.NewSet(
 // ProvideConfigs constructs a Configs instance, starting a new
 // background goroutine to keep it refreshed.
 func ProvideConfigs(
-	ctx context.Context, pool *types.StagingPool, targetDB ident.StagingDB,
+	ctx context.Context, pool *types.StagingPool, targetDB ident.StagingSchema,
 ) (*Configs, func(), error) {
 	target := ident.NewTable(targetDB.Schema(), ident.New("apply_config"))
 

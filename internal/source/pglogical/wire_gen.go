@@ -38,12 +38,12 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingDB, err := logical.ProvideStagingDB(baseConfig)
+	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup2, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingDB)
+	configs, cleanup2, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -56,7 +56,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	}
 	watchers, cleanup4 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
-	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingDB)
+	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup5()
 		cleanup4()

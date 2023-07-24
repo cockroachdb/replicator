@@ -149,7 +149,9 @@ func TestParseChangefeedURL(t *testing.T) {
 	}
 
 	h := &Handler{
-		TargetPool: &types.TargetPool{Product: types.ProductCockroachDB},
+		TargetPool: &types.TargetPool{
+			PoolInfo: types.PoolInfo{Product: types.ProductCockroachDB},
+		},
 	}
 	var leafDecision string
 	requestParsingTestCallback = func(decision string) { leafDecision = decision }

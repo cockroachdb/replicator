@@ -52,13 +52,13 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	stagingDB, err := logical.ProvideStagingDB(baseConfig)
+	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup3, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingDB)
+	configs, cleanup3, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup2()
 		cleanup()
@@ -73,7 +73,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	}
 	watchers, cleanup5 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
-	authenticator, cleanup7, err := ProvideAuthenticator(ctx, stagingPool, config, stagingDB)
+	authenticator, cleanup7, err := ProvideAuthenticator(ctx, stagingPool, config, stagingSchema)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -84,7 +84,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	cdcConfig := &config.CDC
-	typesLeases, err := leases.ProvideLeases(ctx, stagingPool, stagingDB)
+	typesLeases, err := leases.ProvideLeases(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -96,7 +96,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
-	stagers := stage.ProvideFactory(stagingPool, stagingDB)
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema)
 	resolvers, cleanup8, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup7()
@@ -165,12 +165,12 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingDB, err := logical.ProvideStagingDB(baseConfig)
+	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	authenticator, cleanup2, err := ProvideAuthenticator(contextContext, stagingPool, config, stagingDB)
+	authenticator, cleanup2, err := ProvideAuthenticator(contextContext, stagingPool, config, stagingSchema)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -181,7 +181,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup4, err := applycfg.ProvideConfigs(contextContext, stagingPool, stagingDB)
+	configs, cleanup4, err := applycfg.ProvideConfigs(contextContext, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup3()
 		cleanup2()
@@ -199,7 +199,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 	watchers, cleanup6 := schemawatch.ProvideFactory(targetPool)
 	appliers, cleanup7 := apply.ProvideFactory(configs, watchers)
 	cdcConfig := &config.CDC
-	typesLeases, err := leases.ProvideLeases(contextContext, stagingPool, stagingDB)
+	typesLeases, err := leases.ProvideLeases(contextContext, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -211,7 +211,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		return nil, nil, err
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
-	stagers := stage.ProvideFactory(stagingPool, stagingDB)
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema)
 	resolvers, cleanup8, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup7()
@@ -252,7 +252,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		Listener:      listener,
 		StagingPool:   stagingPool,
 		Server:        server,
-		StagingDB:     stagingDB,
+		StagingDB:     stagingSchema,
 		Watcher:       watchers,
 	}
 	return serverTestFixture, func() {
@@ -276,6 +276,6 @@ type testFixture struct {
 	Listener      net.Listener
 	StagingPool   *types.StagingPool
 	Server        *Server
-	StagingDB     ident.StagingDB
+	StagingDB     ident.StagingSchema
 	Watcher       types.Watchers
 }

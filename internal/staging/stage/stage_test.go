@@ -48,7 +48,7 @@ func TestPutAndDrain(t *testing.T) {
 	ctx := fixture.Context
 	a.NotEmpty(fixture.StagingPool.Version)
 	pool := fixture.StagingPool
-	targetDB := fixture.TestDB.Schema()
+	targetDB := fixture.StagingDB.Schema()
 
 	dummyTarget := ident.NewTable(targetDB, ident.New("target"))
 
@@ -214,7 +214,7 @@ func TestSelectMany(t *testing.T) {
 	a.NotEmpty(fixture.StagingPool.Version)
 
 	// Create some fake table names.
-	targetDB := fixture.TestDB.Schema()
+	targetDB := fixture.TargetSchema.Schema()
 	tables := make([]ident.Table, tableCount)
 	for idx := range tables {
 		tables[idx] = ident.NewTable(targetDB, ident.New(fmt.Sprintf("target_%d", idx)))
@@ -451,7 +451,7 @@ func benchmarkStage(b *testing.B, batchSize int) {
 	defer cancel()
 
 	ctx := fixture.Context
-	targetDB := fixture.TestDB.Schema()
+	targetDB := fixture.TargetSchema.Schema()
 
 	dummyTarget := ident.NewTable(targetDB, ident.New("target"))
 

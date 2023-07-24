@@ -34,7 +34,7 @@ var Set = wire.NewSet(
 
 // ProvideMemo is called by Wire to construct the KV wrapper.
 func ProvideMemo(
-	ctx context.Context, db *types.StagingPool, staging ident.StagingDB,
+	ctx context.Context, db *types.StagingPool, staging ident.StagingSchema,
 ) (*Memo, error) {
 	target := ident.NewTable(staging.Schema(), ident.New("memo"))
 	if err := retry.Execute(ctx, db, fmt.Sprintf(schema, target)); err != nil {

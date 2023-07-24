@@ -233,7 +233,8 @@ const (
 // AnyPool is a generic type constraint for any database pool type
 // that we support.
 type AnyPool interface {
-	*StagingPool | *TargetPool
+	*SourcePool | *StagingPool | *TargetPool
+	Info() *PoolInfo
 }
 
 // StagingQuerier is implemented by pgxpool.Pool, pgxpool.Conn, pgxpool.Tx,
@@ -253,22 +254,37 @@ var (
 	_ StagingQuerier = (pgx.Tx)(nil)
 )
 
-// StagingPool is an injection point for a connection to the staging database.
-type StagingPool struct {
-	*pgxpool.Pool
+// PoolInfo describes a database connection pool and what it's connected
+// to.
+type PoolInfo struct {
 	ConnectionString string
 	Product          Product
 	Version          string
-	_                noCopy
+}
+
+// Info returns the PoolInfo when embedded.
+func (i *PoolInfo) Info() *PoolInfo { return i }
+
+// StagingPool is an injection point for a connection to the staging database.
+type StagingPool struct {
+	*pgxpool.Pool
+	PoolInfo
+	_ noCopy
+}
+
+// SourcePool is an injection point for a connection to a source
+// database.
+type SourcePool struct {
+	*sql.DB
+	PoolInfo
+	_ noCopy
 }
 
 // TargetPool is an injection point for a connection to the target database.
 type TargetPool struct {
 	*sql.DB
-	ConnectionString string
-	Product          Product
-	Version          string
-	_                noCopy
+	PoolInfo
+	_ noCopy
 }
 
 // TargetQuerier is implemented by [sql.DB] and [sql.Tx].

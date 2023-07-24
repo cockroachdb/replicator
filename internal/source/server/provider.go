@@ -58,7 +58,7 @@ var Set = wire.NewSet(
 // authenticator, or a no-op authenticator if Config.DisableAuth has
 // been set.
 func ProvideAuthenticator(
-	ctx context.Context, pool *types.StagingPool, config *Config, stagingDB ident.StagingDB,
+	ctx context.Context, pool *types.StagingPool, config *Config, stagingDB ident.StagingSchema,
 ) (types.Authenticator, func(), error) {
 	if config.DisableAuth {
 		log.Info("authentication disabled, any caller may write to the target database")

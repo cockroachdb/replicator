@@ -154,14 +154,14 @@ func TestGetColumns(t *testing.T) {
 		},
 		{
 			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
-			tableSchema: fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TestDB.Schema()),
+			tableSchema: fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TargetSchema.Schema()),
 			primaryKeys: []string{"a"},
 			check: func(t *testing.T, data []types.ColData) {
 				a := assert.New(t)
 				if a.Len(data, 1) {
 					col := data[0]
 					a.Equal(
-						ident.NewUDT(fixture.TestDB.Schema(), ident.New("MyEnum")),
+						ident.NewUDT(fixture.TargetSchema.Schema(), ident.New("MyEnum")),
 						col.Type)
 				}
 			},
@@ -171,7 +171,7 @@ func TestGetColumns(t *testing.T) {
 	// Verify user-defined types with mixed-case name.
 	if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
-		fixture.TestDB.Schema()),
+		fixture.TargetSchema.Schema()),
 	); !a.NoError(err) {
 		return
 	}
@@ -204,7 +204,7 @@ func TestGetColumns(t *testing.T) {
 				cmd = "SET experimental_enable_hash_sharded_indexes='true';" + cmd
 			}
 
-			ti, err := fixture.CreateTable(ctx, cmd)
+			ti, err := fixture.CreateTargetTable(ctx, cmd)
 			if !a.NoError(err) {
 				return
 			}
@@ -255,13 +255,14 @@ func TestColDataIgnoresViews(t *testing.T) {
 
 	ctx := fixture.Context
 
-	ti, err := fixture.CreateTable(ctx, `CREATE TABLE %s ( pk INT PRIMARY KEY )`)
+	ti, err := fixture.CreateTargetTable(ctx, `CREATE TABLE %s ( pk INT PRIMARY KEY )`)
 	if !a.NoError(err) {
 		return
 	}
 	tableName := ti.Name()
 
-	vi, err := fixture.CreateTable(ctx, fmt.Sprintf(`CREATE VIEW %%s AS SELECT pk FROM %s`, tableName))
+	vi, err := fixture.CreateTargetTable(ctx, fmt.Sprintf(
+		`CREATE VIEW %%s AS SELECT pk FROM %s`, tableName))
 	if !a.NoError(err) {
 		return
 	}

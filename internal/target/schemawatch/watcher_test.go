@@ -44,11 +44,11 @@ func TestWatch(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Schema()
+	dbName := fixture.TargetSchema.Schema()
 	w := fixture.Watcher
 
 	// Bootstrap column.
-	tblInfo, err := fixture.CreateTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY)")
+	tblInfo, err := fixture.CreateTargetTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY)")
 	if !a.NoError(err) {
 		return
 	}

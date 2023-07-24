@@ -69,6 +69,8 @@ func GetRowCount[P types.AnyPool](ctx context.Context, db P, name ident.Table) (
 	var count int
 	err := retry.Retry(ctx, func(ctx context.Context) error {
 		switch t := any(db).(type) {
+		case *types.SourcePool:
+			return t.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", name)).Scan(&count)
 		case *types.StagingPool:
 			return t.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", name)).Scan(&count)
 		case *types.TargetPool:

@@ -89,42 +89,49 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Refer to the CRDB support policy when determining how many
+      # older releases to support.
+      # https://www.cockroachlabs.com/docs/releases/release-support-policy.html
+      #
+      # This matrix is explicit, since we have a few axes (target vs
+      # integration) that can't be expressed with the automatic
+      # cross-product behavior provided by the matrix operator.
       matrix:
-        # Pick a primary version to test all of the integration sources
-        # against. The matrix component names should use the target
-        # names listed in the docker-compose.yml file in the parent
-        # directory.
-        cockroachdb: [ v23.1 ]
-        integration:
-          - "firestore"
-          - "mysql-v8"
-          - "mysql-mariadb-v10"
-          - "postgresql-v11"
-          - "postgresql-v12"
-          - "postgresql-v13"
-          - "postgresql-v14"
-          - "postgresql-v15"
-        # The cockroachdb value in this include block will collide with
-        # the value from the auto-expanded matrix. The net effect is
-        # that we'll skip integration tests against older versions of
-        # CRDB. These tests are kept around to ensure that the target
-        # package doesn't use any SQL that couldn't be run on older CRDB
-        # versions.
-        #
-        # Refer to the CRDB support policy when determining how many
-        # older releases to support.
-        # https://www.cockroachlabs.com/docs/releases/release-support-policy.html
         include:
           - cockroachdb: v21.1
           - cockroachdb: v21.2
           - cockroachdb: v22.1
           - cockroachdb: v22.2
           - cockroachdb: v23.1
+            integration: firestore
+          - cockroachdb: v23.1
+            integration: mysql-v8
+          - cockroachdb: v23.1
+            integration: mysql-mariadb-v10
+          - cockroachdb: v23.1
+            integration: postgresql-v11
+          - cockroachdb: v23.1
+            integration: postgresql-v12
+          - cockroachdb: v23.1
+            integration: postgresql-v13
+          - cockroachdb: v23.1
+            integration: postgresql-v14
+          - cockroachdb: v23.1
+            integration: postgresql-v15
+          # Run a test with a separate CockroachDB source and target
+          # instance to ensure there are no accidental dependencies
+          # between the source, staging, and target schemas.
+          - cockroachdb: v23.1
+            source: source-cockroachdb-v23.1
+            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+            target: target-cockroachdb-v23.1
+            targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
     env:
-      COVER_OUT: coverage-${{ matrix.cockroachdb }}-${{ matrix.integration }}.out
+      COVER_OUT: coverage-${{ strategy.job-index }}.out
+      DOCKER_LOGS_OUT: docker-${{ strategy.job-index }}.log
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8181
-      JUNIT_OUT: junit-${{ matrix.cockroachdb }}-${{ matrix.integration }}.xml
-      TEST_OUT: go-test-${{ matrix.cockroachdb }}-${{ matrix.integration }}.json
+      JUNIT_OUT: junit-${{ strategy.job-index }}.xml
+      TEST_OUT: go-test-${{ strategy.job-index }}.json
     steps:
       - uses: actions/checkout@v3
 
@@ -147,14 +154,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Start CockroachDB
+      - name: Start Containers
         working-directory: .github
-        run: docker-compose up -d cockroachdb-${{ matrix.cockroachdb }}
-
-      - name: Start ${{ matrix.integration }}
-        if: ${{ matrix.integration }}
-        working-directory: .github
-        run: docker-compose up -d ${{ matrix.integration }}
+        run: >
+          docker-compose up -d
+          cockroachdb-${{ matrix.cockroachdb }}
+          ${{ matrix.integration }}
+          ${{ matrix.source }}
+          ${{ matrix.target }}
 
       # The go test json output will be written into a pipeline to
       # create a JUnit.xml file. The test reports are aggregated later
@@ -167,6 +174,8 @@ jobs:
         env:
           COCKROACH_DEV_LICENSE: ${{ secrets.COCKROACH_DEV_LICENSE }}
           CDC_INTEGRATION: ${{ matrix.integration }}
+          TEST_SOURCE_CONNECT: ${{ matrix.sourceConn }}
+          TEST_TARGET_CONNECT: ${{ matrix.targetConn }}
         run: >
           set -o pipefail;
           go test
@@ -185,16 +194,17 @@ jobs:
           -package-name ${{ matrix.cockroachdb }}-${{ matrix.integration }} |
           tee ${{ env.TEST_OUT }}
 
-      - name: Stop databases
-        if: ${{ always() }}
-        working-directory: .github
-        run: docker-compose down
-
       - name: Upload coverage
         uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ${{ env.COVER_OUT }}
+
+      # Capture container logs in case they're needed for diagnostics.
+      - name: Docker container logs
+        if: always()
+        working-directory: .github
+        run: docker-compose logs --no-color > ${{ env.DOCKER_LOGS_OUT }}
 
       # Upload all test reports to a common artifact name, to make them
       # available to the summarization step. The go test json is
@@ -206,6 +216,7 @@ jobs:
           name: integration-reports
           path: |
             ${{ env.COVER_OUT }}
+            ${{ env.DOCKER_LOGS_OUT }}
             ${{ env.JUNIT_OUT }}
             ${{ env.TEST_OUT }}
           retention-days: 7

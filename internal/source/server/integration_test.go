@@ -81,7 +81,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	r.NoError(err)
 	defer cancel()
 
-	targetDB := destFixture.TestDB.Schema()
+	targetDB := destFixture.TargetSchema.Schema()
 	targetPool := destFixture.TargetPool
 
 	// The target fixture contains the cdc-sink server.
@@ -90,8 +90,9 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 			BaseConfig: logical.BaseConfig{
 				Immediate:    immediate,
 				LoopName:     "changefeed",
+				StagingConn:  destFixture.StagingPool.ConnectionString,
 				StagingDB:    destFixture.StagingDB.Schema(),
-				TargetSchema: destFixture.TestDB.Schema(),
+				TargetSchema: destFixture.TargetSchema.Schema(),
 				TargetConn:   destFixture.TargetPool.ConnectionString,
 			},
 			MetaTableName: ident.New("resolved_timestamps"),
@@ -103,7 +104,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	defer cancel()
 
 	// Set up source and target tables.
-	source, err := sourceFixture.CreateTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
+	source, err := sourceFixture.CreateSourceTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
 	r.NoError(err)
 
 	// Since we're creating the target table without using the helper

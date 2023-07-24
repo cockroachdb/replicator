@@ -75,9 +75,11 @@ func OpenPgxAsStaging(
 	}()
 
 	ret := &types.StagingPool{
-		Pool:             db,
-		ConnectionString: connectString,
-		Product:          types.ProductCockroachDB,
+		Pool: db,
+		PoolInfo: types.PoolInfo{
+			ConnectionString: connectString,
+			Product:          types.ProductCockroachDB,
+		},
 	}
 
 	if err := retry.Retry(ctx, func(ctx context.Context) error {
@@ -117,8 +119,10 @@ func OpenPgxAsTarget(
 	}()
 
 	ret := &types.TargetPool{
-		ConnectionString: connectString,
-		DB:               db,
+		DB: db,
+		PoolInfo: types.PoolInfo{
+			ConnectionString: connectString,
+		},
 	}
 
 	if err := retry.Retry(ctx, func(ctx context.Context) error {

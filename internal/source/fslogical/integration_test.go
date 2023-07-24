@@ -61,22 +61,22 @@ func testSmoke(t *testing.T, chaosProb float32) {
 
 	ctx := fixture.Context
 	// Mangle our DB ident into something the emulator will accept.
-	projectID := strings.NewReplacer("_", "", ".", "").Replace(fixture.TestDB.Schema().Raw())
+	projectID := strings.NewReplacer("_", "", ".", "").Replace(fixture.TargetSchema.Schema().Raw())
 
 	// Create the target schema.
-	destTable, err := fixture.CreateTable(ctx,
+	destTable, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (id STRING PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
 	r.NoError(err)
 
 	// Create a child table, to test the case where an update from a
 	// collection gets written to multiple tables with FK relationships.
-	childTable, err := fixture.CreateTable(ctx, fmt.Sprintf(
+	childTable, err := fixture.CreateTargetTable(ctx, fmt.Sprintf(
 		"CREATE TABLE %%s (id STRING PRIMARY KEY REFERENCES %s ON DELETE CASCADE)",
 		destTable))
 	r.NoError(err)
 
 	// Create a table for a collection-group to be synced.
-	subTable, err := fixture.CreateTable(ctx,
+	subTable, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (id STRING PRIMARY KEY, v STRING, updated_at TIMESTAMP)")
 	r.NoError(err)
 
@@ -136,9 +136,10 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			LoopName:           "fslogicaltest",
 			RetryDelay:         time.Nanosecond,
 			StandbyTimeout:     10 * time.Millisecond,
+			StagingConn:        fixture.StagingPool.ConnectionString,
 			StagingDB:          fixture.StagingDB.Schema(),
 			TargetConn:         fixture.TargetPool.ConnectionString,
-			TargetSchema:       fixture.TestDB.Schema(),
+			TargetSchema:       fixture.TargetSchema.Schema(),
 
 			ScriptConfig: script.Config{
 				MainPath: "/main.ts",

@@ -41,13 +41,14 @@ type Fixture struct {
 	Watcher types.Watcher // A watcher for TestDB.
 }
 
-// CreateTable creates a test table within the TestDB and refreshes the
-// target database's Watcher. The schemaSpec parameter must have exactly
+// CreateTargetTable creates a test table within the TargetPool and
+// TargetSchema. If the table is successfully created, the schema
+// watcher will be refreshed. The schemaSpec parameter must have exactly
 // one %s substitution parameter for the database name and table name.
-func (f *Fixture) CreateTable(
+func (f *Fixture) CreateTargetTable(
 	ctx context.Context, schemaSpec string,
 ) (base.TableInfo[*types.TargetPool], error) {
-	ti, err := f.Fixture.CreateTable(ctx, schemaSpec)
+	ti, err := f.Fixture.CreateTargetTable(ctx, schemaSpec)
 	if err == nil {
 		err = f.Watcher.Refresh(ctx, f.TargetPool)
 	}
