@@ -50,16 +50,17 @@ func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo[*
 		BaseConfig: logical.BaseConfig{
 			Immediate:    immediate,
 			LoopName:     "changefeed",
+			StagingConn:  baseFixture.StagingPool.ConnectionString,
 			StagingDB:    baseFixture.StagingDB.Schema(),
 			TargetConn:   baseFixture.TargetPool.ConnectionString,
-			TargetSchema: baseFixture.TestDB.Schema(),
+			TargetSchema: baseFixture.TargetSchema.Schema(),
 		},
 	})
 	r.NoError(err)
 	t.Cleanup(cancel)
 
 	ctx := fixture.Context
-	tableInfo, err := fixture.CreateTable(ctx,
+	tableInfo, err := fixture.CreateTargetTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	r.NoError(err)
 
@@ -220,7 +221,7 @@ func testHandler(t *testing.T, immediate bool) {
 	ctx := fixture.Context
 	h := fixture.Handler
 
-	tableInfo, err := fixture.CreateTable(ctx,
+	tableInfo, err := fixture.CreateTargetTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	r.NoError(err)
 
@@ -362,7 +363,11 @@ func TestRejectedAuth(t *testing.T) {
 	// Verify that auth checks don't require other services.
 	h := &Handler{
 		Authenticator: reject.New(),
-		TargetPool:    &types.TargetPool{Product: types.ProductCockroachDB},
+		TargetPool: &types.TargetPool{
+			PoolInfo: types.PoolInfo{
+				Product: types.ProductCockroachDB,
+			},
+		},
 	}
 
 	tcs := []struct {
@@ -444,10 +449,11 @@ func testMassBackfillWithForeignKeys(
 				FanShards:          16,
 				ForeignKeysEnabled: true,
 				LoopName:           "changefeed",
+				StagingConn:        baseFixture.StagingPool.ConnectionString,
 				StagingDB:          baseFixture.StagingDB.Schema(),
 				RetryDelay:         time.Nanosecond,
 				TargetConn:         baseFixture.TargetPool.ConnectionString,
-				TargetSchema:       baseFixture.TestDB.Schema(),
+				TargetSchema:       baseFixture.TargetSchema.Schema(),
 			},
 		})
 		r.NoError(err)
@@ -456,16 +462,16 @@ func testMassBackfillWithForeignKeys(
 	loadStart := time.Now()
 	log.Info("starting data load")
 
-	parent, err := baseFixture.CreateTable(ctx,
+	parent, err := baseFixture.CreateTargetTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	r.NoError(err)
 
-	child, err := baseFixture.CreateTable(ctx, fmt.Sprintf(
+	child, err := baseFixture.CreateTargetTable(ctx, fmt.Sprintf(
 		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
 		parent.Name()))
 	r.NoError(err)
 
-	grand, err := baseFixture.CreateTable(ctx, fmt.Sprintf(
+	grand, err := baseFixture.CreateTargetTable(ctx, fmt.Sprintf(
 		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
 		child.Name()))
 	r.NoError(err)

@@ -14,25 +14,25 @@ func NewFixture() (*Fixture, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingPool, cleanup2, err := ProvideStagingPool(context)
+	sourcePool, cleanup2, err := ProvideSourcePool(context)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup3, err := ProvideTargetPool(context)
+	sourceSchema, cleanup3, err := ProvideSourceSchema(context, sourcePool)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingDB, cleanup4, err := ProvideStagingDB(context, stagingPool)
+	stagingPool, cleanup4, err := ProvideStagingPool(context)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	testDB, cleanup5, err := ProvideTestDB(context, targetPool)
+	stagingSchema, cleanup5, err := ProvideStagingSchema(context, stagingPool)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -40,14 +40,37 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	targetPool, cleanup6, err := ProvideTargetPool(context, sourcePool)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	targetSchema, cleanup7, err := ProvideTargetSchema(context, targetPool)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	fixture := &Fixture{
-		Context:     context,
-		StagingPool: stagingPool,
-		TargetPool:  targetPool,
-		StagingDB:   stagingDB,
-		TestDB:      testDB,
+		Context:      context,
+		SourcePool:   sourcePool,
+		SourceSchema: sourceSchema,
+		StagingPool:  stagingPool,
+		StagingDB:    stagingSchema,
+		TargetPool:   targetPool,
+		TargetSchema: targetSchema,
 	}
 	return fixture, func() {
+		cleanup7()
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()

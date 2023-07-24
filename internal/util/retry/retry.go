@@ -43,6 +43,8 @@ func Execute[P types.AnyPool](ctx context.Context, db P, query string, args ...a
 	return Retry(ctx, func(ctx context.Context) error {
 		var err error
 		switch t := any(db).(type) {
+		case *types.SourcePool:
+			_, err = t.ExecContext(ctx, query, args...)
 		case *types.StagingPool:
 			_, err = t.Exec(ctx, query, args...)
 		case *types.TargetPool:

@@ -35,7 +35,10 @@ import (
 // InsertTestingKey generates a new private key and updates the existing
 // Authenticator with the associated public key.
 func InsertTestingKey(
-	ctx context.Context, tx types.StagingQuerier, auth types.Authenticator, stagingDB ident.StagingDB,
+	ctx context.Context,
+	tx types.StagingQuerier,
+	auth types.Authenticator,
+	stagingDB ident.StagingSchema,
 ) (method jwt.SigningMethod, signer crypto.PrivateKey, err error) {
 	impl, ok := auth.(*authenticator)
 	if !ok {
@@ -91,7 +94,7 @@ func InsertRevokedToken(
 	ctx context.Context,
 	tx types.StagingQuerier,
 	auth types.Authenticator,
-	stagingDB ident.StagingDB,
+	stagingDB ident.StagingSchema,
 	id string,
 ) error {
 	impl, ok := auth.(*authenticator)

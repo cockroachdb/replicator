@@ -37,7 +37,7 @@ var Set = wire.NewSet(
 //
 // https://github.com/cockroachdb/cockroach/issues/100194
 func ProvideLeases(
-	ctx context.Context, pool *types.StagingPool, stagingDB ident.StagingDB,
+	ctx context.Context, pool *types.StagingPool, stagingDB ident.StagingSchema,
 ) (types.Leases, error) {
 	return New(ctx, Config{
 		Guard:      time.Second,

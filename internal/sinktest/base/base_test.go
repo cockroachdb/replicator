@@ -29,6 +29,10 @@ func TestBaseSmoke(t *testing.T) {
 	r.NoError(err)
 	defer cleanup()
 
+	r.NotNil(fixture.SourcePool.DB)
+	r.NotEmpty(fixture.SourcePool.ConnectionString)
+	r.NotEmpty(fixture.SourcePool.Version)
+
 	r.NotNil(fixture.StagingPool.Pool)
 	r.NotEmpty(fixture.StagingPool.ConnectionString)
 	r.NotEmpty(fixture.StagingPool.Version)

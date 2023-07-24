@@ -16,10 +16,10 @@
 
 package ident
 
-// StagingDB is a type alias for the name of the "_cdc_sink" database.
-// It serves as an injection point for uniquely naming the staging
-// database in test cases.
-type StagingDB Schema
+// StagingSchema is a type alias for the name of the "_cdc_sink.public"
+// table schema. It serves as an injection point for uniquely naming the
+// staging database in test cases.
+type StagingSchema Schema
 
 // Schema returns the underying database identifier.
-func (s StagingDB) Schema() Schema { return Schema(s) }
+func (s StagingSchema) Schema() Schema { return Schema(s) }

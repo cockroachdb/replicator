@@ -121,7 +121,7 @@ func TestGetDependencyOrder(t *testing.T) {
 	pool := fixture.TargetPool
 
 	for idx, tc := range tcs {
-		sql := fmt.Sprintf(tc.schema, fixture.TestDB.Schema())
+		sql := fmt.Sprintf(tc.schema, fixture.TargetSchema.Schema())
 		_, err := pool.ExecContext(ctx, sql)
 		r.NoError(err, idx)
 	}
@@ -148,21 +148,21 @@ func TestGetDependencyOrder(t *testing.T) {
 CREATE TABLE %[1]s.cycle_a (pk int primary key);
 CREATE TABLE %[1]s.cycle_b (pk int primary key, ref int references %[1]s.cycle_a);
 ALTER TABLE %[1]s.cycle_a ADD COLUMN ref int references %[1]s.cycle_b;
-`, fixture.TestDB.Schema()))
+`, fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 	case types.ProductOracle:
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
-			`CREATE TABLE %[1]s.cycle_a (pk int primary key)`, fixture.TestDB.Schema()))
+			`CREATE TABLE %[1]s.cycle_a (pk int primary key)`, fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
 			`CREATE TABLE %[1]s.cycle_b (pk int primary key, ref int references %[1]s.cycle_a)`,
-			fixture.TestDB.Schema()))
+			fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
-			`ALTER TABLE %[1]s.cycle_a ADD (ref int references %[1]s.cycle_b)`, fixture.TestDB.Schema()))
+			`ALTER TABLE %[1]s.cycle_a ADD (ref int references %[1]s.cycle_b)`, fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 	default:

@@ -39,7 +39,7 @@ type testFixture struct {
 	Listener      net.Listener
 	StagingPool   *types.StagingPool
 	Server        *Server
-	StagingDB     ident.StagingDB
+	StagingDB     ident.StagingSchema
 	Watcher       types.Watchers
 }
 

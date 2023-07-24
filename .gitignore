@@ -17,3 +17,5 @@ cdc-sink
 
 # CockroachDB data directory
 cockroach-data/
+goroutine_dump/
+heap_profiler/

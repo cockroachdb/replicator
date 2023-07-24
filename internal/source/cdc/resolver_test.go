@@ -41,15 +41,16 @@ func TestResolverDeQueue(t *testing.T) {
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
 			StagingDB:    baseFixture.StagingDB.Schema(),
+			StagingConn:  baseFixture.StagingPool.ConnectionString,
 			TargetConn:   baseFixture.TargetPool.ConnectionString,
-			TargetSchema: baseFixture.TestDB.Schema(),
+			TargetSchema: baseFixture.TargetSchema.Schema(),
 		},
 	})
 	r.NoError(err)
 	defer cancel()
 
 	ctx := fixture.Context
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	r.NoError(err)
 

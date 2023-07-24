@@ -54,7 +54,7 @@ func TestApply(t *testing.T) {
 		Pk0 int    `json:"pk0"`
 		Pk1 string `json:"pk1"`
 	}
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk0 INT, pk1 STRING, extras JSONB, PRIMARY KEY (pk0,pk1))")
 	if !a.NoError(err) {
 		return
@@ -364,7 +364,7 @@ func TestAllDataTypes(t *testing.T) {
 				create = fmt.Sprintf("CREATE TABLE %%s (k int primary key, val %s)", tc.columnType)
 			}
 
-			tbl, err := fixture.CreateTable(ctx, create)
+			tbl, err := fixture.CreateTargetTable(ctx, create)
 			if !a.NoError(err) {
 				return
 			}
@@ -430,7 +430,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		TS  time.Time `json:"ts"`
 	}
 
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP)")
 	if !a.NoError(err) {
 		return
@@ -580,7 +580,7 @@ func TestExpressionColumns(t *testing.T) {
 		Fixed string `json:"fixed"`
 	}
 
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING, fixed STRING)")
 	if !a.NoError(err) {
 		return
@@ -654,7 +654,7 @@ func TestIgnoredColumns(t *testing.T) {
 		ValIgnored string `json:"val_ignored"`
 	}
 
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk0 INT, pk1 INT, val0 STRING, not_required STRING, PRIMARY KEY (pk0, pk1))")
 	if !a.NoError(err) {
 		return
@@ -708,7 +708,7 @@ func TestRenamedColumns(t *testing.T) {
 		Val string `json:"val_source"`
 	}
 
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
 	if !a.NoError(err) {
 		return
@@ -761,7 +761,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		Pk0 int    `json:"pk0"`
 		Val string `json:"val"`
 	}
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk0 INT PRIMARY KEY, ignored INT AS (1) STORED, val STRING)")
 	if !a.NoError(err) {
 		return
@@ -825,12 +825,12 @@ func TestUTDEnum(t *testing.T) {
 
 	_, err = fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
-		fixture.TestDB.Schema()))
+		fixture.TargetSchema.Schema()))
 	r.NoError(err)
 
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		fmt.Sprintf(`CREATE TABLE %%s (pk INT PRIMARY KEY, val %s."MyEnum")`,
-			fixture.TestDB.Schema()))
+			fixture.TargetSchema.Schema()))
 	r.NoError(err)
 
 	app, err := fixture.Appliers.Get(ctx, tbl.Name())
@@ -867,7 +867,7 @@ func TestVirtualColumns(t *testing.T) {
 		CK int `json:"ck"`
 		X  int `json:"x,omitempty"`
 	}
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s ("+
 			"a INT, "+
 			"ck INT AS (a + b) STORED, "+
@@ -966,7 +966,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 
 	ctx := fixture.Context
 
-	tbl, err := fixture.CreateTable(ctx,
+	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk UUID PRIMARY KEY, ver INT, ts TIMESTAMP)")
 	if !a.NoError(err) {
 		return

@@ -56,7 +56,7 @@ func TestScript(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	schema := fixture.TestDB.Schema()
+	schema := fixture.TargetSchema.Schema()
 
 	// Create tables that will be referenced by the user-script.
 	_, err = fixture.TargetPool.ExecContext(ctx,

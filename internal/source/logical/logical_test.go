@@ -54,7 +54,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Schema()
+	dbName := fixture.TargetSchema.Schema()
 	pool := fixture.TargetPool
 
 	// Create some tables.
@@ -86,6 +86,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 		LoopName:       "generator",
 		Immediate:      immediate,
 		RetryDelay:     time.Nanosecond,
+		StagingConn:    fixture.StagingPool.ConnectionString,
 		StagingDB:      fixture.StagingDB.Schema(),
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.ConnectionString,
@@ -179,7 +180,7 @@ func TestUserScript(t *testing.T) {
 	defer cancel()
 
 	ctx := fixture.Context
-	dbName := fixture.TestDB.Schema()
+	dbName := fixture.TargetSchema.Schema()
 	pool := fixture.TargetPool
 
 	// Create some tables.
@@ -198,6 +199,7 @@ func TestUserScript(t *testing.T) {
 		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
 		LoopName:       "generator",
 		Immediate:      false,
+		StagingConn:    fixture.StagingPool.ConnectionString,
 		StagingDB:      fixture.StagingDB.Schema(),
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.ConnectionString,

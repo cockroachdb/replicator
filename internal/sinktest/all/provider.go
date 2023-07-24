@@ -20,6 +20,7 @@ package all
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
@@ -41,7 +42,7 @@ var TestSet = wire.NewSet(
 // ProvideWatcher is called by Wire to construct a Watcher
 // bound to the testing database.
 func ProvideWatcher(
-	ctx context.Context, testDB base.TestDB, watchers types.Watchers,
+	ctx context.Context, target sinktest.TargetSchema, watchers types.Watchers,
 ) (types.Watcher, error) {
-	return watchers.Get(ctx, testDB.Schema())
+	return watchers.Get(ctx, target.Schema())
 }

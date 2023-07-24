@@ -37,12 +37,12 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingDB, err := logical.ProvideStagingDB(baseConfig)
+	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingDB)
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
