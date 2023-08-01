@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mkjwt"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mylogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/pglogical"
+	"github.com/cockroachdb/cdc-sink/internal/cmd/preflight"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/start"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/version"
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -103,6 +104,7 @@ func main() {
 		pglogical.Command(),
 		licenses.Command(),
 		mylogical.Command(),
+		preflight.Command(),
 		script.HelpCommand(),
 		start.Command(),
 		version.Command(),
