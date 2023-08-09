@@ -46,6 +46,7 @@ import (
 // stagingTable returns the staging table name that will store mutations
 // for the given target table.
 func stagingTable(stagingDB ident.Schema, target ident.Table) ident.Table {
+	target = target.Canonical() // Use lower-cased version of the table.
 	mangled := ident.Join(target, ident.Raw, '_')
 	return ident.NewTable(stagingDB, ident.New(mangled))
 }

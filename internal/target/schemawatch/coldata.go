@@ -32,7 +32,7 @@ func colSliceEqual(a, b []types.ColData) bool {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if !a[i].Equal(b[i]) {
 			return false
 		}
 	}
@@ -221,7 +221,7 @@ func getColumns(
 			}
 
 			for _, col := range columns {
-				if col.Name != rowID {
+				if !ident.Equal(col.Name, rowID) {
 					next = append(next, col)
 				}
 			}

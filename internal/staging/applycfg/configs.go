@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -49,7 +50,7 @@ type Configs struct {
 
 	mu struct {
 		sync.RWMutex
-		data    map[ident.Table]*Config
+		data    *ident.TableMap[*Config]
 		updated chan struct{} // Closed and swapped when data is updated.
 	}
 
@@ -65,22 +66,20 @@ type Configs struct {
 func (c *Configs) Get(tbl ident.Table) *Config {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if ret, ok := c.mu.data[tbl]; ok {
+	if ret, ok := c.mu.data.Get(tbl); ok {
 		return ret
 	}
 	return configZero
 }
 
 // GetAll returns a deep copy of all known table configurations.
-func (c *Configs) GetAll() map[ident.Table]*Config {
+func (c *Configs) GetAll() *ident.TableMap[*Config] {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	data := c.mu.data
 
-	ret := make(map[ident.Table]*Config, len(data))
-	for k, v := range data {
-		ret[k] = v.Copy()
-	}
+	ret := &ident.TableMap[*Config]{}
+	data.CopyInto(ret)
 	return ret
 }
 
@@ -130,7 +129,7 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 		*Config
 		casMap map[int]SourceColumn
 	}
-	nextConfigs := make(map[ident.Table]*tempConfig)
+	nextConfigs := &ident.TableMap[*tempConfig]{}
 
 	for rows.Next() {
 		var targetSchema, targetTable, targetColumn string
@@ -156,10 +155,10 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 		targetTableIdent := ident.NewTable(sch, ident.New(targetTable))
 		targetColIdent := ident.New(targetColumn)
 
-		tableData, found := nextConfigs[targetTableIdent]
+		tableData, found := nextConfigs.Get(targetTableIdent)
 		if !found {
 			tableData = &tempConfig{NewConfig(), make(map[int]SourceColumn)}
-			nextConfigs[targetTableIdent] = tableData
+			nextConfigs.Put(targetTableIdent, tableData)
 		}
 
 		if cas != 0 {
@@ -167,10 +166,10 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 			tableData.casMap[cas-1] = targetColIdent
 		}
 		if deadline > 0 {
-			tableData.Deadlines[targetColIdent] = deadline
+			tableData.Deadlines.Put(targetColIdent, deadline)
 		}
 		if expr != "" {
-			tableData.Exprs[targetColIdent] = expr
+			tableData.Exprs.Put(targetColIdent, expr)
 		}
 		if extras {
 			if !tableData.Extras.Empty() {
@@ -181,32 +180,37 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 			tableData.Extras = targetColIdent
 		}
 		if ignore {
-			tableData.Ignore[targetColIdent] = true
+			tableData.Ignore.Put(targetColIdent, true)
 		}
 		if rename != "" {
-			tableData.SourceNames[targetColIdent] = ident.New(rename)
+			tableData.SourceNames.Put(targetColIdent, ident.New(rename))
 		}
 
 	}
 
-	finalized := make(map[ident.Table]*Config, len(nextConfigs))
-	for table, data := range nextConfigs {
+	finalized := &ident.TableMap[*Config]{}
+	if err := nextConfigs.Range(func(table ident.Table, data *tempConfig) error {
 		// Ensure that the CAS mappings are sane and create the slice.
 		data.CASColumns = make([]SourceColumn, len(data.casMap))
 		for idx := range data.CASColumns {
 			colName, found := data.casMap[idx]
 			if !found {
-				return false, errors.Errorf("%s: gap in CAS columns at index %d", table, idx)
+				return errors.Errorf("%s: gap in CAS columns at index %d", table, idx)
 			}
 			data.CASColumns[idx] = colName
 		}
-		finalized[table] = data.Config
+		finalized.Put(table, data.Config)
+		return nil
+	}); err != nil {
+		return false, err
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if reflect.DeepEqual(c.mu.data, finalized) {
+	if cmap.Equal[ident.Table, *Config](c.mu.data, finalized, func(a, b *Config) bool {
+		return a.Equal(b)
+	}) {
 		return false, nil
 	}
 
@@ -247,6 +251,7 @@ func (c *Configs) refreshLoop(ctx context.Context) {
 func (c *Configs) Store(
 	ctx context.Context, tx types.StagingQuerier, table ident.Table, cfg *Config,
 ) error {
+	table = table.Canonical()
 	// Delete existing configuration data for the table.
 	if _, err := tx.Exec(ctx,
 		c.sql.delete,
@@ -262,62 +267,64 @@ func (c *Configs) Store(
 	}
 
 	// Collect all referenced source columns.
-	casIdx := make(map[SourceColumn]int)
-	refs := make(map[SourceColumn]struct{})
+	var casIdx ident.Map[int]
+	var refs ident.Map[struct{}]
 	for idx, col := range cfg.CASColumns {
-		refs[col] = struct{}{}
-		casIdx[col] = idx + 1 // Store one-based values.
+		refs.Put(col, struct{}{})
+		casIdx.Put(col, idx+1) // Store one-based values.
 	}
-	for col, val := range cfg.Deadlines {
+	_ = cfg.Deadlines.Range(func(col ident.Ident, val time.Duration) error {
 		if val > 0 {
-			refs[col] = struct{}{}
+			refs.Put(col, struct{}{})
 		}
-	}
-	for col, val := range cfg.Exprs {
+		return nil
+	})
+	_ = cfg.Exprs.Range(func(col ident.Ident, val string) error {
 		if val != "" {
-			refs[col] = struct{}{}
+			refs.Put(col, struct{}{})
 		}
-	}
+		return nil
+	})
 	if !cfg.Extras.Empty() {
-		refs[cfg.Extras] = struct{}{}
+		refs.Put(cfg.Extras, struct{}{})
 	}
-	for col, val := range cfg.Ignore {
+	_ = cfg.Ignore.Range(func(col ident.Ident, val bool) error {
 		if val {
-			refs[col] = struct{}{}
+			refs.Put(col, struct{}{})
 		}
-	}
-	for col, val := range cfg.SourceNames {
+		return nil
+	})
+	_ = cfg.SourceNames.Range(func(col ident.Ident, val SourceColumn) error {
 		if !val.Empty() {
-			refs[col] = struct{}{}
+			refs.Put(col, struct{}{})
 		}
-	}
+		return nil
+	})
 
 	// Insert relevant data for each referenced column. We rely on the
 	// zero values returned from map lookup misses.
-	for col := range refs {
-		if _, err := tx.Exec(ctx,
+	return refs.Range(func(col ident.Ident, _ struct{}) error {
+		_, err := tx.Exec(ctx,
 			c.sql.upsert,
 			table.Schema().Raw(),
 			table.Table().Raw(),
 			col.Raw(),
-			casIdx[col],
-			cfg.Deadlines[col],
-			cfg.Exprs[col],
-			cfg.Extras == col,
-			cfg.Ignore[col],
-			cfg.SourceNames[col].Raw(),
-		); err != nil {
-			return errors.WithStack(err)
-		}
-	}
-
-	return nil
+			casIdx.GetZero(col),
+			cfg.Deadlines.GetZero(col),
+			cfg.Exprs.GetZero(col),
+			ident.Equal(cfg.Extras, col),
+			cfg.Ignore.GetZero(col),
+			cfg.SourceNames.GetZero(col).Raw(),
+		)
+		return errors.WithStack(err)
+	})
 }
 
 // Watch returns a channel that will emit updated Config information.
 // The cancel function should be called when the consumer is no longer
 // interested in updates.
 func (c *Configs) Watch(tbl ident.Table) (ch <-chan *Config, cancel func()) {
+	tbl = tbl.Canonical()
 	ret := make(chan *Config)
 
 	// See discussion in c.watchCtx for why this isn't Background().
@@ -348,7 +355,7 @@ func (c *Configs) waitForUpdate(ctx context.Context, tbl ident.Table, last *Conf
 	// broadcast when the parent watch context has been shut down.
 	for {
 		c.mu.RLock()
-		next, ok := c.mu.data[tbl]
+		next, ok := c.mu.data.Get(tbl)
 		if !ok {
 			next = configZero
 		}

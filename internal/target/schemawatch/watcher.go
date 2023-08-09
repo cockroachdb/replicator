@@ -51,11 +51,6 @@ type watcher struct {
 		data    *types.SchemaData
 		updated chan struct{} // Closed and replaced when data is updated.
 	}
-
-	sql struct {
-		tables     string
-		tablesArgs []any
-	}
 }
 
 var _ types.Watcher = (*watcher)(nil)
@@ -74,16 +69,6 @@ func newWatcher(
 		schema:     schema,
 	}
 	w.mu.updated = make(chan struct{})
-	switch tx.Product {
-	case types.ProductCockroachDB:
-		w.sql.tables = fmt.Sprintf(tableTemplateCrdb, schema)
-	case types.ProductOracle:
-		w.sql.tables = tableTemplateOracle
-		w.sql.tablesArgs = []any{sql.Named("owner", schema.Raw())}
-	default:
-		cancel()
-		return nil, nil, errors.Errorf("unimplemented %s", tx.Product)
-	}
 
 	// Initial data load to sanity-check and make ready.
 	data, err := w.getTables(ctx, tx)
@@ -144,18 +129,19 @@ func (w *watcher) Snapshot(in ident.Schema) *types.SchemaData {
 	defer w.mu.RUnlock()
 
 	ret := &types.SchemaData{
-		Columns: make(map[ident.Table][]types.ColData, len(w.mu.data.Columns)),
+		Columns: &ident.TableMap[[]types.ColData]{},
 		Order:   make([][]ident.Table, 0, len(w.mu.data.Order)),
 	}
 
-	for table, cols := range w.mu.data.Columns {
+	_ = w.mu.data.Columns.Range(func(table ident.Table, cols []types.ColData) error {
 		if in.Contains(table) {
 			// https://github.com/golang/go/wiki/SliceTricks#copy
 			out := make([]types.ColData, len(cols))
 			copy(out, cols)
-			ret.Columns[table] = out
+			ret.Columns.Put(table, out)
 		}
-	}
+		return nil
+	})
 	for _, tables := range w.mu.data.Order {
 		filtered := make([]ident.Table, 0, len(tables))
 		for _, tbl := range tables {
@@ -181,7 +167,7 @@ func (w *watcher) String() string {
 func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel func(), _ error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	if _, ok := w.mu.data.Columns[table]; !ok {
+	if _, ok := w.mu.data.Columns.Get(table); !ok {
 		return nil, nil, errors.Errorf("unknown table %s", table)
 	}
 
@@ -194,7 +180,7 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 		var last []types.ColData
 		for {
 			w.mu.RLock()
-			next, ok := w.mu.data.Columns[table]
+			next, ok := w.mu.data.Columns.Get(table)
 			updated := w.mu.updated
 			w.mu.RUnlock()
 
@@ -227,37 +213,94 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 }
 
 const (
-	tableTemplateCrdb   = `SELECT table_name FROM [SHOW TABLES FROM %s] WHERE type = 'table'`
-	tableTemplateOracle = `SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :owner`
+	databaseTemplateCrdb = `SELECT datname FROM pg_database WHERE datname ILIKE $1`
+	tableTemplateCrdb    = `
+SELECT table_catalog, table_schema, table_name
+  FROM %s.information_schema.tables
+ WHERE table_catalog = $1
+   AND table_schema ILIKE $2
+   AND table_type = 'BASE TABLE'`
+	tableTemplateOracle = `
+SELECT OWNER, NULL, TABLE_NAME FROM ALL_TABLES WHERE UPPER(OWNER) = UPPER(:owner)`
 )
 
 func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.SchemaData, error) {
 	ret := &types.SchemaData{
-		Columns: make(map[ident.Table][]types.ColData),
+		Columns: &ident.TableMap[[]types.ColData]{},
 	}
 
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		rows, err := tx.QueryContext(ctx, w.sql.tables, w.sql.tablesArgs...)
+		var rows *sql.Rows
+		var err error
+
+		switch tx.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			parts := w.schema.Idents(make([]ident.Ident, 0, 2))
+			if len(parts) != 2 {
+				return errors.Errorf("expecting a schema with 2 parts, got %v", parts)
+			}
+
+			// Normalize the database name.
+			var dbName string
+			if err := tx.QueryRowContext(ctx, databaseTemplateCrdb, parts[0].Raw()).Scan(&dbName); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errors.Errorf("unknown schema: %s", w.schema)
+				}
+				return errors.Wrap(err, w.schema.String())
+			}
+
+			rows, err = tx.QueryContext(ctx, fmt.Sprintf(tableTemplateCrdb, dbName), dbName, parts[1].Raw())
+
+		case types.ProductOracle:
+			rows, err = tx.QueryContext(ctx, tableTemplateOracle, w.schema.Raw())
+
+		default:
+			return errors.Errorf("unimplemented product: %s", tx.Product)
+		}
+
 		if err != nil {
-			return errors.Wrap(err, w.sql.tables)
+			return errors.WithStack(err)
 		}
 		defer rows.Close()
 
+		var sch ident.Schema
 		for rows.Next() {
-			var table string
-			if err := rows.Scan(&table); err != nil {
+			// Oracle query may return NULL.
+			rawParts := make([]*string, 3)
+			if err := rows.Scan(&rawParts[0], &rawParts[1], &rawParts[2]); err != nil {
 				return err
 			}
-			tbl := ident.NewTable(w.schema, ident.New(table))
+
+			// Filter null or empty values.
+			parts := make([]ident.Ident, 0, len(rawParts))
+			for _, rawPart := range rawParts {
+				if rawPart == nil || *rawPart == "" {
+					continue
+				}
+				parts = append(parts, ident.New(*rawPart))
+			}
+
+			// All tables will be in the same enclosing schema, so we
+			// only need to compute this once.
+			if sch.Empty() {
+				sch, err = ident.NewSchema(parts[:len(parts)-1]...)
+				if err != nil {
+					return err
+				}
+			}
+
+			tbl := ident.NewTable(sch, parts[len(parts)-1])
 			cols, err := getColumns(ctx, tx, tbl)
 			if err != nil {
 				return err
 			}
-			ret.Columns[tbl] = cols
-
+			ret.Columns.Put(tbl, cols)
 		}
 
-		ret.Order, err = getDependencyOrder(ctx, tx, w.schema)
+		// Empty if there were no tables.
+		if !sch.Empty() {
+			ret.Order, err = getDependencyOrder(ctx, tx, sch)
+		}
 		return err
 	})
 

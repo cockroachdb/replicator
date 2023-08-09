@@ -62,7 +62,7 @@ type request struct {
 	leaf    func(ctx context.Context, req *request) error
 	// keys contains all the columns that make up the primary key
 	// for the target table and their ordinal position within the key.
-	keys      map[ident.Ident]int
+	keys      *ident.Map[int]
 	target    ident.Schematic
 	timestamp hlc.Time
 }

@@ -33,6 +33,6 @@ func ProvideFactory(db *types.StagingPool, stagingDB ident.StagingSchema) types.
 		db:        db,
 		stagingDB: stagingDB.Schema(),
 	}
-	f.mu.instances = make(map[ident.Table]*stage)
+	f.mu.instances = &ident.TableMap[*stage]{}
 	return f
 }

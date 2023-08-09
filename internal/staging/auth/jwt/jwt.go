@@ -218,7 +218,8 @@ func matches(allowed, requested ident.Schema) bool {
 	requestedParts := requested.Idents(nil)
 
 	for len(allowedParts) > 0 && len(requestedParts) > 0 {
-		partMatches := allowedParts[0] == requestedParts[0] || allowedParts[0] == wildcard
+		partMatches := ident.Equal(allowedParts[0], requestedParts[0]) ||
+			ident.Equal(allowedParts[0], wildcard)
 		if !partMatches {
 			return false
 		}

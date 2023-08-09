@@ -57,7 +57,7 @@ func (s lsnStamp) Less(other stamp.Stamp) bool { return s.LSN < other.(lsnStamp)
 // status updates.
 type conn struct {
 	// Columns, as ordered by the source database.
-	columns map[ident.Table][]types.ColData
+	columns *ident.TableMap[[]types.ColData]
 	// The pg publication name to subscribe to.
 	publicationName string
 	// Map source ids to target tables.
@@ -256,7 +256,7 @@ func (c *conn) decodeMutation(
 	var mut types.Mutation
 	var key []string
 	enc := make(map[string]any)
-	targetCols, ok := c.columns[tbl]
+	targetCols, ok := c.columns.Get(tbl)
 	if !ok {
 		return mut, errors.Errorf("no column data for %s", tbl)
 	}
@@ -348,7 +348,7 @@ func (c *conn) onRelation(msg *pglogrepl.RelationMessage, targetDB ident.Schema)
 			Type: fmt.Sprintf("%d", col.DataType),
 		}
 	}
-	c.columns[tbl] = colNames
+	c.columns.Put(tbl, colNames)
 
 	log.WithFields(log.Fields{
 		"Columns":    colNames,

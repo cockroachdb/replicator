@@ -65,17 +65,17 @@ func ProvideLoops(
 	}
 
 	idx := 0
-	ret := make([]*logical.Loop, len(userscript.Sources))
-	recurseFilter := make(map[ident.Ident]struct{})
+	ret := make([]*logical.Loop, userscript.Sources.Len())
+	recurseFilter := &ident.Map[struct{}]{}
 
-	for sourceName, source := range userscript.Sources {
+	err := userscript.Sources.Range(func(sourceName ident.Ident, source *script.Source) error {
 		var sourcePath string
 		var q firestore.Query
 		if r := sourceName.Raw(); strings.HasPrefix(r, GroupPrefix) {
 			sourcePath = r
 			tail := r[len(GroupPrefix):]
 			q = fs.CollectionGroup(tail).Query
-			recurseFilter[ident.New(tail)] = struct{}{}
+			recurseFilter.Put(ident.New(tail), struct{}{})
 		} else {
 			coll := fs.Collection(r)
 			sourcePath = coll.Path
@@ -100,13 +100,14 @@ func ProvideLoops(
 			updatedAtProperty: cfg.UpdatedAtProperty,
 		}, logical.WithName(sourceName.Raw()))
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		idx++
 		log.Infof("started firestore loop %s", sourceName)
-	}
+		return nil
+	})
 
-	return ret, loops.Close, nil
+	return ret, loops.Close, err
 }
 
 // ProvideFirestoreClient is called by wire. If a local emulator is in
@@ -162,9 +163,12 @@ func ProvideTombstones(
 	}
 
 	ret.coll = fs.Collection(cfg.TombstoneCollection)
-	ret.deletesTo = make(map[ident.Ident]ident.Table, len(userscript.Sources))
-	for source, dest := range userscript.Sources {
-		ret.deletesTo[source] = dest.DeletesTo
+	ret.deletesTo = &ident.Map[ident.Table]{}
+	if err := userscript.Sources.Range(func(source ident.Ident, dest *script.Source) error {
+		ret.deletesTo.Put(source, dest.DeletesTo)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	ret.source = ident.New(cfg.TombstoneCollection)
 	ret.mu.cache = &lru.Cache{MaxEntries: 1_000_000}

@@ -48,7 +48,7 @@ type orderedEvents struct {
 	// Remember the last configuration.
 	lastDeps [][]ident.Table
 	// The table dependency tree.
-	levels map[ident.Table]int
+	levels *ident.TableMap[int]
 }
 
 // OnBegin implements Events. It will initialize the orderedEvents
@@ -62,10 +62,10 @@ func (e *orderedEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 		for idx := range e.deferred {
 			e.deferred[idx] = make([]deferredData, 0, batches.Size())
 		}
-		e.levels = make(map[ident.Table]int)
+		e.levels = &ident.TableMap[int]{}
 		for level, tbls := range deps {
 			for _, tbl := range tbls {
-				e.levels[tbl] = level
+				e.levels.Put(tbl, level)
 			}
 		}
 	}
@@ -96,7 +96,7 @@ func (e *orderedEvents) OnCommit(ctx context.Context) error {
 func (e *orderedEvents) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
-	destLevel, ok := e.levels[target]
+	destLevel, ok := e.levels.Get(target)
 	if !ok {
 		return errors.Errorf("unknown destination table %s", target)
 	}

@@ -14,22 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package schemawatch
+//go:build race
 
-import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/google/wire"
-)
+package ident
 
-// Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideFactory,
-)
+const expectedIdentWords = 4
 
-// ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *types.TargetPool) (types.Watchers, func()) {
-	w := &factory{pool: pool}
-	w.mu.data = &ident.SchemaMap[*watcher]{}
-	return w, w.close
+// See comments in primary file.
+type noCompare struct {
+	_ []struct{}
 }

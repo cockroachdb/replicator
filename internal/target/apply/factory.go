@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/pkg/errors"
 )
 
 // factory vends singleton instance of apply.
@@ -32,7 +33,7 @@ type factory struct {
 	mu       struct {
 		sync.RWMutex
 		cleanup   []func()
-		instances map[ident.Table]*apply
+		instances *ident.TableMap[*apply]
 	}
 }
 
@@ -53,13 +54,17 @@ func (f *factory) getOrCreateUnlocked(table ident.Table) (*apply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if ret := f.mu.instances[table]; ret != nil {
+	if f.mu.instances == nil {
+		return nil, errors.New("factory has been shut down")
+	}
+
+	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
 	ret, cancel, err := newApply(table, f.configs, f.watchers)
 	if err == nil {
 		f.mu.cleanup = append(f.mu.cleanup, cancel)
-		f.mu.instances[table] = ret
+		f.mu.instances.Put(table, ret)
 	}
 	return ret, err
 }
@@ -68,5 +73,9 @@ func (f *factory) getOrCreateUnlocked(table ident.Table) (*apply, error) {
 func (f *factory) getUnlocked(table ident.Table) *apply {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.mu.instances[table]
+	// Used after shutdown.
+	if f.mu.instances == nil {
+		return nil
+	}
+	return f.mu.instances.GetZero(table)
 }

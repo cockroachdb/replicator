@@ -22,20 +22,41 @@ import (
 )
 
 // An atom is a canonicalized instance of a quoted identifier. They
-// should only ever be constructed via [atoms].
+// should only ever be constructed via [atoms]. An atom also contains a
+// pointer to a lower-cased representation of the atom (possibly itself)
+// that we use as the canonical form of a SQL identifier.
 type atom struct {
+	lowered     *atom
 	quoted, raw string
 	_           noCopy
 }
 
 // Keys are raw values.
 var atoms = canonicalMap[string, *atom]{
-	Lazy: func(key string) *atom {
-		return &atom{
+	Lazy: func(owner *canonicalMap[string, *atom], key string) *atom {
+		lowered := strings.ToLower(key)
+
+		ret := &atom{
 			quoted: `"` + strings.ReplaceAll(key, `"`, `""`) + `"`,
 			raw:    key,
 		}
+
+		if key == lowered {
+			ret.lowered = ret
+		} else {
+			ret.lowered = owner.Get(lowered)
+		}
+		return ret
 	},
+}
+
+// Canonical returns a canonical representation of the enclosed ident.
+// That is, it returns a lower-cased form of the SQL identifier.
+func (a *atom) Canonical() Ident {
+	if a == nil {
+		return Ident{}
+	}
+	return Ident{atom: a.lowered}
 }
 
 // Empty implements Identifier and returns true if the identifier is empty.
@@ -48,7 +69,7 @@ func (a *atom) Idents(buf []Ident) []Ident {
 	if a == nil {
 		return buf
 	}
-	return append(buf, Ident{a})
+	return append(buf, Ident{atom: a})
 }
 
 // MarshalJSON implements Identifier, returning a JSON string.
@@ -75,7 +96,7 @@ func (a *atom) Raw() string {
 
 // Split implements Identifier, returning the atom and an empty ident.
 func (a *atom) Split() (Ident, Identifier) {
-	return Ident{a}, empty
+	return Ident{atom: a}, empty
 }
 
 // String returns the atom in a manner suitable for constructing a query.

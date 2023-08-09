@@ -67,7 +67,7 @@ func ProvideResolvers(
 		stagers:   stagers,
 		watchers:  watchers,
 	}
-	ret.mu.instances = make(map[ident.Schema]*resolver)
+	ret.mu.instances = &ident.SchemaMap[*resolver]{}
 
 	// Resume from previous state.
 	schemas, err := ScanForTargetSchemas(ctx, pool, ret.metaTable)

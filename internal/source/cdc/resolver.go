@@ -357,7 +357,7 @@ func (r *resolver) process(
 		Targets:     targets,
 	}
 
-	flush := func(toApply map[ident.Table][]types.Mutation) error {
+	flush := func(toApply *ident.TableMap[[]types.Mutation]) error {
 		flushStart := time.Now()
 
 		ctx, cancel := context.WithTimeout(ctx, r.cfg.ApplyTimeout)
@@ -370,7 +370,7 @@ func (r *resolver) process(
 
 		for _, tables := range targets {
 			for _, table := range tables {
-				muts := toApply[table]
+				muts := toApply.GetZero(table)
 				if len(muts) == 0 {
 					continue
 				}
@@ -402,7 +402,7 @@ func (r *resolver) process(
 
 	var epoch hlc.Time
 	flushCounter := 0
-	toApply := make(map[ident.Table][]types.Mutation)
+	toApply := &ident.TableMap[[]types.Mutation]{}
 	total := 0
 	if err := r.stagers.SelectMany(ctx, r.pool, cursor,
 		func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
@@ -429,13 +429,14 @@ func (r *resolver) process(
 				total += flushCounter
 				flushCounter = 0
 				// Reset the slices in toApply; flush() ignores zero-length entries.
-				for tbl, muts := range toApply {
-					toApply[tbl] = muts[:0]
-				}
+				_ = toApply.Range(func(tbl ident.Table, muts []types.Mutation) error {
+					toApply.Put(tbl, muts[:0])
+					return nil
+				})
 			}
 
 			flushCounter++
-			toApply[tbl] = append(toApply[tbl], mut)
+			toApply.Put(tbl, append(toApply.GetZero(tbl), mut))
 			epoch = mut.Time
 			return nil
 		}); err != nil {
@@ -534,21 +535,27 @@ func (r *resolver) retireLoop(ctx context.Context) {
 			log.Tracef("retiring mutations in %s <= %s", r.target, next)
 
 			targetTables := r.watcher.Get().Columns
-			for table := range targetTables {
+			if err := targetTables.Range(func(table ident.Table, _ []types.ColData) error {
 				stager, err := r.stagers.Get(ctx, table)
 				if err != nil {
+					// Don't log, just stop if canceled.
 					if errors.Is(err, context.Canceled) {
-						return
+						return err
 					}
+					// Warn, but keep running.
 					log.WithError(err).Warnf("could not acquire stager for %s", table)
-					continue
+					return nil
 				}
 				if err := stager.Retire(ctx, r.pool, next); err != nil {
 					if errors.Is(err, context.Canceled) {
-						return
+						return err
 					}
 					log.WithError(err).Warnf("error while retiring staged mutations in %s", table)
 				}
+				return nil
+			}); err != nil {
+				// We only see an error on cancellation, so just exit.
+				return
 			}
 		}
 	}()
@@ -575,7 +582,7 @@ type Resolvers struct {
 	mu struct {
 		sync.Mutex
 		cleanups  []func()
-		instances map[ident.Schema]*resolver
+		instances *ident.SchemaMap[*resolver]
 	}
 }
 
@@ -589,9 +596,10 @@ func (r *Resolvers) close() {
 		cancel()
 	}
 	// Wait for shutdown.
-	for _, r := range r.mu.instances {
+	_ = r.mu.instances.Range(func(_ ident.Schema, r *resolver) error {
 		<-r.loop.Stopped()
-	}
+		return nil
+	})
 	r.mu.cleanups = nil
 	r.mu.instances = nil
 }
@@ -600,7 +608,7 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if found, ok := r.mu.instances[target]; ok {
+	if found, ok := r.mu.instances.Get(target); ok {
 		return found, nil
 	}
 
@@ -627,7 +635,7 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 	}
 	ret.loop = loop
 
-	r.mu.instances[target] = ret
+	r.mu.instances.Put(target, ret)
 
 	// Start a goroutine to retire old data.
 	retireCtx, cancelRetire := context.WithCancel(context.Background())

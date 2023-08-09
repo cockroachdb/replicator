@@ -18,12 +18,13 @@ package ident
 
 // A UDT is the name of a user-defined type, such as an enum.
 type UDT struct {
+	_ noCompare
 	*qualified
 }
 
 // NewUDT constructs an identifier for a user-defined type.
 func NewUDT(enclosing Schema, name Ident) UDT {
-	return UDT{qualifieds.Get(qualifiedKey{enclosing.array, name.atom})}
+	return UDT{qualified: qualifieds.Get(qualifiedKey{enclosing.array, name.atom})}
 }
 
 // Name returns the UDT's leaf name identifier.
@@ -31,7 +32,7 @@ func (t UDT) Name() Ident {
 	if t.qualified == nil {
 		return Ident{}
 	}
-	return Ident{t.qualified.terminal}
+	return Ident{atom: t.qualified.terminal}
 }
 
 // Schema returns the schema from the UDT.
@@ -39,7 +40,7 @@ func (t UDT) Schema() Schema {
 	if t.qualified == nil {
 		return Schema{}
 	}
-	return Schema{t.qualified.namespace}
+	return Schema{array: t.qualified.namespace}
 }
 
 // UnmarshalJSON parses a JSON array.

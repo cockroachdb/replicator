@@ -23,16 +23,16 @@ import "encoding/json"
 var Public = New("public")
 
 // An Ident is a quoted SQL identifier, generally a table, column, or
-// database. This type is an immutable value type, suitable for use as a
-// map key.
+// database.
 type Ident struct {
+	_ noCompare
 	*atom
 }
 
 // New returns a quoted SQL identifier. Prefer using ParseIdent when
 // operating on user-provided input that may already be quoted.
 func New(raw string) Ident {
-	return Ident{atoms.Get(raw)}
+	return Ident{atom: atoms.Get(raw)}
 }
 
 // UnmarshalJSON converts a raw json string into an Ident.

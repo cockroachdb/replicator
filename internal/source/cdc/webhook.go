@@ -64,7 +64,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 
 	// Aggregate the mutations by target table. We know that the default
 	// batch size for webhooks is reasonable.
-	toProcess := make(map[ident.Table][]types.Mutation)
+	toProcess := &ident.TableMap[[]types.Mutation]{}
 
 	for i := range payload.Payload {
 		timestamp, err := hlc.Parse(payload.Payload[i].Updated)
@@ -86,24 +86,27 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			Key:  payload.Payload[i].Key,
 			Time: timestamp,
 		}
-		toProcess[table] = append(toProcess[table], mut)
+		toProcess.Put(table, append(toProcess.GetZero(table), mut))
 	}
 	return h.processMutations(ctx, toProcess)
 }
 
 func (h *Handler) processMutations(
-	ctx context.Context, toProcess map[ident.Table][]types.Mutation,
+	ctx context.Context, toProcess *ident.TableMap[[]types.Mutation],
 ) error {
 	// Create Store instances up front. The first time a target table is
 	// used, the Stager must create the staging table. We want to ensure
 	// that this happens before we create the transaction below.
-	stores := make(map[ident.Table]types.Stager, len(toProcess))
-	for table := range toProcess {
+	stores := &ident.TableMap[types.Stager]{}
+	if err := toProcess.Range(func(table ident.Table, _ []types.Mutation) error {
 		s, err := h.Stores.Get(ctx, table)
 		if err != nil {
 			return err
 		}
-		stores[table] = s
+		stores.Put(table, s)
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	return retry.Retry(ctx, func(ctx context.Context) error {
@@ -115,14 +118,14 @@ func (h *Handler) processMutations(
 			defer tx.Rollback()
 
 			// Stage or apply the per-target mutations.
-			for target, muts := range toProcess {
+			if err := toProcess.Range(func(target ident.Table, muts []types.Mutation) error {
 				applier, err := h.Appliers.Get(ctx, target)
 				if err != nil {
 					return err
 				}
-				if err := applier.Apply(ctx, tx, muts); err != nil {
-					return err
-				}
+				return applier.Apply(ctx, tx, muts)
+			}); err != nil {
+				return err
 			}
 
 			return tx.Commit()
@@ -136,10 +139,10 @@ func (h *Handler) processMutations(
 		defer tx.Rollback(ctx)
 
 		// Stage or apply the per-target mutations.
-		for target, muts := range toProcess {
-			if err := stores[target].Store(ctx, tx, muts); err != nil {
-				return err
-			}
+		if err := toProcess.Range(func(target ident.Table, muts []types.Mutation) error {
+			return stores.GetZero(target).Store(ctx, tx, muts)
+		}); err != nil {
+			return err
 		}
 
 		return tx.Commit(ctx)

@@ -122,10 +122,10 @@ SELECT * FROM action`,
 		{
 			name: "deadline",
 			cfg: &applycfg.Config{
-				Deadlines: types.Deadlines{
-					ident.New("val1"): time.Second,
-					ident.New("val0"): time.Hour,
-				},
+				Deadlines: ident.MapOf[time.Duration](
+					ident.New("val1"), time.Second,
+					ident.New("val0"), time.Hour,
+				),
 			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
 VALUES
@@ -139,10 +139,10 @@ SELECT * FROM deadlined`,
 			name: "casDeadline",
 			cfg: &applycfg.Config{
 				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
-				Deadlines: types.Deadlines{
-					ident.New("val0"): time.Hour,
-					ident.New("val1"): time.Second,
-				},
+				Deadlines: ident.MapOf[time.Duration](
+					ident.New("val0"), time.Hour,
+					ident.New("val1"), time.Second,
+				),
 			},
 			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
 VALUES
@@ -166,10 +166,10 @@ SELECT * FROM action`,
 		{
 			name: "ignore",
 			cfg: &applycfg.Config{
-				Ignore: map[applycfg.SourceColumn]bool{
-					ident.New("geom"): true,
-					ident.New("geog"): true,
-				},
+				Ignore: ident.MapOf[bool](
+					ident.New("geom"), true,
+					ident.New("geog"), true,
+				),
 			},
 			upsert: `UPSERT INTO "database"."schema"."table" (
 "pk0","pk1","val0","val1","enum"
@@ -183,11 +183,11 @@ SELECT * FROM action`,
 			// value when looking up values in the incoming mutation.
 			name: "source names",
 			cfg: &applycfg.Config{
-				SourceNames: map[applycfg.TargetColumn]applycfg.SourceColumn{
-					ident.New("val1"):    ident.New("valRenamed"),
-					ident.New("geog"):    ident.New("george"),
-					ident.New("unknown"): ident.New("is ok"),
-				},
+				SourceNames: ident.MapOf[applycfg.SourceColumn](
+					ident.New("val1"), ident.New("valRenamed"),
+					ident.New("geog"), ident.New("george"),
+					ident.New("unknown"), ident.New("is ok"),
+				),
 			},
 			upsert: `UPSERT INTO "database"."schema"."table" (
 "pk0","pk1","val0","val1","geom","geog","enum"
@@ -200,15 +200,15 @@ SELECT * FROM action`,
 			// multiple uses of the substitution position.
 			name: "expr",
 			cfg: &applycfg.Config{
-				Exprs: map[applycfg.TargetColumn]string{
-					ident.New("val0"): `'fixed'`, // Doesn't consume a parameter slot.
-					ident.New("val1"): `$0||'foobar'`,
-					ident.New("pk1"):  `$0+$0`,
-				},
-				Ignore: map[applycfg.TargetColumn]bool{
-					ident.New("geom"): true,
-					ident.New("geog"): true,
-				},
+				Exprs: ident.MapOf[string](
+					ident.New("val0"), `'fixed'`, // Doesn't consume a parameter slot.
+					ident.New("val1"), `$0||'foobar'`,
+					ident.New("pk1"), `$0+$0`,
+				),
+				Ignore: ident.MapOf[bool](
+					ident.New("geom"), true,
+					ident.New("geog"), true,
+				),
 			},
 			delete: `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1","ignored_pk")IN(($1::STRING,($2+$2)::INT8,$3::STRING),
 ($4::STRING,($5+$5)::INT8,$6::STRING))`,
@@ -223,10 +223,11 @@ SELECT * FROM action`,
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			a := assert.New(t)
-			if tc.cfg == nil {
-				tc.cfg = applycfg.NewConfig()
+			cfg := applycfg.NewConfig()
+			if tc.cfg != nil {
+				cfg.Patch(tc.cfg)
 			}
-			tmpls := newTemplates(tableID, tc.cfg, cols)
+			tmpls := newTemplates(tableID, cfg, cols)
 
 			s, err := tmpls.delete(2)
 			a.NoError(err)

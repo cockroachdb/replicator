@@ -39,7 +39,7 @@ var _ Events = (*scriptEvents)(nil)
 func (e *scriptEvents) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
-	cfg, ok := e.Script.Sources[source]
+	cfg, ok := e.Script.Sources.Get(source)
 	if !ok {
 		return e.sendToTarget(ctx, source, target, muts)
 	}
@@ -54,7 +54,7 @@ func (e *scriptEvents) OnData(
 		// table and allow FK's to perform the cascade.
 		if mut.IsDelete() {
 			deletesTo := cfg.DeletesTo
-			if deletesTo == (ident.Table{}) {
+			if deletesTo.Empty() {
 				return errors.Errorf(
 					"cannot apply delete from %s because there is no "+
 						"table configured for receiving the delete", source)
@@ -69,11 +69,11 @@ func (e *scriptEvents) OnData(
 		if err != nil {
 			return err
 		}
-		if len(routing) > 0 {
-			for dest, muts := range routing {
-				if err := e.sendToTarget(ctx, source, dest, muts); err != nil {
-					return err
-				}
+		if routing.Len() > 0 {
+			if err := routing.Range(func(dest ident.Table, muts []types.Mutation) error {
+				return e.sendToTarget(ctx, source, dest, muts)
+			}); err != nil {
+				return err
 			}
 		}
 	}
@@ -85,7 +85,7 @@ func (e *scriptEvents) OnData(
 func (e *scriptEvents) sendToTarget(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
-	cfg, ok := e.Script.Targets[target]
+	cfg, ok := e.Script.Targets.Get(target)
 	if !ok {
 		return e.Events.OnData(ctx, source, target, muts)
 	}

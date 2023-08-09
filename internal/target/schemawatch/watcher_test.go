@@ -21,16 +21,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWatch(t *testing.T) {
-	a := assert.New(t)
+	r := require.New(t)
 
 	// Override the delay to exercise the background goroutine.
 	const delay = time.Second
@@ -38,78 +39,96 @@ func TestWatch(t *testing.T) {
 	defer func() { *schemawatch.RefreshDelay = time.Minute }()
 
 	fixture, cancel, err := all.NewFixture()
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	defer cancel()
 
 	ctx := fixture.Context
 	dbName := fixture.TargetSchema.Schema()
 	w := fixture.Watcher
 
+	w2, err := fixture.Watchers.Get(ctx, sinktest.JumbleSchema(fixture.TargetSchema.Schema()))
+	r.NoError(err)
+	r.Same(w, w2)
+
 	// Bootstrap column.
 	tblInfo, err := fixture.CreateTargetTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY)")
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	ch, cancel, err := w.Watch(tblInfo.Name())
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	defer cancel()
 
-	select {
-	case <-ctx.Done():
-		a.FailNow("timed out waiting for channel data")
-	case data := <-ch:
-		if a.Len(data, 1) {
-			a.Equal("pk", data[0].Name.Raw())
+	t.Run("smoke", func(t *testing.T) {
+		r := require.New(t)
+
+		select {
+		case <-ctx.Done():
+			r.FailNow("timed out waiting for channel data")
+		case data := <-ch:
+			r.Len(data, 1)
+			r.Equal("pk", data[0].Name.Raw())
 		}
-	}
+	})
+
+	// Check that we can retrieve a jumbled table name.
+	t.Run("jumbled", func(t *testing.T) {
+		r := require.New(t)
+		jumbled := sinktest.JumbleTable(tblInfo.Name())
+
+		ch, cancel, err := w.Watch(jumbled)
+		r.NoError(err)
+		defer cancel()
+
+		select {
+		case <-ctx.Done():
+			r.FailNow("timed out waiting for channel data")
+		case data := <-ch:
+			r.Len(data, 1)
+			r.Equal("pk", data[0].Name.Raw())
+		}
+	})
 
 	// Add a column and expect to see it.
-	switch fixture.TargetPool.Product {
-	case types.ProductCockroachDB, types.ProductPostgreSQL:
-		if !a.NoError(retry.Execute(ctx, fixture.TargetPool,
-			fmt.Sprintf("ALTER TABLE %s ADD COLUMN v STRING", tblInfo.Name()))) {
-			return
+	t.Run("add_column", func(t *testing.T) {
+		r := require.New(t)
+		switch fixture.TargetPool.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			r.NoError(retry.Execute(ctx, fixture.TargetPool,
+				fmt.Sprintf("ALTER TABLE %s ADD COLUMN v STRING", tblInfo.Name())))
+
+		case types.ProductOracle:
+			r.NoError(retry.Execute(ctx, fixture.TargetPool,
+				fmt.Sprintf("ALTER TABLE %s ADD (v INT)", tblInfo.Name())))
+
+		default:
+			r.FailNow("unsupported product")
 		}
 
-	case types.ProductOracle:
-		if !a.NoError(retry.Execute(ctx, fixture.TargetPool,
-			fmt.Sprintf("ALTER TABLE %s ADD (v INT)", tblInfo.Name()))) {
-			return
+		select {
+		case <-ctx.Done():
+			r.FailNow("timed out waiting for channel data")
+		case data := <-ch:
+			r.Len(data, 2)
+			r.Equal("pk", data[0].Name.Raw())
+			r.Equal("v", data[1].Name.Raw())
 		}
-
-	default:
-		a.FailNow("unsupported product")
-	}
-
-	select {
-	case <-ctx.Done():
-		a.FailNow("timed out waiting for channel data")
-	case data := <-ch:
-		if a.Len(data, 2) {
-			a.Equal("pk", data[0].Name.Raw())
-			a.Equal("v", data[1].Name.Raw())
-		}
-	}
+	})
 
 	// Expect the channel to close if the table is dropped.
-	if !a.NoError(tblInfo.DropTable(ctx)) {
-		return
-	}
-	select {
-	case <-ctx.Done():
-		a.FailNow("timed out waiting for channel close")
-	case _, open := <-ch:
-		a.False(open)
-	}
+	t.Run("drop", func(t *testing.T) {
+		r := require.New(t)
+		r.NoError(tblInfo.DropTable(ctx))
+		select {
+		case <-ctx.Done():
+			r.FailNow("timed out waiting for channel close")
+		case _, open := <-ch:
+			r.False(open)
+		}
 
-	// Check that we error out quickly on unknown tables.
-	ch, cancel, err = w.Watch(ident.NewTable(dbName, ident.New("blah")))
-	a.Nil(ch)
-	a.Nil(cancel)
-	a.Error(err)
+		// Check that we error out quickly on unknown tables.
+		ch, cancel, err = w.Watch(ident.NewTable(dbName, ident.New("blah")))
+		r.Nil(ch)
+		r.Nil(cancel)
+		r.Error(err)
+	})
 }
