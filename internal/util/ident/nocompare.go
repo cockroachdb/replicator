@@ -14,22 +14,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package schemawatch
+//go:build !race
 
-import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/google/wire"
-)
+package ident
 
-// Set is used by Wire.
-var Set = wire.NewSet(
-	ProvideFactory,
-)
+// This is used by a test to ensure that, in production, the identifier
+// types occupy one word.
+const expectedIdentWords = 1
 
-// ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *types.TargetPool) (types.Watchers, func()) {
-	w := &factory{pool: pool}
-	w.mu.data = &ident.SchemaMap[*watcher]{}
-	return w, w.close
-}
+// A noCompare struct can be added to a type to prevent it from being
+// used as a comparable type (e.g. in a map key). An alternate version
+// of this type (containing a slice) will be used if the "race" build
+// tag is present, since that is how we execute our tests.
+//
+// This should be an external lint tool in a future state.
+type noCompare struct{}

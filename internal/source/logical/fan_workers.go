@@ -41,7 +41,7 @@ type fanWorkers struct {
 
 	mu struct {
 		sync.Mutex
-		data    map[ident.Table][]types.Mutation
+		data    *ident.TableMap[[]types.Mutation]
 		drain   bool          // Graceful drain condition.
 		updated chan struct{} // Closed and replaced when mu changes.
 	}
@@ -57,7 +57,7 @@ func newFanWorkers(ctx context.Context, loop *loop, stamp stamp.Stamp) *fanWorke
 		targetPool: loop.targetPool,
 		stamp:      stamp,
 	}
-	ret.mu.data = make(map[ident.Table][]types.Mutation)
+	ret.mu.data = &ident.TableMap[[]types.Mutation]{}
 	ret.mu.updated = make(chan struct{})
 
 	eg, egCtx := errgroup.WithContext(ctx)
@@ -81,7 +81,7 @@ func (t *fanWorkers) Enqueue(table ident.Table, mut []types.Mutation) error {
 		return errors.New("Enqueue() after Wait()")
 	}
 	t.pending.Apply(len(mut))
-	t.mu.data[table] = append(t.mu.data[table], mut...)
+	t.mu.data.Put(table, append(t.mu.data.GetZero(table), mut...))
 	close(t.mu.updated)
 	t.mu.updated = make(chan struct{})
 	return nil
@@ -150,6 +150,9 @@ func (t *fanWorkers) loop(ctx context.Context) error {
 	}
 }
 
+// Used by waitForWork to break out of a Range loop.
+var errStop = errors.New("ignored")
+
 // waitForWork finds some mutations to apply to a table. If there are no
 // remaining mutations and the fanWorkers is stopped, this method will
 // return false.
@@ -159,11 +162,15 @@ func (t *fanWorkers) waitForWork() (table ident.Table, mut []types.Mutation, mor
 		defer t.mu.Unlock()
 
 		// Find a non-empty slice of mutations.
-		for table, mut = range t.mu.data {
+		_ = t.mu.data.Range(func(candidateTbl ident.Table, candidateMut []types.Mutation) error {
+			// Copy variables into outer scope.
+			table = candidateTbl
+			mut = candidateMut
+
 			if count := len(mut); count > 0 {
 				// Limit number of values dequeued.
 				if count > t.batchSize {
-					t.mu.data[table] = mut[t.batchSize:]
+					t.mu.data.Put(table, mut[t.batchSize:])
 					mut = mut[:t.batchSize]
 					// Ensure another worker is woken to consume the
 					// remainder of the slice.
@@ -171,11 +178,17 @@ func (t *fanWorkers) waitForWork() (table ident.Table, mut []types.Mutation, mor
 					t.mu.updated = make(chan struct{})
 				} else {
 					// Consuming all values.
-					delete(t.mu.data, table)
+					t.mu.data.Delete(table)
 				}
 				moreWork = true
-				return nil
+				// We found work, so return a sentinel error.
+				return errStop
 			}
+			return nil
+		})
+		// Found work to do, no need to wait.
+		if moreWork {
+			return nil
 		}
 		// Shutdown flag set by Wait.
 		if t.mu.drain {

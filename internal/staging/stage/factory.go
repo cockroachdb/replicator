@@ -40,7 +40,7 @@ type factory struct {
 
 	mu struct {
 		sync.RWMutex
-		instances map[ident.Table]*stage
+		instances *ident.TableMap[*stage]
 	}
 }
 
@@ -58,13 +58,13 @@ func (f *factory) createUnlocked(ctx context.Context, table ident.Table) (*stage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if ret := f.mu.instances[table]; ret != nil {
+	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
 
 	ret, err := newStore(ctx, f.db, f.stagingDB, table)
 	if err == nil {
-		f.mu.instances[table] = ret
+		f.mu.instances.Put(table, ret)
 	}
 	return ret, err
 }
@@ -72,7 +72,7 @@ func (f *factory) createUnlocked(ctx context.Context, table ident.Table) (*stage
 func (f *factory) getUnlocked(table ident.Table) *stage {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.mu.instances[table]
+	return f.mu.instances.GetZero(table)
 }
 
 // SelectMany implements types.Stagers.
@@ -91,17 +91,17 @@ func (f *factory) SelectMany(
 	}
 
 	// Each table is assigned a numeric id to simplify the queries.
-	tablesToIds := make(map[ident.Table]int)
+	tablesToIds := &ident.TableMap[int]{}
 	idsToTables := make(map[int]ident.Table)
 	var orderedTables []ident.Table
 	for _, tables := range q.Targets {
 		orderedTables = append(orderedTables, tables...)
 		for _, table := range tables {
-			id := len(tablesToIds)
-			if _, duplicate := tablesToIds[table]; duplicate {
+			id := tablesToIds.Len()
+			if _, duplicate := tablesToIds.Get(table); duplicate {
 				return errors.Errorf("duplicate table name: %s", table)
 			}
-			tablesToIds[table] = id
+			tablesToIds.Put(table, id)
 			idsToTables[id] = table
 		}
 	}
@@ -119,8 +119,8 @@ func (f *factory) SelectMany(
 		start := time.Now()
 
 		offsetTableIdx := -1
-		if q.OffsetTable != (ident.Table{}) {
-			offsetTableIdx = tablesToIds[q.OffsetTable]
+		if !q.OffsetTable.Empty() {
+			offsetTableIdx = tablesToIds.GetZero(q.OffsetTable)
 		}
 
 		// This is a union-all construct:
@@ -139,7 +139,7 @@ args AS (SELECT $1::INT, $2::INT, $3::INT, $4::INT, $5::INT, $6:::INT, $7::INT, 
 data AS (`)
 		needsUnion := false
 		for _, table := range orderedTables {
-			id := tablesToIds[table]
+			id := tablesToIds.GetZero(table)
 			// If we're backfilling, the dominant ordering term is the
 			// table. Any tables that are before the starting table can
 			// simply be elided from the query.

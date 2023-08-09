@@ -36,7 +36,7 @@ func ProvideFactory(configs *applycfg.Configs, watchers types.Watchers) (types.A
 		configs:  configs,
 		watchers: watchers,
 	}
-	f.mu.instances = make(map[ident.Table]*apply)
+	f.mu.instances = &ident.TableMap[*apply]{}
 	return f, func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()

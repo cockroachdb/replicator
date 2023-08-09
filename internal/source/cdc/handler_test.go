@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
@@ -224,6 +225,11 @@ func testHandler(t *testing.T, immediate bool) {
 	tableInfo, err := fixture.CreateTargetTable(ctx,
 		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
 	r.NoError(err)
+	// Ensure that we can handle identifiers that don't align with
+	// what's actually in the target database.
+	jumbleName := func() ident.Table {
+		return sinktest.JumbleTable(tableInfo.Name())
+	}
 
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
@@ -254,7 +260,7 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Stage two lines of data.
 		a.NoError(h.ndjson(ctx, &request{
-			target: tableInfo.Name(),
+			target: jumbleName(),
 			body: strings.NewReader(`
 { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "updated" : "1.0" }
 { "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "updated" : "1.0" }
@@ -263,10 +269,10 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Send the resolved timestamp request.
 		a.NoError(h.resolved(ctx, &request{
-			target:    tableInfo.Name(),
+			target:    jumbleName(),
 			timestamp: hlc.New(2, 0),
 		}))
-		a.NoError(maybeFlush(tableInfo.Name(), hlc.New(2, 0)))
+		a.NoError(maybeFlush(jumbleName(), hlc.New(2, 0)))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -274,7 +280,7 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Now, delete the data.
 		a.NoError(h.ndjson(ctx, &request{
-			target: tableInfo.Name(),
+			target: jumbleName(),
 			body: strings.NewReader(`
 { "after" : null, "key" : [ 42 ], "updated" : "3.0" }
 { "key" : [ 99 ], "updated" : "3.0" }
@@ -282,10 +288,10 @@ func testHandler(t *testing.T, immediate bool) {
 		}, parseNdjsonMutation))
 
 		a.NoError(h.resolved(ctx, &request{
-			target:    tableInfo.Name(),
+			target:    jumbleName(),
 			timestamp: hlc.New(5, 0),
 		}))
-		a.NoError(maybeFlush(tableInfo.Name(), hlc.New(5, 0)))
+		a.NoError(maybeFlush(jumbleName(), hlc.New(5, 0)))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -299,20 +305,20 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Insert data and verify flushing.
 		a.NoError(h.webhook(ctx, &request{
-			target: tableInfo.Name().Schema(),
+			target: jumbleName().Schema(),
 			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "topic" : %[1]s, "updated" : "10.0" },
   { "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "topic" : %[1]s, "updated" : "10.0" }
 ] }
-`, tableInfo.Name().Table())),
+`, jumbleName().Table())),
 		}))
 
 		a.NoError(h.webhook(ctx, &request{
-			target: tableInfo.Name().Schema(),
+			target: jumbleName().Schema(),
 			body:   strings.NewReader(`{ "resolved" : "20.0" }`),
 		}))
-		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(20, 0)))
+		a.NoError(maybeFlush(jumbleName().Schema(), hlc.New(20, 0)))
 
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -320,20 +326,20 @@ func testHandler(t *testing.T, immediate bool) {
 
 		// Now, delete the data.
 		a.NoError(h.webhook(ctx, &request{
-			target: tableInfo.Name().Schema(),
+			target: jumbleName().Schema(),
 			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "key" : [ 42 ], "topic" : %[1]s, "updated" : "30.0" },
   { "after" : null, "key" : [ 99 ], "topic" : %[1]s, "updated" : "30.0" }
 ] }
-`, tableInfo.Name().Table())),
+`, jumbleName().Table())),
 		}))
 
 		a.NoError(h.webhook(ctx, &request{
-			target: tableInfo.Name().Schema(),
+			target: jumbleName().Schema(),
 			body:   strings.NewReader(`{ "resolved" : "40.0" }`),
 		}))
-		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(40, 0)))
+		a.NoError(maybeFlush(jumbleName().Schema(), hlc.New(40, 0)))
 
 		ct, err = tableInfo.RowCount(ctx)
 		a.NoError(err)
@@ -344,7 +350,7 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Run("empty-ndjson", func(t *testing.T) {
 		a := assert.New(t)
 		a.NoError(h.ndjson(ctx, &request{
-			target: tableInfo.Name(),
+			target: jumbleName(),
 			body:   strings.NewReader(""),
 		}, parseNdjsonMutation))
 	})
@@ -353,7 +359,7 @@ func testHandler(t *testing.T, immediate bool) {
 	t.Run("empty-webhook", func(t *testing.T) {
 		a := assert.New(t)
 		a.NoError(h.webhook(ctx, &request{
-			target: tableInfo.Name().Schema(),
+			target: jumbleName().Schema(),
 			body:   strings.NewReader(""),
 		}))
 	})

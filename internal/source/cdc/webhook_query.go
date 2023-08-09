@@ -64,7 +64,7 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	}
 	// Aggregate the mutations by target table. We know that the default
 	// batch size for webhooks is reasonable.
-	toProcess := make(map[ident.Table][]types.Mutation)
+	toProcess := &ident.TableMap[[]types.Mutation]{}
 	for _, payload := range message.Payload {
 		qp := queryPayload{
 			keys: keys,
@@ -77,7 +77,7 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		if err != nil {
 			return err
 		}
-		toProcess[table] = append(toProcess[table], mut)
+		toProcess.Put(table, append(toProcess.GetZero(table), mut))
 	}
 	return h.processMutations(ctx, toProcess)
 }

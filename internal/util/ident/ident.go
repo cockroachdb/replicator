@@ -17,22 +17,25 @@
 // Package ident contains types for safely representing SQL identifiers.
 package ident
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // Public is a commonly-used identifier.
 var Public = New("public")
 
 // An Ident is a quoted SQL identifier, generally a table, column, or
-// database. This type is an immutable value type, suitable for use as a
-// map key.
+// database.
 type Ident struct {
+	_ noCompare
 	*atom
 }
 
 // New returns a quoted SQL identifier. Prefer using ParseIdent when
 // operating on user-provided input that may already be quoted.
 func New(raw string) Ident {
-	return Ident{atoms.Get(raw)}
+	return Ident{atom: atoms.Get(raw)}
 }
 
 // UnmarshalJSON converts a raw json string into an Ident.
@@ -50,3 +53,30 @@ func (n *Ident) UnmarshalText(data []byte) error {
 	*n = New(string(data))
 	return nil
 }
+
+// Idents is a slice of Ident.
+type Idents []Ident
+
+var _ sort.Interface = Idents(nil)
+
+// Equal returns true if the two slices contain equivalent identifiers.
+func (n Idents) Equal(o Idents) bool {
+	if len(n) != len(o) {
+		return false
+	}
+	for i := range n {
+		if !Equal(n[i], o[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// Len implements [sort.Interface].
+func (n Idents) Len() int { return len(n) }
+
+// Less implements [sort.Interface].
+func (n Idents) Less(i, j int) bool { return Compare(n[i], n[j]) < 0 }
+
+// Swap implements [sort.Interface].
+func (n Idents) Swap(i, j int) { n[i], n[j] = n[j], n[i] }

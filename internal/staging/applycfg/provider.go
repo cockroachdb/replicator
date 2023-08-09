@@ -43,7 +43,7 @@ func ProvideConfigs(
 	}
 
 	cfg := &Configs{pool: pool}
-	cfg.mu.data = make(map[ident.Table]*Config)
+	cfg.mu.data = &ident.TableMap[*Config]{}
 	cfg.mu.updated = make(chan struct{})
 	cfg.sql.delete = fmt.Sprintf(deleteConfTemplate, target)
 	cfg.sql.loadAll = fmt.Sprintf(loadConfTemplate, target)

@@ -34,13 +34,13 @@ func TestQueryPayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		data    string
-		keys    map[ident.Ident]int
+		keys    *ident.Map[int]
 		want    types.Mutation
 		wantErr string
 	}{
 		{"insert",
 			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0},
+			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{
 				Data: json.RawMessage(`{"pk":42,"v":9}`),
 				Time: hlc.New(1, 0),
@@ -50,7 +50,7 @@ func TestQueryPayload(t *testing.T) {
 		},
 		{"insert 2 pk",
 			`{"__event__": "insert", "pk" : 42, "pk2" : 43, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0, ident.New("pk2"): 1},
+			ident.MapOf[int](ident.New("pk"), 0, ident.New("pk2"), 1),
 			types.Mutation{
 				Data: json.RawMessage(`{"pk":42,"pk2":43,"v":9}`),
 				Time: hlc.New(1, 0),
@@ -60,7 +60,7 @@ func TestQueryPayload(t *testing.T) {
 		},
 		{"update 3 pk",
 			`{"__event__": "update", "pk" : 42, "pk2" : 43, "pk3" : 44, "v" : 9, "v2" : 10, "__crdb__": {"updated": "10.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0, ident.New("pk2"): 1, ident.New("pk3"): 2},
+			ident.MapOf[int](ident.New("pk"), 0, ident.New("pk2"), 1, ident.New("pk3"), 2),
 			types.Mutation{
 				Data: json.RawMessage(`{"pk":42,"pk2":43,"pk3":44,"v":9,"v2":10}`),
 				Time: hlc.New(10, 0),
@@ -70,7 +70,7 @@ func TestQueryPayload(t *testing.T) {
 		},
 		{"delete",
 			`{"__event__": "delete", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0},
+			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{
 				Data: nil,
 				Time: hlc.New(1, 0),
@@ -80,25 +80,25 @@ func TestQueryPayload(t *testing.T) {
 		},
 		{"missing pk",
 			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0, ident.New("pk2"): 1},
+			ident.MapOf[int](ident.New("pk"), 0, ident.New("pk2"), 1),
 			types.Mutation{},
 			`expecting a value for key: "pk2"`,
 		},
 		{"missing timestamp",
 			`{"__event__": "delete", "pk" : 42, "v" : 9, "__crdb__": {"something": "1.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0},
+			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{},
 			"can't parse timestamp ",
 		},
 		{"missing op",
 			`{"pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0},
+			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{},
 			"CREATE CHANGEFEED must specify the __event__ colum set to op_event()",
 		},
 		{"invalid op",
 			`{"__event__": "select","pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			map[ident.Ident]int{ident.New("pk"): 0},
+			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{},
 			`unable to decode operation type: unknown operation "select"`,
 		},

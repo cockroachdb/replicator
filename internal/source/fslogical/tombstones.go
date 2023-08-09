@@ -72,8 +72,8 @@ type (
 type Tombstones struct {
 	cfg       *Config
 	coll      *firestore.CollectionRef
-	deletesTo map[ident.Ident]ident.Table // Collection names to target tables.
-	source    ident.Ident                 // The collection name; passed to Events.OnData.
+	deletesTo *ident.Map[ident.Table] // Collection names to target tables.
+	source    ident.Ident             // The collection name; passed to Events.OnData.
 
 	mu struct {
 		sync.RWMutex
@@ -206,7 +206,7 @@ func (t *Tombstones) Process(
 		}
 
 		for _, elt := range evt.elts {
-			tbl, ok := t.deletesTo[ident.New(elt.collection)]
+			tbl, ok := t.deletesTo.Get(ident.New(elt.collection))
 			if !ok {
 				if t.cfg.TombstoneIgnoreUnmapped {
 					log.WithFields(log.Fields{

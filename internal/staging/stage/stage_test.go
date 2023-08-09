@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/mutations"
@@ -57,6 +58,10 @@ func TestPutAndDrain(t *testing.T) {
 		return
 	}
 	a.NotNil(s)
+
+	jumbledStager, err := fixture.Stagers.Get(ctx, sinktest.JumbleTable(dummyTarget))
+	a.NoError(err)
+	a.Same(s, jumbledStager)
 
 	// Steal implementation details to cross-check DB state.
 	stagingTable := s.(interface{ GetTable() ident.Table }).GetTable()
@@ -226,10 +231,10 @@ func TestSelectMany(t *testing.T) {
 		{tables[3], tables[4], tables[5]},
 		{tables[6], tables[7], tables[8], tables[9]},
 	}
-	tableToGroup := make(map[ident.Table]int)
+	tableToGroup := &ident.TableMap[int]{}
 	for group, tables := range tableGroups {
 		for _, table := range tables {
-			tableToGroup[table] = group
+			tableToGroup.Put(table, group)
 		}
 	}
 
@@ -301,18 +306,19 @@ func TestSelectMany(t *testing.T) {
 			},
 		}
 
-		entriesByTable := make(map[ident.Table][]types.Mutation)
+		entriesByTable := &ident.TableMap[[]types.Mutation]{}
 		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
+				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
 				return nil
 			})
 		r.NoError(err)
-		for _, seen := range entriesByTable {
+		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 			if a.Len(seen, len(expectedMutOrder)) {
 				a.Equal(expectedMutOrder, seen)
 			}
-		}
+			return nil
+		}))
 	})
 
 	// Read the middle two tranches of updates.
@@ -332,18 +338,19 @@ func TestSelectMany(t *testing.T) {
 			},
 		}
 
-		entriesByTable := make(map[ident.Table][]types.Mutation)
+		entriesByTable := &ident.TableMap[[]types.Mutation]{}
 		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
+				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
 				return nil
 			})
 		r.NoError(err)
-		for _, seen := range entriesByTable {
+		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 			if a.Len(seen, 2*entries) {
 				a.Equal(expectedMutOrder[entries:3*entries], seen)
 			}
-		}
+			return nil
+		}))
 	})
 
 	// What's different about the backfill case is that we want to
@@ -365,26 +372,27 @@ func TestSelectMany(t *testing.T) {
 			},
 		}
 
-		entriesByTable := make(map[ident.Table][]types.Mutation)
+		entriesByTable := &ident.TableMap[[]types.Mutation]{}
 		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
+				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
 
 				// Check that all data for parent groups have been received.
-				if group := tableToGroup[tbl]; group > 1 {
+				if group := tableToGroup.GetZero(tbl); group > 1 {
 					for _, tableToCheck := range tableGroups[group-1] {
-						r.Len(entriesByTable[tableToCheck], len(muts))
+						r.Len(entriesByTable.GetZero(tableToCheck), len(muts))
 					}
 				}
 				return nil
 			})
 		r.NoError(err)
 
-		for _, seen := range entriesByTable {
+		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 			if a.Len(seen, len(expectedMutOrder)) {
 				a.Equal(expectedMutOrder, seen)
 			}
-		}
+			return nil
+		}))
 	})
 
 	// Similar to the backfill test, but we read a subset of the data.
@@ -405,26 +413,27 @@ func TestSelectMany(t *testing.T) {
 			},
 		}
 
-		entriesByTable := make(map[ident.Table][]types.Mutation)
+		entriesByTable := &ident.TableMap[[]types.Mutation]{}
 		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable[tbl] = append(entriesByTable[tbl], mut)
+				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
 
 				// Check that all data for parent groups have been received.
-				if group := tableToGroup[tbl]; group > 1 {
+				if group := tableToGroup.GetZero(tbl); group > 1 {
 					for _, tableToCheck := range tableGroups[group-1] {
-						r.Len(entriesByTable[tableToCheck], 2*entries)
+						r.Len(entriesByTable.GetZero(tableToCheck), 2*entries)
 					}
 				}
 				return nil
 			})
 		r.NoError(err)
 
-		for _, seen := range entriesByTable {
+		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 			if a.Len(seen, 2*entries) {
 				a.Equal(expectedMutOrder[entries:3*entries], seen)
 			}
-		}
+			return nil
+		}))
 	})
 }
 

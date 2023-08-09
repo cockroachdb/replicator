@@ -79,25 +79,25 @@ func TestScript(t *testing.T) {
 		Options:  &opts,
 	}, TargetSchema(schema))
 	r.NoError(err)
-	a.Len(s.Sources, 3)
-	a.Len(s.Targets, 2)
+	a.Equal(3, s.Sources.Len())
+	a.Equal(2, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
 	tbl2 := ident.NewTable(schema, ident.New("table2"))
 	tblS := ident.NewTable(schema, ident.New("some_table"))
 
-	if cfg := s.Sources[ident.New("expander")]; a.NotNil(cfg) {
+	if cfg := s.Sources.GetZero(ident.New("expander")); a.NotNil(cfg) {
 		a.Equal(tbl1, cfg.DeletesTo)
 		mut := types.Mutation{Data: []byte(`{"msg":true}`)}
 		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
-			if docs := mapped[tbl1]; a.Len(docs, 1) {
+			if docs := mapped.GetZero(tbl1); a.Len(docs, 1) {
 				a.Equal(`{"dest":"table1","msg":true}`, string(docs[0].Data))
 				a.Equal(`[true]`, string(docs[0].Key))
 			}
 
-			if docs := mapped[tbl2]; a.Len(docs, 2) {
+			if docs := mapped.GetZero(tbl2); a.Len(docs, 2) {
 				a.Equal(`{"dest":"table2","idx":0,"msg":true}`, string(docs[0].Data))
 				a.Equal(`[0]`, string(docs[0].Key))
 
@@ -107,45 +107,45 @@ func TestScript(t *testing.T) {
 		}
 	}
 
-	if cfg := s.Sources[ident.New("passthrough")]; a.NotNil(cfg) {
+	if cfg := s.Sources.GetZero(ident.New("passthrough")); a.NotNil(cfg) {
 		a.Equal(tblS, cfg.DeletesTo)
 		mut := types.Mutation{Data: []byte(`{"passthrough":true}`)}
 		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
 			tbl := ident.NewTable(schema, ident.New("some_table"))
-			expanded := mapped[tbl]
+			expanded := mapped.GetZero(tbl)
 			if a.Len(expanded, 1) {
 				a.Equal(mut, expanded[0])
 			}
 		}
 	}
 
-	if cfg := s.Sources[ident.New("recursive")]; a.NotNil(cfg) {
+	if cfg := s.Sources.GetZero(ident.New("recursive")); a.NotNil(cfg) {
 		a.True(cfg.Recurse)
 	}
 
 	tbl := ident.NewTable(schema, ident.New("all_features"))
-	if cfg := s.Targets[tbl]; a.NotNil(cfg) {
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
 		expectedApply := applycfg.Config{
 			CASColumns: []ident.Ident{ident.New("cas0"), ident.New("cas1")},
-			Deadlines: map[applycfg.TargetColumn]time.Duration{
-				ident.New("dl0"): time.Hour,
-				ident.New("dl1"): time.Minute,
-			},
-			Exprs: map[applycfg.TargetColumn]string{
-				ident.New("expr0"): "fnv32($0::BYTES)",
-				ident.New("expr1"): "Hello Library!",
-			},
+			Deadlines: ident.MapOf[time.Duration](
+				ident.New("dl0"), time.Hour,
+				ident.New("dl1"), time.Minute,
+			),
+			Exprs: ident.MapOf[string](
+				ident.New("expr0"), "fnv32($0::BYTES)",
+				ident.New("expr1"), "Hello Library!",
+			),
 			Extras: ident.New("overflow_column"),
-			Ignore: map[applycfg.TargetColumn]bool{
-				ident.New("ign0"): true,
-				ident.New("ign1"): true,
+			Ignore: ident.MapOf[bool](
+				ident.New("ign0"), true,
+				ident.New("ign1"), true,
 				// The false value is dropped.
-			},
+			),
 			// SourceName not used; that can be handled by the function.
-			SourceNames: map[applycfg.TargetColumn]applycfg.SourceColumn{},
+			SourceNames: &ident.Map[applycfg.SourceColumn]{},
 		}
-		a.Equal(expectedApply, cfg.Config)
+		a.True(expectedApply.Equal(&cfg.Config))
 
 		if filter := cfg.Map; a.NotNil(filter) {
 			mapped, keep, err := filter(context.Background(), types.Mutation{Data: []byte(`{"hello":"world!"}`)})
@@ -156,7 +156,7 @@ func TestScript(t *testing.T) {
 	}
 
 	tbl = ident.NewTable(schema, ident.New("drop_all"))
-	if cfg := s.Targets[tbl]; a.NotNil(cfg) {
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
 		if filter := cfg.Map; a.NotNil(filter) {
 			_, keep, err := filter(context.Background(), types.Mutation{Data: []byte(`{"hello":"world!"}`)})
 			a.NoError(err)

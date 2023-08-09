@@ -35,15 +35,15 @@ import (
 // to some number of downstream tables. Dispatch functions are
 // internally synchronized to ensure single-threaded access to the
 // underlying JS VM.
-type Dispatch func(ctx context.Context, mutation types.Mutation) (map[ident.Table][]types.Mutation, error)
+type Dispatch func(ctx context.Context, mutation types.Mutation) (*ident.TableMap[[]types.Mutation], error)
 
 // dispatchTo returns a Dispatch which assigns all mutations to the
 // given target.
 func dispatchTo(target ident.Table) Dispatch {
-	return func(_ context.Context, mut types.Mutation) (map[ident.Table][]types.Mutation, error) {
-		return map[ident.Table][]types.Mutation{
-			target: {mut},
-		}, nil
+	return func(_ context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
+		ret := &ident.TableMap[[]types.Mutation]{}
+		ret.Put(target, []types.Mutation{mut})
+		return ret, nil
 	}
 }
 
@@ -82,8 +82,8 @@ type Target struct {
 // UserScript encapsulates a user-provided configuration expressed as a
 // JavaScript program.
 type UserScript struct {
-	Sources map[ident.Ident]*Source
-	Targets map[ident.Table]*Target
+	Sources *ident.Map[*Source]
+	Targets *ident.TableMap[*Target]
 
 	rt      *goja.Runtime // The JavaScript VM. See execJS.
 	rtMu    sync.Mutex    // Serialize access to the VM.
@@ -101,7 +101,7 @@ func (s *UserScript) bind(loader *Loader) error {
 	for sourceName, bag := range loader.sources {
 		src := &Source{Recurse: bag.Recurse}
 		// Note that this is not necessarily a SQL ident.
-		s.Sources[ident.New(sourceName)] = src
+		s.Sources.Put(ident.New(sourceName), src)
 
 		// The user has the option to provide either a dispatch function
 		// or the name of a table.
@@ -136,7 +136,7 @@ func (s *UserScript) bind(loader *Loader) error {
 			return errors.Wrapf(err, "configureTable(%q)", tableName)
 		}
 		tgt := &Target{Config: *applycfg.NewConfig()}
-		s.Targets[table] = tgt
+		s.Targets.Put(table, tgt)
 
 		for _, cas := range bag.CASColumns {
 			tgt.CASColumns = append(tgt.CASColumns, ident.New(cas))
@@ -146,10 +146,10 @@ func (s *UserScript) bind(loader *Loader) error {
 			if err != nil {
 				return errors.Wrapf(err, "configureTable(%q)", tableName)
 			}
-			tgt.Deadlines[ident.New(k)] = d
+			tgt.Deadlines.Put(ident.New(k), d)
 		}
 		for k, v := range bag.Exprs {
-			tgt.Exprs[ident.New(k)] = v
+			tgt.Exprs.Put(ident.New(k), v)
 		}
 		if bag.Extras != "" {
 			tgt.Extras = ident.New(bag.Extras)
@@ -161,7 +161,7 @@ func (s *UserScript) bind(loader *Loader) error {
 		}
 		for k, v := range bag.Ignore {
 			if v {
-				tgt.Ignore[ident.New(k)] = true
+				tgt.Ignore.Put(ident.New(k), true)
 			}
 		}
 	}
@@ -171,7 +171,7 @@ func (s *UserScript) bind(loader *Loader) error {
 
 // bindDispatch exports a user-provided function as a Dispatch.
 func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
-	return func(ctx context.Context, mut types.Mutation) (map[ident.Table][]types.Mutation, error) {
+	return func(ctx context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
 		// Unmarshal the mutation's data as a generic map.
 		data := make(map[string]any)
 		if err := json.Unmarshal(mut.Data, &data); err != nil {
@@ -191,13 +191,14 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 			return nil, err
 		}
 
+		ret := &ident.TableMap[[]types.Mutation]{}
+
 		// If nothing returned, return an empty map.
 		if len(dispatches) == 0 {
-			return map[ident.Table][]types.Mutation{}, nil
+			return ret, nil
 		}
 
 		// Serialize mutations back to JSON.
-		ret := make(map[ident.Table][]types.Mutation, len(dispatches))
 		for tblName, jsDocs := range dispatches {
 			tbl, _, err := ident.ParseTableRelative(tblName, s.target)
 			if err != nil {
@@ -205,9 +206,9 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 					"dispatch function returned unparsable table name %q", tblName)
 			}
 			tblMuts := make([]types.Mutation, len(jsDocs))
-			ret[tbl] = tblMuts
+			ret.Put(tbl, tblMuts)
 			for idx, jsDoc := range jsDocs {
-				colData, ok := s.watcher.Get().Columns[tbl]
+				colData, ok := s.watcher.Get().Columns.Get(tbl)
 				if !ok {
 					return nil, errors.Errorf(
 						"dispatch function %s returned unknown table %s", fnName, tbl)
@@ -281,7 +282,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		}
 
 		// Refresh the primary-key values in the mutation.
-		colData, ok := s.watcher.Get().Columns[table]
+		colData, ok := s.watcher.Get().Columns.Get(table)
 		if !ok {
 			return mut, false, errors.Errorf("map missing schema data for %s", table)
 		}

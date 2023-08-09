@@ -63,6 +63,23 @@ var _ types.Applier = (*apply)(nil)
 func newApply(
 	target ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
+	// Start a background goroutine to refresh the templates.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	w, err := watchers.Get(ctx, target.Schema())
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	// Use the target database's name for the table. We perform a lookup
+	// against the column data map to retrieve the original table name
+	// key under which the data was inserted.
+	target, ok := w.Get().OriginalName(target)
+	if !ok {
+		cancel()
+		return nil, nil, errors.Errorf("unknown table %s", target)
+	}
+
 	labelValues := metrics.TableValues(target)
 	a := &apply{
 		target: target,
@@ -73,17 +90,9 @@ func newApply(
 		upserts:   applyUpserts.WithLabelValues(labelValues...),
 	}
 
-	// Start a background goroutine to refresh the templates.
-	ctx, cancel := context.WithCancel(context.Background())
 	errs := make(chan error, 1)
 	go func(ctx context.Context, errs chan<- error) {
 		defer cancel()
-
-		w, err := watchers.Get(ctx, target.Schema())
-		if err != nil {
-			errs <- err
-			return
-		}
 
 		schemaCh, cancelSchema, err := w.Watch(target)
 		if err != nil {
@@ -274,7 +283,7 @@ func (a *apply) upsertLocked(
 	extrasArgIdx := -1
 
 	// Decode the mutations into an actionable map.
-	columnData := make([]map[ident.Ident]any, len(muts))
+	columnData := make([]*ident.Map[any], len(muts))
 	if err := pjson.Decode(ctx, columnData,
 		func(i int) []byte { return muts[i].Data },
 	); err != nil {
@@ -285,21 +294,21 @@ func (a *apply) upsertLocked(
 		// Track the columns that we expect to see and that are seen in
 		// the incoming payload. This improves the error returned when
 		// there are unexpected columns.
-		knownColumnsInPayload := make(map[ident.Ident]struct{}, len(a.mu.schemaData))
+		var knownColumnsInPayload ident.Map[struct{}]
 
 		for _, col := range a.mu.schemaData {
 			// Determine which key to look for in the mutation payload.
 			// If there's no explicit configuration, use the target
 			// column's name.
-			sourceCol, renamed := a.mu.configData.SourceNames[col.Name]
+			sourceCol, renamed := a.mu.configData.SourceNames.Get(col.Name)
 			if !renamed {
 				sourceCol = col.Name
 			}
-			decoded, presentInPayload := incomingColumnData[sourceCol]
+			decoded, presentInPayload := incomingColumnData.Get(sourceCol)
 			// Keep track of columns in the incoming payload that match
 			// columns that we expect to see in the target database.
 			if presentInPayload {
-				knownColumnsInPayload[sourceCol] = struct{}{}
+				knownColumnsInPayload.Put(sourceCol, struct{}{})
 			}
 			// Ignored will be true for columns in the target database
 			// that we know about, but that we don't actually want to
@@ -307,7 +316,7 @@ func (a *apply) upsertLocked(
 			// ignored columns could be part of the primary key, or they
 			// could be a regular column. We also allow the user to
 			// force columns to be ignored (e.g. to drop a column).
-			if col.Ignored || a.mu.configData.Ignore[col.Name] {
+			if col.Ignored || a.mu.configData.Ignore.GetZero(col.Name) {
 				continue
 			}
 			// We allow the user to specify an arbitrary expression for
@@ -315,7 +324,7 @@ func (a *apply) upsertLocked(
 			// we want to drop the column from the values to be sent
 			// with the query. The templates will bake in the fixed
 			// expression.
-			if expr, ok := a.mu.configData.Exprs[col.Name]; ok {
+			if expr, ok := a.mu.configData.Exprs.Get(col.Name); ok {
 				if !strings.Contains(expr, applycfg.SubstitutionToken) {
 					continue
 				}
@@ -333,7 +342,7 @@ func (a *apply) upsertLocked(
 					string(muts[i].Key), muts[i].Time)
 			}
 
-			if col.Name == a.mu.configData.Extras {
+			if ident.Equal(col.Name, a.mu.configData.Extras) {
 				extrasArgIdx = argIdx
 			}
 			allArgs[argIdx] = decoded
@@ -341,20 +350,22 @@ func (a *apply) upsertLocked(
 		}
 
 		// Pretend as though we've seen any ignored columns.
-		for col := range a.mu.configData.Ignore {
-			knownColumnsInPayload[col] = struct{}{}
-		}
+		_ = a.mu.configData.Ignore.Range(func(col ident.Ident, _ bool) error {
+			knownColumnsInPayload.Put(col, struct{}{})
+			return nil
+		})
 
 		// Collect unknown / unmapped columns into the extras blob,
 		// or error out if we have no place to store extras.
-		if extraCount := len(incomingColumnData) - len(knownColumnsInPayload); extraCount > 0 {
+		if extraCount := incomingColumnData.Len() - knownColumnsInPayload.Len(); extraCount > 0 {
 			if a.mu.configData.Extras.Empty() {
 				var unmapped []string
-				for key := range incomingColumnData {
-					if _, seen := knownColumnsInPayload[key]; !seen {
+				_ = incomingColumnData.Range(func(key ident.Ident, _ any) error {
+					if _, seen := knownColumnsInPayload.Get(key); !seen {
 						unmapped = append(unmapped, key.Raw())
 					}
-				}
+					return nil
+				})
 				sort.Strings(unmapped)
 				return errors.Errorf(
 					"schema drift detected in %s: "+
@@ -363,12 +374,13 @@ func (a *apply) upsertLocked(
 					a.target, unmapped, string(muts[i].Key), muts[i].Time)
 			}
 
-			unmapped := make(map[ident.Ident]any, extraCount)
-			for key, value := range incomingColumnData {
-				if _, seen := knownColumnsInPayload[key]; !seen {
-					unmapped[key] = value
+			unmapped := &ident.Map[any]{}
+			_ = incomingColumnData.Range(func(key ident.Ident, value any) error {
+				if _, seen := knownColumnsInPayload.Get(key); !seen {
+					unmapped.Put(key, value)
 				}
-			}
+				return nil
+			})
 			// Find the location in the args slice to update
 			// with the extra data.
 			if extrasArgIdx < 0 {
@@ -376,7 +388,12 @@ func (a *apply) upsertLocked(
 					"extras column %s not found the target schema",
 					a.mu.configData.Extras)
 			}
-			allArgs[extrasArgIdx] = unmapped
+			// We want to control the marshaling of JSON data.
+			data, err := unmapped.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			allArgs[extrasArgIdx] = string(data)
 		}
 	}
 
@@ -412,34 +429,43 @@ func (a *apply) upsertLocked(
 func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.ColData) error {
 	// We want to verify that the cas and deadline columns actually
 	// exist in the incoming column data.
-	allColNames := make(map[ident.Ident]struct{}, len(schemaData))
+	var allColNames ident.Map[struct{}]
 	for _, col := range schemaData {
-		allColNames[col.Name] = struct{}{}
+		allColNames.Put(col.Name, struct{}{})
 	}
 	for _, col := range configData.CASColumns {
-		if _, found := allColNames[col]; !found {
+		if _, found := allColNames.Get(col); !found {
 			return errors.Errorf("cas column name %s not found in table %s", col, a.target)
 		}
 	}
-	for col := range configData.Deadlines {
-		if _, found := allColNames[col]; !found {
+	if err := configData.Deadlines.Range(func(col ident.Ident, _ time.Duration) error {
+		if _, found := allColNames.Get(col); !found {
 			return errors.Errorf("deadline column name %s not found in table %s", col, a.target)
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
-	for col := range configData.Exprs {
-		if _, found := allColNames[col]; !found {
+	if err := configData.Exprs.Range(func(col ident.Ident, _ string) error {
+		if _, found := allColNames.Get(col); !found {
 			return errors.Errorf("expression column name %s not found in table %s", col, a.target)
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// The Ignores field doesn't need validation, since you might want
 	// to mark a column as ignored in order to (eventually) drop it from
 	// the destination database.
 
-	for col := range configData.SourceNames {
-		if _, found := allColNames[col]; !found {
+	if err := configData.SourceNames.Range(func(col ident.Ident, _ applycfg.SourceColumn) error {
+		if _, found := allColNames.Get(col); !found {
 			return errors.Errorf("renamed column name %s not found in table %s", col, a.target)
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// Compute the expected length of the "key" attribute in the

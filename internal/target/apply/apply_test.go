@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/mutations"
@@ -50,20 +51,28 @@ func TestApply(t *testing.T) {
 
 	ctx := fixture.Context
 
+	// Note the mixed-case in the json fields. This will ensure that we
+	// can insert data in a case-insensitive fashion.
 	type Payload struct {
-		Pk0 int    `json:"pk0"`
-		Pk1 string `json:"pk1"`
+		Pk0 int    `json:"Pk0"`
+		Pk1 string `json:"pK1"`
 	}
 	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk0 INT, pk1 STRING, extras JSONB, PRIMARY KEY (pk0,pk1))")
 	if !a.NoError(err) {
 		return
 	}
+	// Use this jumbled name when accessing the API.
+	jumbleName := sinktest.JumbleTable(tbl.Name())
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, jumbleName)
 	if !a.NoError(err) {
 		return
 	}
+
+	app2, err := fixture.Appliers.Get(ctx, tbl.Name())
+	a.NoError(err)
+	a.Same(app, app2)
 
 	t.Run("smoke", func(t *testing.T) {
 		a := assert.New(t)
@@ -146,7 +155,7 @@ func TestApply(t *testing.T) {
 		a := assert.New(t)
 		cfg := applycfg.NewConfig()
 		cfg.Extras = ident.New("extras")
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), cfg))
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbleName, cfg))
 		changed, err := fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
@@ -155,12 +164,12 @@ func TestApply(t *testing.T) {
 		for {
 			err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
 				{
-					Data: []byte(`{"pk0":1, "pk1":0, "heretofore":"unseen", "are":"OK"}`),
-					Key:  []byte(`[1, 0]`),
+					Data: []byte(`{"pk0":1, "pk1":"0", "heretofore":"unseen", "are":"OK"}`),
+					Key:  []byte(`[1, "0"]`),
 				},
 				{
-					Data: []byte(`{"pk0":2, "pk1":0, "check":"multiple", "mutations":"work"}`),
-					Key:  []byte(`[2, 0]`),
+					Data: []byte(`{"pk0":2, "pk1":"0", "check":"multiple", "mutations":"work"}`),
+					Key:  []byte(`[2, "0"]`),
 				},
 			})
 			if err == nil {
@@ -187,7 +196,7 @@ func TestApply(t *testing.T) {
 		).Scan(&extrasRaw))
 		a.Equal(`{"check": "multiple", "mutations": "work"}`, extrasRaw)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), nil))
+		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbleName, nil))
 		changed, err = fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
@@ -368,8 +377,9 @@ func TestAllDataTypes(t *testing.T) {
 			if !a.NoError(err) {
 				return
 			}
+			tblName := sinktest.JumbleTable(tbl.Name())
 
-			app, err := fixture.Appliers.Get(ctx, tbl.Name())
+			app, err := fixture.Appliers.Get(ctx, tblName)
 			if !a.NoError(err) {
 				return
 			}
@@ -435,18 +445,24 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	if !a.NoError(err) {
 		return
 	}
+	// Use this when calling the APIs.
+	jumbleName := sinktest.JumbleTable(tbl.Name())
 
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &applycfg.Config{
-			CASColumns: []ident.Ident{ident.New("bad_column")},
-		}))
+		a.NoError(fixture.Configs.Store(ctx,
+			fixture.StagingPool,
+			jumbleName,
+			applycfg.NewConfig().Patch(&applycfg.Config{
+				CASColumns: []ident.Ident{ident.New("bad_column")},
+			}),
+		))
 		changed, err := fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
 
-		_, err = fixture.Appliers.Get(ctx, tbl.Name())
+		_, err = fixture.Appliers.Get(ctx, jumbleName)
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -455,14 +471,18 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), &applycfg.Config{
-			Deadlines: types.Deadlines{ident.New("bad_column"): time.Second},
-		}))
+		a.NoError(fixture.Configs.Store(ctx,
+			fixture.StagingPool,
+			jumbleName,
+			applycfg.NewConfig().Patch(&applycfg.Config{
+				Deadlines: ident.MapOf[time.Duration](ident.New("bad_column"), time.Second),
+			}),
+		))
 		changed, err := fixture.Configs.Refresh(ctx)
 		a.True(changed)
 		a.NoError(err)
 
-		_, err = fixture.Appliers.Get(ctx, tbl.Name())
+		_, err = fixture.Appliers.Get(ctx, jumbleName)
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -485,13 +505,13 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
 	if deadline {
-		configData.Deadlines[ident.New("ts")] = 10 * time.Minute
+		configData.Deadlines.Put(ident.New("ts"), 10*time.Minute)
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbleName, configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, jumbleName)
 	if !a.NoError(err) {
 		return
 	}
@@ -585,18 +605,20 @@ func TestExpressionColumns(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
+	// Use this jumbled-case name when calling through the API.
+	jumbledName := sinktest.JumbleTable(tbl.Name())
 
 	configData := applycfg.NewConfig()
-	configData.Exprs = map[applycfg.TargetColumn]string{
-		ident.New("pk"):    "2 * $0",
-		ident.New("val"):   "$0 || ' world!'",
-		ident.New("fixed"): "'constant'",
-	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
+	configData.Exprs = ident.MapOf[string](
+		ident.New("pk"), "2 * $0",
+		ident.New("val"), "$0 || ' world!'",
+		ident.New("fixed"), "'constant'",
+	)
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbledName, configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, jumbledName)
 	if !a.NoError(err) {
 		return
 	}
@@ -659,18 +681,19 @@ func TestIgnoredColumns(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
+	tblName := sinktest.JumbleTable(tbl.Name())
 
 	configData := applycfg.NewConfig()
-	configData.Ignore = map[applycfg.TargetColumn]bool{
-		ident.New("pk_deleted"):   true,
-		ident.New("val_ignored"):  true,
-		ident.New("not_required"): true,
-	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
+	configData.Ignore = ident.MapOf[bool](
+		ident.New("pk_deleted"), true,
+		ident.New("val_ignored"), true,
+		ident.New("not_required"), true,
+	)
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tblName, configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, tblName)
 	if !a.NoError(err) {
 		return
 	}
@@ -713,17 +736,18 @@ func TestRenamedColumns(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
+	tblName := sinktest.JumbleTable(tbl.Name())
 
 	configData := applycfg.NewConfig()
-	configData.SourceNames = map[applycfg.TargetColumn]applycfg.SourceColumn{
-		ident.New("pk"):  ident.New("pk_source"),
-		ident.New("val"): ident.New("val_source"),
-	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
+	configData.SourceNames = ident.MapOf[applycfg.SourceColumn](
+		ident.New("pk"), ident.New("pk_source"),
+		ident.New("val"), ident.New("val_source"),
+	)
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tblName, configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, tblName)
 	if !a.NoError(err) {
 		return
 	}
@@ -766,6 +790,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
+	jumbledName := sinktest.JumbleTable(tbl.Name())
 
 	// Detect hopeful future case where UPSERT has the desired behavior.
 	_, err = fixture.TargetPool.ExecContext(ctx,
@@ -777,7 +802,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		a.FailNow("the workaround is no longer necessary for this version of CRDB")
 	}
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, jumbledName)
 	if !a.NoError(err) {
 		return
 	}
@@ -832,8 +857,9 @@ func TestUTDEnum(t *testing.T) {
 		fmt.Sprintf(`CREATE TABLE %%s (pk INT PRIMARY KEY, val %s."MyEnum")`,
 			fixture.TargetSchema.Schema()))
 	r.NoError(err)
+	tblName := sinktest.JumbleTable(tbl.Name())
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, tblName)
 	r.NoError(err)
 
 	p := Payload{PK: 42, Val: "bar"}
@@ -877,8 +903,9 @@ func TestVirtualColumns(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
+	tblName := sinktest.JumbleTable(tbl.Name())
 
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, tblName)
 	if !a.NoError(err) {
 		return
 	}
@@ -971,6 +998,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	if !a.NoError(err) {
 		return
 	}
+	tblName := sinktest.JumbleTable(tbl.Name())
 
 	// Set up the apply instance, per the configuration.
 	configData := applycfg.NewConfig()
@@ -978,13 +1006,13 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 		configData.CASColumns = []ident.Ident{ident.New("ver")}
 	}
 	if cfg.deadline {
-		configData.Deadlines[ident.New("ts")] = time.Hour
+		configData.Deadlines.Put(ident.New("ts"), time.Hour)
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tbl.Name(), configData))
+	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tblName, configData))
 	changed, err := fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)
-	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	app, err := fixture.Appliers.Get(ctx, tblName)
 	if !a.NoError(err) {
 		return
 	}

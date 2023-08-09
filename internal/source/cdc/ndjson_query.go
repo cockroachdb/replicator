@@ -52,7 +52,7 @@ func (h *Handler) parseNdjsonQueryMutation(
 
 // getPrimaryKey returns a map that contains all the columns that make up the primary key
 // for the target table and their ordinal position within the key.
-func (h *Handler) getPrimaryKey(ctx context.Context, req *request) (map[ident.Ident]int, error) {
+func (h *Handler) getPrimaryKey(ctx context.Context, req *request) (*ident.Map[int], error) {
 	if req.keys != nil {
 		return req.keys, nil
 	}
@@ -60,18 +60,18 @@ func (h *Handler) getPrimaryKey(ctx context.Context, req *request) (map[ident.Id
 	if !ok {
 		return nil, errors.Errorf("expecting ident.Table, got %T", req.target)
 	}
-	req.keys = make(map[ident.Ident]int)
 	watcher, err := h.Resolvers.watchers.Get(ctx, table.Schema())
 	if err != nil {
 		return nil, err
 	}
-	columns, ok := watcher.Get().Columns[table]
+	columns, ok := watcher.Get().Columns.Get(table)
 	if !ok {
 		return nil, errors.Errorf("table %q not found", table)
 	}
+	req.keys = &ident.Map[int]{}
 	for i, col := range columns {
 		if col.Primary {
-			req.keys[col.Name] = i
+			req.keys.Put(col.Name, i)
 		}
 	}
 	return req.keys, nil

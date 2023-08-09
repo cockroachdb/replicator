@@ -217,7 +217,7 @@ func TestGetColumns(t *testing.T) {
 				}
 			}
 
-			colData, ok := fixture.Watcher.Get().Columns[tableName]
+			colData, ok := fixture.Watcher.Get().Columns.Get(tableName)
 			if !a.Truef(ok, "Snapshot() did not return info for %s", tableName) {
 				return
 			}
@@ -268,11 +268,11 @@ func TestColDataIgnoresViews(t *testing.T) {
 	}
 	viewName := vi.Name()
 
-	colData, ok := fixture.Watcher.Get().Columns[tableName]
+	colData, ok := fixture.Watcher.Get().Columns.Get(tableName)
 	a.True(ok)
 	a.NotNil(colData)
 
-	viewData, ok := fixture.Watcher.Get().Columns[viewName]
+	viewData, ok := fixture.Watcher.Get().Columns.Get(viewName)
 	a.False(ok)
 	a.Nil(viewData)
 }

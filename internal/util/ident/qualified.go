@@ -26,12 +26,27 @@ type qualifiedKey struct {
 // A qualified associates an atomic identifier within some namespace.
 type qualified struct {
 	qualifiedKey
-	_ noCopy
+	lowered *qualified
+	_       noCopy
 }
 
 var qualifieds = canonicalMap[qualifiedKey, *qualified]{
-	Lazy: func(key qualifiedKey) *qualified {
-		return &qualified{qualifiedKey: key}
+	Lazy: func(owner *canonicalMap[qualifiedKey, *qualified], key qualifiedKey) *qualified {
+		var loweredKey qualifiedKey
+		if key.namespace != nil {
+			loweredKey.namespace = key.namespace.lowered
+		}
+		if key.terminal != nil {
+			loweredKey.terminal = key.terminal.lowered
+		}
+
+		ret := &qualified{qualifiedKey: key}
+		if loweredKey == key {
+			ret.lowered = ret
+		} else {
+			ret.lowered = owner.Get(loweredKey)
+		}
+		return ret
 	},
 }
 
@@ -48,7 +63,7 @@ func (q *qualified) Idents(buf []Ident) []Ident {
 	if len(buf) == 0 {
 		buf = make([]Ident, 0, maxArrayLength+1)
 	}
-	return append(q.namespace.Idents(buf), Ident{q.terminal})
+	return append(q.namespace.Idents(buf), Ident{atom: q.terminal})
 }
 
 // MarshalJSON returns the ident as an array.
@@ -75,14 +90,14 @@ func (q *qualified) Split() (Ident, Identifier) {
 		return Ident{}, empty
 	}
 	if q.namespace.Empty() {
-		return Ident{q.terminal}, empty
+		return Ident{atom: q.terminal}, empty
 	}
 	var nextArray arrayKey
 	copy(nextArray[:], q.namespace.key[1:])
 	for idx, atm := range nextArray {
 		if atm == nil {
 			nextArray[idx] = q.terminal
-			return Ident{q.namespace.key[0]}, arrays.Get(nextArray)
+			return Ident{atom: q.namespace.key[0]}, arrays.Get(nextArray)
 		}
 	}
 	panic("shift did not leave a nil behind")

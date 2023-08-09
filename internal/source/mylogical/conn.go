@@ -48,7 +48,7 @@ import (
 // status updates.
 type conn struct {
 	// Columns, as ordered by the source database.
-	columns map[ident.Table][]types.ColData
+	columns *ident.TableMap[[]types.ColData]
 	// Flavor is one of the mysql.MySQLFlavor or mysql.MariaDBFlavor constants
 	flavor string
 	// Map source ids to target tables.
@@ -294,7 +294,7 @@ func (c *conn) onDataTuple(
 		log.Tracef("Skipping update on %s because it is not in the target schema", tbl)
 		return nil
 	}
-	targetCols, ok := c.columns[tbl]
+	targetCols, ok := c.columns.Get(tbl)
 	if !ok {
 		return errors.Errorf("no column data for %s", tbl)
 	}
@@ -377,7 +377,7 @@ func (c *conn) onRelation(msg *replication.TableMapEvent) error {
 			Type:    ctype,
 		}
 	}
-	c.columns[tbl] = colData
+	c.columns.Put(tbl, colData)
 	return nil
 }
 

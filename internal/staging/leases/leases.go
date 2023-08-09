@@ -61,7 +61,7 @@ func (c *Config) sanitize() error {
 	if c.Pool == nil {
 		return errors.New("pool must not be nil")
 	}
-	if c.Target == (ident.Table{}) {
+	if c.Target.Empty() {
 		return errors.New("target must be set")
 	}
 	// OK for Guard to be zero.
