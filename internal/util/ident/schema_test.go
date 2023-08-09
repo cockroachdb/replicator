@@ -32,6 +32,8 @@ func TestSchema(t *testing.T) {
 		a.Equal("", s.Raw())
 		a.True(s.Empty())
 		a.Equal(s, s.Schema())
+		a.Equal(s, s.Canonical())
+		a.Nil(s.array)
 
 		// Zero schema contains no tables.
 		a.False(s.Contains(NewTable(s, New("foo"))))
@@ -53,6 +55,8 @@ func TestSchema(t *testing.T) {
 		a.True(s.Empty())
 		a.Same(s.array, MustSchema().array)
 		a.Equal(s, s.Schema())
+		a.Equal(s, s.Canonical())
+		a.Nil(s.array)
 
 		// Empty schema contains no tables.
 		a.False(s.Contains(NewTable(s, New("foo"))))
@@ -75,12 +79,20 @@ func TestSchema(t *testing.T) {
 		a.Same(s.array, MustSchema(New("foo")).array)
 		a.True(s.Contains(NewTable(s, New("foo"))))
 		a.Equal(s, s.Schema())
+		a.Equal(s, s.Canonical())
+		a.Same(s.array, s.array.lowered)
 
 		first, remainder := s.Split()
 		a.Equal(New("foo"), first)
 		a.True(remainder.Empty())
 
 		checkSchemaJSON(t, s)
+
+		s2, err := NewSchema(New("FOO"))
+		a.NoError(err)
+		a.NotEqual(s, s2)
+		a.Equal(s.Canonical(), s2.Canonical())
+		a.Same(s.array, s2.array.lowered)
 	})
 
 	t.Run("two", func(t *testing.T) {
@@ -94,6 +106,8 @@ func TestSchema(t *testing.T) {
 		a.Same(s.array, MustSchema(New("foo"), New("bar")).array)
 		a.True(s.Contains(NewTable(s, New("foo"))))
 		a.Equal(s, s.Schema())
+		a.Equal(s, s.Canonical())
+		a.Same(s.array, s.array.lowered)
 
 		first, remainder := s.Split()
 		a.Equal(New("foo"), first)
@@ -104,6 +118,12 @@ func TestSchema(t *testing.T) {
 		a.True(remainder.Empty())
 
 		checkSchemaJSON(t, s)
+
+		s2, err := NewSchema(New("FOO"), New("BaR"))
+		a.NoError(err)
+		a.NotEqual(s, s2)
+		a.Equal(s.Canonical(), s2.Canonical())
+		a.Same(s.array, s2.array.lowered)
 	})
 
 	t.Run("three", func(t *testing.T) {

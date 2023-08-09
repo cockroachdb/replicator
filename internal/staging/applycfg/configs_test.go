@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
@@ -64,25 +64,25 @@ func TestPersistenceRoundTrip(t *testing.T) {
 			ident.New("cas1"),
 			ident.New("cas2"),
 		},
-		Deadlines: types.Deadlines{
-			ident.New("dl1"): time.Second,
-			ident.New("dl2"): 2 * time.Second,
-		},
-		Exprs: map[ident.Ident]string{
-			ident.New("expr1"): "1 + $0",
-			ident.New("expr2"): "2 + $0",
-		},
+		Deadlines: ident.MapOf[time.Duration](
+			ident.New("dl1"), time.Second,
+			ident.New("dl2"), 2*time.Second,
+		),
+		Exprs: ident.MapOf[string](
+			ident.New("expr1"), "1 + $0",
+			ident.New("expr2"), "2 + $0",
+		),
 		Extras: ident.New("extras"),
-		Ignore: map[ident.Ident]bool{
-			ident.New("ignore1"): true,
-			ident.New("ignore2"): true,
-		},
-		SourceNames: map[ident.Ident]ident.Ident{
-			ident.New("rename1"): ident.New("renamed1"),
-			ident.New("rename2"): ident.New("renamed2"),
-		},
+		Ignore: ident.MapOf[bool](
+			ident.New("ignore1"), true,
+			ident.New("ignore2"), true,
+		),
+		SourceNames: ident.MapOf[ident.Ident](
+			ident.New("rename1"), ident.New("renamed1"),
+			ident.New("rename2"), ident.New("renamed2"),
+		),
 	}
-	a.Equal(cfg, cfg.Copy())
+	a.True(cfg.Equal(cfg.Copy()))
 
 	// Check zero value.
 	a.True(cfgs.Get(tbl).IsZero())
@@ -105,7 +105,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 
 	// Verify that the data is equal.
 	found := cfgs.Get(tbl)
-	a.Equal(cfg, found)
+	a.True(cfg.Equal(found))
 
 	bytes, err := json.Marshal(cfgs.GetAll())
 	if a.NoError(err) {
@@ -113,11 +113,14 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 
 	// Verify updated data from the watch.
-	a.Equal(cfg, readWatch())
+	a.True(cfg.Equal(readWatch()))
+
+	// Ensure we can load the data using a jumbled name.
+	a.True(cfg.Equal(cfgs.Get(sinktest.JumbleTable(tbl))))
 
 	// Replace the data with an empty configuration, this will wind
 	// up deleting the config rows.
-	a.NoError(cfgs.Store(ctx, fixture.StagingPool, tbl, &applycfg.Config{}))
+	a.NoError(cfgs.Store(ctx, fixture.StagingPool, tbl, applycfg.NewConfig()))
 	changed, err = fixture.Configs.Refresh(ctx)
 	a.True(changed)
 	a.NoError(err)

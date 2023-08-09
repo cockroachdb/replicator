@@ -34,6 +34,8 @@ func TestTable(t *testing.T) {
 		a.True(tbl.Empty())
 		a.Equal(Schema{}, tbl.Schema())
 		a.Equal(Ident{}, tbl.Table())
+		a.Equal(Table{}, tbl.Canonical())
+		a.Nil(tbl.qualified)
 
 		first, remainder := tbl.Split()
 		a.True(first.Empty())
@@ -52,6 +54,8 @@ func TestTable(t *testing.T) {
 		a.True(tbl.Empty())
 		a.Equal(Schema{}, tbl.Schema())
 		a.Equal(Ident{}, tbl.Table())
+		a.Equal(Table{}, tbl.Canonical())
+		a.Nil(tbl.qualified)
 
 		first, remainder := tbl.Split()
 		a.True(first.Empty())
@@ -70,6 +74,8 @@ func TestTable(t *testing.T) {
 		a.False(tbl.Empty())
 		a.Equal(Schema{}, tbl.Schema())
 		a.Equal(New("table"), tbl.Table())
+		a.Equal(tbl, tbl.Canonical())
+		a.Same(tbl.qualified, tbl.qualified.lowered)
 
 		first, remainder := tbl.Split()
 		a.Equal(New("table"), first)
@@ -77,6 +83,10 @@ func TestTable(t *testing.T) {
 
 		checkTableJSON(t, tbl)
 		checkTableText(t, tbl)
+
+		tbl2 := NewTable(Schema{}, New("TABLE"))
+		a.Equal(tbl, tbl2.Canonical())
+		a.Same(tbl.qualified, tbl2.qualified.lowered)
 	})
 
 	t.Run("two", func(t *testing.T) {
@@ -99,6 +109,10 @@ func TestTable(t *testing.T) {
 
 		checkTableJSON(t, tbl)
 		checkTableText(t, tbl)
+
+		tbl2 := NewTable(MustSchema(New("DB")), New("TABLE"))
+		a.Equal(tbl, tbl2.Canonical())
+		a.Same(tbl.qualified, tbl2.qualified.lowered)
 	})
 
 	t.Run("three", func(t *testing.T) {
@@ -125,6 +139,10 @@ func TestTable(t *testing.T) {
 
 		checkTableJSON(t, tbl)
 		checkTableText(t, tbl)
+
+		tbl2 := NewTable(MustSchema(New("DB"), Public), New("TABLE"))
+		a.Equal(tbl, tbl2.Canonical())
+		a.Same(tbl.qualified, tbl2.qualified.lowered)
 	})
 }
 

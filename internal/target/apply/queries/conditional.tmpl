@@ -25,13 +25,13 @@ deadlined: filters the incoming data by the deadline columns
 
 deadlined AS (SELECT * from data WHERE ts > now() - '1m'::INTERVAL)
 */ -}}
-{{- if .Deadlines -}}
+{{- $deadlineEntries := .Deadlines.Entries -}}
+{{- if $deadlineEntries -}}
 , {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
 deadlined AS (SELECT * FROM {{ $dataSource }} WHERE
-{{- $andNeeded := false -}} {{- range $dlc, $dli := .Deadlines -}}
-    {{- if $andNeeded -}} AND {{- end -}}
-    ( {{- $dlc -}} >now()-'{{- $dli -}}'::INTERVAL)
-    {{- $andNeeded = true -}}
+{{- range $entryIdx, $entry := $deadlineEntries -}}
+    {{- if $entryIdx -}} AND {{- end -}}
+    ( {{- $entry.Key -}} >now()-'{{- $entry.Value -}}'::INTERVAL)
 {{- end -}})
 {{- $dataSource = "deadlined" -}}
 {{- end -}}

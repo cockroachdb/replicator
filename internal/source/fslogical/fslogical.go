@@ -39,20 +39,20 @@ import (
 
 // Dialect reads data from Google Cloud Firestore.
 type Dialect struct {
-	backfillBatchSize int                      // Limit backfill query response size.
-	docIDProperty     string                   // Added to mutation properties.
-	fs                *firestore.Client        // Access to Firestore.
-	idempotent        bool                     // Detect reprocessing the same document.
-	loops             *logical.Factory         // Support dynamic nested collections.
-	memo              types.Memo               // Durable logging of processed doc ids.
-	pool              *types.StagingPool       // Database access.
-	query             firestore.Query          // The base query build from.
-	recurse           bool                     // Scan for dynamic, nested collections.
-	recurseFilter     map[ident.Ident]struct{} // Ignore nested collections with these names.
-	sourceCollection  ident.Ident              // Identifies the loop to the user-script.
-	sourcePath        string                   // The source collection path, for logging.
-	tombstones        *Tombstones              // Filters already-deleted ids.
-	updatedAtProperty ident.Ident              // Order-by property in queries.
+	backfillBatchSize int                  // Limit backfill query response size.
+	docIDProperty     string               // Added to mutation properties.
+	fs                *firestore.Client    // Access to Firestore.
+	idempotent        bool                 // Detect reprocessing the same document.
+	loops             *logical.Factory     // Support dynamic nested collections.
+	memo              types.Memo           // Durable logging of processed doc ids.
+	pool              *types.StagingPool   // Database access.
+	query             firestore.Query      // The base query build from.
+	recurse           bool                 // Scan for dynamic, nested collections.
+	recurseFilter     *ident.Map[struct{}] // Ignore nested collections with these names.
+	sourceCollection  ident.Ident          // Identifies the loop to the user-script.
+	sourcePath        string               // The source collection path, for logging.
+	tombstones        *Tombstones          // Filters already-deleted ids.
+	updatedAtProperty ident.Ident          // Order-by property in queries.
 }
 
 var (
@@ -529,7 +529,7 @@ func (d *Dialect) doRecurse(
 			return errors.Wrapf(err, "loading dynamic collections of %s", doc.Path)
 		}
 
-		if _, skip := d.recurseFilter[ident.New(coll.ID)]; skip {
+		if _, skip := d.recurseFilter.Get(ident.New(coll.ID)); skip {
 			continue
 		}
 

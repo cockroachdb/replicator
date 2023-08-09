@@ -21,7 +21,7 @@ import "sync"
 type canonicalMap[K comparable, V any] struct {
 	// This constructor function may be called multiple times with the
 	// same key.
-	Lazy func(K) V
+	Lazy func(owner *canonicalMap[K, V], key K) V
 	// This is ideally a weak map or we could add an intermediate handle
 	// object with a finalizer to manage a ref-count scheme. Given the
 	// finite, small number of identifiers that we expect to see in a
@@ -45,9 +45,9 @@ func (m *canonicalMap[K, V]) Get(key K) V {
 		return found
 	}
 
-	// Construct instance outside of critical sections, not that this
-	// ought to take very long.
-	ret := m.Lazy(key)
+	// Construct instance outside the critical section, since the
+	// functions will be reentrant.
+	ret := m.Lazy(m, key)
 
 	// Upgrade to write lock.
 	m.mu.Lock()

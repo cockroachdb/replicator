@@ -123,8 +123,8 @@ func ProvideUserScript(
 	if boot == nil {
 		// Un-configured case, return a dummy object.
 		return &UserScript{
-			Sources: map[ident.Ident]*Source{},
-			Targets: map[ident.Table]*Target{},
+			Sources: &ident.Map[*Source]{},
+			Targets: &ident.TableMap[*Target]{},
 		}, nil
 	}
 
@@ -134,8 +134,8 @@ func ProvideUserScript(
 	}
 
 	ret := &UserScript{
-		Sources: map[ident.Ident]*Source{},
-		Targets: map[ident.Table]*Target{},
+		Sources: &ident.Map[*Source]{},
+		Targets: &ident.TableMap[*Target]{},
 		rt:      boot.rt,
 		target:  target.AsSchema(),
 		watcher: watcher,
@@ -151,10 +151,11 @@ func ProvideUserScript(
 			return errors.WithStack(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		for tbl, tblCfg := range ret.Targets {
-			if err := applyConfigs.Store(ctx, tx, tbl, &tblCfg.Config); err != nil {
-				return errors.WithStack(err)
-			}
+		if err := ret.Targets.Range(func(tbl ident.Table, tblCfg *Target) error {
+			err := applyConfigs.Store(ctx, tx, tbl, &tblCfg.Config)
+			return errors.WithStack(err)
+		}); err != nil {
+			return err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return errors.WithStack(err)

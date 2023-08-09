@@ -32,10 +32,12 @@ const (
 	deleteFieldValue = `"delete"`
 	insertFieldValue = `"insert"`
 	updateFieldValue = `"update"`
+)
 
-	// labels
-	crdbLabel  = "__crdb__"
-	eventLabel = "__event__"
+// labels
+var (
+	crdbLabel  = ident.New("__crdb__")
+	eventLabel = ident.New("__event__")
 )
 
 // Metadata contains a string representation of a timestamp,
@@ -84,8 +86,8 @@ func decodeUpdatedTimestamp(data json.RawMessage) (hlc.Time, error) {
 // queryPayload stores the payload sent by the client for
 // a change feed that uses a query
 type queryPayload struct {
-	after     map[string]json.RawMessage
-	keys      map[ident.Ident]int
+	after     *ident.Map[json.RawMessage]
+	keys      *ident.Map[int]
 	keyValues []json.RawMessage
 	operation operationType
 	updated   hlc.Time
@@ -121,8 +123,8 @@ func (q *queryPayload) AsMutation() (types.Mutation, error) {
 // {"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}
 func (q *queryPayload) UnmarshalJSON(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
-	q.keyValues = make([]json.RawMessage, len(q.keys))
-	q.after = make(map[string]json.RawMessage)
+	q.keyValues = make([]json.RawMessage, q.keys.Len())
+	q.after = &ident.Map[json.RawMessage]{}
 	if err := dec.Decode(&q.after); err != nil {
 		return err
 	}
@@ -130,29 +132,31 @@ func (q *queryPayload) UnmarshalJSON(data []byte) error {
 	var ok bool
 	var err error
 	// Process eventLabel.
-	if v, ok = q.after[eventLabel]; !ok {
-		return errors.Errorf("CREATE CHANGEFEED must specify the %s colum set to op_event()", eventLabel)
+	if v, ok = q.after.Get(eventLabel); !ok {
+		return errors.Errorf(
+			"CREATE CHANGEFEED must specify the %s colum set to op_event()",
+			eventLabel.Raw())
 	}
 	if q.operation, err = decodeOp(v); err != nil {
 		return fmt.Errorf("unable to decode operation type: %w", err)
 	}
-	delete(q.after, eventLabel)
+	q.after.Delete(eventLabel)
 
 	// Process crdbLabel - it must contain the updated timestamp.
-	if v, ok = q.after[crdbLabel]; !ok {
+	if v, ok = q.after.Get(crdbLabel); !ok {
 		return errors.Errorf("missing %s field", crdbLabel)
 	}
 	if q.updated, err = decodeUpdatedTimestamp(v); err != nil {
 		return err
 	}
-	delete(q.after, crdbLabel)
+	q.after.Delete(crdbLabel)
 
 	// Process keys.
-	for k, pos := range q.keys {
-		if v, ok = q.after[k.Raw()]; !ok {
+	return q.keys.Range(func(k ident.Ident, pos int) error {
+		if v, ok = q.after.Get(k); !ok {
 			return fmt.Errorf("expecting a value for key: %s", k)
 		}
 		q.keyValues[pos] = v
-	}
-	return nil
+		return nil
+	})
 }

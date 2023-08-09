@@ -146,7 +146,7 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 	}
 
 	// Apply logic and configurations defined by the user-script.
-	if len(f.userscript.Sources) > 0 || len(f.userscript.Targets) > 0 {
+	if f.userscript.Sources.Len() > 0 || f.userscript.Targets.Len() > 0 {
 		loop.events.fan = &scriptEvents{
 			Events: loop.events.fan,
 			Script: f.userscript,

@@ -25,6 +25,7 @@ import (
 // A Schema identifier is a multipart identifier for a Table container.
 // This type is immutable and suitable for use as a map key.
 type Schema struct {
+	_ noCompare
 	*array
 }
 
@@ -50,7 +51,16 @@ func NewSchema(parts ...Ident) (Schema, error) {
 	for idx, part := range parts {
 		key[idx] = part.atom
 	}
-	return Schema{arrays.Get(key)}, nil
+	return Schema{array: arrays.Get(key)}, nil
+}
+
+// Canonical returns a canonicalized form of the SQL schema name. That
+// is, it returns a lower-cased form of the enclosed SQL identifiers.
+func (s Schema) Canonical() Schema {
+	if s.array == nil {
+		return Schema{}
+	}
+	return Schema{array: s.array.lowered}
 }
 
 // Contains returns true if the given table is defined within the

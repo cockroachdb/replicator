@@ -19,6 +19,7 @@ package ident
 import (
 	"encoding/json"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -31,6 +32,7 @@ func TestIdent(t *testing.T) {
 		a.Equal(`""`, id.String())
 		a.Equal("", id.Raw())
 		a.True(id.Empty())
+		a.Equal(id, id.Canonical())
 
 		first, remainder := id.Split()
 		a.True(first.Empty())
@@ -44,6 +46,7 @@ func TestIdent(t *testing.T) {
 		a.Equal(`""`, id.String())
 		a.Equal("", id.Raw())
 		a.True(id.Empty())
+		a.Equal(id, id.Canonical())
 
 		first, remainder := id.Split()
 		a.True(first.Empty())
@@ -57,6 +60,7 @@ func TestIdent(t *testing.T) {
 		a.Equal("table", id.Raw())
 		a.Equal(`"table"`, id.String())
 		a.False(id.Empty())
+		a.Same(id.atom, id.lowered)
 
 		first, remainder := id.Split()
 		a.Equal(id, first)
@@ -69,9 +73,14 @@ func TestIdent(t *testing.T) {
 		id := New("table")
 		id2 := New("table")
 		id3 := New("other")
+		id4 := New("TABLE")
 
 		a.Same(id.atom, id2.atom)
 		a.NotSame(id.atom, id3.atom)
+
+		a.NotSame(id.atom, id4.atom)
+		a.Same(id.atom, id4.lowered)
+		a.Equal(id, id4.Canonical())
 	})
 }
 
@@ -118,4 +127,14 @@ func TestIdentMarshal(t *testing.T) {
 			a.Same(id.atom, id2.atom)
 		})
 	}
+}
+
+func TestIdentSize(t *testing.T) {
+	a := assert.New(t)
+
+	ptrSize := unsafe.Sizeof(uintptr(0))
+	a.Equal(expectedIdentWords, int(unsafe.Sizeof(Ident{})/ptrSize))
+	a.Equal(expectedIdentWords, int(unsafe.Sizeof(Schema{})/ptrSize))
+	a.Equal(expectedIdentWords, int(unsafe.Sizeof(Table{})/ptrSize))
+	a.Equal(expectedIdentWords, int(unsafe.Sizeof(UDT{})/ptrSize))
 }

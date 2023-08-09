@@ -139,7 +139,7 @@ func ParseTable(s string) (Table, error) {
 	}
 	last := parts[len(parts)-1]
 
-	return Table{qualifieds.Get(qualifiedKey{
+	return Table{qualified: qualifieds.Get(qualifiedKey{
 		namespace: sch.array,
 		terminal:  last.atom,
 	})}, nil

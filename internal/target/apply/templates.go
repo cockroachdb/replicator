@@ -85,14 +85,14 @@ type templateCache struct {
 }
 
 type templates struct {
-	Columns    []types.ColData        // All non-ignored columns.
-	Conditions []types.ColData        // The version-like fields for CAS ops.
-	Deadlines  types.Deadlines        // Allow too-old data to just be dropped.
-	Exprs      map[ident.Ident]string // Value-replacement expressions.
-	PK         []types.ColData        // Primary-key columns for upserts.
-	PKDelete   []types.ColData        // Primary-key columns for delete expressions.
-	TableName  ident.Table            // The target table.
-	cache      *templateCache         // Memoize calls to delete() and upsert().
+	Columns    []types.ColData    // All non-ignored columns.
+	Conditions []types.ColData    // The version-like fields for CAS ops.
+	Deadlines  types.Deadlines    // Allow too-old data to just be dropped.
+	Exprs      *ident.Map[string] // Value-replacement expressions.
+	PK         []types.ColData    // Primary-key columns for upserts.
+	PKDelete   []types.ColData    // Primary-key columns for delete expressions.
+	TableName  ident.Table        // The target table.
+	cache      *templateCache     // Memoize calls to delete() and upsert().
 
 	// The variables below here are updated during evaluation.
 
@@ -106,9 +106,9 @@ func newTemplates(
 	target ident.Table, cfgData *applycfg.Config, colData []types.ColData,
 ) *templates {
 	// Map cas column names to their order in the comparison tuple.
-	casMap := make(map[ident.Ident]int, len(cfgData.CASColumns))
+	var casMap ident.Map[int]
 	for idx, name := range cfgData.CASColumns {
-		casMap[name] = idx
+		casMap.Put(name, idx)
 	}
 
 	ret := &templates{
@@ -131,7 +131,10 @@ func newTemplates(
 		if col.Primary && !strings.HasPrefix("crdb_internal_", col.Name.Raw()) {
 			ret.PKDelete = append(ret.PKDelete, col)
 		}
-		if col.Ignored || cfgData.Ignore[col.Name] {
+		if col.Ignored {
+			continue
+		}
+		if userIgnored, _ := cfgData.Ignore.Get(col.Name); userIgnored {
 			continue
 		}
 		ret.Columns[idx] = col
@@ -139,7 +142,7 @@ func newTemplates(
 		if col.Primary {
 			ret.PK = append(ret.PK, col)
 		}
-		if idx, isCas := casMap[col.Name]; isCas {
+		if idx, isCas := casMap.Get(col.Name); isCas {
 			ret.Conditions[idx] = col
 		}
 	}
@@ -176,7 +179,7 @@ func (t *templates) Vars() [][]varPair {
 			}
 			pairIdx++
 
-			if pattern, ok := t.Exprs[col.Name]; ok {
+			if pattern, ok := t.Exprs.Get(col.Name); ok {
 				vp.Expr = strings.ReplaceAll(
 					pattern, applycfg.SubstitutionToken, fmt.Sprintf("$%d", vp.Index))
 				// A constant expression doesn't occupy an index slot.
@@ -235,7 +238,7 @@ func (t *templates) upsert(rowCount int) (string, error) {
 
 	var buf strings.Builder
 	var err error
-	if len(cpy.Conditions) == 0 && len(cpy.Deadlines) == 0 {
+	if len(cpy.Conditions) == 0 && cpy.Deadlines.Len() == 0 {
 		err = upsertTemplate.Execute(&buf, &cpy)
 	} else {
 		err = conditionalTemplate.Execute(&buf, &cpy)

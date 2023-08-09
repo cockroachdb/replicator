@@ -28,13 +28,28 @@ type arrayKey [maxArrayLength]*atom
 // An array is a canonicalized instance of an array of atoms. They
 // should only ever be constructed via [arrays].
 type array struct {
-	key arrayKey
-	_   noCopy
+	key     arrayKey
+	lowered *array
+	_       noCopy
 }
 
 var arrays = canonicalMap[arrayKey, *array]{
-	Lazy: func(key arrayKey) *array {
-		return &array{key: key}
+	Lazy: func(owner *canonicalMap[arrayKey, *array], key arrayKey) *array {
+		var loweredKey arrayKey
+		for idx, atom := range key {
+			if atom == nil {
+				break
+			}
+			loweredKey[idx] = atom.lowered
+		}
+
+		ret := &array{key: key}
+		if loweredKey == key {
+			ret.lowered = ret
+		} else {
+			ret.lowered = owner.Get(loweredKey)
+		}
+		return ret
 	},
 }
 
@@ -63,7 +78,7 @@ func (a *array) Idents(buf []Ident) []Ident {
 		if i == nil {
 			break
 		}
-		buf = append(buf, Ident{i})
+		buf = append(buf, Ident{atom: i})
 	}
 	return buf
 }
@@ -90,7 +105,7 @@ func (a *array) Split() (Ident, Identifier) {
 	}
 	var nextKey arrayKey
 	copy(nextKey[:], a.key[1:])
-	return Ident{a.key[0]}, arrays.Get(nextKey)
+	return Ident{atom: a.key[0]}, arrays.Get(nextKey)
 }
 
 // String returns the identifier in a manner suitable for constructing a

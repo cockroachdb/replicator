@@ -55,7 +55,7 @@ type Authenticator interface {
 }
 
 // Deadlines associate a column identifier with a duration.
-type Deadlines map[ident.Ident]time.Duration
+type Deadlines = *ident.Map[time.Duration]
 
 var (
 	// ErrCancelSingleton may be returned by callbacks passed to
@@ -201,9 +201,18 @@ type ColData struct {
 	Type any
 }
 
+// Equal returns true if the two ColData are equivalent under
+// case-insensitivity.
+func (d ColData) Equal(o ColData) bool {
+	return d.Ignored == o.Ignored &&
+		ident.Equal(d.Name, o.Name) &&
+		d.Primary == o.Primary &&
+		d.Type == o.Type
+}
+
 // SchemaData holds SQL schema metadata.
 type SchemaData struct {
-	Columns map[ident.Table][]ColData
+	Columns *ident.TableMap[[]ColData]
 
 	// Order is a two-level slice that represents equivalency-groups
 	// with respect to table foreign-key ordering. That is, if all
@@ -214,6 +223,13 @@ type SchemaData struct {
 	// for deferrable foreign-key constraints:
 	// https://github.com/cockroachdb/cockroach/issues/31632
 	Order [][]ident.Table
+}
+
+// OriginalName returns the name of the table as it is defined in the
+// underlying database.
+func (s *SchemaData) OriginalName(tbl ident.Table) (ident.Table, bool) {
+	ret, _, ok := s.Columns.Match(tbl)
+	return ret, ok
 }
 
 // Product is an enum type to make it easy to switch on the underlying

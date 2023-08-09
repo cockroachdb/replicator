@@ -19,7 +19,7 @@ package applycfg
 import (
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
@@ -31,27 +31,31 @@ const SubstitutionToken = "$0"
 type (
 	// SourceColumn is the name of a column found in incoming data.
 	SourceColumn = ident.Ident
+	// SourceColumns is the names of columns found in the source database.
+	SourceColumns = ident.Idents
 	// TargetColumn is the name of a column found in the target database.
 	TargetColumn = ident.Ident
+	// TargetColumns is the names of columns found in the target database.
+	TargetColumns = ident.Idents
 )
 
 // A Config contains per-target-table configuration.
 type Config struct {
-	CASColumns  []TargetColumn                 // The columns for compare-and-set operations.
-	Deadlines   map[TargetColumn]time.Duration // Deadline-based operation.
-	Exprs       map[TargetColumn]string        // Synthetic or replacement SQL expressions.
-	Extras      TargetColumn                   // JSONB column to store unmapped values in.
-	Ignore      map[TargetColumn]bool          // Source column names to ignore.
-	SourceNames map[TargetColumn]SourceColumn  // Look for alternate name in the incoming data.
+	CASColumns  TargetColumns             // The columns for compare-and-set operations.
+	Deadlines   *ident.Map[time.Duration] // Deadline-based operation.
+	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.
+	Extras      TargetColumn              // JSONB column to store unmapped values in.
+	Ignore      *ident.Map[bool]          // Source column names to ignore.
+	SourceNames *ident.Map[SourceColumn]  // Look for alternate name in the incoming data.
 }
 
 // NewConfig constructs a Config with all map fields populated.
 func NewConfig() *Config {
 	return &Config{
-		Deadlines:   make(types.Deadlines),
-		Exprs:       make(map[TargetColumn]string),
-		Ignore:      make(map[TargetColumn]bool),
-		SourceNames: make(map[TargetColumn]SourceColumn),
+		Deadlines:   &ident.Map[time.Duration]{},
+		Exprs:       &ident.Map[string]{},
+		Ignore:      &ident.Map[bool]{},
+		SourceNames: &ident.Map[SourceColumn]{},
 	}
 }
 
@@ -60,30 +64,56 @@ func (t *Config) Copy() *Config {
 	ret := NewConfig()
 
 	ret.CASColumns = append(ret.CASColumns, t.CASColumns...)
-	for k, v := range t.Deadlines {
-		ret.Deadlines[k] = v
-	}
-	for k, v := range t.Exprs {
-		ret.Exprs[k] = v
-	}
+	t.Deadlines.CopyInto(ret.Deadlines)
+	t.Exprs.CopyInto(ret.Exprs)
 	ret.Extras = t.Extras
-	for k, v := range t.Ignore {
-		ret.Ignore[k] = v
-	}
-	for k, v := range t.SourceNames {
-		ret.SourceNames[k] = v
-	}
+	t.Ignore.CopyInto(ret.Ignore)
+	t.SourceNames.CopyInto(ret.SourceNames)
 
 	return ret
+}
+
+// Equal returns true if the other Config is equivalent to the receiver.
+func (t *Config) Equal(o *Config) bool {
+	return t == o || // Identity or nil-nil.
+		(t != nil) && (o != nil) &&
+			t.CASColumns.Equal(o.CASColumns) &&
+			t.Deadlines.Equal(o.Deadlines, cmap.Comparator[time.Duration]()) &&
+			t.Exprs.Equal(o.Exprs, cmap.Comparator[string]()) &&
+			ident.Equal(t.Extras, o.Extras) &&
+			t.Ignore.Equal(o.Ignore, cmap.Comparator[bool]()) &&
+			t.SourceNames.Equal(o.SourceNames, ident.Comparator[ident.Ident]())
 }
 
 // IsZero returns true if the Config represents the absence of a
 // configuration.
 func (t *Config) IsZero() bool {
 	return len(t.CASColumns) == 0 &&
-		len(t.Deadlines) == 0 &&
-		len(t.Exprs) == 0 &&
+		t.Deadlines.Len() == 0 &&
+		t.Exprs.Len() == 0 &&
 		t.Extras.Empty() &&
-		len(t.Ignore) == 0 &&
-		len(t.SourceNames) == 0
+		t.Ignore.Len() == 0 &&
+		t.SourceNames.Len() == 0
+}
+
+// Patch applies any non-empty fields from another Config to the
+// receiver and returns the receiver.
+func (t *Config) Patch(other *Config) *Config {
+	t.CASColumns = append(t.CASColumns, other.CASColumns...)
+	if other.Deadlines != nil {
+		other.Deadlines.CopyInto(t.Deadlines)
+	}
+	if other.Exprs != nil {
+		other.Exprs.CopyInto(t.Exprs)
+	}
+	if !other.Extras.Empty() {
+		t.Extras = other.Extras
+	}
+	if other.Ignore != nil {
+		other.Ignore.CopyInto(t.Ignore)
+	}
+	if other.SourceNames != nil {
+		other.SourceNames.CopyInto(t.SourceNames)
+	}
+	return t
 }

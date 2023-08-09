@@ -30,7 +30,7 @@ type factory struct {
 	mu   struct {
 		sync.RWMutex
 		cancels []func()
-		data    map[ident.Schema]*watcher
+		data    *ident.SchemaMap[*watcher]
 	}
 }
 
@@ -52,14 +52,14 @@ func (f *factory) close() {
 		cancel()
 	}
 	f.mu.cancels = nil
-	f.mu.data = make(map[ident.Schema]*watcher)
+	f.mu.data = &ident.SchemaMap[*watcher]{}
 }
 
 func (f *factory) createUnlocked(ctx context.Context, db ident.Schema) (*watcher, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if ret := f.mu.data[db]; ret != nil {
+	if ret := f.mu.data.GetZero(db); ret != nil {
 		return ret, nil
 	}
 
@@ -69,13 +69,13 @@ func (f *factory) createUnlocked(ctx context.Context, db ident.Schema) (*watcher
 	}
 
 	f.mu.cancels = append(f.mu.cancels, cancel)
-	f.mu.data[db] = ret
+	f.mu.data.Put(db, ret)
 	return ret, nil
 }
 
 func (f *factory) getUnlocked(db ident.Schema) *watcher {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.mu.data[db]
+	return f.mu.data.GetZero(db)
 
 }

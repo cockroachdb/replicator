@@ -22,9 +22,9 @@ import (
 	"github.com/pkg/errors"
 )
 
-// A Table is an identifier with an enclosing Schema. This type is an
-// immutable value type, suitable for use as a map key.
+// A Table is an identifier with an enclosing Schema.
 type Table struct {
+	_ noCompare
 	*qualified
 }
 
@@ -33,7 +33,16 @@ func NewTable(enclosing Schema, name Ident) Table {
 	if enclosing.Empty() && name.Empty() {
 		return Table{}
 	}
-	return Table{qualifieds.Get(qualifiedKey{enclosing.array, name.atom})}
+	return Table{qualified: qualifieds.Get(qualifiedKey{enclosing.array, name.atom})}
+}
+
+// Canonical returns a canonical form of the table identifier.  That is,
+// it returns a lower-cased form of the enclosed identifiers.
+func (t Table) Canonical() Table {
+	if t.qualified == nil {
+		return Table{}
+	}
+	return Table{qualified: t.qualified.lowered}
 }
 
 // Schema implements Schematic by returning the enclosing Schema.
@@ -41,7 +50,7 @@ func (t Table) Schema() Schema {
 	if t.qualified == nil {
 		return Schema{}
 	}
-	return Schema{t.qualified.namespace}
+	return Schema{array: t.qualified.namespace}
 }
 
 // Table returns the table's identifier.
@@ -49,7 +58,7 @@ func (t Table) Table() Ident {
 	if t.qualified == nil {
 		return Ident{}
 	}
-	return Ident{t.qualified.terminal}
+	return Ident{atom: t.qualified.terminal}
 }
 
 // UnmarshalJSON parses a JSON array.

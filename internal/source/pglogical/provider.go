@@ -85,7 +85,7 @@ func ProvideDialect(ctx context.Context, config *Config) (logical.Dialect, error
 	sourceConfig.RuntimeParams["replication"] = "database"
 
 	return &conn{
-		columns:         make(map[ident.Table][]types.ColData),
+		columns:         &ident.TableMap[[]types.ColData]{},
 		publicationName: config.Publication,
 		relations:       make(map[uint32]ident.Table),
 		slotName:        config.Slot,
