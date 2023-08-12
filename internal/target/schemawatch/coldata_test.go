@@ -48,6 +48,7 @@ func TestGetColumns(t *testing.T) {
 		skip        bool                              // Extra logic to disable case
 		sqlPost     []string                          // Additional SQL, table name is %s
 		tableSchema string                            // Column definitions only
+		types       *ident.Map[string]                // Optional check for column types
 	}
 	testcases := []testcase{
 		{
@@ -166,6 +167,20 @@ func TestGetColumns(t *testing.T) {
 				}
 			},
 		},
+		// Check type extraction.
+		{
+			products:    []types.Product{types.ProductOracle},
+			tableSchema: "a INT, b VARCHAR(42), c FLOAT(8), d RAW(55), e NUMBER(4,2), PRIMARY KEY (a,b)",
+			primaryKeys: []string{"a", "b"},
+			dataCols:    []string{"c", "d", "e"},
+			types: ident.MapOf[string](
+				"a", "NUMBER",
+				"b", "VARCHAR2(42)",
+				"c", "FLOAT(8)",
+				"d", "RAW(55)",
+				"e", "NUMBER(4,2)",
+			),
+		},
 	}
 
 	// Verify user-defined types with mixed-case name.
@@ -224,15 +239,23 @@ func TestGetColumns(t *testing.T) {
 			var primaryKeys, dataCols []string
 			for i := range colData {
 				a.NotEmpty(colData[i].Type)
-				name := colData[i].Name.Raw()
+				name := colData[i].Name.Canonical().Raw()
 				if colData[i].Ignored {
 					name = "ignored_" + name
 				}
 				if colData[i].Primary {
+					a.Empty(dataCols, "should see PKs before data colums")
 					primaryKeys = append(primaryKeys, name)
 				} else {
 					dataCols = append(dataCols, name)
 				}
+				if test.types != nil {
+					// See above comment.
+					a.Equalf(test.types.GetZero(colData[i].Name),
+						fmt.Sprintf("%s", colData[i].Type),
+						"column %s", colData[i].Name)
+				}
+
 			}
 			a.Equal(test.primaryKeys, primaryKeys)
 			a.Equal(test.dataCols, dataCols)

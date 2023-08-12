@@ -43,19 +43,39 @@ func colSliceEqual(a, b []types.ColData) bool {
 //
 // Parts of the CTE:
 // * atc: basic information about all columns
+// * pk_cols:  primary-key constraints, which provide PK column ordering
 // * acc: look for the ids of constraints applied to the columns
-// * ac:  extract primary-key constraints
+//
+// We extract the length for data types where a size is a mandatory
+// feature of the SQL grammar.
+//
+// List of data types from:
+// https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Data-Types.html
 const sqlColumnsQueryOra = `
-WITH atc AS (SELECT OWNER, TABLE_NAME, COLUMN_NAME, DATA_TYPE, VIRTUAL_COLUMN FROM ALL_TAB_COLS),
-     acc AS (SELECT OWNER, TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, POSITION FROM ALL_CONS_COLUMNS),
-     ac  AS (SELECT CONSTRAINT_NAME, 't' IS_PK FROM ALL_CONSTRAINTS WHERE CONSTRAINT_TYPE='P')
-SELECT lower(COLUMN_NAME),
-       COALESCE(ac.IS_PK, 'f'),
+WITH atc AS (
+  SELECT OWNER, TABLE_NAME, COLUMN_NAME,
+  CASE
+    WHEN CHAR_COL_DECL_LENGTH IS NOT NULL AND DATA_TYPE NOT LIKE '%LOB%' THEN
+      DATA_TYPE || '(' || CHAR_COL_DECL_LENGTH || ')'
+    WHEN DATA_PRECISION IS NOT NULL AND DATA_SCALE IS NOT NULL THEN
+      DATA_TYPE || '(' || DATA_PRECISION || ',' || DATA_SCALE || ')'
+    WHEN DATA_PRECISION IS NOT NULL THEN
+      DATA_TYPE || '(' || DATA_PRECISION || ')'
+    WHEN DATA_TYPE IN ('RAW', 'UROWID') THEN
+      DATA_TYPE || '(' || DATA_LENGTH || ')'
+    ELSE DATA_TYPE
+  END DATA_TYPE,
+  VIRTUAL_COLUMN FROM ALL_TAB_COLS
+),
+     pk_cols  AS (SELECT OWNER, TABLE_NAME, CONSTRAINT_NAME FROM ALL_CONSTRAINTS WHERE CONSTRAINT_TYPE='P'),
+     acc AS (SELECT OWNER, TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, POSITION, 't' IS_PK FROM ALL_CONS_COLUMNS)
+SELECT COLUMN_NAME,
+       COALESCE(IS_PK, 'f'),
        atc.DATA_TYPE,
        CASE WHEN atc.VIRTUAL_COLUMN = 'YES' THEN 't' ELSE 'f' END
 FROM atc
-LEFT JOIN acc USING (OWNER, TABLE_NAME, COLUMN_NAME)
-LEFT JOIN ac  USING (CONSTRAINT_NAME)
+LEFT JOIN pk_cols  USING (OWNER, TABLE_NAME)
+LEFT JOIN acc USING (OWNER, TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME)
 WHERE (OWNER = :owner AND TABLE_NAME = :tbl_name)
 ORDER BY POSITION, COLUMN_NAME
 `
@@ -171,7 +191,9 @@ func getColumns(
 			switch len(parts) {
 			case 1:
 				// Raw type, like INT8
-				column.Type = parts[0].Raw()
+				typeName := parts[0].Raw()
+				column.Parse = parseHelper(tx.Product, typeName)
+				column.Type = typeName
 			case 2:
 				// UDT for CRDB <= 22.1 only includes schema and name.
 				relSchema, _, err := table.Schema().Relative(parts[0])

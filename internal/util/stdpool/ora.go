@@ -19,11 +19,13 @@ package stdpool
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	ora "github.com/sijms/go-ora/v2"
+	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -32,6 +34,11 @@ import (
 func OpenOracleAsTarget(
 	ctx context.Context, connectString string, options ...Option,
 ) (*types.TargetPool, func(), error) {
+	var tc TestControls
+	if err := attachOptions(ctx, &tc, options); err != nil {
+		return nil, nil, err
+	}
+
 	return returnOrStop(ctx, func(ctx *stopper.Context) (*types.TargetPool, error) {
 		unconfigured, err := sql.Open("oracle", "")
 		if err != nil {
@@ -63,7 +70,17 @@ func OpenOracleAsTarget(
 			return nil
 		})
 
+	ping:
 		if err := ret.Ping(); err != nil {
+			if tc.WaitForStartup && isStartupError(err) {
+				log.WithError(err).Info("waiting for database to become ready")
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(10 * time.Second):
+					goto ping
+				}
+			}
 			return nil, errors.Wrap(err, "could not ping the database")
 		}
 
@@ -73,4 +90,20 @@ func OpenOracleAsTarget(
 
 		return ret, attachOptions(ctx, ret.DB, options)
 	})
+}
+
+// These have been enumerated through trial and error.
+var oracleStartupErrors = map[int]bool{
+	1017:  true, // Invalid username/password
+	1109:  true, // Database not open
+	12514: true, // TNS listener doesn't know about the service
+	28000: true, // The account is locked
+}
+
+func isStartupError(err error) bool {
+	var oErr *network.OracleError
+	if !errors.As(err, &oErr) {
+		return false
+	}
+	return oracleStartupErrors[oErr.ErrCode]
 }

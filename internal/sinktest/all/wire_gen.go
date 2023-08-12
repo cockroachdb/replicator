@@ -91,7 +91,7 @@ func NewFixture() (*Fixture, func(), error) {
 		return nil, nil, err
 	}
 	watchers, cleanup9 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup10 := apply.ProvideFactory(configs, watchers)
+	appliers, cleanup10 := apply.ProvideFactory(configs, targetPool, watchers)
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup10()

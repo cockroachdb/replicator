@@ -102,7 +102,9 @@ services:
     ports:
       - "3306:3306"
   oracle-v18.4:
-    image: container-registry.oracle.com/database/express:18.4.0-xe
+    # Use a private mirror of the image to speed up CI tests. The original is at
+    # container-registry.oracle.com/database/express:18.4.0-xe
+    image: ghcr.io/cockroachdb/cdc-sink/oracle-express:18.4.0-xe
     platform: linux/x86_64
     environment:
       ORACLE_PWD: SoupOrSecret
@@ -110,7 +112,9 @@ services:
       - "1521:1521"
       - "5500:5500"
   oracle-v21.3:
-    image: container-registry.oracle.com/database/express:21.3.0-xe
+    # Use a private mirror of the image to speed up CI tests. The original is at
+    # container-registry.oracle.com/database/express:21.3.0-xe
+    image: ghcr.io/cockroachdb/cdc-sink/oracle-express:21.3.0-xe
     platform: linux/x86_64
     environment:
       ORACLE_PWD: SoupOrSecret

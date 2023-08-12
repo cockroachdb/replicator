@@ -73,7 +73,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
+	appliers, cleanup6 := apply.ProvideFactory(configs, targetPool, watchers)
 	memoMemo, err := memo.ProvideMemo(contextContext, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup6()

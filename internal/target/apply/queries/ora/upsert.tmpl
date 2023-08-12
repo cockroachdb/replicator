@@ -1,0 +1,116 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+{{- /*
+This implementation is similar to the PG one, in that we have a number
+of CTEs that define the incoming data and filter it based on CAS or
+deadline operations.
+
+It will be useful to refer to the templates_test.go file to see how
+this template expands into SQL.
+*/ -}}
+MERGE INTO {{ .TableName }} USING ( {{- nl -}}
+
+{{- /*
+We start by defining a data section that is a sequence of
+
+SELECT a, b, c FROM DUAL UNION ALL
+SELECT e, f, g FROM DUAL ...
+*/ -}}
+{{- $dataSource := "data" -}}
+WITH data ({{- template "names" $.Columns -}}) AS (
+{{- range $groupIdx, $pairs :=  $.Vars -}}
+    {{- if $groupIdx }} UNION ALL {{ end -}}
+    {{- nl -}}SELECT {{- sp -}}
+    {{- range $pairIdx, $pair := $pairs -}}
+        {{- if $pairIdx }}, {{ end -}}
+        {{- template "pairExpr" $pair -}}
+    {{- end -}}
+    {{- sp -}} FROM DUAL
+{{- end }}
+)
+
+{{- /*
+If deadlines are enabled, we'll add a CTE clause that filters the
+proposed data by the deadline column(s).
+
+This is basically a SELECT * FROM data WHERE ts_col > (computed
+deadline). The computed deadline is the current time minus our
+time.Duration converted to some (fractional) seconds.
+*/ -}}
+{{- $deadlineEntries := .Deadlines.Entries -}}
+{{- if $deadlineEntries -}}
+    , {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
+    deadlined AS (SELECT * FROM {{ $dataSource }} WHERE
+    {{- range $entryIdx, $entry := $deadlineEntries -}}
+        {{- if $entryIdx -}} AND {{- end -}}
+        ( {{- $entry.Key -}} > (CURRENT_TIMESTAMP - NUMTODSINTERVAL({{- $entry.Value.Seconds -}}, 'SECOND')))
+    {{- end -}})
+    {{- $dataSource = "deadlined" -}}
+{{- end -}}
+
+{{- /*
+In CAS mode, we have an extra CTE that selects the active values from
+the target table. (Note that "current" is a keyword in Oracle, unlike
+PG.) The active-data query uses a left join to grab the version-like
+columns from the destination table.
+
+The action CTE is another filter, that selects rows from the current
+datasource if there's no active row with the same PK or if the proposed
+data has a version that is strictly greater than the active version.
+*/ -}}
+{{- if .Conditions -}}
+    , {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
+    active AS ( {{- nl -}}
+    SELECT {{ template "names" .PK}}, {{ template "join" (qualify .TableName .Conditions) -}} {{- nl -}}
+    FROM {{ .TableName }} JOIN {{ $dataSource }} USING ({{ template "names" .PK }})), {{- nl -}}
+
+    action AS ( {{- nl -}}
+    SELECT {{ template "names" .PK}}, {{ template "join" (qualify $dataSource .Data) }} FROM {{ $dataSource }} {{- nl -}}
+    LEFT JOIN active {{- sp -}}
+    USING ({{ template "names" .PK }}) {{- sp -}}
+    WHERE active.{{ (index .Conditions 0).Name }} IS NULL OR {{- nl -}}
+    ( {{- template "join" (qualify $dataSource .Conditions) -}} ) > ( {{- template "join" (qualify "active" .Conditions) -}} ))
+    {{- $dataSource = "action" -}}
+{{- end -}}
+
+{{- /* We then select the datasource and give it a label "x". */ -}}
+{{- nl -}}
+SELECT * FROM {{ $dataSource }}) x {{- sp -}}
+
+{{- /*
+This is the MERGE USING (....) ON ( pk0, pk1 ) clause that defines how
+the proposed rows are joined aginst the destination table.
+*/ -}}
+ON (
+{{- range $idx, $pk := $.PK -}}
+    {{- if $idx }} AND {{ end -}}
+    {{- $.TableName -}}.{{- $pk.Name }} = x.{{- $pk.Name -}}
+{{- end -}}
+)
+
+{{- /* Insert if there was no match. */ -}}
+{{- nl -}}
+WHEN NOT MATCHED THEN INSERT (
+{{- range $idx, $col := .Columns }}
+    {{- if $idx -}},{{- end -}}
+    {{$col.Name}}
+{{- end -}}
+) VALUES (
+{{- range $idx, $col := .Columns -}}
+    {{- if $idx -}}, {{ end -}}
+    x.{{- $col.Name -}}
+{{- end -}} )
+
+
+{{- /* No update if all columns are part of the PK. */ -}}
+{{- if .Data -}}
+    {{- nl -}}
+    WHEN MATCHED THEN UPDATE SET {{- sp -}}
+    {{- $needsComma := false -}}
+    {{- range $idx, $col := .Columns -}}
+        {{- if not $col.Primary -}}
+            {{- if $needsComma -}}, {{ end -}}
+            {{- $needsComma = true -}}
+            {{- $col.Name }} = x.{{- $col.Name -}}
+        {{- end -}}
+    {{- end -}}
+{{- end -}}

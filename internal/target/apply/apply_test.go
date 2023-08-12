@@ -34,6 +34,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,8 +58,20 @@ func TestApply(t *testing.T) {
 		Pk0 int    `json:"Pk0"`
 		Pk1 string `json:"pK1"`
 	}
-	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk0 INT, pk1 STRING, extras JSONB, PRIMARY KEY (pk0,pk1))")
+	var tableSchema string
+	switch fixture.TargetPool.Product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		// extras could also be JSONB, but validation is easier if we
+		// control the exact bytes that come back.
+		tableSchema = "CREATE TABLE %s (pk0 INT, pk1 STRING, extras STRING, PRIMARY KEY (pk0,pk1))"
+	case types.ProductOracle:
+		// The lower-case names in the payload will be matched to the
+		// upper-case names that exist within the database.
+		tableSchema = `CREATE TABLE %s (PK0 INT, PK1 VARCHAR2(4000), EXTRAS VARCHAR2(4000), PRIMARY KEY (PK0,PK1))`
+	default:
+		a.FailNow("untested product")
+	}
+	tbl, err := fixture.CreateTargetTable(ctx, tableSchema)
 	if !a.NoError(err) {
 		return
 	}
@@ -124,7 +137,7 @@ func TestApply(t *testing.T) {
 				Key:  []byte(`[1]`),
 			},
 		}); a.Error(err) {
-			a.Contains(err.Error(), "missing PK column pk1")
+			a.Contains(strings.ToLower(err.Error()), "missing pk column pk1")
 		}
 	})
 
@@ -183,18 +196,21 @@ func TestApply(t *testing.T) {
 			return
 		}
 
+		var extrasQ string
+		switch fixture.TargetPool.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			extrasQ = fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name())
+		case types.ProductOracle:
+			extrasQ = fmt.Sprintf(`SELECT extras FROM %s WHERE pk0=:p1 AND pk1=:p2`, tbl.Name())
+		default:
+			a.Fail("unimplemented", fixture.TargetPool.Product)
+		}
 		var extrasRaw string
-		a.NoError(fixture.TargetPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
-			1, "0",
-		).Scan(&extrasRaw))
-		a.Equal(`{"are": "OK", "heretofore": "unseen"}`, extrasRaw)
+		a.NoError(fixture.TargetPool.QueryRowContext(ctx, extrasQ, 1, "0").Scan(&extrasRaw))
+		a.Equal(`{"are":"OK","heretofore":"unseen"}`, extrasRaw)
 
-		a.NoError(fixture.TargetPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name()),
-			2, "0",
-		).Scan(&extrasRaw))
-		a.Equal(`{"check": "multiple", "mutations": "work"}`, extrasRaw)
+		a.NoError(fixture.TargetPool.QueryRowContext(ctx, extrasQ, 2, "0").Scan(&extrasRaw))
+		a.Equal(`{"check":"multiple","mutations":"work"}`, extrasRaw)
 
 		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbleName, nil))
 		changed, err = fixture.Configs.Refresh(ctx)
@@ -203,52 +219,102 @@ func TestApply(t *testing.T) {
 	})
 }
 
-// This is a smoke test, copied from main_test.go to ensure that
-// all supported data types can be applied. It works by creating
-// a test table for each type and using CRDB's built-in to_jsonb()
-// function to create a payload.
-func TestAllDataTypes(t *testing.T) {
-	testcases := []struct {
-		name        string
-		columnType  string
-		columnValue string
-		indexable   bool
-	}{
-		{`string_array`, `STRING[]`, `{"sky","road","car"}`, false},
-		{`string_array_null`, `STRING[]`, ``, false},
-		{`int_array`, `INT[]`, `{1,2,3}`, false},
-		{`int_array_null`, `INT[]`, ``, false},
-		{`serial_array`, `SERIAL[]`, `{148591304110702593,148591304110702594,148591304110702595}`, false},
-		{`serial_array_null`, `SERIAL[]`, ``, false},
-		{`bit`, `VARBIT`, `10010101`, true},
-		{`bit_null`, `VARBIT`, ``, false},
-		{`bool`, `BOOL`, `true`, true},
-		{`bool_array`, `BOOL[]`, `{true, false, true}`, false},
-		{`bool_null`, `BOOL`, ``, false},
-		{`bytes`, `BYTES`, `b'\141\061\142\062\143\063'`, true},
-		{`collate`, `STRING COLLATE de`, `'a1b2c3' COLLATE de`, true},
-		{`collate_null`, `STRING COLLATE de`, ``, false},
-		{`date`, `DATE`, `2016-01-25`, true},
-		{`date_null`, `DATE`, ``, false},
-		{`decimal`, `DECIMAL`, `1.2345`, true},
-		{`decimal_eng_6,0`, `DECIMAL(6,0)`, `4e+2`, true},
-		{`decimal_eng_6,2`, `DECIMAL(6,2)`, `4.98765e+2`, true},
-		{`decimal_eng_50,2`, `DECIMAL(600,2)`, `4e+50`, true}, // Bigger than int64
-		{`decimal_null`, `DECIMAL`, ``, false},
-		{`float`, `FLOAT`, `1.2345`, true},
-		{`float_null`, `FLOAT`, ``, false},
-		{`geography`, `GEOGRAPHY`, `0101000020E6100000000000000000F03F0000000000000040`, false},
-		{`geometry`, `GEOMETRY`, `010100000075029A081B9A5DC0F085C954C1F84040`, false},
-		{`inet`, `INET`, `192.168.0.1`, true},
-		{`inet_null`, `INET`, ``, false},
-		{`int`, `INT`, `12345`, true},
-		{`int_null`, `INT`, ``, false},
-		{`interval`, `INTERVAL`, `2h30m30s`, true},
-		{`interval_null`, `INTERVAL`, ``, false},
+type dataTypeTestCase struct {
+	name       string // (Required) Test case name.
+	sourceType string // (Optional) Override columnType in source db.
+	columnType string // (Required) Type in the source and target database.
+	sqlValue   string // (Required) Expression that the source database can turn into JSON.
+	expectJSON string // (Optional) JSON expression to expect. Defaults to toJSON(sqlValue).
+	indexable  bool   // (Optional) Use the type as a primary key column.
+}
+
+var (
+	oraDataTypeTests = []dataTypeTestCase{
 		{
-			`jsonb`,
-			`JSONB`,
-			`
+			// Dates are returned with a midnight time.
+			name:       `date`,
+			columnType: `DATE`,
+			sqlValue:   `2016-01-25`,
+			expectJSON: `"2016-01-25T00:00:00"`,
+			indexable:  true,
+		},
+		{name: `date_null`, columnType: `DATE`},
+		{
+			name:       `decimal_to_number`,
+			sourceType: `DECIMAL(6,3)`,
+			sqlValue:   `123.456`,
+			columnType: `NUMBER(6,3)`,
+			indexable:  true,
+		},
+		{name: `int`, columnType: `INT`, sqlValue: `12345`, indexable: true},
+		{name: `int_null`, columnType: `INT`},
+		{name: `string`, columnType: `VARCHAR(4000)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `string_null`, columnType: `VARCHAR(4000)`},
+		{name: `string_escape`, columnType: `VARCHAR(4000)`, sqlValue: `a1\b/2?c"3`, indexable: true},
+		{
+			name:       `timestamp`,
+			columnType: `TIMESTAMP`, // Defaults to TIMESTAMP(6)
+			sqlValue:   `2016-01-25 10:10:10.123`,
+			expectJSON: `"2016-01-25T10:10:10.123000"`,
+			indexable:  true},
+		{name: `timestamp_null`, columnType: `TIMESTAMP`},
+		{
+			// ORA-02329: column of datatype TIME/TIMESTAMP WITH TIME ZONE cannot be unique or a primary key
+			name:       `timestamptz`,
+			columnType: `TIMESTAMP WITH TIME ZONE`, // Defaults to TIMESTAMP(6)
+			sqlValue:   `2016-01-25 10:10:10.123-05:00`,
+			expectJSON: `"2016-01-25T15:10:10.123000Z"`,
+		},
+		{name: `timestamptz_null`, columnType: `TIMESTAMP WITH TIME ZONE`},
+		{
+			name:       `uuid_to_raw`,
+			sourceType: `UUID`,
+			columnType: `RAW(16)`,
+			sqlValue:   `01C2A76E-DD87-492E-B129-F6E9ACD89556`,
+			expectJSON: `"01C2A76EDD87492EB129F6E9ACD89556"`,
+		},
+	}
+
+	pgDataTypeTests = []dataTypeTestCase{
+		{name: `string_array`, columnType: `STRING[]`, sqlValue: `{"sky","road","car"}`},
+		{name: `string_array_null`, columnType: `STRING[]`},
+		{name: `int_array`, columnType: `INT[]`, sqlValue: `{1,2,3}`},
+		{name: `int_array_null`, columnType: `INT[]`},
+		{name: `serial_array`, columnType: `SERIAL[]`, sqlValue: `{148591304110702593,148591304110702594,148591304110702595}`},
+		{name: `serial_array_null`, columnType: `SERIAL[]`},
+		{name: `bit`, columnType: `VARBIT`, sqlValue: `10010101`, indexable: true},
+		{name: `bit_null`, columnType: `VARBIT`},
+		{name: `bool`, columnType: `BOOL`, sqlValue: `true`, indexable: true},
+		{name: `bool_array`, columnType: `BOOL[]`, sqlValue: `{true, false, true}`},
+		{name: `bool_null`, columnType: `BOOL`},
+		{name: `bytes`, columnType: `BYTES`, sqlValue: `b'\141\061\142\062\143\063'`, indexable: true},
+		{name: `collate`, columnType: `STRING COLLATE de`, sqlValue: `'a1b2c3' COLLATE de`, indexable: true},
+		{name: `collate_null`, columnType: `STRING COLLATE de`},
+		{name: `date`, columnType: `DATE`, sqlValue: `2016-01-25`, indexable: true},
+		{name: `date_null`, columnType: `DATE`},
+		{name: `decimal`, columnType: `DECIMAL`, sqlValue: `1.2345`, indexable: true},
+		{name: `decimal_eng_6,0`, columnType: `DECIMAL(6,0)`, sqlValue: `4e+2`, indexable: true, expectJSON: "400"},
+		{name: `decimal_eng_6,2`, columnType: `DECIMAL(6,2)`, sqlValue: `4.98765e+2`, indexable: true, expectJSON: "498.77"},
+		{
+			// Bigger than int64
+			name: `decimal_eng_50,2`, columnType: `DECIMAL(600,2)`, sqlValue: `4e+50`, indexable: true,
+			expectJSON: "400000000000000000000000000000000000000000000000000.00",
+		},
+		{name: `decimal_null`, columnType: `DECIMAL`},
+		{name: `float`, columnType: `FLOAT`, sqlValue: `1.2345`, indexable: true},
+		{name: `float_null`, columnType: `FLOAT`},
+		{name: `geography`, columnType: `GEOGRAPHY`, sqlValue: `0101000020E6100000000000000000F03F0000000000000040`},
+		{name: `geometry`, columnType: `GEOMETRY`, sqlValue: `010100000075029A081B9A5DC0F085C954C1F84040`},
+		{name: `inet`, columnType: `INET`, sqlValue: `192.168.0.1`, indexable: true},
+		{name: `inet_null`, columnType: `INET`},
+		{name: `int`, columnType: `INT`, sqlValue: `12345`, indexable: true},
+		{name: `int_null`, columnType: `INT`},
+		{name: `interval`, columnType: `INTERVAL`, sqlValue: `2h30m30s`, indexable: true},
+		{name: `interval_null`, columnType: `INTERVAL`},
+		{
+			name:       `jsonb`,
+			columnType: `JSONB`,
+			sqlValue: `
 			{
 				"string": "Lola",
 				"bool": true,
@@ -322,28 +388,50 @@ func TestAllDataTypes(t *testing.T) {
 				}
 			}
 			`,
-			false,
 		},
-		{`jsonb_null`, `JSONB`, ``, false},
-		{`serial`, `SERIAL`, `148591304110702593`, true},
+		{name: `jsonb_null`, columnType: `JSONB`},
+		{name: `serial`, columnType: `SERIAL`, sqlValue: `148591304110702593`, indexable: true},
 		// serial cannot be null
-		{`string`, `STRING`, `a1b2c3`, true},
-		{`string_null`, `STRING`, ``, false},
-		{`string_escape`, `STRING`, `a1\b/2?c"3`, true},
-		{`time`, `TIME`, `01:23:45.123456`, true},
-		{`time_null`, `TIME`, ``, false},
-		{`timestamp`, `TIMESTAMP`, `2016-01-25 10:10:10`, true},
-		{`timestamp_null`, `TIMESTAMP`, ``, false},
-		{`timestamptz`, `TIMESTAMPTZ`, `2016-01-25 10:10:10-05:00`, true},
-		{`timestamptz_null`, `TIMESTAMPTZ`, ``, false},
-		{`uuid`, `UUID`, `7f9c24e8-3b12-4fef-91e0-56a2d5a246ec`, true},
-		{`uuid_null`, `UUID`, ``, false},
+		{name: `string`, columnType: `STRING`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `string_null`, columnType: `STRING`},
+		{name: `string_escape`, columnType: `STRING`, sqlValue: `a1\b/2?c"3`, indexable: true},
+		{name: `time`, columnType: `TIME`, sqlValue: `01:23:45.123456`, indexable: true},
+		{name: `time_null`, columnType: `TIME`},
+		{name: `timestamp`, columnType: `TIMESTAMP`, sqlValue: `2016-01-25 10:10:10`, indexable: true},
+		{name: `timestamp_null`, columnType: `TIMESTAMP`},
+		{name: `timestamptz`, columnType: `TIMESTAMPTZ`, sqlValue: `2016-01-25 10:10:10-05:00`, indexable: true},
+		{name: `timestamptz_null`, columnType: `TIMESTAMPTZ`},
+		{name: `uuid`, columnType: `UUID`, sqlValue: `7f9c24e8-3b12-4fef-91e0-56a2d5a246ec`, indexable: true},
+		{name: `uuid_null`, columnType: `UUID`},
 	}
+)
 
-	expectInstead := map[string]string{
-		"decimal_eng_6,0":  "400",
-		"decimal_eng_6,2":  "498.77",
-		"decimal_eng_50,2": "400000000000000000000000000000000000000000000000000.00",
+// This is a smoke test  to ensure that
+// all supported data types can be applied. It works by creating
+// a test table for each type and using CRDB's built-in to_jsonb()
+// function to create a payload.
+func TestAllDataTypes(t *testing.T) {
+
+	var expectArrayWrapper bool
+	var readBackQ string
+	var testcases []dataTypeTestCase
+	{
+		fixture, cancel, err := all.NewFixture()
+		require.NoError(t, err)
+
+		switch fixture.TargetPool.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			testcases = pgDataTypeTests
+			readBackQ = "SELECT ifnull(to_json(val)::string, 'null') FROM %s"
+		case types.ProductOracle:
+			testcases = oraDataTypeTests
+			// JSON_QUERY in older versions refuses to return raw scalars.
+			readBackQ = "SELECT JSON_QUERY(JSON_ARRAY(val NULL ON NULL), '$[0]' WITH ARRAY WRAPPER) FROM %s"
+			expectArrayWrapper = true
+		default:
+			t.Fatal("unimplemented product")
+		}
+		cancel()
 	}
 
 	for _, tc := range testcases {
@@ -358,9 +446,7 @@ func TestAllDataTypes(t *testing.T) {
 			//
 			// https://github.com/cockroachdb/cockroach/issues/102259
 			fixture, cancel, err := all.NewFixture()
-			if !a.NoError(err) {
-				return
-			}
+			require.NoError(t, err)
 			defer cancel()
 
 			ctx := fixture.Context
@@ -384,16 +470,21 @@ func TestAllDataTypes(t *testing.T) {
 				return
 			}
 
+			// Use the staging connection to create a reasonable JSON blob.
 			var jsonValue string
-			if tc.columnValue == "" {
+			if tc.sqlValue == "" {
 				jsonValue = "null"
 			} else {
-				q := fmt.Sprintf("SELECT to_json($1::%s)::string", tc.columnType)
-				if !a.NoError(fixture.TargetPool.QueryRowContext(ctx, q, tc.columnValue).Scan(&jsonValue)) {
+				sourceType := tc.columnType
+				if tc.sourceType != "" {
+					sourceType = tc.sourceType
+				}
+				q := fmt.Sprintf("SELECT to_json($1::%s)::string", sourceType)
+				if !a.NoError(fixture.StagingPool.QueryRow(ctx, q, tc.sqlValue).Scan(&jsonValue)) {
 					return
 				}
 			}
-			log.Debug(jsonValue)
+			log.Info(jsonValue)
 
 			mut := types.Mutation{
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
@@ -401,14 +492,19 @@ func TestAllDataTypes(t *testing.T) {
 			}
 			a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
 
-			var jsonFound string
+			var readBack string
 			a.NoError(fixture.TargetPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT ifnull(to_json(val)::string, 'null') FROM %s", tbl),
-			).Scan(&jsonFound))
-			if alternate, ok := expectInstead[tc.name]; ok {
-				a.Equal(alternate, jsonFound)
+				fmt.Sprintf(readBackQ, tbl),
+			).Scan(&readBack))
+
+			// See note in readBackQ
+			if expectArrayWrapper {
+				readBack = readBack[1 : len(readBack)-1]
+			}
+			if tc.expectJSON != "" {
+				a.Equal(tc.expectJSON, readBack)
 			} else {
-				a.Equal(jsonValue, jsonFound)
+				a.Equal(jsonValue, readBack)
 			}
 		})
 	}
@@ -441,7 +537,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 
 	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP)")
+		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP WITH TIME ZONE)")
 	if !a.NoError(err) {
 		return
 	}
@@ -493,8 +589,17 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	// Utility function to retrieve the most recently set data.
 	getRow := func() (version int, ts time.Time, err error) {
+		var q string
+		switch fixture.TargetPool.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			q = "SELECT ver, ts FROM %s WHERE pk = $1"
+		case types.ProductOracle:
+			q = "SELECT ver, ts FROM %s WHERE pk = :p1"
+		default:
+			return 0, time.Time{}, errors.New("unimplemented product")
+		}
 		err = fixture.TargetPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT ver, ts FROM %s WHERE pk = $1", tbl.Name()), id,
+			fmt.Sprintf(q, tbl.Name()), id,
 		).Scan(&version, &ts)
 		return
 	}
@@ -571,7 +676,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		// Test the version that's currently in the database, make sure
 		// that we haven't gone backwards.
 		ver, ts, err := getRow()
-		a.Equal(expectedTime, ts)
+		a.Equal(expectedTime.UTC(), ts.UTC())
 		a.Equal(expectedVersion, ver)
 		a.NoError(err)
 
@@ -601,7 +706,7 @@ func TestExpressionColumns(t *testing.T) {
 	}
 
 	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING, fixed STRING)")
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val VARCHAR(2048), fixed VARCHAR(2048))")
 	if !a.NoError(err) {
 		return
 	}
@@ -677,7 +782,7 @@ func TestIgnoredColumns(t *testing.T) {
 	}
 
 	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk0 INT, pk1 INT, val0 STRING, not_required STRING, PRIMARY KEY (pk0, pk1))")
+		"CREATE TABLE %s (pk0 INT, pk1 INT, val0 VARCHAR(2048), not_required VARCHAR(2048), PRIMARY KEY (pk0, pk1))")
 	if !a.NoError(err) {
 		return
 	}
@@ -732,7 +837,7 @@ func TestRenamedColumns(t *testing.T) {
 	}
 
 	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val VARCHAR(2048))")
 	if !a.NoError(err) {
 		return
 	}
@@ -786,20 +891,22 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		Val string `json:"val"`
 	}
 	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk0 INT PRIMARY KEY, ignored INT AS (1) STORED, val STRING)")
+		"CREATE TABLE %s (pk0 INT PRIMARY KEY, ignored INT AS (1) VIRTUAL, val VARCHAR(2048))")
 	if !a.NoError(err) {
 		return
 	}
 	jumbledName := sinktest.JumbleTable(tbl.Name())
 
 	// Detect hopeful future case where UPSERT has the desired behavior.
-	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("UPSERT INTO %s (pk0, val) VALUES ($1, $2), ($3, $4)", tbl.Name()),
-		1, "1", 1, "1")
-	if a.Error(err) {
-		a.Contains(err.Error(), "cannot affect row a second time")
-	} else {
-		a.FailNow("the workaround is no longer necessary for this version of CRDB")
+	if fixture.TargetPool.Product == types.ProductCockroachDB {
+		_, err = fixture.TargetPool.ExecContext(ctx,
+			fmt.Sprintf("UPSERT INTO %s (pk0, val) VALUES ($1, $2), ($3, $4)", tbl.Name()),
+			1, "1", 1, "1")
+		if a.Error(err) {
+			a.Contains(err.Error(), "cannot affect row a second time")
+		} else {
+			a.FailNow("the workaround is no longer necessary for this version of CRDB")
+		}
 	}
 
 	app, err := fixture.Appliers.Get(ctx, jumbledName)
@@ -825,8 +932,17 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 
 	count, err := base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
 	if a.NoError(err) && a.Equal(1, count) {
+		var q string
+		switch fixture.TargetPool.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			q = "SELECT val FROM %s WHERE pk0 = $1"
+		case types.ProductOracle:
+			q = "SELECT val FROM %s WHERE pk0 = :pk"
+		default:
+			a.Fail("unimplemented product")
+		}
 		row := fixture.TargetPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT val FROM %s WHERE pk0 = $1", tbl.Name()), 10)
+			fmt.Sprintf(q, tbl.Name()), 10)
 		var val string
 		a.NoError(row.Scan(&val))
 		a.Equal("Repeated", val)
@@ -840,6 +956,10 @@ func TestUTDEnum(t *testing.T) {
 	fixture, cancel, err := all.NewFixture()
 	r.NoError(err)
 	defer cancel()
+
+	if fixture.TargetPool.Product != types.ProductCockroachDB {
+		t.Skip("test not relevant to product")
+	}
 
 	ctx := fixture.Context
 
@@ -893,13 +1013,18 @@ func TestVirtualColumns(t *testing.T) {
 		CK int `json:"ck"`
 		X  int `json:"x,omitempty"`
 	}
-	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s ("+
-			"a INT, "+
-			"ck INT AS (a + b) STORED, "+
-			"b INT, "+
-			"c INT AS (a + b) STORED, "+
-			"PRIMARY KEY (a,ck,b))")
+
+	tblDef := "CREATE TABLE %s (" +
+		"a INT, " +
+		"ck INT AS (a + b) VIRTUAL, " +
+		"b INT, " +
+		"c INT AS (a + b + 1) VIRTUAL, " +
+		"PRIMARY KEY (a,ck,b))"
+	// v21 didn't yet implement virtual columns in PKs.
+	if strings.Contains(fixture.TargetPool.Version, "v21.") {
+		tblDef = strings.ReplaceAll(tblDef, "VIRTUAL", "STORED")
+	}
+	tbl, err := fixture.CreateTargetTable(ctx, tblDef)
 	if !a.NoError(err) {
 		return
 	}

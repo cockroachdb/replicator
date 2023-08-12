@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	log "github.com/sirupsen/logrus"
@@ -66,7 +67,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	}
 
 	for _, tgt := range tgts {
-		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
+		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048))`, tgt)
 		if _, err := pool.ExecContext(ctx, schema); !a.NoError(err) {
 			return
 		}
@@ -190,7 +191,7 @@ func TestUserScript(t *testing.T) {
 	}
 
 	for _, tgt := range tgts {
-		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
+		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048))`, tgt)
 		_, err := pool.ExecContext(ctx, schema)
 		r.NoError(err)
 	}
@@ -212,12 +213,12 @@ func TestUserScript(t *testing.T) {
 import * as api from "cdc-sink@v1";
 api.configureSource("t1", {
   dispatch: (doc) => ({
-    "t_1": [ doc ],
+    "T_1": [ doc ], // Note upper-case table name.
     "t_2": [ doc ]
   }),
   deletesTo: "t_1"
 });
-api.configureTable("t_1", {
+api.configureTable("T_1", { // Upper-case table name.
   map: (doc) => {
     doc.v = "cowbell";
     return doc;
@@ -252,9 +253,18 @@ api.configureTable("t_2", {
 			search = "llebwoc"
 		}
 		for {
+			var q string
+			switch fixture.TargetPool.Product {
+			case types.ProductCockroachDB, types.ProductPostgreSQL:
+				q = "SELECT count(*) FROM %s WHERE v = $1"
+			case types.ProductOracle:
+				q = "SELECT count(*) FROM %s WHERE v = :v"
+			default:
+				r.Fail("unimplemented product")
+			}
+
 			var count int
-			r.NoError(pool.QueryRowContext(ctx, fmt.Sprintf(
-				"SELECT count(*) FROM %s WHERE v = $1", tgt), search).Scan(&count))
+			r.NoError(pool.QueryRowContext(ctx, fmt.Sprintf(q, tgt), search).Scan(&count))
 			log.Tracef("backfill count %d", count)
 			if count == numEmits {
 				break
@@ -264,7 +274,7 @@ api.configureTable("t_2", {
 	}
 
 	// Ensure that deletes propagate correctly to t_1.
-	_, err = pool.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE TRUE", tgts[0]))
+	_, err = pool.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE 1=1", tgts[0]))
 	r.NoError(err)
 
 	for {

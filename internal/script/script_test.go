@@ -60,13 +60,13 @@ func TestScript(t *testing.T) {
 
 	// Create tables that will be referenced by the user-script.
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.table1(msg TEXT PRIMARY KEY)", schema))
+		fmt.Sprintf("CREATE TABLE %s.table1(msg VARCHAR(2048) PRIMARY KEY)", schema))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("CREATE TABLE %s.table2(idx INT PRIMARY KEY)", schema))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.all_features(msg TEXT PRIMARY KEY)", schema))
+		fmt.Sprintf("CREATE TABLE %s.all_features(msg VARCHAR(2048) PRIMARY KEY)", schema))
 	r.NoError(err)
 
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))

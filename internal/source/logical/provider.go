@@ -158,10 +158,6 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPo
 	if err != nil {
 		return nil, nil, err
 	}
-	if ret.Product != types.ProductCockroachDB {
-		cancel()
-		return nil, nil, errors.Errorf("only CockroachDB is a supported target at this time; have %s", ret.Product)
-	}
 
 	// This sanity-checks the configured schema against the product. For
 	// Cockroach and Postgres, we'll add any missing "public" schema
