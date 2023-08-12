@@ -23,6 +23,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,9 +114,9 @@ func TestGetDependencyOrder(t *testing.T) {
 			"create table %[1]s.self_child (pk int primary key, self int references %[1]s.self, self_child int references %[1]s.self_child)",
 		},
 	}
-	expected := make(map[string]int, len(tcs))
+	expected := &ident.Map[int]{}
 	for _, tc := range tcs {
-		expected[tc.name] = tc.order
+		expected.Put(ident.New(tc.name), tc.order)
 	}
 
 	ctx := fixture.Context
@@ -130,16 +132,16 @@ func TestGetDependencyOrder(t *testing.T) {
 	snap := fixture.Watcher.Get()
 
 	tableCount := 0
-	found := make(map[string]int, len(expected))
+	found := &ident.Map[int]{}
 	for idx, tables := range snap.Order {
 		for _, table := range tables {
-			found[table.Table().Raw()] = idx
+			found.Put(table.Table(), idx)
 			tableCount++
 		}
 	}
 
 	a.Equal(len(tcs), tableCount)
-	a.Equal(expected, found)
+	a.True(expected.Equal(found, cmap.Comparator[int]()))
 
 	// Ensure that we fail in a useful manner if there is a reference cycle.
 	switch pool.Product {
@@ -153,16 +155,16 @@ ALTER TABLE %[1]s.cycle_a ADD COLUMN ref int references %[1]s.cycle_b;
 
 	case types.ProductOracle:
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
-			`CREATE TABLE %[1]s.cycle_a (pk int primary key)`, fixture.TargetSchema.Schema()))
+			`CREATE TABLE %[1]s."cycle_a" (pk int primary key)`, fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
-			`CREATE TABLE %[1]s.cycle_b (pk int primary key, ref int references %[1]s.cycle_a)`,
+			`CREATE TABLE %[1]s."cycle_b" (pk int primary key, ref int references %[1]s."cycle_a")`,
 			fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
-			`ALTER TABLE %[1]s.cycle_a ADD (ref int references %[1]s.cycle_b)`, fixture.TargetSchema.Schema()))
+			`ALTER TABLE %[1]s."cycle_a" ADD (ref int references %[1]s."cycle_b")`, fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 	default:

@@ -207,7 +207,13 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 			}
 			tblMuts := make([]types.Mutation, len(jsDocs))
 			ret.Put(tbl, tblMuts)
-			for idx, jsDoc := range jsDocs {
+			for idx, rawJsDoc := range jsDocs {
+				// Use a case-insensitive map for lookups.
+				jsDoc := &ident.Map[any]{}
+				for k, v := range rawJsDoc {
+					jsDoc.Put(ident.New(k), v)
+				}
+
 				colData, ok := s.watcher.Get().Columns.Get(tbl)
 				if !ok {
 					return nil, errors.Errorf(
@@ -218,7 +224,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 				var jsKey []any
 				for _, col := range colData {
 					if col.Primary {
-						keyVal, ok := jsDoc[col.Name.Raw()]
+						keyVal, ok := jsDoc.Get(col.Name)
 						if !ok {
 							return nil, errors.Errorf(
 								"dispatch funcion %s omitted value for PK %s", fnName, col.Name)
@@ -259,21 +265,27 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		}
 
 		// Execute the user code to return the replacement values.
-		var mapped map[string]any
+		var rawMapped map[string]any
 		if err := s.execJS(ctx, func() (err error) {
 			meta := mut.Meta
 			if meta == nil {
 				meta = make(map[string]any)
 			}
-			mapped, err = mapper(data, meta)
+			rawMapped, err = mapper(data, meta)
 			return err
 		}); err != nil {
 			return mut, false, err
 		}
 
 		// Filtered out.
-		if len(mapped) == 0 {
+		if len(rawMapped) == 0 {
 			return mut, false, nil
+		}
+
+		// Use case-insensitive idents for mapping.
+		mapped := &ident.Map[any]{}
+		for k, v := range rawMapped {
+			mapped.Put(ident.New(k), v)
 		}
 
 		dataBytes, err := json.Marshal(mapped)
@@ -290,7 +302,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		var jsKey []any
 		for _, colData := range colData {
 			if colData.Primary {
-				keyVal, ok := mapped[colData.Name.Raw()]
+				keyVal, ok := mapped.Get(colData.Name)
 				if !ok {
 					return mut, false, errors.Errorf(
 						"map document missing value for PK column %s", colData.Name)

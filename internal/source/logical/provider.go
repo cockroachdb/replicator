@@ -139,12 +139,7 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPo
 	if txTimeout != 0 {
 		options = append(options, stdpool.WithTransactionTimeout(txTimeout))
 	}
-	ret, cancel, err := stdpool.OpenTarget(ctx, config.TargetConn, options...)
-	if ret.Product != types.ProductCockroachDB {
-		cancel()
-		return nil, nil, errors.Errorf("only CockroachDB is a supported target at this time; have %s", ret.Product)
-	}
-	return ret, cancel, err
+	return stdpool.OpenTarget(ctx, config.TargetConn, options...)
 }
 
 // ProvideUserScriptConfig is called by Wire to extract the user-script

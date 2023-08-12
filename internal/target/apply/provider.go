@@ -31,9 +31,12 @@ var Set = wire.NewSet(
 // ProvideFactory is called by Wire to construct the factory. The cancel
 // function will, in turn, destroy the per-schema types.Applier
 // instances.
-func ProvideFactory(configs *applycfg.Configs, watchers types.Watchers) (types.Appliers, func()) {
+func ProvideFactory(
+	configs *applycfg.Configs, target *types.TargetPool, watchers types.Watchers,
+) (types.Appliers, func()) {
 	f := &factory{
 		configs:  configs,
+		product:  target.Product,
 		watchers: watchers,
 	}
 	f.mu.instances = &ident.TableMap[*apply]{}

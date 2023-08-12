@@ -72,7 +72,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	watchers, cleanup5 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup6 := apply.ProvideFactory(configs, watchers)
+	appliers, cleanup6 := apply.ProvideFactory(configs, targetPool, watchers)
 	authenticator, cleanup7, err := ProvideAuthenticator(ctx, stagingPool, config, stagingSchema)
 	if err != nil {
 		cleanup6()
@@ -197,7 +197,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		return nil, nil, err
 	}
 	watchers, cleanup6 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup7 := apply.ProvideFactory(configs, watchers)
+	appliers, cleanup7 := apply.ProvideFactory(configs, targetPool, watchers)
 	cdcConfig := &config.CDC
 	typesLeases, err := leases.ProvideLeases(contextContext, stagingPool, stagingSchema)
 	if err != nil {

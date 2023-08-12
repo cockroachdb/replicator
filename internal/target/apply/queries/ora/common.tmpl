@@ -1,0 +1,41 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+
+{{- /* names produces a comma-separated list of column names: foo, bar, baz*/ -}}
+{{- define "names" -}}
+    {{- range $idx, $col := . }}
+        {{- if $idx -}},{{- end -}}
+        {{$col.Name}}
+    {{- end -}}
+{{- end -}}
+
+{{- /*
+pairExprs produces a comma-separated list of positional arguments.
+*/ -}}
+{{- define "pairExprs" -}}
+    {{- $pairs := . -}}
+    {{- range $pairIdx, $pair := $pairs -}}
+        {{- if $pairIdx }}, {{ end -}}
+        {{- template "pairExpr" $pair -}}
+    {{- end -}}
+{{- end -}}
+
+{{- /*
+pairExpr emits a type-cast SQL expression for a single positional argument.
+*/ -}}
+{{- define "pairExpr" -}}
+    {{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.varPair*/ -}}
+    {{- $pair := . -}}
+    {{- if $pair.Expr -}}
+        CAST({{ $pair.Expr }} AS {{ $pair.Column.Type }})
+    {{- else -}}
+        CAST(:p{{ $pair.Index }} AS {{ $pair.Column.Type }})
+    {{- end -}}
+{{- end -}}
+
+{{- /* join creates a comma-separated list of its input: a, b, c, ... */ -}}
+{{- define "join" -}}
+    {{- range $idx, $val := . }}
+        {{- if $idx -}},{{- end -}}
+        {{- $val -}}
+    {{- end -}}
+{{- end -}}

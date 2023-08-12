@@ -32,10 +32,10 @@ import (
 )
 
 var (
-	//go:embed queries/*.tmpl
+	//go:embed queries/*/*.tmpl
 	queries embed.FS
 
-	parsed = template.Must(template.New("").Funcs(template.FuncMap{
+	tmplFuncs = template.FuncMap{
 		"isUDT": func(x any) bool {
 			_, ok := x.(ident.UDT)
 			return ok
@@ -45,6 +45,10 @@ var (
 		// syntax.
 		"nl": func() string { return "\n" },
 
+		// sp just inserts a space into the output. This is useful when
+		// using whitespace-consuming template markers.
+		"sp": func() string { return " " },
+
 		// qualify is used with the "join" template to emit a list of
 		// qualified database identifiers. The prefix is prepended to
 		// each column's name using a dot separator.
@@ -52,14 +56,14 @@ var (
 		// would return values such as
 		//     foo.PK, foo.Val0, foo.Val1, ....
 		"qualify": func(prefix any, cols []types.ColData) ([]string, error) {
-			var id ident.Ident
+			var id string
 			switch t := prefix.(type) {
 			case string:
-				id = ident.New(t)
-			case ident.Ident:
 				id = t
+			case ident.Ident:
+				id = t.String()
 			case ident.Table:
-				id = t.Table()
+				id = t.Table().String()
 			default:
 				return nil, errors.Errorf("unsupported conversion %T", t)
 			}
@@ -69,10 +73,10 @@ var (
 			}
 			return ret, nil
 		},
-	}).ParseFS(queries, "**/*.tmpl"))
-	conditionalTemplate = parsed.Lookup("conditional.tmpl")
-	deleteTemplate      = parsed.Lookup("delete.tmpl")
-	upsertTemplate      = parsed.Lookup("upsert.tmpl")
+	}
+
+	tmplOra = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/ora/*.tmpl"))
+	tmplPG  = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/pg/*.tmpl"))
 )
 
 // A templateCache stores variations of the delete and upsert commands
@@ -85,69 +89,46 @@ type templateCache struct {
 }
 
 type templates struct {
-	Columns    []types.ColData    // All non-ignored columns.
-	Conditions []types.ColData    // The version-like fields for CAS ops.
-	Deadlines  types.Deadlines    // Allow too-old data to just be dropped.
-	Exprs      *ident.Map[string] // Value-replacement expressions.
-	PK         []types.ColData    // Primary-key columns for upserts.
-	PKDelete   []types.ColData    // Primary-key columns for delete expressions.
-	TableName  ident.Table        // The target table.
-	cache      *templateCache     // Memoize calls to delete() and upsert().
+	*columnMapping
+
+	cache       *templateCache // Memoize calls to delete() and upsert().
+	conditional *template.Template
+	delete      *template.Template
+	upsert      *template.Template
 
 	// The variables below here are updated during evaluation.
-
-	RowCount int // The number of rows to be applied.
+	ForDelete bool // True if we only iterate over PKs to delete
+	RowCount  int  // The number of rows to be applied.
 }
 
 // newTemplates constructs a new templates instance, performing some
 // pre-computations to identify primary keys and to filter out ignored
 // columns.
-func newTemplates(
-	target ident.Table, cfgData *applycfg.Config, colData []types.ColData,
-) *templates {
-	// Map cas column names to their order in the comparison tuple.
-	var casMap ident.Map[int]
-	for idx, name := range cfgData.CASColumns {
-		casMap.Put(name, idx)
-	}
-
+func newTemplates(mapping *columnMapping) (*templates, error) {
 	ret := &templates{
-		Conditions: make([]types.ColData, len(cfgData.CASColumns)),
-		Columns:    append([]types.ColData(nil), colData...),
-		Deadlines:  cfgData.Deadlines,
-		Exprs:      cfgData.Exprs,
-		TableName:  target,
+		columnMapping: mapping,
 		cache: &templateCache{
 			deletes: lru.New(batches.Size()),
 			upserts: lru.New(batches.Size()),
 		},
 	}
 
-	// Filter out the ignored columns, build the list of PK columns,
-	// and apply renames.
-	// https://github.com/golang/go/wiki/SliceTricks#filter-in-place
-	idx := 0
-	for _, col := range ret.Columns {
-		if col.Primary && !strings.HasPrefix("crdb_internal_", col.Name.Raw()) {
-			ret.PKDelete = append(ret.PKDelete, col)
-		}
-		if col.Ignored {
-			continue
-		}
-		if userIgnored, _ := cfgData.Ignore.Get(col.Name); userIgnored {
-			continue
-		}
-		ret.Columns[idx] = col
-		idx++
-		if col.Primary {
-			ret.PK = append(ret.PK, col)
-		}
-		if idx, isCas := casMap.Get(col.Name); isCas {
-			ret.Conditions[idx] = col
-		}
+	switch mapping.Product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		ret.conditional = tmplPG.Lookup("conditional.tmpl")
+		ret.delete = tmplPG.Lookup("delete.tmpl")
+		ret.upsert = tmplPG.Lookup("upsert.tmpl")
+
+	case types.ProductOracle:
+		ret.delete = tmplOra.Lookup("delete.tmpl")
+		ret.upsert = tmplOra.Lookup("upsert.tmpl")
+		ret.conditional = ret.upsert
+
+	default:
+		return nil, errors.Errorf("unsupported product %s", mapping.Product)
 	}
-	ret.Columns = ret.Columns[:idx]
-	return ret
+
+	return ret, nil
 }
 
 // varPair is returned by Vars, to associate a Column with a
@@ -167,12 +148,17 @@ type varPair struct {
 // Vars is a generator function that returns windows of 1-based
 // substitution parameters for the given columns. These are used to
 // generate the multi-VALUES ($1,$2, ...), ($55, $56) clauses.
-func (t *templates) Vars() [][]varPair {
+func (t *templates) Vars() ([][]varPair, error) {
 	ret := make([][]varPair, t.RowCount)
 	pairIdx := 1
 	for row := range ret {
-		ret[row] = make([]varPair, len(t.Columns))
-		for colIdx, col := range t.Columns {
+		cols := t.Columns
+		if t.ForDelete {
+			cols = t.PKDelete
+		}
+
+		ret[row] = make([]varPair, len(cols))
+		for colIdx, col := range cols {
 			vp := varPair{
 				Column: col,
 				Index:  pairIdx,
@@ -180,8 +166,18 @@ func (t *templates) Vars() [][]varPair {
 			pairIdx++
 
 			if pattern, ok := t.Exprs.Get(col.Name); ok {
+				var reference string
+				switch t.Product {
+				case types.ProductCockroachDB, types.ProductPostgreSQL:
+					reference = fmt.Sprintf("$%d", vp.Index)
+				case types.ProductOracle:
+					reference = fmt.Sprintf(":ref%d", vp.Index)
+				default:
+					return nil, errors.Errorf("unimplemented product %s", t.Product)
+				}
+
 				vp.Expr = strings.ReplaceAll(
-					pattern, applycfg.SubstitutionToken, fmt.Sprintf("$%d", vp.Index))
+					pattern, applycfg.SubstitutionToken, reference)
 				// A constant expression doesn't occupy an index slot.
 				if vp.Expr == pattern {
 					vp.Index = 0
@@ -192,10 +188,10 @@ func (t *templates) Vars() [][]varPair {
 			ret[row][colIdx] = vp
 		}
 	}
-	return ret
+	return ret, nil
 }
 
-func (t *templates) delete(rowCount int) (string, error) {
+func (t *templates) deleteExpr(rowCount int) (string, error) {
 	// Fast lookup
 	t.cache.Lock()
 	found, ok := t.cache.deletes.Get(rowCount)
@@ -208,11 +204,11 @@ func (t *templates) delete(rowCount int) (string, error) {
 
 	// Make a copy that we can tweak.
 	cpy := *t
-	cpy.Columns = t.PKDelete
+	cpy.ForDelete = true
 	cpy.RowCount = rowCount
 
 	var buf strings.Builder
-	err := deleteTemplate.Execute(&buf, &cpy)
+	err := t.delete.Execute(&buf, &cpy)
 	ret, err := buf.String(), errors.WithStack(err)
 	if err == nil {
 		t.cache.Lock()
@@ -222,7 +218,7 @@ func (t *templates) delete(rowCount int) (string, error) {
 	return ret, err
 }
 
-func (t *templates) upsert(rowCount int) (string, error) {
+func (t *templates) upsertExpr(rowCount int) (string, error) {
 	t.cache.Lock()
 	found, ok := t.cache.upserts.Get(rowCount)
 	t.cache.Unlock()
@@ -239,9 +235,9 @@ func (t *templates) upsert(rowCount int) (string, error) {
 	var buf strings.Builder
 	var err error
 	if len(cpy.Conditions) == 0 && cpy.Deadlines.Len() == 0 {
-		err = upsertTemplate.Execute(&buf, &cpy)
+		err = t.upsert.Execute(&buf, &cpy)
 	} else {
-		err = conditionalTemplate.Execute(&buf, &cpy)
+		err = t.conditional.Execute(&buf, &cpy)
 	}
 	ret, err := buf.String(), errors.WithStack(err)
 	if err == nil {
