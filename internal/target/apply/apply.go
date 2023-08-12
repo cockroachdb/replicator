@@ -22,7 +22,6 @@ package apply
 import (
 	"context"
 	"encoding/json"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,7 +40,8 @@ import (
 
 // apply will upsert mutations and deletions into a target table.
 type apply struct {
-	target ident.Table
+	product types.Product
+	target  ident.Table
 
 	deletes   prometheus.Counter
 	durations prometheus.Observer
@@ -50,10 +50,7 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
-		configData        *applycfg.Config
-		expectedKeyLength int // Sanity-check "key" attribute
-		schemaData        []types.ColData
-		templates         *templates
+		templates *templates
 	}
 }
 
@@ -61,7 +58,7 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	target ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
+	product types.Product, target ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
 	// Start a background goroutine to refresh the templates.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,7 +79,8 @@ func newApply(
 
 	labelValues := metrics.TableValues(target)
 	a := &apply{
-		target: target,
+		product: product,
+		target:  target,
 
 		deletes:   applyDeletes.WithLabelValues(labelValues...),
 		durations: applyDurations.WithLabelValues(labelValues...),
@@ -170,7 +168,7 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if len(a.mu.schemaData) == 0 {
+	if a.mu.templates.Len() == 0 {
 		return errors.Errorf("no ColumnData available for %s", a.target)
 	}
 
@@ -210,7 +208,7 @@ func (a *apply) deleteLocked(
 	if len(muts) == 0 {
 		return nil
 	}
-	sql, err := a.mu.templates.delete(len(muts))
+	sql, err := a.mu.templates.deleteExpr(len(muts))
 	if err != nil {
 		return err
 	}
@@ -222,16 +220,16 @@ func (a *apply) deleteLocked(
 		return err
 	}
 
-	allArgs := make([]any, 0, a.mu.expectedKeyLength*len(muts))
+	allArgs := make([]any, 0, len(a.mu.templates.PKDelete)*len(muts))
 	for i, keyGroup := range keyGroups {
-		if len(keyGroup) != a.mu.expectedKeyLength {
+		if len(keyGroup) != len(a.mu.templates.PKDelete) {
 			return errors.Errorf(
 				"schema drift detected in %s: "+
 					"inconsistent number of key columns: "+
 					"received %d expect %d: "+
 					"key %s@%s",
 				a.target,
-				len(keyGroup), a.mu.expectedKeyLength,
+				len(keyGroup), len(a.mu.templates.PKDelete),
 				string(muts[i].Key), muts[i].Time)
 		}
 		allArgs = append(allArgs, keyGroup...)
@@ -239,7 +237,8 @@ func (a *apply) deleteLocked(
 
 	for idx, arg := range allArgs {
 		if num, ok := arg.(json.Number); ok {
-			allArgs[idx] = removeExponent(num)
+			// See comment in upsertLocked().
+			allArgs[idx] = removeExponent(num).String()
 		}
 	}
 
@@ -269,142 +268,131 @@ func (a *apply) upsertLocked(
 	}
 	start := time.Now()
 
-	sql, err := a.mu.templates.upsert(len(muts))
+	sql, err := a.mu.templates.upsertExpr(len(muts))
 	if err != nil {
 		return err
 	}
 
 	// Allocate a slice for all mutation data. We'll reset the length
 	// once we know how many elements we actually have.
-	allArgs := make([]any, len(a.mu.schemaData)*len(muts))
+	allArgs := make([]any, a.mu.templates.UpsertParameterCount*len(muts))
 	argIdx := 0
-	// We'll remember the current location for any extra arguments
-	// that we see, so we can backtrack to fill in the blank.
-	extrasArgIdx := -1
 
 	// Decode the mutations into an actionable map.
-	columnData := make([]*ident.Map[any], len(muts))
-	if err := pjson.Decode(ctx, columnData,
+	allPayloadData := make([]*ident.Map[any], len(muts))
+	if err := pjson.Decode(ctx, allPayloadData,
 		func(i int) []byte { return muts[i].Data },
 	); err != nil {
 		return err
 	}
 
-	for i, incomingColumnData := range columnData {
-		// Track the columns that we expect to see and that are seen in
+	for idx, rowData := range allPayloadData {
+		var extrasData *ident.Map[any]
+		if a.mu.templates.ExtrasColIdx != -1 {
+			extrasData = &ident.Map[any]{}
+		}
+
+		// Track the columns that we must see and that are seen in
 		// the incoming payload. This improves the error returned when
 		// there are unexpected columns.
-		var knownColumnsInPayload ident.Map[struct{}]
-
-		for _, col := range a.mu.schemaData {
-			// Determine which key to look for in the mutation payload.
-			// If there's no explicit configuration, use the target
-			// column's name.
-			sourceCol, renamed := a.mu.configData.SourceNames.Get(col.Name)
-			if !renamed {
-				sourceCol = col.Name
-			}
-			decoded, presentInPayload := incomingColumnData.Get(sourceCol)
-			// Keep track of columns in the incoming payload that match
-			// columns that we expect to see in the target database.
-			if presentInPayload {
-				knownColumnsInPayload.Put(sourceCol, struct{}{})
-			}
-			// Ignored will be true for columns in the target database
-			// that we know about, but that we don't actually want to
-			// insert new values for (e.g. computed columns). These
-			// ignored columns could be part of the primary key, or they
-			// could be a regular column. We also allow the user to
-			// force columns to be ignored (e.g. to drop a column).
-			if col.Ignored || a.mu.configData.Ignore.GetZero(col.Name) {
-				continue
-			}
-			// We allow the user to specify an arbitrary expression for
-			// a column value. If there's no $0 substitution token, then
-			// we want to drop the column from the values to be sent
-			// with the query. The templates will bake in the fixed
-			// expression.
-			if expr, ok := a.mu.configData.Exprs.Get(col.Name); ok {
-				if !strings.Contains(expr, applycfg.SubstitutionToken) {
-					continue
-				}
-			}
-			// We're not going to worry about missing columns in the
-			// mutation to be applied unless it's a PK. If other new
-			// columns have been added to the target table, the source
-			// table might not have them yet.
-			if col.Primary && !presentInPayload {
-				return errors.Errorf(
-					"schema drift detected in %s: "+
-						"missing PK column %s: "+
-						"key %s@%s",
-					a.target, sourceCol.Raw(),
-					string(muts[i].Key), muts[i].Time)
-			}
-
-			if ident.Equal(col.Name, a.mu.configData.Extras) {
-				extrasArgIdx = argIdx
-			}
-			allArgs[argIdx] = decoded
-			argIdx++
+		missingPKs := &ident.Map[struct{}]{}
+		for _, pk := range a.mu.templates.PK {
+			missingPKs.Put(pk.Name, struct{}{})
 		}
 
-		// Pretend as though we've seen any ignored columns.
-		_ = a.mu.configData.Ignore.Range(func(col ident.Ident, _ bool) error {
-			knownColumnsInPayload.Put(col, struct{}{})
-			return nil
-		})
+		var unexpectedColumns []string
 
-		// Collect unknown / unmapped columns into the extras blob,
-		// or error out if we have no place to store extras.
-		if extraCount := incomingColumnData.Len() - knownColumnsInPayload.Len(); extraCount > 0 {
-			if a.mu.configData.Extras.Empty() {
-				var unmapped []string
-				_ = incomingColumnData.Range(func(key ident.Ident, _ any) error {
-					if _, seen := knownColumnsInPayload.Get(key); !seen {
-						unmapped = append(unmapped, key.Raw())
-					}
-					return nil
-				})
-				sort.Strings(unmapped)
-				return errors.Errorf(
-					"schema drift detected in %s: "+
-						"unexpected columns %v: "+
-						"key %s@%s",
-					a.target, unmapped, string(muts[i].Key), muts[i].Time)
-			}
+		err = rowData.Range(func(incomingColName ident.Ident, value any) error {
+			targetColumn, ok := a.mu.templates.Get(incomingColName)
 
-			unmapped := &ident.Map[any]{}
-			_ = incomingColumnData.Range(func(key ident.Ident, value any) error {
-				if _, seen := knownColumnsInPayload.Get(key); !seen {
-					unmapped.Put(key, value)
+			// The incoming data didn't map to a column. Report an error
+			// if no extras column has been configured or accumulate it
+			// for later encoding.
+			if !ok {
+				if extrasData == nil {
+					unexpectedColumns = append(unexpectedColumns, incomingColName.Raw())
+				} else {
+					extrasData.Put(incomingColName, value)
 				}
 				return nil
+			}
+
+			// We've seen the PK column, remove it from the set of
+			// unseen names.
+			if targetColumn.Primary {
+				missingPKs.Delete(targetColumn.Name)
+			}
+
+			// This is a signal that we want the column to be mentioned
+			// in the input data, but that we don't actually want to
+			// make use of the provided value. For example, generated PK
+			// columns.
+			if targetColumn.UpsertPosition < 0 {
+				return nil
+			}
+
+			// The JSON parser is configured to parse numbers as though
+			// they were strings.  We'll keep the string encoding so
+			// that the target database can tell us if the string value
+			// exceeds the precision or scale for the target column.
+			if num, ok := value.(json.Number); ok {
+				value = removeExponent(num).String()
+			} else if str, ok := value.(string); ok && targetColumn.Parse != nil {
+				value, ok = targetColumn.Parse(str)
+				if !ok {
+					return errors.Errorf("could not parse %q as a %s", str, targetColumn.Type)
+				}
+			}
+
+			// Assign the value to the relevant offset in the args.
+			allArgs[argIdx+targetColumn.UpsertPosition] = value
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		// Report missing PK columns. We're not going to worry about
+		// other missing columns in the mutation to be applied. If other
+		// new columns have been added to the target table, the source
+		// table might not have them yet.
+		if missingPKs.Len() > 0 {
+			var missingCols strings.Builder
+			_ = missingPKs.Range(func(name ident.Ident, _ struct{}) error {
+				if missingCols.Len() > 0 {
+					missingCols.WriteString(", ")
+				}
+				missingCols.WriteString(name.Raw())
+				return nil
 			})
-			// Find the location in the args slice to update
-			// with the extra data.
-			if extrasArgIdx < 0 {
-				return errors.Errorf(
-					"extras column %s not found the target schema",
-					a.mu.configData.Extras)
-			}
-			// We want to control the marshaling of JSON data.
-			data, err := unmapped.MarshalJSON()
+			return errors.Errorf(
+				"schema drift detected in %s: "+
+					"missing PK column %s: "+
+					"key %s@%s",
+				a.target, missingCols.String(),
+				string(muts[idx].Key), muts[idx].Time)
+		}
+
+		// Report any other unmapped column names.
+		if len(unexpectedColumns) > 0 {
+			return errors.Errorf(
+				"schema drift detected in %s: "+
+					"unexpected columns %v: "+
+					"key %s@%s",
+				a.target, unexpectedColumns, string(muts[idx].Key), muts[idx].Time)
+		}
+
+		if extrasData != nil {
+			extraJSONBytes, err := json.Marshal(extrasData)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "could not encode extras column value")
 			}
-			allArgs[extrasArgIdx] = string(data)
+			allArgs[argIdx+a.mu.templates.ExtrasColIdx] = string(extraJSONBytes)
 		}
-	}
 
-	// Done accumulating data, trim the slice.
+		argIdx += a.mu.templates.UpsertParameterCount
+	}
 	allArgs = allArgs[:argIdx]
-
-	for idx, arg := range allArgs {
-		if num, ok := arg.(json.Number); ok {
-			allArgs[idx] = removeExponent(num)
-		}
-	}
 
 	tag, err := db.ExecContext(ctx, sql, allArgs...)
 	if err != nil {
@@ -427,6 +415,30 @@ func (a *apply) upsertLocked(
 
 // refreshUnlocked updates the apply with new column information.
 func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.ColData) error {
+	// Sanity-check the configuration against target schema.
+	if err := a.validate(configData, schemaData); err != nil {
+		return err
+	}
+
+	// Extract column metadata.
+	columnMapping, err := newColumnMapping(configData, schemaData, a.product, a.target)
+	if err != nil {
+		return err
+	}
+
+	// Build template cache.
+	tmpl, err := newTemplates(columnMapping)
+	if err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mu.templates = tmpl
+	return nil
+}
+
+func (a *apply) validate(configData *applycfg.Config, schemaData []types.ColData) error {
 	// We want to verify that the cas and deadline columns actually
 	// exist in the incoming column data.
 	var allColNames ident.Map[struct{}]
@@ -454,6 +466,12 @@ func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.
 	}); err != nil {
 		return err
 	}
+	if !configData.Extras.Empty() {
+		if _, found := allColNames.Get(configData.Extras); !found {
+			return errors.Errorf("extras column name %s not found in table %s",
+				configData.Extras, a.target)
+		}
+	}
 
 	// The Ignores field doesn't need validation, since you might want
 	// to mark a column as ignored in order to (eventually) drop it from
@@ -467,33 +485,5 @@ func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.
 	}); err != nil {
 		return err
 	}
-
-	// Compute the expected length of the "key" attribute in the
-	// incoming changefeed messages. This length may be greater than the
-	// number of PKs that we'll actually write to, since columns with a
-	// generation expression are included in the changefeed.
-	var expectedKeyLength int
-	for _, col := range schemaData {
-		// PKs are always first in the slice.
-		if !col.Primary {
-			break
-		}
-		// Special case: If the primary key is hash-sharded, the
-		// changefeed strips the shard from the key before sending it.
-		if strings.HasPrefix(col.Name.Raw(), "crdb_internal_") {
-			continue
-		}
-		// Note that we include any other "ignored" columns to support
-		// schemas with PKs that contain generated columns (e.g. custom
-		// sharding approaches).
-		expectedKeyLength++
-	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.mu.configData = configData
-	a.mu.schemaData = schemaData
-	a.mu.expectedKeyLength = expectedKeyLength
-	a.mu.templates = newTemplates(a.target, configData, schemaData)
 	return nil
 }

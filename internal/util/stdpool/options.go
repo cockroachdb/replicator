@@ -36,7 +36,7 @@ type Option interface {
 type (
 	// attachable are all types on which attachOptions can operate.
 	attachable interface {
-		*ora.OracleConnector | *pgx.Conn | *pgxpool.Config | *pgxpool.Pool | *sql.DB
+		*ora.OracleConnector | *pgx.Conn | *pgxpool.Config | *pgxpool.Pool | *sql.DB | *TestControls
 	}
 
 	oraConnector interface {
@@ -57,6 +57,10 @@ type (
 
 	sqlDBOption interface {
 		sqlDB(ctx context.Context, db *sql.DB) error
+	}
+
+	testControlsOption interface {
+		testControls(ctx context.Context, tc *TestControls) error
 	}
 )
 
@@ -107,6 +111,15 @@ func attachOptions[T attachable](ctx context.Context, target T, options []Option
 		for _, option := range options {
 			if x, ok := option.(sqlDBOption); ok {
 				if err := x.sqlDB(ctx, t); err != nil {
+					return err
+				}
+			}
+		}
+
+	case *TestControls:
+		for _, option := range options {
+			if x, ok := option.(testControlsOption); ok {
+				if err := x.testControls(ctx, t); err != nil {
 					return err
 				}
 			}

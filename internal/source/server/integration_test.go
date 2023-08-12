@@ -110,7 +110,7 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	// Since we're creating the target table without using the helper
 	// CreateTable(), we need to manually refresh the target's Watcher.
 	target := ident.NewTable(targetDB, source.Name().Table())
-	_, err = targetPool.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)", target))
+	_, err = targetPool.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, val VARCHAR(2048))", target))
 	r.NoError(err)
 	watcher, err := targetFixture.Watcher.Get(ctx, targetDB)
 	r.NoError(err)

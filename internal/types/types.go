@@ -196,6 +196,10 @@ type Stagers interface {
 type ColData struct {
 	Ignored bool
 	Name    ident.Ident
+	// A Parse function may be supplied to allow a string representation
+	// of a complex datatype to be converted into a type more readily
+	// used by a target database driver.
+	Parse   func(string) (any, bool)
 	Primary bool
 	// Type of the column. Dialect might choose to use a string representation or a enum.
 	Type any
@@ -206,6 +210,7 @@ type ColData struct {
 func (d ColData) Equal(o ColData) bool {
 	return d.Ignored == o.Ignored &&
 		ident.Equal(d.Name, o.Name) &&
+		// Parse is excluded, since functions are not comparable.
 		d.Primary == o.Primary &&
 		d.Type == o.Type
 }

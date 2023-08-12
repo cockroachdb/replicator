@@ -29,6 +29,7 @@ import (
 // factory vends singleton instance of apply.
 type factory struct {
 	configs  *applycfg.Configs
+	product  types.Product
 	watchers types.Watchers
 	mu       struct {
 		sync.RWMutex
@@ -46,11 +47,11 @@ func (f *factory) Get(_ context.Context, table ident.Table) (types.Applier, erro
 		return ret, nil
 	}
 	// Fall back to write-locked get-or-create.
-	return f.getOrCreateUnlocked(table)
+	return f.getOrCreateUnlocked(f.product, table)
 }
 
 // getOrCreateUnlocked takes a write-lock.
-func (f *factory) getOrCreateUnlocked(table ident.Table) (*apply, error) {
+func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) (*apply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -61,7 +62,7 @@ func (f *factory) getOrCreateUnlocked(table ident.Table) (*apply, error) {
 	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
-	ret, cancel, err := newApply(table, f.configs, f.watchers)
+	ret, cancel, err := newApply(product, table, f.configs, f.watchers)
 	if err == nil {
 		f.mu.cleanup = append(f.mu.cleanup, cancel)
 		f.mu.instances.Put(table, ret)

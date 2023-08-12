@@ -73,7 +73,7 @@ WITH parent_refs AS (SELECT OWNER tbl_owner, TABLE_NAME tbl_name, R_OWNER parent
                 UNION ALL
                 SELECT lvl, tbl_owner, tbl_name
                 FROM levels)
-SELECT lower(tbl_owner), lower(tbl_name), max(lvl) - 1 lvl
+SELECT tbl_owner, tbl_name, max(lvl) - 1 lvl
 FROM cyclic
 WHERE tbl_owner = (:owner)
 GROUP BY tbl_owner, tbl_name

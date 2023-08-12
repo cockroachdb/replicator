@@ -17,7 +17,7 @@
 name: Golang
 permissions:
   contents: read
-  packages: read
+  packages: write # It is unclear why write access is needed to access private ghcr.io packages.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -140,6 +140,14 @@ jobs:
             sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
             target: target-cockroachdb-v23.1
             targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
+            # The Oracle 18 image doesn't come with a pre-built database, we need to do more work
+            # to allow this image to boot up fast enough for use in tests.
+#          - cockroachdb: v23.1
+#            target: oracle-v18.4
+#            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
+          - cockroachdb: v23.1
+            target: oracle-v21.3
+            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out
       DOCKER_LOGS_OUT: docker-${{ strategy.job-index }}.log

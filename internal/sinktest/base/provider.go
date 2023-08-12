@@ -141,7 +141,11 @@ func ProvideContext() (context.Context, func(), error) {
 func ProvideSourcePool(ctx context.Context) (*types.SourcePool, func(), error) {
 	tgt := *sourceConn
 	log.Infof("source connect string: %s", tgt)
-	ret, cancel, err := stdpool.OpenTarget(ctx, tgt)
+	ret, cancel, err := stdpool.OpenTarget(ctx, tgt,
+		stdpool.WithTestControls(stdpool.TestControls{
+			WaitForStartup: true,
+		}),
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -203,7 +207,11 @@ func ProvideStagingSchema(
 func ProvideStagingPool(ctx context.Context) (*types.StagingPool, func(), error) {
 	tgt := *stagingConn
 	log.Infof("staging connect string: %s", tgt)
-	return stdpool.OpenPgxAsStaging(ctx, tgt)
+	return stdpool.OpenPgxAsStaging(ctx, tgt,
+		stdpool.WithTestControls(stdpool.TestControls{
+			WaitForStartup: true,
+		}),
+	)
 }
 
 // ProvideTargetPool connects to the target database (which is most
@@ -217,7 +225,11 @@ func ProvideTargetPool(
 		return (*types.TargetPool)(source), func() {}, nil
 	}
 	log.Infof("target connect string: %s", tgt)
-	return stdpool.OpenTarget(ctx, *targetString)
+	return stdpool.OpenTarget(ctx, *targetString,
+		stdpool.WithTestControls(stdpool.TestControls{
+			WaitForStartup: true,
+		}),
+	)
 }
 
 // ProvideSourceSchema create a globally-unique container for tables in
@@ -257,6 +269,11 @@ func provideSchema[P types.AnyPool](
 		err := retry.Execute(ctx, pool, fmt.Sprintf("CREATE USER %s", name))
 		if err != nil {
 			return ident.Schema{}, nil, errors.Wrapf(err, "could not create user %s", name)
+		}
+
+		err = retry.Execute(ctx, pool, fmt.Sprintf("ALTER USER %s QUOTA UNLIMITED ON USERS", name))
+		if err != nil {
+			return ident.Schema{}, nil, errors.Wrapf(err, "could not grant quota to %s", name)
 		}
 
 		cancel := func() {

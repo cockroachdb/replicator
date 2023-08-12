@@ -66,7 +66,7 @@ func TestWatch(t *testing.T) {
 			r.FailNow("timed out waiting for channel data")
 		case data := <-ch:
 			r.Len(data, 1)
-			r.Equal("pk", data[0].Name.Raw())
+			r.Equal("pk", data[0].Name.Canonical().Raw())
 		}
 	})
 
@@ -84,7 +84,7 @@ func TestWatch(t *testing.T) {
 			r.FailNow("timed out waiting for channel data")
 		case data := <-ch:
 			r.Len(data, 1)
-			r.Equal("pk", data[0].Name.Raw())
+			r.Equal("pk", data[0].Name.Canonical().Raw())
 		}
 	})
 
@@ -109,8 +109,8 @@ func TestWatch(t *testing.T) {
 			r.FailNow("timed out waiting for channel data")
 		case data := <-ch:
 			r.Len(data, 2)
-			r.Equal("pk", data[0].Name.Raw())
-			r.Equal("v", data[1].Name.Raw())
+			r.Equal("pk", data[0].Name.Canonical().Raw())
+			r.Equal("v", data[1].Name.Canonical().Raw())
 		}
 	})
 

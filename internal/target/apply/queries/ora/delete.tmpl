@@ -1,0 +1,17 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+{{- /*
+DELETE FROM "schema"."table"
+WHERE ("pk0","pk1") IN ((:p1,:p2), (...), ...)
+*/ -}}
+DELETE FROM {{ .TableName }} WHERE (
+{{- range $idx, $col := $.PKDelete }}
+    {{- if $idx -}},{{- end -}}
+    {{$col.Name}}
+{{- end -}}
+)IN(
+{{- range $groupIdx, $pairs := $.Vars -}}
+    {{- if $groupIdx -}},{{- nl -}}{{- end -}}
+    ( {{- template "pairExprs" $pairs -}} )
+{{- end -}}
+)
+{{- /* Trim whitespace */ -}}

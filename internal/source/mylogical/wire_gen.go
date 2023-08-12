@@ -55,7 +55,7 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		return nil, nil, err
 	}
 	watchers, cleanup4 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup5 := apply.ProvideFactory(configs, watchers)
+	appliers, cleanup5 := apply.ProvideFactory(configs, targetPool, watchers)
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup5()
