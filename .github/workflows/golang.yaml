@@ -34,23 +34,36 @@ on:
       - '.github/workflows/golang.yaml'
 
 jobs:
-  # Static code-quality checks.
-  code-quality:
-    name: Code Quality
+  # This job is required by the jobs below.  It ensures that all go
+  # modules are cached within the local GitHub cache before executing
+  # the full test matrix. We've been seeing some requests to the
+  # upstream module cache fail due to network rate-limiting.
+  warm-build-cache:
+    name: Warm build cache
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
-      # Just cache based on job and go.sum contents.
-      - name: Write cache key
-        run: echo '${{ github.job }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
-          cache: true
-          cache-dependency-path: CACHE_KEY
+
+      - name: Download modules
+        run: go mod download
+
+  # Static code-quality checks.
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    needs: warm-build-cache
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
 
       - name: crlfmt returns no deltas
         if: ${{ always() }}
@@ -87,6 +100,7 @@ jobs:
   tests:
     name: Integration Tests
     runs-on: ubuntu-latest
+    needs: warm-build-cache
     strategy:
       fail-fast: false
       # Refer to the CRDB support policy when determining how many
@@ -135,16 +149,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      # Just cache based on job and go.sum contents.
-      - name: Write cache key
-        run: echo '${{ github.job }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
-
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
-          cache: true
-          cache-dependency-path: CACHE_KEY
 
       # Ensure we can grab any private images we need for testing.
       - name: Log in to GitHub Package Registry
