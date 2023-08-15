@@ -35,9 +35,28 @@ on:
   workflow_dispatch:  # Make it easy to push other branches/tags.
 
 jobs:
+  # This job is required by the jobs below.  It ensures that all go
+  # modules are cached within the local GitHub cache before executing
+  # the full test matrix. We've been seeing some requests to the
+  # upstream module cache fail due to network rate-limiting.
+  warm-build-cache:
+    name: Warm build cache
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Download modules
+        run: go mod download
+
   binaries:
     name: Binaries
     runs-on: ubuntu-latest
+    needs: warm-build-cache
     strategy:
       matrix:
         include:
@@ -96,18 +115,11 @@ jobs:
           echo "$DISTRO_PATHS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      # Use separate build caches for each target platform.
-      - id: cache_key
-        name: Write cache key
-        run: echo '${{ github.job }} ${{ toJSON(matrix) }} ${{ hashFiles('go.sum') }}' > CACHE_KEY
-
       - id: setup_go
         name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
-          cache: true
-          cache-dependency-path: CACHE_KEY
 
       - id: licenses
         name: Bundle license files
