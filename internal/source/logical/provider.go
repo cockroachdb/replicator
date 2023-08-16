@@ -99,7 +99,7 @@ func ProvideLoop(ctx context.Context, factory *Factory, dialect Dialect) (*Loop,
 // ProvideStagingDB is called by Wire to retrieve the name of the
 // _cdc_sink SQL DATABASE.
 func ProvideStagingDB(config *BaseConfig) (ident.StagingSchema, error) {
-	return ident.StagingSchema(config.StagingDB), nil
+	return ident.StagingSchema(config.StagingSchema), nil
 }
 
 // ProvideStagingPool is called by Wire to create a connection pool that
@@ -108,13 +108,28 @@ func ProvideStagingDB(config *BaseConfig) (ident.StagingSchema, error) {
 func ProvideStagingPool(
 	ctx context.Context, config *BaseConfig,
 ) (*types.StagingPool, func(), error) {
-	return stdpool.OpenPgxAsStaging(ctx,
+	ret, cancel, err := stdpool.OpenPgxAsStaging(ctx,
 		config.StagingConn,
 		stdpool.WithConnectionLifetime(5*time.Minute),
 		stdpool.WithMetrics("staging"),
 		stdpool.WithPoolSize(128),
 		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
 	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// This sanity-checks the configured schema against the product. For
+	// Cockroach and Postgresql, we'll add any missing "public" schema
+	// names.
+	sch, err := ret.Product.ExpandSchema(config.StagingSchema)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	config.StagingSchema = sch
+
+	return ret, cancel, err
 }
 
 // ProvideTargetPool is called by Wire to create a connection pool that
@@ -140,10 +155,24 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPo
 		options = append(options, stdpool.WithTransactionTimeout(txTimeout))
 	}
 	ret, cancel, err := stdpool.OpenTarget(ctx, config.TargetConn, options...)
+	if err != nil {
+		return nil, nil, err
+	}
 	if ret.Product != types.ProductCockroachDB {
 		cancel()
 		return nil, nil, errors.Errorf("only CockroachDB is a supported target at this time; have %s", ret.Product)
 	}
+
+	// This sanity-checks the configured schema against the product. For
+	// Cockroach and Postgres, we'll add any missing "public" schema
+	// names.
+	sch, err := ret.Product.ExpandSchema(config.TargetSchema)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	config.TargetSchema = sch
+
 	return ret, cancel, err
 }
 

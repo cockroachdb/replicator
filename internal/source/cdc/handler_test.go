@@ -49,12 +49,12 @@ func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo[*
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
-			Immediate:    immediate,
-			LoopName:     "changefeed",
-			StagingConn:  baseFixture.StagingPool.ConnectionString,
-			StagingDB:    baseFixture.StagingDB.Schema(),
-			TargetConn:   baseFixture.TargetPool.ConnectionString,
-			TargetSchema: baseFixture.TargetSchema.Schema(),
+			Immediate:     immediate,
+			LoopName:      "changefeed",
+			StagingConn:   baseFixture.StagingPool.ConnectionString,
+			StagingSchema: baseFixture.StagingDB.Schema(),
+			TargetConn:    baseFixture.TargetPool.ConnectionString,
+			TargetSchema:  baseFixture.TargetSchema.Schema(),
 		},
 	})
 	r.NoError(err)
@@ -456,7 +456,7 @@ func testMassBackfillWithForeignKeys(
 				ForeignKeysEnabled: true,
 				LoopName:           "changefeed",
 				StagingConn:        baseFixture.StagingPool.ConnectionString,
-				StagingDB:          baseFixture.StagingDB.Schema(),
+				StagingSchema:      baseFixture.StagingDB.Schema(),
 				RetryDelay:         time.Nanosecond,
 				TargetConn:         baseFixture.TargetPool.ConnectionString,
 				TargetSchema:       baseFixture.TargetSchema.Schema(),

@@ -85,9 +85,9 @@ type BaseConfig struct {
 	StandbyTimeout time.Duration
 	// Connection stsring for the staging cluster.
 	StagingConn string
-	// The name of a SQL database in the target cluster to store
+	// The name of a SQL schema in the staging cluster to store
 	// metadata in.
-	StagingDB ident.Schema
+	StagingSchema ident.Schema
 	// Connection string for the target cluster.
 	TargetConn string
 	// The number of connections to the target database. If zero, a
@@ -122,8 +122,15 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"re-order updates to satisfy foreign key constraints")
 	f.DurationVar(&c.RetryDelay, "retryDelay", defaultRetryDelay,
 		"the amount of time to sleep between replication retries")
-	c.StagingDB = ident.MustSchema(ident.New("_cdc_sink"))
-	f.Var(ident.NewSchemaFlag(&c.StagingDB), "stagingDB",
+	c.StagingSchema = ident.MustSchema(ident.New("_cdc_sink"), ident.Public)
+	// stagingDB is deprecated.
+	f.Var(ident.NewSchemaFlag(&c.StagingSchema), "stagingDB",
+		"a SQL database schema to store metadata in")
+	// Only returns an error if flag can't be found.
+	if err := f.MarkDeprecated("stagingDB", "use --stagingSchema instead"); err != nil {
+		panic(err)
+	}
+	f.Var(ident.NewSchemaFlag(&c.StagingSchema), "stagingSchema",
 		"a SQL database schema to store metadata in")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
 		"how often to commit the consistent point")
@@ -131,7 +138,14 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"the staging CockroachDB cluster's connection string; required if target is other than CRDB")
 	f.StringVar(&c.TargetConn, "targetConn", "",
 		"the target database's connection string; always required")
+	// targetDB is deprecated.
 	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetDB",
+		"the SQL database schema in the target cluster to update")
+	// Only returns an error if flag can't be found.
+	if err := f.MarkDeprecated("targetDB", "use --targetSchema instead"); err != nil {
+		panic(err)
+	}
+	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
 		"the SQL database schema in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
 		"the maximum pool size to the target cluster")
@@ -172,7 +186,7 @@ func (c *BaseConfig) Preflight() error {
 	if c.RetryDelay == 0 {
 		c.RetryDelay = defaultRetryDelay
 	}
-	if c.StagingDB.Empty() {
+	if c.StagingSchema.Empty() {
 		return errors.New("no staging database specified")
 	}
 	if c.StandbyTimeout == 0 {

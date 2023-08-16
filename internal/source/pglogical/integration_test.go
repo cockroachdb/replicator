@@ -121,14 +121,14 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
 		BaseConfig: logical.BaseConfig{
-			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			ChaosProb:    withChaosProb,
-			Immediate:    immediate,
-			LoopName:     "pglogicaltest",
-			RetryDelay:   time.Nanosecond,
-			StagingDB:    fixture.StagingDB.Schema(),
-			TargetConn:   crdbPool.ConnectionString,
-			TargetSchema: dbSchema,
+			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
+			ChaosProb:     withChaosProb,
+			Immediate:     immediate,
+			LoopName:      "pglogicaltest",
+			RetryDelay:    time.Nanosecond,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+			TargetSchema:  dbSchema,
 		},
 		Publication: dbName.Raw(),
 		Slot:        dbName.Raw(),
@@ -349,11 +349,11 @@ func TestDataTypes(t *testing.T) {
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	loop, cancelLoop, err := Start(ctx, &Config{
 		BaseConfig: logical.BaseConfig{
-			LoopName:     "pglogicaltest",
-			RetryDelay:   time.Nanosecond,
-			StagingDB:    fixture.StagingDB.Schema(),
-			TargetConn:   crdbPool.ConnectionString,
-			TargetSchema: dbSchema,
+			LoopName:      "pglogicaltest",
+			RetryDelay:    time.Nanosecond,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+			TargetSchema:  dbSchema,
 		},
 		Publication: dbName.Raw(),
 		Slot:        dbName.Raw(),

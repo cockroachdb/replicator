@@ -88,12 +88,12 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	targetFixture, cancel, err := newTestFixture(ctx, &Config{
 		CDC: cdc.Config{
 			BaseConfig: logical.BaseConfig{
-				Immediate:    immediate,
-				LoopName:     "changefeed",
-				StagingConn:  destFixture.StagingPool.ConnectionString,
-				StagingDB:    destFixture.StagingDB.Schema(),
-				TargetSchema: destFixture.TargetSchema.Schema(),
-				TargetConn:   destFixture.TargetPool.ConnectionString,
+				Immediate:     immediate,
+				LoopName:      "changefeed",
+				StagingConn:   destFixture.StagingPool.ConnectionString,
+				StagingSchema: destFixture.StagingDB.Schema(),
+				TargetSchema:  destFixture.TargetSchema.Schema(),
+				TargetConn:    destFixture.TargetPool.ConnectionString,
 			},
 			MetaTableName: ident.New("resolved_timestamps"),
 		},
