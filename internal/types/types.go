@@ -246,6 +246,41 @@ const (
 	ProductPostgreSQL
 )
 
+// ExpandSchema validates a Schema against the expected form used by the
+// database. This method may return an alternate value to add missing
+// default namespace elements.
+func (p Product) ExpandSchema(s ident.Schema) (ident.Schema, error) {
+	if s.Empty() {
+		return ident.Schema{}, errors.New("empty schema not allowed")
+	}
+
+	parts := s.Idents(nil)
+	numParts := len(parts)
+
+	switch p {
+	case ProductCockroachDB, ProductPostgreSQL:
+		switch numParts {
+		case 1:
+			// Add missing "public" identifier.
+			return ident.NewSchema(parts[0], ident.Public)
+		case 2:
+			// Fully-specified, return as-is.
+			return s, nil
+		default:
+			return ident.Schema{}, errors.Errorf("unexpected number of schema parts: %d", numParts)
+		}
+
+	case ProductOracle:
+		if numParts != 1 {
+			return ident.Schema{}, errors.Errorf("expecting exactly one schema part, had %d", numParts)
+		}
+		return s, nil
+
+	default:
+		return ident.Schema{}, errors.Errorf("unimplemented: %s", p)
+	}
+}
+
 // AnyPool is a generic type constraint for any database pool type
 // that we support.
 type AnyPool interface {

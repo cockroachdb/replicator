@@ -137,7 +137,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			RetryDelay:         time.Nanosecond,
 			StandbyTimeout:     10 * time.Millisecond,
 			StagingConn:        fixture.StagingPool.ConnectionString,
-			StagingDB:          fixture.StagingDB.Schema(),
+			StagingSchema:      fixture.StagingDB.Schema(),
 			TargetConn:         fixture.TargetPool.ConnectionString,
 			TargetSchema:       fixture.TargetSchema.Schema(),
 

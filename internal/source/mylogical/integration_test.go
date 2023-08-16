@@ -73,13 +73,13 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 
 	config := &Config{
 		BaseConfig: logical.BaseConfig{
-			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:    immediate,
-			RetryDelay:   10 * time.Second,
-			StagingDB:    fixture.StagingDB.Schema(),
-			TargetConn:   crdbPool.ConnectionString,
-			TargetSchema: dbName,
-			LoopName:     loopName,
+			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:     immediate,
+			RetryDelay:    10 * time.Second,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+			TargetSchema:  dbName,
+			LoopName:      loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
 		ProcessID:  123456,
@@ -339,13 +339,13 @@ func TestDataTypes(t *testing.T) {
 
 	config := &Config{
 		BaseConfig: logical.BaseConfig{
-			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:    false,           // we care about transaction semantics
-			RetryDelay:   10 * time.Second,
-			StagingDB:    fixture.StagingDB.Schema(),
-			TargetConn:   crdbPool.ConnectionString,
-			TargetSchema: dbName,
-			LoopName:     loopName,
+			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
+			Immediate:     false,           // we care about transaction semantics
+			RetryDelay:    10 * time.Second,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+			TargetSchema:  dbName,
+			LoopName:      loopName,
 		},
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
 		ProcessID:  123456,

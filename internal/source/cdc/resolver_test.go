@@ -40,10 +40,10 @@ func TestResolverDeQueue(t *testing.T) {
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
-			StagingDB:    baseFixture.StagingDB.Schema(),
-			StagingConn:  baseFixture.StagingPool.ConnectionString,
-			TargetConn:   baseFixture.TargetPool.ConnectionString,
-			TargetSchema: baseFixture.TargetSchema.Schema(),
+			StagingSchema: baseFixture.StagingDB.Schema(),
+			StagingConn:   baseFixture.StagingPool.ConnectionString,
+			TargetConn:    baseFixture.TargetPool.ConnectionString,
+			TargetSchema:  baseFixture.TargetSchema.Schema(),
 		},
 	})
 	r.NoError(err)
