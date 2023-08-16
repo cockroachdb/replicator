@@ -66,7 +66,24 @@ func (s Schema) Canonical() Schema {
 // Contains returns true if the given table is defined within the
 // Schema.
 func (s Schema) Contains(table Table) bool {
-	return s.array != nil && table.qualified != nil && s.array == table.qualified.namespace
+	// Empty schema contains no tables.
+	if s.array == nil {
+		return false
+	}
+	// The table must have an enclosing namespace.
+	if table.qualified == nil || table.qualified.namespace == nil {
+		return false
+	}
+	for idx, part := range s.array.key {
+		// Handle "db" containing "db"."schema"."table" case.
+		if part == nil {
+			break
+		}
+		if part != table.qualified.namespace.key[idx] {
+			return false
+		}
+	}
+	return true
 }
 
 // Relative returns a new schema, relative to the receiver. For an input
