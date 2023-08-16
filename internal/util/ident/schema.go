@@ -66,7 +66,25 @@ func (s Schema) Canonical() Schema {
 // Contains returns true if the given table is defined within the
 // Schema.
 func (s Schema) Contains(table Table) bool {
-	return s.array != nil && table.qualified != nil && s.array == table.qualified.namespace
+	sParts := s.Idents(make([]Ident, 0, maxArrayLength))
+	tParts := table.Idents(make([]Ident, 0, maxArrayLength+1))
+
+	// Empty schema contains no tables.
+	if len(sParts) == 0 {
+		return false
+	}
+	// The table must have an enclosing namespace (i.e. have more parts
+	// than a schema which would enclose it).
+	if len(sParts) >= len(tParts) {
+		return false
+	}
+	// The schema parts should then be a prefix of the table parts.
+	for idx, sPart := range sParts {
+		if !Equal(sPart, tParts[idx]) {
+			return false
+		}
+	}
+	return true
 }
 
 // Relative returns a new schema, relative to the receiver. For an input
