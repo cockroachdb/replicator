@@ -93,6 +93,12 @@ func TestSchema(t *testing.T) {
 		a.NotEqual(s, s2)
 		a.Equal(s.Canonical(), s2.Canonical())
 		a.Same(s.array, s2.array.lowered)
+
+		// Schema "foo" should contain a table defined in a sub-schema, regardless of case.
+		a.True(s.Contains(NewTable(MustSchema(New("foo"), Public), New("bar"))))
+		a.True(s.Contains(NewTable(MustSchema(New("foo"), New("other")), New("bar"))))
+		a.True(s.Contains(NewTable(MustSchema(New("FOO"), Public), New("bar"))))
+		a.True(s.Contains(NewTable(MustSchema(New("FOO"), New("OTHER")), New("bar"))))
 	})
 
 	t.Run("two", func(t *testing.T) {
