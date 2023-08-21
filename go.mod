@@ -34,7 +34,7 @@ require (
 	golang.org/x/tools v0.12.0
 	google.golang.org/api v0.136.0
 	google.golang.org/grpc v1.57.0
-	honnef.co/go/tools v0.4.3
+	honnef.co/go/tools v0.4.5
 )
 
 require (
