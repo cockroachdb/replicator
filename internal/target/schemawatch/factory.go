@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
@@ -34,7 +35,25 @@ type factory struct {
 	}
 }
 
-var _ types.Watchers = (*factory)(nil)
+var (
+	_ diag.Diagnostic = (*factory)(nil)
+	_ types.Watchers  = (*factory)(nil)
+)
+
+// Diagnostics returns all known schema data.
+func (f *factory) Diagnostic(_ context.Context) any {
+	ret := make(map[string]any)
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	_ = f.mu.data.Range(func(sch ident.Schema, w *watcher) error {
+		ret[sch.Raw()] = w.Get()
+		return nil
+	})
+
+	return ret
+}
 
 // Get creates or returns a memoized watcher for the given database.
 func (f *factory) Get(ctx context.Context, db ident.Schema) (types.Watcher, error) {

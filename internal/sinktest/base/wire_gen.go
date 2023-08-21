@@ -6,6 +6,10 @@
 
 package base
 
+import (
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+)
+
 // Injectors from injector.go:
 
 // NewFixture constructs a self-contained test fixture.
@@ -14,25 +18,21 @@ func NewFixture() (*Fixture, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	sourcePool, cleanup2, err := ProvideSourcePool(context)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	sourceSchema, cleanup3, err := ProvideSourceSchema(context, sourcePool)
+	diagnostics, cleanup2 := diag.New(context)
+	sourcePool, cleanup3, err := ProvideSourcePool(context, diagnostics)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup4, err := ProvideStagingPool(context)
+	sourceSchema, cleanup4, err := ProvideSourceSchema(context, sourcePool)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingSchema, cleanup5, err := ProvideStagingSchema(context, stagingPool)
+	stagingPool, cleanup5, err := ProvideStagingPool(context)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -40,7 +40,7 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup6, err := ProvideTargetPool(context, sourcePool)
+	stagingSchema, cleanup6, err := ProvideStagingSchema(context, stagingPool)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -49,8 +49,19 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema, cleanup7, err := ProvideTargetSchema(context, targetPool)
+	targetPool, cleanup7, err := ProvideTargetPool(context, sourcePool, diagnostics)
 	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	targetSchema, cleanup8, err := ProvideTargetSchema(context, targetPool)
+	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -69,6 +80,7 @@ func NewFixture() (*Fixture, func(), error) {
 		TargetSchema: targetSchema,
 	}
 	return fixture, func() {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()

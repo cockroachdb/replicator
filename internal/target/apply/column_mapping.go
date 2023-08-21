@@ -34,18 +34,18 @@ import (
 // The columnMapping also contains data about the target schema that we
 // want to memoize.
 type columnMapping struct {
-	*ident.Map[positionalColumn]                    // Map of idents to column info and position.
-	Conditions                   []types.ColData    // The version-like fields for CAS ops.
-	Columns                      []types.ColData    // All columns named in an upsert statement.
-	Data                         []types.ColData    // Non-PK, non-ignored columns.
-	Deadlines                    types.Deadlines    // Allow too-old data to just be dropped.
-	Exprs                        *ident.Map[string] // Value-replacement expressions.
-	ExtrasColIdx                 int                // Position of the extras column, or -1 if unconfigured.
-	Product                      types.Product      // Target database product.
-	PK                           []types.ColData    // The names of the PK columns.
-	PKDelete                     []types.ColData    // The names of the PK columns to delete.
-	TableName                    ident.Table        // The target table.
-	UpsertParameterCount         int                // The number of SQL arguments.
+	Conditions           []types.ColData              // The version-like fields for CAS ops.
+	Columns              []types.ColData              // All columns named in an upsert statement.
+	Data                 []types.ColData              // Non-PK, non-ignored columns.
+	Deadlines            types.Deadlines              // Allow too-old data to just be dropped.
+	Exprs                *ident.Map[string]           // Value-replacement expressions.
+	ExtrasColIdx         int                          // Position of the extras column, or -1 if unconfigured.
+	Pos                  *ident.Map[positionalColumn] // Map of idents to column info and position.
+	Product              types.Product                // Target database product.
+	PK                   []types.ColData              // The names of the PK columns.
+	PKDelete             []types.ColData              // The names of the PK columns to delete.
+	TableName            ident.Table                  // The target table.
+	UpsertParameterCount int                          // The number of SQL arguments.
 }
 
 // positionalColumn augments ColData with the offset of the positional
@@ -63,7 +63,7 @@ func newColumnMapping(
 		Deadlines:    &ident.Map[time.Duration]{},
 		Exprs:        &ident.Map[string]{},
 		ExtrasColIdx: -1,
-		Map:          &ident.Map[positionalColumn]{},
+		Pos:          &ident.Map[positionalColumn]{},
 		Product:      product,
 		TableName:    table,
 	}
@@ -76,7 +76,7 @@ func newColumnMapping(
 	// Track the positional parameters for an upsert.
 	currentParameterIndex := 0
 	for _, col := range cols {
-		if _, collision := ret.Get(col.Name); collision {
+		if _, collision := ret.Pos.Get(col.Name); collision {
 			return nil, errors.Errorf("column name collision: %s", col.Name)
 		}
 
@@ -116,7 +116,7 @@ func newColumnMapping(
 		// ensures that all data that is part of a mutation has
 		// somewhere to go or has been explicitly ignored, either by the
 		// target database or by the user.
-		ret.Put(col.Name, positionalColumn{col, positionalParameterIndex})
+		ret.Pos.Put(col.Name, positionalColumn{col, positionalParameterIndex})
 
 		if !willUpsert {
 			continue
@@ -149,8 +149,8 @@ func newColumnMapping(
 	// We also allow the user to force non-existent columns to be
 	// ignored (e.g. to drop a column).
 	_ = cfg.Ignore.Range(func(tgt ident.Ident, _ bool) error {
-		if _, alreadyIgnored := ret.Get(tgt); !alreadyIgnored {
-			ret.Put(tgt, positionalColumn{
+		if _, alreadyIgnored := ret.Pos.Get(tgt); !alreadyIgnored {
+			ret.Pos.Put(tgt, positionalColumn{
 				ColData: types.ColData{
 					Ignored: true,
 					Name:    tgt,
@@ -164,8 +164,8 @@ func newColumnMapping(
 
 	// Add redundant mappings for renamed columns.
 	if err := cfg.SourceNames.Range(func(tgt ident.Ident, src applycfg.SourceColumn) error {
-		if found, ok := ret.Get(tgt); ok {
-			ret.Put(src, found)
+		if found, ok := ret.Pos.Get(tgt); ok {
+			ret.Pos.Put(src, found)
 		}
 		return nil
 	}); err != nil {

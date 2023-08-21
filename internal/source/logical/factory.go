@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
@@ -32,6 +33,7 @@ type Factory struct {
 	appliers     types.Appliers
 	applyConfigs *applycfg.Configs
 	baseConfig   *BaseConfig
+	diags        *diag.Diagnostics
 	memo         types.Memo
 	scriptLoader *script.Loader
 	stagingPool  *types.StagingPool
@@ -51,7 +53,7 @@ func (f *Factory) Start(config *LoopConfig) (*Loop, func(), error) {
 
 	// Construct the new loop and start it.
 	stop := stopper.WithContext(context.Background())
-	loop, err := f.newLoop(stop, config)
+	loop, cleanup, err := f.newLoop(stop, config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -62,6 +64,7 @@ func (f *Factory) Start(config *LoopConfig) (*Loop, func(), error) {
 	cancel := func() {
 		stop.Stop(grace)
 		<-loop.Stopped()
+		cleanup()
 	}
 
 	return loop, cancel, nil
@@ -84,10 +87,10 @@ func (f *Factory) expandConfig(config *LoopConfig) (*LoopConfig, error) {
 }
 
 // newLoop constructs a loop, but does not start it.
-func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, error) {
+func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func(), error) {
 	watcher, err := f.watchers.Get(ctx, config.TargetSchema)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	config = config.Copy()
 	config.Dialect = WithChaos(config.Dialect, f.baseConfig.ChaosProb)
@@ -99,7 +102,7 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, erro
 	loop.consistentPoint.updated = make(chan struct{})
 	initialPoint, err := loop.loadConsistentPoint(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	loop.consistentPoint.stamp = initialPoint
 
@@ -125,21 +128,32 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, erro
 	} else {
 		// Sanity-check that there are no FKs defined.
 		if len(watcher.Get().Order) > 1 {
-			return nil, errors.New("the destination database has tables with foreign keys, " +
+			return nil, nil, errors.New("the destination database has tables with foreign keys, " +
 				"but support for FKs is not enabled")
 		}
+	}
+
+	// Create a branch in the diagnostics reporting for the loop.
+	loopDiags, err := f.diags.Wrap(config.LoopName)
+	if err != nil {
+		return nil, nil, err
+	}
+	cancel := func() {
+		f.diags.Unregister(config.LoopName)
 	}
 
 	userscript, err := script.Evaluate(
 		ctx,
 		f.scriptLoader,
 		f.applyConfigs,
+		loopDiags,
 		f.stagingPool,
 		script.TargetSchema(config.TargetSchema),
 		f.watchers,
 	)
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not initialize userscript for %s", config.LoopName)
+		cancel()
+		return nil, nil, errors.Wrapf(err, "could not initialize userscript for %s", config.LoopName)
 	}
 
 	// Apply logic and configurations defined by the user-script.
@@ -159,5 +173,10 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, erro
 
 	loop.metrics.backfillStatus = backfillStatus.WithLabelValues(config.LoopName)
 
-	return &Loop{loop, initialPoint}, nil
+	if err := loopDiags.Register("loop", loop); err != nil {
+		cancel()
+		return nil, nil, err
+	}
+
+	return &Loop{loop, initialPoint}, cancel, nil
 }

@@ -26,6 +26,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/dop251/goja"
 	"github.com/pkg/errors"
@@ -65,7 +66,7 @@ type Source struct {
 	DeletesTo ident.Table
 	// A user-provided function that routes mutations to zero or more
 	// tables.
-	Dispatch Dispatch
+	Dispatch Dispatch `json:"-"`
 	// Enable recursion in sources which support nested sources.
 	Recurse bool
 }
@@ -89,6 +90,16 @@ type UserScript struct {
 	rtMu    sync.Mutex    // Serialize access to the VM.
 	target  ident.Schema  // The schema being populated.
 	watcher types.Watcher // Access to target schema.
+}
+
+var _ diag.Diagnostic = (*UserScript)(nil)
+
+// Diagnostic implements [diag.Diagnostic].
+func (s *UserScript) Diagnostic(_ context.Context) any {
+	return map[string]any{
+		"sources": s.Sources,
+		"targets": s.Targets,
+	}
 }
 
 // bind validates the user configuration against the target schema and
