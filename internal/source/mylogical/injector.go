@@ -26,15 +26,24 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/google/wire"
 )
 
+// MYLogical isa MySQL/MariaDB logical replication loop.
+type MYLogical struct {
+	Diagnostics *diag.Diagnostics
+	Loop        *logical.Loop
+}
+
 // Start creates a MySQL/MariaDB logical replication loop using the
 // provided configuration.
-func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
+func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 	panic(wire.Build(
 		wire.Bind(new(logical.Config), new(*Config)),
+		wire.Struct(new(MYLogical), "*"),
 		Set,
+		diag.New,
 		logical.Set,
 		script.Set,
 		staging.Set,

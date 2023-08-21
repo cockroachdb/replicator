@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
 import (
@@ -20,8 +21,8 @@ import (
 // Injectors from injector.go:
 
 // Evaluate the loaded script.
-func Evaluate(ctx context.Context, loader *Loader, configs *applycfg.Configs, stagingPool *types.StagingPool, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
-	userScript, err := ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
+func Evaluate(ctx context.Context, loader *Loader, configs *applycfg.Configs, diags *diag.Diagnostics, stagingPool *types.StagingPool, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
+	userScript, err := ProvideUserScript(ctx, configs, loader, diags, stagingPool, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -36,9 +37,10 @@ func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema Tar
 	if err != nil {
 		return nil, err
 	}
+	diagnostics := fixture.Diagnostics
 	stagingPool := baseFixture.StagingPool
 	watchers := fixture.Watchers
-	userScript, err := ProvideUserScript(contextContext, configs, loader, stagingPool, targetSchema, watchers)
+	userScript, err := ProvideUserScript(contextContext, configs, loader, diagnostics, stagingPool, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}

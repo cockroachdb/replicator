@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
 // Fixture provides a complete set of database-backed services. One can
@@ -33,6 +34,7 @@ type Fixture struct {
 
 	Appliers       types.Appliers
 	Configs        *applycfg.Configs
+	Diagnostics    *diag.Diagnostics
 	Memo           types.Memo
 	Stagers        types.Stagers
 	VersionChecker *version.Checker

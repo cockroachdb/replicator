@@ -20,6 +20,7 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
@@ -36,7 +37,7 @@ type Option interface {
 type (
 	// attachable are all types on which attachOptions can operate.
 	attachable interface {
-		*ora.OracleConnector | *pgx.Conn | *pgxpool.Config | *pgxpool.Pool | *sql.DB | *TestControls
+		*ora.OracleConnector | *pgx.Conn | *pgxpool.Config | *pgxpool.Pool | *sql.DB | *types.PoolInfo | *TestControls
 	}
 
 	oraConnector interface {
@@ -53,6 +54,10 @@ type (
 
 	pgxPoolOption interface {
 		pgxPool(ctx context.Context, pool *pgxpool.Pool) error
+	}
+
+	poolInfoOption interface {
+		poolInfo(ctx context.Context, info *types.PoolInfo) error
 	}
 
 	sqlDBOption interface {
@@ -120,6 +125,15 @@ func attachOptions[T attachable](ctx context.Context, target T, options []Option
 		for _, option := range options {
 			if x, ok := option.(testControlsOption); ok {
 				if err := x.testControls(ctx, t); err != nil {
+					return err
+				}
+			}
+		}
+
+	case *types.PoolInfo:
+		for _, option := range options {
+			if x, ok := option.(poolInfoOption); ok {
+				if err := x.poolInfo(ctx, t); err != nil {
 					return err
 				}
 			}

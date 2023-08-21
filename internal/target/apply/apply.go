@@ -168,7 +168,7 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if a.mu.templates.Len() == 0 {
+	if a.mu.templates.Positions.Len() == 0 {
 		return errors.Errorf("no ColumnData available for %s", a.target)
 	}
 
@@ -303,7 +303,7 @@ func (a *apply) upsertLocked(
 		var unexpectedColumns []string
 
 		err = rowData.Range(func(incomingColName ident.Ident, value any) error {
-			targetColumn, ok := a.mu.templates.Get(incomingColName)
+			targetColumn, ok := a.mu.templates.Positions.Get(incomingColName)
 
 			// The incoming data didn't map to a column. Report an error
 			// if no extras column has been configured or accumulate it

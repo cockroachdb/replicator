@@ -22,6 +22,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/dop251/goja"
@@ -116,6 +117,7 @@ func ProvideUserScript(
 	ctx context.Context,
 	applyConfigs *applycfg.Configs,
 	boot *Loader,
+	diags *diag.Diagnostics,
 	stagingPool *types.StagingPool,
 	target TargetSchema,
 	watchers types.Watchers,
@@ -142,6 +144,9 @@ func ProvideUserScript(
 	}
 
 	if err := ret.bind(boot); err != nil {
+		return nil, err
+	}
+	if err := diags.Register("script", ret); err != nil {
 		return nil, err
 	}
 

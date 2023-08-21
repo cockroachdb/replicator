@@ -60,6 +60,11 @@ type Configs struct {
 	}
 }
 
+// Diagnostic implements [diag.Diagnostic].
+func (c *Configs) Diagnostic(_ context.Context) any {
+	return c.GetAll()
+}
+
 // Get returns the configuration for the named table, or a non-nil, zero
 // value if no configuration has been provided.
 func (c *Configs) Get(tbl ident.Table) *Config {

@@ -18,6 +18,7 @@ package schemawatch
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
 )
@@ -28,8 +29,11 @@ var Set = wire.NewSet(
 )
 
 // ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *types.TargetPool) (types.Watchers, func()) {
+func ProvideFactory(pool *types.TargetPool, d *diag.Diagnostics) (types.Watchers, func(), error) {
 	w := &factory{pool: pool}
 	w.mu.data = &ident.SchemaMap[*watcher]{}
-	return w, w.close
+	if err := d.Register("schema", w); err != nil {
+		return nil, nil, err
+	}
+	return w, w.close, nil
 }

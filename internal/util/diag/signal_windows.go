@@ -14,27 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build wireinject
-// +build wireinject
+//go:build windows
 
-package logical
+package diag
 
-import (
-	"context"
+import "context"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/google/wire"
-)
-
-func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), error) {
-	panic(wire.Build(
-		Set,
-		diag.New,
-		script.Set,
-		staging.Set,
-		target.Set,
-	))
-}
+// logOnSignal is a no-op on Windows.
+func logOnSignal(ctx context.Context, d *Diagnostics) {}
