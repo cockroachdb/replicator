@@ -22,6 +22,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 )
@@ -38,7 +39,27 @@ type factory struct {
 	}
 }
 
-var _ types.Appliers = (*factory)(nil)
+var (
+	_ types.Appliers  = (*factory)(nil)
+	_ diag.Diagnostic = (*factory)(nil)
+)
+
+// Diagnostic implements [diag.Diagnostic].
+func (f *factory) Diagnostic(_ context.Context) any {
+	ret := &ident.TableMap[*columnMapping]{}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	_ = f.mu.instances.Range(func(tbl ident.Table, app *apply) error {
+		app.mu.RLock()
+		defer app.mu.RUnlock()
+		ret.Put(tbl, app.mu.templates.columnMapping)
+		return nil
+	})
+
+	return ret
+}
 
 // Get creates or returns a memoized instance of the table's Applier.
 func (f *factory) Get(_ context.Context, table ident.Table) (types.Applier, error) {

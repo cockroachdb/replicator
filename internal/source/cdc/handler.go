@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/httpauth"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -97,21 +98,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) checkAccess(
 	ctx context.Context, r *http.Request, target ident.Schema,
 ) (bool, error) {
-	var token string
-	if raw := r.Header.Get("Authorization"); raw != "" {
-		if strings.HasPrefix(raw, "Bearer ") {
-			token = raw[7:]
-		}
-	} else if token = r.URL.Query().Get("access_token"); token != "" {
-		// Delete the token query parameter to prevent logging later
-		// on. This doesn't take care of issues with L7
-		// loadbalancers, but this param is used by other
-		// OAuth-style implementations and will hopefully be
-		// discarded without logging.
-		values := r.URL.Query()
-		values.Del("access_token")
-		r.URL.RawQuery = values.Encode()
-	}
+	token := httpauth.Token(r)
 	// It's OK if token is empty here, we might be using a trivial
 	// Authenticator.
 	ok, err := h.Authenticator.Check(ctx, target, token)

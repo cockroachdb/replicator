@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
@@ -102,6 +103,8 @@ type loop struct {
 	}
 }
 
+var _ diag.Diagnostic = (*loop)(nil)
+
 // loadConsistentPoint will return the latest consistent-point stamp,
 // the value of Config.DefaultConsistentPoint, or Dialect.ZeroStamp.
 func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
@@ -157,6 +160,19 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	return l.factory.memo.Put(context.Background(),
 		l.factory.stagingPool, l.loopConfig.LoopName, data,
 	)
+}
+
+// Diagnostic implements [diag.Diagnostic].
+func (l *loop) Diagnostic(ctx context.Context) any {
+	ret := make(map[string]any)
+
+	ret["config"] = l.loopConfig
+	if x, ok := l.loopConfig.Dialect.(diag.Diagnostic); ok {
+		ret["dialect"] = x.Diagnostic(ctx)
+	}
+	ret["stamp"] = l.GetConsistentPoint()
+
+	return ret
 }
 
 // GetConsistentPoint implements State.
@@ -486,10 +502,11 @@ func (l *loop) doBackfill(ctx context.Context, loopName string, backfiller Backf
 
 	// The incoming context should already be a stopper.
 	stop := stopper.WithContext(ctx)
-	filler, err := l.factory.newLoop(stop, cfg)
+	filler, cleanup, err := l.factory.newLoop(stop, cfg)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	return filler.loop.runOnceUsing(
 		stop,

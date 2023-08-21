@@ -14,33 +14,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package trust contains a types.Authenticator which always returns true.
-package trust
+package stdpool
 
 import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
-// authenticator is a no-op implementation of types.Authenticator
-// that always returns true.
-type authenticator struct{}
-
-// New returns an Authenticator which always allows incoming requests.
-func New() types.Authenticator {
-	return &authenticator{}
+// WithDiagnostics attaches information about the pool to the given
+// [diag.Diagnostics] collector.
+func WithDiagnostics(diags *diag.Diagnostics, label string) Option {
+	return &withDiagnostics{diags, label}
 }
 
-var _ types.Authenticator = (*authenticator)(nil)
-
-// Check always returns true.
-func (a *authenticator) Check(context.Context, ident.Schema, string) (bool, error) {
-	return true, nil
+type withDiagnostics struct {
+	diags *diag.Diagnostics
+	label string
 }
 
-// Diagnostic implements diag.Diagnostic.
-func (a *authenticator) Diagnostic(context.Context) any {
-	return map[string]bool{"trust": true}
+var _ poolInfoOption = (*withDiagnostics)(nil)
+
+func (o *withDiagnostics) option() {}
+
+func (o *withDiagnostics) poolInfo(_ context.Context, info *types.PoolInfo) error {
+	return o.diags.Register(o.label, diag.DiagnosticFn(func(ctx context.Context) any {
+		return info
+	}))
 }
