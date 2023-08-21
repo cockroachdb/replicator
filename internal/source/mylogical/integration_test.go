@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -153,7 +154,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	loop, cancelLoop, err := Start(ctx, config)
+	repl, cancelLoop, err := Start(ctx, config)
 	if !a.NoError(err) {
 		return
 	}
@@ -229,11 +230,13 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
+
 	cancelLoop()
 	select {
 	case <-ctx.Done():
 		a.Fail("cancelConn timed out")
-	case <-loop.Stopped():
+	case <-repl.Loop.Stopped():
 		// OK
 	}
 }
@@ -428,7 +431,7 @@ func TestDataTypes(t *testing.T) {
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	loop, cancelLoop, err := Start(ctx, config)
+	repl, cancelLoop, err := Start(ctx, config)
 	if !a.NoError(err) {
 		return
 	}
@@ -453,9 +456,11 @@ func TestDataTypes(t *testing.T) {
 		})
 	}
 
+	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
+
 	cancelLoop()
 	select {
-	case <-loop.Stopped():
+	case <-repl.Loop.Stopped():
 	case <-ctx.Done():
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/google/wire"
 )
 
@@ -34,6 +35,7 @@ func Evaluate(
 	ctx context.Context,
 	loader *Loader,
 	configs *applycfg.Configs,
+	diags *diag.Diagnostics,
 	stagingPool *types.StagingPool,
 	targetSchema TargetSchema,
 	watchers types.Watchers,
@@ -44,7 +46,7 @@ func Evaluate(
 func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, error) {
 	panic(wire.Build(
 		Set,
-		wire.FieldsOf(new(*all.Fixture), "Fixture", "Configs", "Watchers"),
+		wire.FieldsOf(new(*all.Fixture), "Diagnostics", "Fixture", "Configs", "Watchers"),
 		wire.FieldsOf(new(*base.Fixture), "Context", "StagingPool"),
 	))
 }

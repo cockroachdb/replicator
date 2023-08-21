@@ -143,6 +143,27 @@ func (a *authenticator) Check(
 	return false, nil
 }
 
+// Diagnostic implements [diag.Diagnostic].
+func (a *authenticator) Diagnostic(context.Context) any {
+	type payload struct {
+		JWT        bool
+		PublicKeys int
+		Revoked    map[string]bool
+	}
+	p := payload{
+		JWT:     true,
+		Revoked: map[string]bool{},
+	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	p.PublicKeys = len(a.mu.publicKeys)
+	for id := range a.mu.revoked {
+		p.Revoked[id] = true
+	}
+	return p
+}
+
 const (
 	ensureKeysTemplate = `
 CREATE TABLE IF NOT EXISTS %s (

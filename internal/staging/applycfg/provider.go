@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
@@ -34,7 +35,10 @@ var Set = wire.NewSet(
 // ProvideConfigs constructs a Configs instance, starting a new
 // background goroutine to keep it refreshed.
 func ProvideConfigs(
-	ctx context.Context, pool *types.StagingPool, targetDB ident.StagingSchema,
+	ctx context.Context,
+	diags *diag.Diagnostics,
+	pool *types.StagingPool,
+	targetDB ident.StagingSchema,
 ) (*Configs, func(), error) {
 	target := ident.NewTable(targetDB.Schema(), ident.New("apply_config"))
 
@@ -59,6 +63,9 @@ func ProvideConfigs(
 	go cfg.refreshLoop(refreshCtx)
 	// Once the refresh context has stopped, watches won't fire.
 	cfg.watchCtx = refreshCtx
-
+	if err := diags.Register("applycfg", cfg); err != nil {
+		cancel()
+		return nil, nil, err
+	}
 	return cfg, cancel, nil
 }

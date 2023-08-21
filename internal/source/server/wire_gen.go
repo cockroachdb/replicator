@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"net"
 )
@@ -30,53 +31,80 @@ import (
 // Injectors from injector.go:
 
 func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
-	listener, cleanup, err := ProvideListener(config)
+	diagnostics, cleanup := diag.New(ctx)
+	listener, cleanup2, err := ProvideListener(config, diagnostics)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup2, err := logical.ProvideStagingPool(ctx, baseConfig)
+	stagingPool, cleanup3, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	configs, cleanup3, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingSchema)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	targetPool, cleanup4, err := logical.ProvideTargetPool(ctx, baseConfig)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup5 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup6 := apply.ProvideFactory(configs, targetPool, watchers)
-	authenticator, cleanup7, err := ProvideAuthenticator(ctx, stagingPool, config, stagingSchema)
+	authenticator, cleanup4, err := ProvideAuthenticator(ctx, diagnostics, config, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	configs, cleanup5, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	targetPool, cleanup6, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup7, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup8, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
+	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -88,6 +116,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	cdcConfig := &config.CDC
 	typesLeases, err := leases.ProvideLeases(ctx, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -99,6 +128,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -109,8 +139,9 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		return nil, nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, memoMemo, loader, stagingPool, targetPool, watchers, checker)
+	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -122,8 +153,9 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema)
-	resolvers, cleanup8, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	resolvers, cleanup9, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -142,9 +174,10 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		Stores:        stagers,
 		TargetPool:    targetPool,
 	}
-	serveMux := ProvideMux(handler, configs, stagingPool, targetPool)
+	serveMux := ProvideMux(authenticator, handler, diagnostics, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
+		cleanup9()
 		cleanup8()
 		cleanup7()
 		cleanup6()
@@ -155,8 +188,9 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup9 := ProvideServer(listener, serveMux, tlsConfig)
+	server, cleanup10 := ProvideServer(listener, serveMux, tlsConfig)
 	return server, func() {
+		cleanup10()
 		cleanup9()
 		cleanup8()
 		cleanup7()
@@ -174,46 +208,47 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 // We want this to be as close as possible to Start, it just exposes
 // additional plumbing details via the returned testFixture pointer.
 func newTestFixture(contextContext context.Context, config *Config) (*testFixture, func(), error) {
+	diagnostics, cleanup := diag.New(contextContext)
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup, err := logical.ProvideStagingPool(contextContext, baseConfig)
+	stagingPool, cleanup2, err := logical.ProvideStagingPool(contextContext, baseConfig, diagnostics)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	authenticator, cleanup2, err := ProvideAuthenticator(contextContext, stagingPool, config, stagingSchema)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	listener, cleanup3, err := ProvideListener(config)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup4, err := applycfg.ProvideConfigs(contextContext, stagingPool, stagingSchema)
+	authenticator, cleanup3, err := ProvideAuthenticator(contextContext, diagnostics, config, stagingPool, stagingSchema)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	listener, cleanup4, err := ProvideListener(config, diagnostics)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup5, err := logical.ProvideTargetPool(contextContext, baseConfig)
+	configs, cleanup5, err := applycfg.ProvideConfigs(contextContext, diagnostics, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -221,11 +256,40 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup6 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup7 := apply.ProvideFactory(configs, targetPool, watchers)
+	targetPool, cleanup6, err := logical.ProvideTargetPool(contextContext, baseConfig, diagnostics)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup7, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup8, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
+	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	cdcConfig := &config.CDC
 	typesLeases, err := leases.ProvideLeases(contextContext, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -237,6 +301,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 	}
 	memoMemo, err := memo.ProvideMemo(contextContext, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -247,8 +312,9 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		return nil, nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, memoMemo, loader, stagingPool, targetPool, watchers, checker)
+	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -260,8 +326,9 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema)
-	resolvers, cleanup8, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	resolvers, cleanup9, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -280,9 +347,10 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		Stores:        stagers,
 		TargetPool:    targetPool,
 	}
-	serveMux := ProvideMux(handler, configs, stagingPool, targetPool)
+	serveMux := ProvideMux(authenticator, handler, diagnostics, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
+		cleanup9()
 		cleanup8()
 		cleanup7()
 		cleanup6()
@@ -293,10 +361,11 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup9 := ProvideServer(listener, serveMux, tlsConfig)
+	server, cleanup10 := ProvideServer(listener, serveMux, tlsConfig)
 	serverTestFixture := &testFixture{
 		Authenticator: authenticator,
 		Config:        config,
+		Diagnostics:   diagnostics,
 		Listener:      listener,
 		StagingPool:   stagingPool,
 		Server:        server,
@@ -304,6 +373,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		Watcher:       watchers,
 	}
 	return serverTestFixture, func() {
+		cleanup10()
 		cleanup9()
 		cleanup8()
 		cleanup7()
@@ -321,6 +391,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 type testFixture struct {
 	Authenticator types.Authenticator
 	Config        *Config
+	Diagnostics   *diag.Diagnostics
 	Listener      net.Listener
 	StagingPool   *types.StagingPool
 	Server        *Server

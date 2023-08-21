@@ -14,33 +14,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package trust contains a types.Authenticator which always returns true.
-package trust
+// Package broken contains an Authenticator that always fails.
+package broken
 
 import (
 	"context"
+	"errors"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
-// authenticator is a no-op implementation of types.Authenticator
-// that always returns true.
-type authenticator struct{}
+// ErrBroken can be expected by tests.
+var ErrBroken = errors.New("broken")
 
-// New returns an Authenticator which always allows incoming requests.
+// New returns an Authenticator that always returns [ErrBroken].
 func New() types.Authenticator {
-	return &authenticator{}
+	return &broken{}
 }
 
-var _ types.Authenticator = (*authenticator)(nil)
+type broken struct{}
 
-// Check always returns true.
-func (a *authenticator) Check(context.Context, ident.Schema, string) (bool, error) {
-	return true, nil
-}
-
-// Diagnostic implements diag.Diagnostic.
-func (a *authenticator) Diagnostic(context.Context) any {
-	return map[string]bool{"trust": true}
+func (b *broken) Check(context.Context, ident.Schema, string) (ok bool, _ error) {
+	return false, ErrBroken
 }

@@ -17,16 +17,21 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	jwtAuth "github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	joonix "github.com/joonix/log"
 	"github.com/prometheus/client_golang/prometheus"
@@ -124,12 +129,12 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetFixture.StagingPool, targetFixture.Authenticator, targetFixture.StagingDB)
 	r.NoError(err)
 
-	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.Schema()})
+	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.Schema(), diag.Schema})
 	r.NoError(err)
 
 	params := make(url.Values)
 	// Set up the changefeed.
-	var feedURL url.URL
+	var diagURL, feedURL url.URL
 	var createStmt string
 	if webhook {
 		params.Set("insecure_tls_skip_verify", "true")
@@ -144,6 +149,13 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 			"WITH updated," +
 			"     resolved='1s'," +
 			"     webhook_auth_header='Bearer " + token + "'"
+
+		diagURL = url.URL{
+			Scheme:   "https",
+			Host:     targetFixture.Listener.Addr().String(),
+			Path:     "/_/diag",
+			RawQuery: "access_token=" + token,
+		}
 	} else {
 		// No webhook_auth_header, so bake it into the query string.
 		// See comments in cdc.Handler.ServeHTTP checkAccess.
@@ -157,7 +169,15 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
 			"INTO '" + feedURL.String() + "' " +
 			"WITH updated,resolved='1s'"
+
+		diagURL = url.URL{
+			Scheme:   "http",
+			Host:     targetFixture.Listener.Addr().String(),
+			Path:     "/_/diag",
+			RawQuery: "access_token=" + token,
+		}
 	}
+
 	// Don't wait the entire 30s. This options was introduced in the
 	// same versions as webhooks.
 	if supportsMinCheckpoint(sourceFixture.TargetPool.Version) {
@@ -196,7 +216,38 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 
 	metrics, err := prometheus.DefaultGatherer.Gather()
 	a.NoError(err)
-	log.WithField("metrics", metrics).Debug()
+	log.WithField("metrics", metrics).Trace()
+
+	sinktest.CheckDiagnostics(ctx, t, targetFixture.Diagnostics)
+
+	// Ensure that diagnostic endpoint is protected, since it has
+	// potentially-sensitive connect strings.
+	t.Run("check diag endpoint", func(t *testing.T) {
+		a := assert.New(t)
+		client := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}
+		u := diagURL.String()
+		resp, err := client.Get(u)
+		if a.NoError(err) {
+			a.Equal(http.StatusOK, resp.StatusCode, u)
+			a.Equal("application/json", resp.Header.Get("content-type"))
+			buf, _ := io.ReadAll(resp.Body)
+			t.Log(string(buf))
+		}
+
+		// Remove auth info.
+		diagURL.RawQuery = ""
+		u = diagURL.String()
+		resp, err = client.Get(u)
+		if a.NoError(err) {
+			a.Equal(http.StatusForbidden, resp.StatusCode, u)
+		}
+	})
 }
 
 func supportsMinCheckpoint(version string) bool {

@@ -14,6 +14,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
 // Injectors from injector.go:
@@ -25,25 +26,21 @@ func NewFixture() (*Fixture, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	sourcePool, cleanup2, err := base.ProvideSourcePool(context)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	sourceSchema, cleanup3, err := base.ProvideSourceSchema(context, sourcePool)
+	diagnostics, cleanup2 := diag.New(context)
+	sourcePool, cleanup3, err := base.ProvideSourcePool(context, diagnostics)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup4, err := base.ProvideStagingPool(context)
+	sourceSchema, cleanup4, err := base.ProvideSourceSchema(context, sourcePool)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingSchema, cleanup5, err := base.ProvideStagingSchema(context, stagingPool)
+	stagingPool, cleanup5, err := base.ProvideStagingPool(context)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -51,7 +48,7 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup6, err := base.ProvideTargetPool(context, sourcePool)
+	stagingSchema, cleanup6, err := base.ProvideStagingSchema(context, stagingPool)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -60,8 +57,19 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema, cleanup7, err := base.ProvideTargetSchema(context, targetPool)
+	targetPool, cleanup7, err := base.ProvideTargetPool(context, sourcePool, diagnostics)
 	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	targetSchema, cleanup8, err := base.ProvideTargetSchema(context, targetPool)
+	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -79,8 +87,9 @@ func NewFixture() (*Fixture, func(), error) {
 		TargetPool:   targetPool,
 		TargetSchema: targetSchema,
 	}
-	configs, cleanup8, err := applycfg.ProvideConfigs(context, stagingPool, stagingSchema)
+	configs, cleanup9, err := applycfg.ProvideConfigs(context, diagnostics, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -90,10 +99,36 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup9 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup10 := apply.ProvideFactory(configs, targetPool, watchers)
+	watchers, cleanup10, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup9()
+		cleanup8()
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup11, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
+	if err != nil {
+		cleanup10()
+		cleanup9()
+		cleanup8()
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup11()
 		cleanup10()
 		cleanup9()
 		cleanup8()
@@ -110,6 +145,7 @@ func NewFixture() (*Fixture, func(), error) {
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	watcher, err := ProvideWatcher(context, targetSchema, watchers)
 	if err != nil {
+		cleanup11()
 		cleanup10()
 		cleanup9()
 		cleanup8()
@@ -126,6 +162,7 @@ func NewFixture() (*Fixture, func(), error) {
 		Fixture:        fixture,
 		Appliers:       appliers,
 		Configs:        configs,
+		Diagnostics:    diagnostics,
 		Memo:           memoMemo,
 		Stagers:        stagers,
 		VersionChecker: checker,
@@ -133,6 +170,7 @@ func NewFixture() (*Fixture, func(), error) {
 		Watcher:        watcher,
 	}
 	return allFixture, func() {
+		cleanup11()
 		cleanup10()
 		cleanup9()
 		cleanup8()

@@ -27,6 +27,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
@@ -56,6 +57,7 @@ type Dialect struct {
 }
 
 var (
+	_ diag.Diagnostic    = (*Dialect)(nil)
 	_ logical.Backfiller = (*Dialect)(nil)
 	_ logical.Dialect    = (*Dialect)(nil)
 )
@@ -292,6 +294,28 @@ func (d *Dialect) ReadInto(
 		if err := send(batchEnd{}); err != nil {
 			return err
 		}
+	}
+}
+
+// Diagnostic implements [diag.Diagnostic].
+func (d *Dialect) Diagnostic(_ context.Context) any {
+	type Payload struct {
+		BackfillBatchSize int
+		DocIDProperty     string
+		Idempotent        bool
+		Recurse           bool
+		RecurseFilter     *ident.Map[struct{}]
+		SourceCollection  ident.Ident
+		UpdatedAtProperty ident.Ident
+	}
+	return &Payload{
+		BackfillBatchSize: d.backfillBatchSize,
+		DocIDProperty:     d.docIDProperty,
+		Idempotent:        d.idempotent,
+		Recurse:           d.recurse,
+		RecurseFilter:     d.recurseFilter,
+		SourceCollection:  d.sourceCollection,
+		UpdatedAtProperty: d.updatedAtProperty,
 	}
 }
 

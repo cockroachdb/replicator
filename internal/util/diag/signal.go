@@ -14,23 +14,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package apply
+//go:build !windows
+
+package diag
 
 import (
-	"encoding/json"
-	"net/http"
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
+	log "github.com/sirupsen/logrus"
 )
 
-// DebugHandler returns a trivial http Handler that will dump the
-// current configuration as a JSON document.
-func DebugHandler(cfgs *applycfg.Configs) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(cfgs.GetAll())
-	})
+// logOnSignal installs a signal handler that will log the current state
+// of the diagnostics.
+func logOnSignal(ctx context.Context, d *Diagnostics) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGUSR1)
+	go func() {
+		defer signal.Stop(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ch:
+				log.WithFields(d.Payload(ctx)).Info()
+			}
+		}
+	}()
 }

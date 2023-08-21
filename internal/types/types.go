@@ -199,7 +199,7 @@ type ColData struct {
 	// A Parse function may be supplied to allow a string representation
 	// of a complex datatype to be converted into a type more readily
 	// used by a target database driver.
-	Parse   func(string) (any, bool)
+	Parse   func(string) (any, bool) `json:"-"`
 	Primary bool
 	// Type of the column.
 	Type string

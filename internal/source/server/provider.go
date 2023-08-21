@@ -30,11 +30,10 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
@@ -58,32 +57,55 @@ var Set = wire.NewSet(
 // authenticator, or a no-op authenticator if Config.DisableAuth has
 // been set.
 func ProvideAuthenticator(
-	ctx context.Context, pool *types.StagingPool, config *Config, stagingDB ident.StagingSchema,
+	ctx context.Context,
+	diags *diag.Diagnostics,
+	config *Config,
+	pool *types.StagingPool,
+	stagingDB ident.StagingSchema,
 ) (types.Authenticator, func(), error) {
+	var auth types.Authenticator
+	var cancel func()
+	var err error
 	if config.DisableAuth {
 		log.Info("authentication disabled, any caller may write to the target database")
-		return trust.New(), func() {}, nil
+		auth = trust.New()
+		cancel = func() {}
+	} else {
+		auth, cancel, err = jwt.ProvideAuth(ctx, pool, stagingDB)
 	}
-	return jwt.ProvideAuth(ctx, pool, stagingDB)
+	if d, ok := auth.(diag.Diagnostic); ok {
+		if err := diags.Register("auth", d); err != nil {
+			cancel()
+			return nil, nil, err
+		}
+	}
+	return auth, cancel, err
 }
 
 // ProvideListener is called by Wire to construct the incoming network
 // socket for the server.
-func ProvideListener(config *Config) (net.Listener, func(), error) {
+func ProvideListener(config *Config, diags *diag.Diagnostics) (net.Listener, func(), error) {
 	// Start listening only when everything else is ready.
 	l, err := net.Listen("tcp", config.BindAddr)
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "could not bind to %q", config.BindAddr)
 	}
 	log.WithField("address", l.Addr()).Info("Server listening")
+	if err := diags.Register("listener", diag.DiagnosticFn(func(context.Context) any {
+		return l.Addr().String()
+	})); err != nil {
+		_ = l.Close()
+		return nil, nil, err
+	}
 	return l, func() { _ = l.Close() }, nil
 }
 
 // ProvideMux is called by Wire to construct the http.ServeMux that
 // routes requests.
 func ProvideMux(
+	auth types.Authenticator,
 	handler *cdc.Handler,
-	applyConf *applycfg.Configs,
+	diags *diag.Diagnostics,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
 ) *http.ServeMux {
@@ -93,7 +115,7 @@ func ProvideMux(
 	// this specific prefix. It seems unlikely that this would collide
 	// with an actual database schema.
 	mux.Handle("/debug/pprof/", http.DefaultServeMux)
-	mux.Handle("/_/config/apply", apply.DebugHandler(applyConf))
+	mux.Handle("/_/diag", diags.Handler(auth))
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := stagingPool.Ping(r.Context()); err != nil {
 			log.WithError(err).Warn("health check failed for staging pool")

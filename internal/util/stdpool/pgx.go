@@ -92,6 +92,10 @@ func OpenPgxAsStaging(
 		return nil, nil, errors.Errorf("only CockroachDB is supported as a staging server; saw %q", ret.Version)
 	}
 
+	if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
+		return nil, nil, err
+	}
+
 	success = true
 	return ret, cancel, err
 }
@@ -138,6 +142,10 @@ func OpenPgxAsTarget(
 		ret.Product = types.ProductPostgreSQL
 	default:
 		return nil, nil, errors.Errorf("unknown product for version: %s", ret.Version)
+	}
+
+	if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
+		return nil, nil, err
 	}
 
 	success = true

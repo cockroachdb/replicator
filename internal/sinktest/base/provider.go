@@ -29,6 +29,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
@@ -86,6 +87,7 @@ var TestSet = wire.NewSet(
 	ProvideSourceSchema,
 	ProvideTargetPool,
 	ProvideTargetSchema,
+	diag.New,
 
 	wire.Struct(new(Fixture), "*"),
 )
@@ -138,10 +140,13 @@ func ProvideContext() (context.Context, func(), error) {
 // CockroachDB cluster, this function will also configure the rangefeed
 // and license cluster settings if they have not been previously
 // configured.
-func ProvideSourcePool(ctx context.Context) (*types.SourcePool, func(), error) {
+func ProvideSourcePool(
+	ctx context.Context, diags *diag.Diagnostics,
+) (*types.SourcePool, func(), error) {
 	tgt := *sourceConn
 	log.Infof("source connect string: %s", tgt)
 	ret, cancel, err := stdpool.OpenTarget(ctx, tgt,
+		stdpool.WithDiagnostics(diags, "source"),
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
@@ -217,7 +222,7 @@ func ProvideStagingPool(ctx context.Context) (*types.StagingPool, func(), error)
 // ProvideTargetPool connects to the target database (which is most
 // often the same as the source database).
 func ProvideTargetPool(
-	ctx context.Context, source *types.SourcePool,
+	ctx context.Context, source *types.SourcePool, diags *diag.Diagnostics,
 ) (*types.TargetPool, func(), error) {
 	tgt := *targetString
 	if tgt == source.ConnectionString {
@@ -226,6 +231,7 @@ func ProvideTargetPool(
 	}
 	log.Infof("target connect string: %s", tgt)
 	return stdpool.OpenTarget(ctx, *targetString,
+		stdpool.WithDiagnostics(diags, "target"),
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),

@@ -14,27 +14,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build wireinject
-// +build wireinject
-
-package logical
+package sinktest
 
 import (
 	"context"
+	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/google/wire"
+	log "github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
 )
 
-func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), error) {
-	panic(wire.Build(
-		Set,
-		diag.New,
-		script.Set,
-		staging.Set,
-		target.Set,
-	))
+// CheckDiagnostics ensures that all diagnostic data can be serialized
+// to JSON.
+func CheckDiagnostics(ctx context.Context, t *testing.T, diags *diag.Diagnostics) {
+	t.Helper()
+	a := require.New(t)
+
+	w := log.StandardLogger().WriterLevel(log.TraceLevel)
+	a.NoError(diags.Write(ctx, w, false /* pretty */))
+	a.NoError(w.Close())
 }
