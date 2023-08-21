@@ -23,6 +23,8 @@ import (
 	"net/http"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/mylogical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -41,20 +43,19 @@ func Command() *cobra.Command {
 		Short: "start a mySQL replication feed",
 		Use:   "mylogical",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if metricsAddr != "" {
-				if err := metricsServer(metricsAddr); err != nil {
-					return err
-				}
-			}
-
-			loop, cancelLoop, err := mylogical.Start(cmd.Context(), cfg)
+			repl, cancelLoop, err := mylogical.Start(cmd.Context(), cfg)
 			if err != nil {
 				return err
+			}
+			if metricsAddr != "" {
+				if err := metricsServer(metricsAddr, repl.Diagnostics); err != nil {
+					return err
+				}
 			}
 			// Pause any log.Exit() or log.Fatal() until the server exits.
 			log.DeferExitHandler(func() {
 				cancelLoop()
-				<-loop.Stopped()
+				<-repl.Loop.Stopped()
 			})
 			// Wait for shutdown. The main function uses log.Exit()
 			// to call the above handler.
@@ -70,8 +71,9 @@ func Command() *cobra.Command {
 
 // metricsServer starts a trivial prometheus endpoint server which runs
 // until the context is canceled.
-func metricsServer(bindAddr string) error {
+func metricsServer(bindAddr string, diags *diag.Diagnostics) error {
 	mux := &http.ServeMux{}
+	mux.Handle("/_/diag", diags.Handler(trust.New()))
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))

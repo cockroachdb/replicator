@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
 // Injectors from test_fixture.go:
@@ -33,30 +34,36 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	stagingPool, cleanup, err := logical.ProvideStagingPool(context, baseConfig)
+	diagnostics, cleanup := diag.New(context)
+	stagingPool, cleanup2, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	metaTable := ProvideMetaTable(config)
 	stagers := fixture.Stagers
 	watchers := fixture.Watchers
-	resolvers, cleanup2, err := ProvideResolvers(context, config, typesLeases, metaTable, stagingPool, stagers, watchers)
+	resolvers, cleanup3, err := ProvideResolvers(context, config, typesLeases, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup3, err := logical.ProvideTargetPool(context, baseConfig)
+	targetPool, cleanup4, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
+		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
@@ -76,6 +83,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()

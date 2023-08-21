@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/google/wire"
@@ -60,6 +61,7 @@ func ProvideFactory(
 	ctx context.Context,
 	appliers types.Appliers,
 	config Config,
+	diag *diag.Diagnostics,
 	memo types.Memo,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
@@ -88,6 +90,10 @@ func ProvideFactory(
 		userscript:  userscript,
 	}
 	f.mu.loops = make(map[string]*Loop)
+	if err := diag.Register("logical", f); err != nil {
+		f.Close()
+		return nil, nil, err
+	}
 	return f, f.Close, nil
 }
 
@@ -106,11 +112,12 @@ func ProvideStagingDB(config *BaseConfig) (ident.StagingSchema, error) {
 // accesses the staging cluster. The pool will be closed by the cancel
 // function.
 func ProvideStagingPool(
-	ctx context.Context, config *BaseConfig,
+	ctx context.Context, config *BaseConfig, diags *diag.Diagnostics,
 ) (*types.StagingPool, func(), error) {
 	ret, cancel, err := stdpool.OpenPgxAsStaging(ctx,
 		config.StagingConn,
 		stdpool.WithConnectionLifetime(5*time.Minute),
+		stdpool.WithDiagnostics(diags, "staging"),
 		stdpool.WithMetrics("staging"),
 		stdpool.WithPoolSize(128),
 		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
@@ -135,9 +142,12 @@ func ProvideStagingPool(
 // ProvideTargetPool is called by Wire to create a connection pool that
 // accesses the target cluster. The pool will be closed by the cancel
 // function.
-func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPool, func(), error) {
+func ProvideTargetPool(
+	ctx context.Context, config *BaseConfig, diags *diag.Diagnostics,
+) (*types.TargetPool, func(), error) {
 	options := []stdpool.Option{
 		stdpool.WithConnectionLifetime(5 * time.Minute),
+		stdpool.WithDiagnostics(diags, "target"),
 		stdpool.WithMetrics("target"),
 		stdpool.WithPoolSize(128),
 		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.

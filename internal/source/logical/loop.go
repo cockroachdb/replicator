@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
@@ -111,6 +112,8 @@ type loop struct {
 	}
 }
 
+var _ diag.Diagnostic = (*loop)(nil)
+
 // loadConsistentPoint will return the latest consistent-point stamp,
 // the value of Config.DefaultConsistentPoint, or Dialect.ZeroStamp.
 func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
@@ -166,6 +169,19 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	return l.memo.Put(context.Background(),
 		l.stagingPool, l.config.LoopName, data,
 	)
+}
+
+// Diagnostics implements [diag.Diagnostic].
+func (l *loop) Diagnostic(ctx context.Context) any {
+	ret := make(map[string]any)
+
+	ret["config"] = l.config
+	if x, ok := l.dialect.(diag.Diagnostic); ok {
+		ret["dialect"] = x.Diagnostic(ctx)
+	}
+	ret["stamp"] = l.GetConsistentPoint()
+
+	return ret
 }
 
 // GetConsistentPoint implements State.

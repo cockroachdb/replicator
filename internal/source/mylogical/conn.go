@@ -32,6 +32,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/client"
@@ -69,7 +70,20 @@ const (
 
 //go:generate go run golang.org/x/tools/cmd/stringer -type=mutationType
 
-var _ logical.Dialect = (*conn)(nil)
+var (
+	_ diag.Diagnostic = (*conn)(nil)
+	_ logical.Dialect = (*conn)(nil)
+)
+
+// Diagnostics implements [diag.Diagnostic].
+func (c *conn) Diagnostic(_ context.Context) any {
+	return map[string]any{
+		"columns":      c.columns,
+		"flavor":       c.flavor,
+		"relations":    c.relations,
+		"sourceConfig": c.sourceConfig,
+	}
+}
 
 // Process implements logical.Dialect and receives a sequence of logical
 // replication messages, or possibly a rollbackMessage.

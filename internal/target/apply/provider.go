@@ -19,6 +19,7 @@ package apply
 import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
 )
@@ -32,14 +33,20 @@ var Set = wire.NewSet(
 // function will, in turn, destroy the per-schema types.Applier
 // instances.
 func ProvideFactory(
-	configs *applycfg.Configs, target *types.TargetPool, watchers types.Watchers,
-) (types.Appliers, func()) {
+	configs *applycfg.Configs,
+	diags *diag.Diagnostics,
+	target *types.TargetPool,
+	watchers types.Watchers,
+) (types.Appliers, func(), error) {
 	f := &factory{
 		configs:  configs,
 		product:  target.Product,
 		watchers: watchers,
 	}
 	f.mu.instances = &ident.TableMap[*apply]{}
+	if err := diags.Register("apply", f); err != nil {
+		return nil, nil, err
+	}
 	return f, func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -48,5 +55,5 @@ func ProvideFactory(
 		}
 		f.mu.cleanup = nil
 		f.mu.instances = nil
-	}
+	}, nil
 }

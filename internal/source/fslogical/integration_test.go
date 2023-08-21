@@ -30,6 +30,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
@@ -299,4 +300,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 	}
 
 	log.Info("all deletes done")
+
+	// Ensure diagnostics can be reported.
+	sinktest.CheckDiagnostics(ctx, t, fixture.Diagnostics)
 }

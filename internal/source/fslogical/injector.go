@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/google/wire"
 )
 
@@ -39,6 +40,7 @@ func Start(context.Context, *Config) ([]*logical.Loop, func(), error) {
 		ProvideFirestoreClient,
 		ProvideLoops,
 		ProvideTombstones,
+		diag.New,
 		logical.Set,
 		script.Set,
 		staging.Set,
@@ -52,7 +54,7 @@ func startLoopsFromFixture(*all.Fixture, *Config) ([]*logical.Loop, func(), erro
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*base.Fixture), "Context"),
 		wire.FieldsOf(new(*all.Fixture),
-			"Appliers", "Fixture", "Configs", "Memo", "VersionChecker", "Watchers"),
+			"Appliers", "Diagnostics", "Fixture", "Configs", "Memo", "VersionChecker", "Watchers"),
 		ProvideFirestoreClient,
 		ProvideLoops,
 		ProvideTombstones,

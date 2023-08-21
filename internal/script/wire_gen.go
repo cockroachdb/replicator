@@ -24,9 +24,10 @@ func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema Tar
 	if err != nil {
 		return nil, err
 	}
+	diagnostics := fixture.Diagnostics
 	stagingPool := baseFixture.StagingPool
 	watchers := fixture.Watchers
-	userScript, err := ProvideUserScript(context, configs, loader, stagingPool, targetSchema, watchers)
+	userScript, err := ProvideUserScript(context, configs, loader, diagnostics, stagingPool, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}

@@ -14,23 +14,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package apply
+package sinktest
 
 import (
-	"encoding/json"
-	"net/http"
+	"context"
+	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	log "github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
 )
 
-// DebugHandler returns a trivial http Handler that will dump the
-// current configuration as a JSON document.
-func DebugHandler(cfgs *applycfg.Configs) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(cfgs.GetAll())
-	})
+// CheckDiagnostics ensures that all diagnostic data can be serialized
+// to JSON.
+func CheckDiagnostics(ctx context.Context, t *testing.T, diags *diag.Diagnostics) {
+	t.Helper()
+	a := require.New(t)
+
+	w := log.StandardLogger().WriterLevel(log.TraceLevel)
+	a.NoError(diags.Write(ctx, w, false /* pretty */))
+	a.NoError(w.Close())
 }

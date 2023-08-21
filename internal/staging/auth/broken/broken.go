@@ -14,21 +14,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build wireinject
-// +build wireinject
-
-package script
+// Package broken contains an Authenticator that always fails.
+package broken
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/google/wire"
+	"context"
+	"errors"
+
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
-func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, error) {
-	panic(wire.Build(
-		Set,
-		wire.FieldsOf(new(*all.Fixture), "Diagnostics", "Fixture", "Configs", "Watchers"),
-		wire.FieldsOf(new(*base.Fixture), "Context", "StagingPool"),
-	))
+// ErrBroken can be expected by tests.
+var ErrBroken = errors.New("broken")
+
+// New returns an Authenticator that always returns [ErrBroken].
+func New() types.Authenticator {
+	return &broken{}
+}
+
+type broken struct{}
+
+func (b *broken) Check(context.Context, ident.Schema, string) (ok bool, _ error) {
+	return false, ErrBroken
 }

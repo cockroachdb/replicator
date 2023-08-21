@@ -14,27 +14,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build wireinject
-// +build wireinject
-
-package logical
+package stdpool
 
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/google/wire"
 )
 
-func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), error) {
-	panic(wire.Build(
-		Set,
-		diag.New,
-		script.Set,
-		staging.Set,
-		target.Set,
-	))
+// WithDiagnostics attaches information about the pool to the given
+// [diag.Diagnostics] collector.
+func WithDiagnostics(diags *diag.Diagnostics, label string) Option {
+	return &withDiagnostics{diags, label}
+}
+
+type withDiagnostics struct {
+	diags *diag.Diagnostics
+	label string
+}
+
+var _ poolInfoOption = (*withDiagnostics)(nil)
+
+func (o *withDiagnostics) option() {}
+
+func (o *withDiagnostics) poolInfo(_ context.Context, info *types.PoolInfo) error {
+	return o.diags.Register(o.label, diag.DiagnosticFn(func(ctx context.Context) any {
+		return info
+	}))
 }

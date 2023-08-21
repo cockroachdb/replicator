@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
@@ -139,7 +140,7 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 	} else {
 		cfg.BackfillWindow = 0
 	}
-	loop, cancelLoop, err := Start(ctx, cfg)
+	repl, cancelLoop, err := Start(ctx, cfg)
 	if !a.NoError(err) {
 		return
 	}
@@ -220,11 +221,13 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 		}
 	}
 
+	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
+
 	cancelLoop()
 	select {
 	case <-ctx.Done():
 		a.Fail("cancelConn timed out")
-	case <-loop.Stopped():
+	case <-repl.Loop.Stopped():
 		// OK
 	}
 }
@@ -347,7 +350,7 @@ func TestDataTypes(t *testing.T) {
 	log.Info(tgts)
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	loop, cancelLoop, err := Start(ctx, &Config{
+	repl, cancelLoop, err := Start(ctx, &Config{
 		BaseConfig: logical.BaseConfig{
 			LoopName:      "pglogicaltest",
 			RetryDelay:    time.Nanosecond,
@@ -382,9 +385,11 @@ func TestDataTypes(t *testing.T) {
 		})
 	}
 
+	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
+
 	cancelLoop()
 	select {
-	case <-loop.Stopped():
+	case <-repl.Loop.Stopped():
 	case <-ctx.Done():
 	}
 }

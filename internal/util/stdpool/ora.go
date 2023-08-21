@@ -88,7 +88,15 @@ func OpenOracleAsTarget(
 			return nil, errors.Wrap(err, "could not query version")
 		}
 
-		return ret, attachOptions(ctx, ret.DB, options)
+		if err := attachOptions(ctx, ret.DB, options); err != nil {
+			return nil, err
+		}
+
+		if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
+			return nil, err
+		}
+
+		return ret, nil
 	})
 }
 

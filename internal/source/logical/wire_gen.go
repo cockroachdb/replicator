@@ -14,75 +14,70 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
 // Injectors from injector.go:
 
 func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), error) {
+	diagnostics, cleanup := diag.New(ctx)
 	scriptConfig, err := ProvideUserScriptConfig(config)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	baseConfig, err := ProvideBaseConfig(config, loader)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup, err := ProvideStagingPool(ctx, baseConfig)
+	stagingPool, cleanup2, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	stagingSchema, err := ProvideStagingDB(baseConfig)
 	if err != nil {
+		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup2, err := applycfg.ProvideConfigs(ctx, stagingPool, stagingSchema)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	targetPool, cleanup3, err := ProvideTargetPool(ctx, baseConfig)
+	configs, cleanup3, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup4 := schemawatch.ProvideFactory(targetPool)
-	appliers, cleanup5 := apply.ProvideFactory(configs, targetPool, watchers)
+	targetPool, cleanup4, err := ProvideTargetPool(ctx, baseConfig, diagnostics)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup5, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup6, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
-	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	targetSchema := ProvideUserScriptTarget(baseConfig)
-	userScript, err := script.ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
-	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, cleanup6, err := ProvideFactory(ctx, appliers, config, memoMemo, stagingPool, targetPool, userScript, watchers, checker)
-	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -92,7 +87,41 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
+	targetSchema := ProvideUserScriptTarget(baseConfig)
+	userScript, err := script.ProvideUserScript(ctx, configs, loader, diagnostics, stagingPool, targetSchema, watchers)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	factory, cleanup7, err := ProvideFactory(ctx, appliers, config, diagnostics, memoMemo, stagingPool, targetPool, userScript, watchers, checker)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
+	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	return logicalLoop, func() {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()

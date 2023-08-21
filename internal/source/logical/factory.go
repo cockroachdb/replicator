@@ -22,6 +22,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
@@ -43,6 +44,8 @@ type Factory struct {
 	}
 }
 
+var _ diag.Diagnostic = (*Factory)(nil)
+
 // Close terminates all running loops and waits for them to shut down.
 func (f *Factory) Close() {
 	f.mu.Lock()
@@ -56,6 +59,20 @@ func (f *Factory) Close() {
 		<-facade.loop.running.Done()
 		delete(f.mu.loops, key)
 	}
+}
+
+// Diagnostic implements [diag.Diagnostic].
+func (f *Factory) Diagnostic(ctx context.Context) any {
+	ret := make(map[string]any)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for name, loop := range f.mu.loops {
+		ret[name] = loop.loop.Diagnostic(ctx)
+	}
+
+	return ret
 }
 
 // Get constructs or retrieves the named Loop.
