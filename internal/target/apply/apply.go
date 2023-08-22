@@ -58,12 +58,12 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	product types.Product, target ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
+	product types.Product, inTarget ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
 	// Start a background goroutine to refresh the templates.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	w, err := watchers.Get(ctx, target.Schema())
+	w, err := watchers.Get(ctx, inTarget.Schema())
 	if err != nil {
 		cancel()
 		return nil, nil, err
@@ -71,10 +71,10 @@ func newApply(
 	// Use the target database's name for the table. We perform a lookup
 	// against the column data map to retrieve the original table name
 	// key under which the data was inserted.
-	target, ok := w.Get().OriginalName(target)
+	target, ok := w.Get().OriginalName(inTarget)
 	if !ok {
 		cancel()
-		return nil, nil, errors.Errorf("unknown table %s", target)
+		return nil, nil, errors.Errorf("unknown table %s", inTarget)
 	}
 
 	labelValues := metrics.TableValues(target)
