@@ -17,7 +17,6 @@
 package logical
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -46,7 +45,7 @@ type Config interface {
 	Preflight() error
 }
 
-// BaseConfig defines the core configuration required by logical.Loop.
+// BaseConfig defines common configuration for all loops started by a Factory.
 type BaseConfig struct {
 	// The maximum length of time to wait for an incoming transaction
 	// to settle (i.e. to detect stalls in the target database).
@@ -63,9 +62,6 @@ type BaseConfig struct {
 	BytesInFlight int
 	// Used in testing to inject errors during processing.
 	ChaosProb float32
-	// The default Consistent Point to use for replication.
-	// Consistent Point persisted in the target database will be used, if available.
-	DefaultConsistentPoint string
 	// The number of concurrent connections to use when writing data in
 	// fan mode.
 	FanShards int
@@ -74,12 +70,12 @@ type BaseConfig struct {
 	// Place the configuration into immediate mode, where mutations are
 	// applied without waiting for transaction boundaries.
 	Immediate bool
-	// Uniquely identifies the replication loop.
-	LoopName string
 	// The amount of time to sleep between replication-loop retries.
 	// If zero, a default value will be used.
 	RetryDelay time.Duration
 	// Userscript configuration.
+	//
+	// TODO(bob): Should this be moved to LoopConfig?
 	ScriptConfig script.Config
 	// How often to commit the latest consistent point.
 	StandbyTimeout time.Duration
@@ -93,8 +89,6 @@ type BaseConfig struct {
 	// The number of connections to the target database. If zero, a
 	// default value will be used.
 	TargetDBConns int
-	// The SQL schema in the target cluster to write into.
-	TargetSchema ident.Schema
 }
 
 // Base returns the BaseConfig.
@@ -112,8 +106,6 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"use a high-throughput, but non-transactional mode if replication is this far behind (0 disables this feature)")
 	f.IntVar(&c.BytesInFlight, "bytesInFlight", defaultBytesInFlight,
 		"apply backpressure when amount of in-flight mutation data reaches this limit")
-	// LoopName bound by dialect packages.
-	// DefaultConsistentPoint bound by dialect packages.
 	f.BoolVar(&c.Immediate, "immediate", false,
 		"apply data without waiting for transaction boundaries")
 	f.IntVar(&c.FanShards, "fanShards", defaultFanShards,
@@ -138,15 +130,6 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"the staging CockroachDB cluster's connection string; required if target is other than CRDB")
 	f.StringVar(&c.TargetConn, "targetConn", "",
 		"the target database's connection string; always required")
-	// targetDB is deprecated.
-	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetDB",
-		"the SQL database schema in the target cluster to update")
-	// Only returns an error if flag can't be found.
-	if err := f.MarkDeprecated("targetDB", "use --targetSchema instead"); err != nil {
-		panic(err)
-	}
-	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
-		"the SQL database schema in the target cluster to update")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
 		"the maximum pool size to the target cluster")
 }
@@ -159,7 +142,7 @@ func (c *BaseConfig) Copy() *BaseConfig {
 
 // Preflight ensures that unset configuration options have sane defaults
 // and returns an error if the Config is missing any fields for which a
-// default connot be provided.
+// default cannot be provided.
 func (c *BaseConfig) Preflight() error {
 	if err := c.ScriptConfig.Preflight(); err != nil {
 		return err
@@ -180,9 +163,6 @@ func (c *BaseConfig) Preflight() error {
 	if c.ForeignKeysEnabled && c.Immediate {
 		return errors.New("foreign-key mode incompatible with immediate mode")
 	}
-	if c.LoopName == "" {
-		return errors.New("replication loops must be named")
-	}
 	if c.RetryDelay == 0 {
 		c.RetryDelay = defaultRetryDelay
 	}
@@ -198,26 +178,71 @@ func (c *BaseConfig) Preflight() error {
 	if c.TargetConn == "" {
 		return errors.New("targetConn must be set")
 	}
-	if c.TargetSchema.Empty() {
-		return errors.New("no target database specified")
-	}
 	if c.TargetDBConns == 0 {
 		c.TargetDBConns = defaultTargetDBConns
 	}
 	return nil
 }
 
-// An Option can be provided to Factory.Get() to provide any final
-// adjustments to the per-Loop BaseConfig.
-type Option func(cfg *BaseConfig)
+// LoopConfig applies to a singular instance of a logical replication
+// loop. Depending on the deployment model, there may be exactly one or
+// multiple loops operating concurrently.
+type LoopConfig struct {
+	// The default Consistent Point to use for replication. Consistent
+	// Point persisted in the target database will be used, if
+	// available.
+	//
+	// TODO(bob): Can this field be eliminated if the Dialect's
+	// ZeroStamp returns this default value instead?
+	DefaultConsistentPoint string
+	// The instance of the Dialect to send events to.
+	Dialect Dialect
+	// Uniquely identifies the replication loop.
+	LoopName string
+	// The SQL schema in the target cluster to write into. This value is
+	// optional if a userscript dispatch function is present.
+	TargetSchema ident.Schema
+}
 
-// WithName appends the given name to the configuration's loop name.
-func WithName(name string) Option {
-	return func(cfg *BaseConfig) {
-		if cfg.LoopName == "" {
-			cfg.LoopName = name
-		} else {
-			cfg.LoopName = fmt.Sprintf("%s-%s", cfg.LoopName, name)
-		}
+// Bind adds flags to the set. This method only makes sense for
+// deployment scenarios where the is exactly one replication loop per
+// instance of the application.
+func (c *LoopConfig) Bind(f *pflag.FlagSet) {
+	// Allow specializations to set the default name before binding.
+	f.StringVar(&c.LoopName, "loopName", c.LoopName, "identify the replication loop in metrics")
+
+	// DefaultConsistentPoint bound by dialect packages, since the name
+	// of the flag will vary based on the product in question.
+
+	// targetDB is deprecated.
+	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetDB",
+		"the SQL database schema in the target cluster to update")
+	// Only returns an error if flag can't be found.
+	if err := f.MarkDeprecated("targetDB", "use --targetSchema instead"); err != nil {
+		panic(err)
 	}
+	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
+		"the SQL database schema in the target cluster to update")
+}
+
+// Copy returns a deep copy of the config.
+func (c *LoopConfig) Copy() *LoopConfig {
+	ret := *c
+	return &ret
+}
+
+// Preflight ensures that unset configuration options have sane defaults
+// and returns an error if the Config is missing any fields for which a
+// default cannot be provided.
+func (c *LoopConfig) Preflight() error {
+	// We don't check Dialect here, since it might be possible to
+	// construct it only after the LoopConfig has been built.
+
+	if c.LoopName == "" {
+		return errors.New("replication loops must be named")
+	}
+	if c.TargetSchema.Empty() {
+		return errors.New("no target database specified")
+	}
+	return nil
 }

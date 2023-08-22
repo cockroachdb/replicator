@@ -20,10 +20,26 @@
 package script
 
 import (
+	"context"
+
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/wire"
 )
+
+// Evaluate the loaded script.
+func Evaluate(
+	ctx context.Context,
+	loader *Loader,
+	configs *applycfg.Configs,
+	stagingPool *types.StagingPool,
+	targetSchema TargetSchema,
+	watchers types.Watchers,
+) (*UserScript, error) {
+	panic(wire.Build(ProvideUserScript))
+}
 
 func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, error) {
 	panic(wire.Build(

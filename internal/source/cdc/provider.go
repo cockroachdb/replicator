@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
@@ -50,6 +51,7 @@ func ProvideResolvers(
 	ctx context.Context,
 	cfg *Config,
 	leases types.Leases,
+	loops *logical.Factory,
 	metaTable MetaTable,
 	pool *types.StagingPool,
 	stagers types.Stagers,
@@ -62,6 +64,7 @@ func ProvideResolvers(
 	ret := &Resolvers{
 		cfg:       cfg,
 		leases:    leases,
+		loops:     loops,
 		metaTable: metaTable.Table(),
 		pool:      pool,
 		stagers:   stagers,

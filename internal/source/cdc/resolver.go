@@ -573,6 +573,7 @@ func (r *resolver) wake() {
 type Resolvers struct {
 	cfg       *Config
 	leases    types.Leases
+	loops     *logical.Factory
 	noStart   bool // Set by test code to disable call to loop.Start()
 	metaTable ident.Table
 	pool      *types.StagingPool
@@ -617,19 +618,16 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 		return nil, err
 	}
 
-	// Start a new logical loop using a fresh configuration.
-	cfg := r.cfg.Base().Copy()
-	cfg.LoopName = "changefeed-" + target.Raw()
-	cfg.TargetSchema = target
-
 	// For testing, we sometimes want to drive the resolver directly.
 	if r.noStart {
 		return ret, nil
 	}
 
-	// Run the logical loop in a background context, since it's going to
-	// outlive the request context.
-	loop, cleanup, err := logical.Start(context.Background(), cfg, ret)
+	loop, cleanup, err := r.loops.Start(&logical.LoopConfig{
+		Dialect:      ret,
+		LoopName:     "changefeed-" + target.Raw(),
+		TargetSchema: target,
+	})
 	if err != nil {
 		return nil, err
 	}

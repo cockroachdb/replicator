@@ -49,7 +49,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
+	targetSchema := ProvideScriptTarget(config)
 	targetPool, cleanup3, err := logical.ProvideTargetPool(contextContext, baseConfig)
 	if err != nil {
 		cleanup2()
@@ -85,7 +85,7 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		return nil, nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, cleanup7, err := logical.ProvideFactory(contextContext, appliers, config, memoMemo, stagingPool, targetPool, userScript, watchers, checker)
+	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -95,9 +95,8 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
+	tombstones, cleanup7, err := ProvideTombstones(config, client, factory, userScript)
 	if err != nil {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -150,7 +149,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	if err != nil {
 		return nil, nil, err
 	}
-	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
+	targetSchema := ProvideScriptTarget(config)
 	watchers := fixture.Watchers
 	userScript, err := script.ProvideUserScript(contextContext, configs, loader, stagingPool, targetSchema, watchers)
 	if err != nil {
@@ -171,16 +170,15 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		return nil, nil, err
 	}
 	checker := fixture.VersionChecker
-	factory, cleanup4, err := logical.ProvideFactory(contextContext, appliers, config, typesMemo, stagingPool, targetPool, userScript, watchers, checker)
+	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, typesMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	tombstones, err := ProvideTombstones(contextContext, config, client, factory, userScript)
+	tombstones, cleanup4, err := ProvideTombstones(config, client, factory, userScript)
 	if err != nil {
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()

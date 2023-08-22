@@ -40,7 +40,7 @@ func newTestFixture(*all.Fixture, *Config) (*testFixture, func(), error) {
 		Set,
 		wire.FieldsOf(new(*base.Fixture), "Context"),
 		wire.FieldsOf(new(*all.Fixture),
-			"Appliers", "Fixture", "Stagers", "Watchers"),
+			"Appliers", "Configs", "Fixture", "Memo", "Stagers", "VersionChecker", "Watchers"),
 		leases.Set,
 		logical.Set,
 		script.Set,

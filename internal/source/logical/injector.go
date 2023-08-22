@@ -28,7 +28,7 @@ import (
 	"github.com/google/wire"
 )
 
-func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), error) {
+func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), error) {
 	panic(wire.Build(
 		Set,
 		script.Set,

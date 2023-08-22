@@ -18,9 +18,9 @@ package logical
 
 import (
 	"context"
-	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
@@ -29,87 +29,72 @@ import (
 // Factory supports uses cases where it is desirable to have multiple,
 // independent logical loops that share common resources.
 type Factory struct {
-	appliers    types.Appliers
-	cfg         Config
-	memo        types.Memo
-	stagingPool *types.StagingPool
-	targetPool  *types.TargetPool
-	watchers    types.Watchers
-	userscript  *script.UserScript
-
-	mu struct {
-		sync.Mutex
-		loops map[string]*Loop
-	}
+	appliers     types.Appliers
+	applyConfigs *applycfg.Configs
+	baseConfig   *BaseConfig
+	memo         types.Memo
+	scriptLoader *script.Loader
+	stagingPool  *types.StagingPool
+	targetPool   *types.TargetPool
+	watchers     types.Watchers
 }
 
-// Close terminates all running loops and waits for them to shut down.
-func (f *Factory) Close() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	// Request stopping.
-	for _, facade := range f.mu.loops {
-		facade.loop.running.Stop(f.cfg.Base().ApplyTimeout)
+// Start constructs a new replication Loop.
+func (f *Factory) Start(config *LoopConfig) (*Loop, func(), error) {
+	var err error
+
+	// Ensure the configuration is set up and validated.
+	config, err = f.expandConfig(config)
+	if err != nil {
+		return nil, nil, err
 	}
-	// Wait for shutdown.
-	for key, facade := range f.mu.loops {
-		<-facade.loop.running.Done()
-		delete(f.mu.loops, key)
+
+	// Construct the new loop and start it.
+	stop := stopper.WithContext(context.Background())
+	loop, err := f.newLoop(stop, config)
+	if err != nil {
+		return nil, nil, err
 	}
+	go loop.loop.run()
+
+	// Perform a graceful shutdown and wait for the loop to exit.
+	grace := f.baseConfig.ApplyTimeout
+	cancel := func() {
+		stop.Stop(grace)
+		<-loop.Stopped()
+	}
+
+	return loop, cancel, nil
 }
 
-// Get constructs or retrieves the named Loop.
-func (f *Factory) Get(ctx context.Context, dialect Dialect, options ...Option) (*Loop, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+// expandConfig returns a preflighted copy of the configuration.
+func (f *Factory) expandConfig(config *LoopConfig) (*LoopConfig, error) {
+	config = config.Copy()
 
-	config := f.cfg.Base().Copy()
-	for _, option := range options {
-		option(config)
-	}
-
-	if err := config.Preflight(); err != nil {
-		return nil, err
-	}
-
-	name := config.LoopName
-	if found, ok := f.mu.loops[name]; ok {
-		select {
-		case <-found.loop.running.Stopping():
-			// Re-create the stopped loop.
-		default:
-			return found, nil
-		}
-	}
-
-	loop, err := f.newLoop(ctx, config, dialect)
+	// This sanity-checks the configured schema against the product. For
+	// Cockroach and Postgres, we'll add any missing "public" schema
+	// names.
+	var err error
+	config.TargetSchema, err = f.targetPool.Product.ExpandSchema(config.TargetSchema)
 	if err != nil {
 		return nil, err
 	}
 
-	f.mu.loops[name] = loop
-	go loop.loop.run()
-
-	return loop, nil
+	return config, config.Preflight()
 }
 
-// newLoop constructs a loop, but does not start or memoize it.
-func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Dialect) (*Loop, error) {
+// newLoop constructs a loop, but does not start it.
+func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, error) {
 	watcher, err := f.watchers.Get(ctx, config.TargetSchema)
 	if err != nil {
 		return nil, err
 	}
-	if config.ChaosProb > 0 {
-		dialect = WithChaos(dialect, config.ChaosProb)
-	}
+	config = config.Copy()
+	config.Dialect = WithChaos(config.Dialect, f.baseConfig.ChaosProb)
 	loop := &loop{
-		config:      config,
-		dialect:     dialect,
-		factory:     f,
-		memo:        f.memo,
-		running:     stopper.WithContext(ctx),
-		stagingPool: f.stagingPool,
-		targetPool:  f.targetPool,
+		factory:    f,
+		loopConfig: config,
+		running:    ctx,
 	}
 	loop.consistentPoint.updated = make(chan struct{})
 	initialPoint, err := loop.loadConsistentPoint(ctx)
@@ -128,7 +113,7 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		targetPool: f.targetPool,
 	}
 
-	if config.ForeignKeysEnabled {
+	if f.baseConfig.ForeignKeysEnabled {
 		loop.events.fan = &orderedEvents{
 			Events:  loop.events.fan,
 			Watcher: watcher,
@@ -145,15 +130,27 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		}
 	}
 
+	userscript, err := script.Evaluate(
+		ctx,
+		f.scriptLoader,
+		f.applyConfigs,
+		f.stagingPool,
+		script.TargetSchema(config.TargetSchema),
+		f.watchers,
+	)
+	if err != nil {
+		return nil, errors.Wrapf(err, "could not initialize userscript for %s", config.LoopName)
+	}
+
 	// Apply logic and configurations defined by the user-script.
-	if f.userscript.Sources.Len() > 0 || f.userscript.Targets.Len() > 0 {
+	if userscript.Sources.Len() > 0 || userscript.Targets.Len() > 0 {
 		loop.events.fan = &scriptEvents{
 			Events: loop.events.fan,
-			Script: f.userscript,
+			Script: userscript,
 		}
 		loop.events.serial = &scriptEvents{
 			Events: loop.events.serial,
-			Script: f.userscript,
+			Script: userscript,
 		}
 	}
 

@@ -63,7 +63,7 @@ func TestMinMap(t *testing.T) {
 	a.Equal(currentMin, m.Min())
 	a.Equal(count, m.Len())
 
-	// Get all values.
+	// New all values.
 	for idx := range elts {
 		found, ok := m.Get(idx)
 		a.Equal(intStamp(idx), found)

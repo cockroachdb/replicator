@@ -36,10 +36,8 @@ type fanEvents struct {
 var _ Events = (*fanEvents)(nil)
 
 // Backfill implements Events. It delegates to the enclosing loop.
-func (f *fanEvents) Backfill(
-	ctx context.Context, source string, backfiller Backfiller, options ...Option,
-) error {
-	return f.loop.doBackfill(ctx, source, backfiller, options...)
+func (f *fanEvents) Backfill(ctx context.Context, source string, backfiller Backfiller) error {
+	return f.loop.doBackfill(ctx, source, backfiller)
 }
 
 // Flush implements Events.

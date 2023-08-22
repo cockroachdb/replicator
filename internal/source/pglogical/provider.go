@@ -19,6 +19,7 @@ package pglogical
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -29,13 +30,19 @@ import (
 )
 
 // Set is used by Wire.
-var Set = wire.NewSet(ProvideDialect)
+var Set = wire.NewSet(
+	ProvideDialect,
+	ProvideLoop,
+)
 
 // ProvideDialect is called by Wire to construct this package's
 // logical.Dialect implementation. This provider will perform some
 // pre-flight tests on the source database to ensure that replication
-// has been configured.
-func ProvideDialect(ctx context.Context, config *Config) (logical.Dialect, error) {
+// has been configured. There's a fake dependency on the script loader
+// so that flags can be evaluated first.
+func ProvideDialect(
+	ctx context.Context, config *Config, _ *script.Loader,
+) (logical.Dialect, error) {
 	if err := config.Preflight(); err != nil {
 		return nil, err
 	}
@@ -91,4 +98,13 @@ func ProvideDialect(ctx context.Context, config *Config) (logical.Dialect, error
 		slotName:        config.Slot,
 		sourceConfig:    sourceConfig,
 	}, nil
+}
+
+// ProvideLoop is called by Wire to construct the sole logical loop used
+// in the pglogical mode.
+func ProvideLoop(
+	cfg *Config, dialect logical.Dialect, loops *logical.Factory,
+) (*logical.Loop, func(), error) {
+	cfg.Dialect = dialect
+	return loops.Start(&cfg.LoopConfig)
 }

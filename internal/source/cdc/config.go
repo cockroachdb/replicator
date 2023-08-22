@@ -55,12 +55,6 @@ type Config struct {
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.BaseConfig.Bind(f)
 
-	// We set the targetDB based on the value in the incoming HTTP
-	// request.
-	if err := f.MarkHidden("targetDB"); err != nil {
-		panic(err)
-	}
-
 	f.IntVar(&c.IdealFlushBatchSize, "idealFlushBatchSize", defaultFlushBatchSize,
 		"try to apply at least this many mutations per resolved-timestamp window")
 	f.IntVar(&c.NDJsonBuffer, "ndjsonBufferSize", defaultNDJsonBuffer,
@@ -74,10 +68,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 
 // Preflight implements logical.Config.
 func (c *Config) Preflight() error {
-	c.BaseConfig.LoopName = "changefeed"
-	c.BaseConfig.TargetSchema = ident.MustSchema(ident.New("__filled_in_later__"))
-
-	if err := c.Base().Preflight(); err != nil {
+	if err := c.BaseConfig.Preflight(); err != nil {
 		return err
 	}
 

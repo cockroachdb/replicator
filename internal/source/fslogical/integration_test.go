@@ -133,13 +133,11 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			BackfillWindow:     time.Minute,
 			ChaosProb:          chaosProb,
 			ForeignKeysEnabled: true,
-			LoopName:           "fslogicaltest",
 			RetryDelay:         time.Nanosecond,
 			StandbyTimeout:     10 * time.Millisecond,
 			StagingConn:        fixture.StagingPool.ConnectionString,
 			StagingSchema:      fixture.StagingDB.Schema(),
 			TargetConn:         fixture.TargetPool.ConnectionString,
-			TargetSchema:       fixture.TargetSchema.Schema(),
 
 			ScriptConfig: script.Config{
 				MainPath: "/main.ts",
@@ -159,6 +157,10 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 					},
 				},
 			},
+		},
+		LoopConfig: logical.LoopConfig{
+			LoopName:     "fslogicaltest",
+			TargetSchema: fixture.TargetSchema.Schema(),
 		},
 		BackfillBatchSize:           10,
 		DocumentIDProperty:          ident.New("id"), // Map doc id metadata to target column.
