@@ -65,10 +65,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	log.Debugf("URL %s", r.URL.Path)
+	log.WithField("path", r.URL.Path).Trace("request")
 	req, err := h.newRequest(r)
 	if err != nil {
-		log.WithError(err).Tracef("could not match URL: %s", r.URL)
+		log.WithError(err).WithField("path", r.URL.Path).Trace("could not match URL")
 		http.NotFound(w, r)
 		return
 	}

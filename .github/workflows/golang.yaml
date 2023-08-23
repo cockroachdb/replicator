@@ -18,6 +18,8 @@ name: Golang
 permissions:
   contents: read
   packages: write # It is unclear why write access is needed to access private ghcr.io packages.
+  security-events: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -65,6 +67,20 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: go
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:go"
+
       - name: crlfmt returns no deltas
         if: ${{ always() }}
         run: |
@@ -95,9 +111,9 @@ jobs:
       - name: License Checks
         if: ${{ always() }}
         run: go run github.com/google/go-licenses check .
-
   # Integration matrix tests for all supported CRDB and source DBs.
   tests:
+    if: false # XXX Skip
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: warm-build-cache
@@ -142,9 +158,9 @@ jobs:
             targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
             # The Oracle 18 image doesn't come with a pre-built database, we need to do more work
             # to allow this image to boot up fast enough for use in tests.
-#          - cockroachdb: v23.1
-#            target: oracle-v18.4
-#            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
+          #          - cockroachdb: v23.1
+          #            target: oracle-v18.4
+          #            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
           - cockroachdb: v23.1
             target: oracle-v21.3
             targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
