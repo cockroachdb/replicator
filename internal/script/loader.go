@@ -127,7 +127,7 @@ func (l *Loader) require(module string) (goja.Value, error) {
 		source, err = parent.Parse(module)
 		// This is a bit of a hack for .ts files, since their import
 		// strings don't generally include the .ts extension.
-		if path.Ext(parent.Path) == ".ts" && path.Ext(source.Path) == "" {
+		if err == nil && path.Ext(parent.Path) == ".ts" && path.Ext(source.Path) == "" {
 			source.Path += ".ts"
 		}
 	}

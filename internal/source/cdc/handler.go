@@ -65,10 +65,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	log.Debugf("URL %s", r.URL.Path)
+	log.WithField("path", safePath(r)).Trace("request")
 	req, err := h.newRequest(r)
 	if err != nil {
-		log.WithError(err).Tracef("could not match URL: %s", r.URL)
+		log.WithError(err).WithField("path", safePath(r)).Trace("could not match URL")
 		http.NotFound(w, r)
 		return
 	}
@@ -112,4 +112,13 @@ func (h *Handler) checkAccess(
 		return true, nil
 	}
 	return false, nil
+}
+
+// safePath returns the request's path, but with any line breaks removed.
+// Recommended by CodeQL per CWE-117.
+func safePath(r *http.Request) string {
+	path := r.URL.Path
+	path = strings.ReplaceAll(path, `\n`, "")
+	path = strings.ReplaceAll(path, `\r`, "")
+	return path
 }

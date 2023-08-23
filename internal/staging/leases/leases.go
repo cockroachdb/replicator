@@ -423,8 +423,6 @@ func (l *leases) tryRelease(ctx context.Context, rel lease) (ok bool, err error)
 	if tag.RowsAffected() == 0 {
 		return false, nil
 	}
-	rel.expires = time.Time{}
-	rel.nonce = uuid.UUID{}
 	return true, nil
 }
 
