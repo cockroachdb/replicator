@@ -31,6 +31,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// sanitizer removes line breaks from the input to address log injection
+// (CWE-117). This isn't strictly necessary with logrus, but:
+// https://github.com/github/codeql/issues/11657
+var sanitizer = strings.NewReplacer("\n", " ", "\r", " ")
+
 // Handler is an http.Handler for processing webhook requests
 // from a CockroachDB changefeed.
 type Handler struct {
@@ -65,10 +70,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	log.Debugf("URL %s", r.URL.Path)
+	log.WithField(
+		"path", sanitizer.Replace(r.URL.Path),
+	).Trace("request")
+
 	req, err := h.newRequest(r)
 	if err != nil {
-		log.WithError(err).Tracef("could not match URL: %s", r.URL)
+		log.WithError(err).WithField(
+			"path", sanitizer.Replace(r.URL.Path),
+		).Trace("could not match URL")
 		http.NotFound(w, r)
 		return
 	}
