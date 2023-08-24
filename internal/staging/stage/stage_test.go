@@ -469,7 +469,7 @@ func benchmarkStage(b *testing.B, batchSize int) {
 		b.Fatal(err)
 	}
 
-	allBytes := int64(0)
+	var allBytes atomic.Int64
 	muts := mutations.Generator(ctx, 100000, 0.5)
 
 	b.ResetTimer()
@@ -479,7 +479,7 @@ func benchmarkStage(b *testing.B, batchSize int) {
 			for i := range batch {
 				mut := <-muts
 				batch[i] = mut
-				atomic.AddInt64(&allBytes, int64(len(mut.Data)+len(mut.Key)))
+				allBytes.Add(int64(len(mut.Data) + len(mut.Key)))
 			}
 			if err := s.Store(ctx, fixture.StagingPool, batch); err != nil {
 				b.Fatal(err)
@@ -487,6 +487,6 @@ func benchmarkStage(b *testing.B, batchSize int) {
 		}
 	})
 	// Use JSON byte count as throughput measure.
-	b.SetBytes(atomic.LoadInt64(&allBytes))
+	b.SetBytes(allBytes.Load())
 
 }

@@ -258,16 +258,16 @@ func TestLeases(t *testing.T) {
 		defer cancel()
 
 		eg, egCtx := errgroup.WithContext(ctx)
-		var running int32
+		var running atomic.Bool
 		for i := 0; i < 10; i++ {
 			eg.Go(func() error {
 				// Each callback verifies that it's the only instance
 				// running, then requests to be shut down.
 				l.Singleton(egCtx, t.Name(), func(ctx context.Context) error {
 					a.NoError(ctx.Err())
-					if a.True(atomic.CompareAndSwapInt32(&running, 0, 1)) {
+					if a.True(running.CompareAndSwap(false, true)) {
 						time.Sleep(3 * l.cfg.Poll)
-						atomic.StoreInt32(&running, 0)
+						running.Store(false)
 					}
 					return types.ErrCancelSingleton
 				})

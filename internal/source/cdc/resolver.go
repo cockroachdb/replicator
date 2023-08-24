@@ -505,7 +505,7 @@ func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Tim
 // goroutines which it spawns will terminate when the context is
 // canceled.
 func (r *resolver) retireLoop(ctx context.Context) {
-	var toRetire atomic.Value
+	var toRetire atomic.Pointer[hlc.Time]
 	wakeup := make(chan struct{}, 1)
 
 	// Coalesce incoming candidates value. This goroutine will exit
@@ -515,7 +515,7 @@ func (r *resolver) retireLoop(ctx context.Context) {
 		for {
 			select {
 			case retire := <-r.retirements:
-				toRetire.Store(retire)
+				toRetire.Store(&retire)
 				select {
 				case wakeup <- struct{}{}:
 				default:
@@ -531,7 +531,7 @@ func (r *resolver) retireLoop(ctx context.Context) {
 	// will exit when the wakeup channel has been closed.
 	go func() {
 		for range wakeup {
-			next := toRetire.Load().(hlc.Time)
+			next := *toRetire.Load()
 			log.Tracef("retiring mutations in %s <= %s", r.target, next)
 
 			targetTables := r.watcher.Get().Columns
