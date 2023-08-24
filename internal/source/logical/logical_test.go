@@ -18,7 +18,6 @@ package logical_test
 
 import (
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -140,8 +139,8 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 		a.Fail("timed out waiting for shutdown")
 	}
 	if !withChaos && !allowBackfill {
-		a.Equal(int32(1), atomic.LoadInt32(&gen.atomic.processExits))
-		a.Equal(int32(1), atomic.LoadInt32(&gen.atomic.readIntoExits))
+		a.Equal(int32(1), gen.atomic.processExits.Load())
+		a.Equal(int32(1), gen.atomic.readIntoExits.Load())
 	}
 
 	select {

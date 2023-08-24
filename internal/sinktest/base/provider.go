@@ -264,7 +264,7 @@ func provideSchema[P types.AnyPool](
 		// "globally" unique ID.  While PIDs do recycle, they're highly
 		// unlikely to do so during a single run of the test suite.
 		name := ident.New(fmt.Sprintf(
-			"%s_%d_%d", prefix, os.Getpid(), atomic.AddInt32(&dbIdentCounter, 1)))
+			"%s_%d_%d", prefix, os.Getpid(), dbIdentCounter.Add(1)))
 
 		err := retry.Execute(ctx, pool, fmt.Sprintf("CREATE USER %s", name))
 		if err != nil {
@@ -292,14 +292,14 @@ func provideSchema[P types.AnyPool](
 }
 
 // Ensure unique database identifiers within a test run.
-var dbIdentCounter int32
+var dbIdentCounter atomic.Int32
 
 // CreateSchema creates a schema with a unique name that will be
 // dropped when the cancel function is called.
 func CreateSchema[P types.AnyPool](
 	ctx context.Context, pool P, prefix string,
 ) (ident.Schema, func(), error) {
-	dbNum := atomic.AddInt32(&dbIdentCounter, 1)
+	dbNum := dbIdentCounter.Add(1)
 
 	// Each package tests run in a separate binary, so we need a
 	// "globally" unique ID.  While PIDs do recycle, they're highly
@@ -341,7 +341,7 @@ func CreateSchema[P types.AnyPool](
 // A global counter for allocating all temp tables in a test run. We
 // know that the enclosing database has a unique name, but it's
 // convenient for all test table names to be unique as well.
-var tempTable int32
+var tempTable atomic.Int32
 
 // CreateTable creates a test table. The schemaSpec parameter must have
 // exactly one %s substitution parameter for the database name and table
@@ -349,7 +349,7 @@ var tempTable int32
 func CreateTable[P types.AnyPool](
 	ctx context.Context, pool P, enclosing ident.Schema, schemaSpec string,
 ) (TableInfo[P], error) {
-	tableNum := atomic.AddInt32(&tempTable, 1)
+	tableNum := tempTable.Add(1)
 	tableName := ident.New(fmt.Sprintf("tbl_%d", tableNum))
 	table := ident.NewTable(enclosing, tableName)
 

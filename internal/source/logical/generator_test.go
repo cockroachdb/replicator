@@ -54,8 +54,8 @@ type generatorDialect struct {
 
 	// Counters to ensure we shut down cleanly.
 	atomic struct {
-		readIntoExits int32
-		processExits  int32
+		readIntoExits atomic.Int32
+		processExits  atomic.Int32
 	}
 
 	workRequested chan struct{}
@@ -107,7 +107,7 @@ func (g *generatorDialect) ReadInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	log.Trace("ReadInto starting")
-	defer atomic.AddInt32(&g.atomic.readIntoExits, 1)
+	defer g.atomic.readIntoExits.Add(1)
 
 	var nextBatchNumber int
 	// If we're recovering from a failure condition, reset to a consistent point.
@@ -159,7 +159,7 @@ func (g *generatorDialect) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	log.Trace("Process starting")
-	defer atomic.AddInt32(&g.atomic.processExits, 1)
+	defer g.atomic.processExits.Add(1)
 
 	for m := range ch {
 		g.processMu.Lock()

@@ -1168,7 +1168,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	// Create a source of Mutatation data.
 	muts := mutations.Generator(ctx, 100000, 0)
 
-	var loopTotal int64
+	var loopTotal atomic.Int64
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		batch := make([]types.Mutation, cfg.batchSize)
@@ -1178,7 +1178,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 			for i := range batch {
 				mut := <-muts
 				batch[i] = mut
-				atomic.AddInt64(&loopTotal, int64(len(mut.Data)))
+				loopTotal.Add(int64(len(mut.Data)))
 			}
 
 			// Applying a discarded mutation should never result in an error.
@@ -1190,5 +1190,5 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	})
 
 	// Use bytes as a throughput measure.
-	b.SetBytes(atomic.LoadInt64(&loopTotal))
+	b.SetBytes(loopTotal.Load())
 }
