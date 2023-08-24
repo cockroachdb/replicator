@@ -35,23 +35,8 @@ on:
   workflow_dispatch:  # Make it easy to push other branches/tags.
 
 jobs:
-  # This job is required by the jobs below.  It ensures that all go
-  # modules are cached within the local GitHub cache before executing
-  # the full test matrix. We've been seeing some requests to the
-  # upstream module cache fail due to network rate-limiting.
   warm-build-cache:
-    name: Warm build cache
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version-file: 'go.mod'
-
-      - name: Download modules
-        run: go mod download
+    uses: ./.github/workflows/warm-build-cache.yaml
 
   binaries:
     name: Binaries
