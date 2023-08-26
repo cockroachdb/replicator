@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/cmd/dumphelp"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/fslogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/licenses"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mkjwt"
@@ -99,10 +100,11 @@ func main() {
 	f.CountVarP(&verbosity, "verbose", "v", "increase logging verbosity to debug; repeat for trace")
 
 	root.AddCommand(
-		mkjwt.Command(),
+		dumphelp.Command(),
 		fslogical.Command(),
 		pglogical.Command(),
 		licenses.Command(),
+		mkjwt.Command(),
 		mylogical.Command(),
 		preflight.Command(),
 		script.HelpCommand(),
