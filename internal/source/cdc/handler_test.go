@@ -401,36 +401,77 @@ func TestRejectedAuth(t *testing.T) {
 // This test adds a large number of rows that have FK dependencies, in
 // excess of a number that should be processed as a single transaction.
 func TestWithForeignKeys(t *testing.T) {
-	t.Run("normal-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0, 1) })
-	t.Run("normal-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0, 1) })
-	t.Run("chaos-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0.01, 1) })
-	t.Run("chaos-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0.01, 1) })
+	const handlers = 1
+	const rowCount = 10_000
+	t.Run("normal-backfill", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.BackfillWindow = time.Minute
+		})
+	})
+	t.Run("normal-transactional", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers)
+	})
+	t.Run("normal-transactional-flush-every", func(t *testing.T) {
+		// Reduced row count since throughput is compromised.
+		testMassBackfillWithForeignKeys(t, rowCount/10, handlers, func(cfg *Config) {
+			cfg.FlushEveryTimestamp = true
+		})
+	})
+	t.Run("chaos-backfill", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.BackfillWindow = time.Minute
+			cfg.ChaosProb = 0.01
+		})
+	})
+	t.Run("chaos-transactional", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.ChaosProb = 0.01
+		})
+	})
 }
 
 // This test simulates having multiple instances of the handler as we
 // would see in a load-balanced configuration.
 func TestConcurrentHandlers(t *testing.T) {
-	t.Run("normal-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0, 3) })
-	t.Run("normal-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0, 3) })
-	t.Run("chaos-backfill", func(t *testing.T) { testMassBackfillWithForeignKeys(t, true, 0.01, 3) })
-	t.Run("chaos-transactional", func(t *testing.T) { testMassBackfillWithForeignKeys(t, false, 0.01, 3) })
+	const handlers = 3
+	const rowCount = 10_000
+
+	t.Run("normal-backfill", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.BackfillWindow = time.Minute
+		})
+	})
+	t.Run("normal-transactional", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers)
+	})
+	t.Run("normal-transactional-flush-every", func(t *testing.T) {
+		// Reduced row count since throughput is compromised.
+		testMassBackfillWithForeignKeys(t, rowCount/10, handlers, func(cfg *Config) {
+			cfg.FlushEveryTimestamp = true
+		})
+	})
+	t.Run("chaos-backfill", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.BackfillWindow = time.Minute
+			cfg.ChaosProb = 0.01
+		})
+	})
+	t.Run("chaos-transactional", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.ChaosProb = 0.01
+		})
+	})
 }
 
 func testMassBackfillWithForeignKeys(
-	t *testing.T, backfill bool, chaosProb float32, fixtureCount int,
+	t *testing.T, rowCount, fixtureCount int, fns ...func(*Config),
 ) {
-	const rowCount = 10_000
 	r := require.New(t)
 
 	baseFixture, cancel, err := all.NewFixture()
 	ctx := baseFixture.Context
 	r.NoError(err)
 	defer cancel()
-
-	var backfillWindow time.Duration
-	if backfill {
-		backfillWindow = time.Minute
-	}
 
 	fixtures := make([]*testFixture, fixtureCount)
 
@@ -444,14 +485,12 @@ func testMassBackfillWithForeignKeys(
 	}()
 
 	for idx := range fixtures {
-		fixtures[idx], cancels[idx], err = newTestFixture(baseFixture, &Config{
+		cfg := &Config{
 			IdealFlushBatchSize: 123, // Pick weird batch sizes.
 			SelectBatchSize:     587,
 			MetaTableName:       ident.New("resolved_timestamps"),
 			BaseConfig: logical.BaseConfig{
 				ApplyTimeout:       time.Second,
-				BackfillWindow:     backfillWindow,
-				ChaosProb:          chaosProb,
 				FanShards:          16,
 				ForeignKeysEnabled: true,
 				LoopName:           "changefeed",
@@ -461,7 +500,11 @@ func testMassBackfillWithForeignKeys(
 				TargetConn:         baseFixture.TargetPool.ConnectionString,
 				TargetSchema:       baseFixture.TargetSchema.Schema(),
 			},
-		})
+		}
+		for _, fn := range fns {
+			fn(cfg)
+		}
+		fixtures[idx], cancels[idx], err = newTestFixture(baseFixture, cfg)
 		r.NoError(err)
 	}
 
@@ -523,7 +566,7 @@ func testMassBackfillWithForeignKeys(
 	// Send a resolved timestamp that needs to dequeue many rows.
 	r.NoError(h().resolved(ctx, &request{
 		target:    parent.Name(),
-		timestamp: hlc.New(rowCount+1, 0),
+		timestamp: hlc.New(int64(rowCount)+1, 0),
 	}))
 
 	// Wait for rows to appear.

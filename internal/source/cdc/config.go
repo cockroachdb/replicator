@@ -35,6 +35,13 @@ const (
 type Config struct {
 	logical.BaseConfig
 
+	// Don't coalesce updates from different source MVCC timestamps into
+	// a single destination transaction. Setting this will preserve the
+	// original structure of updates from the source, but may decrease
+	// overall throughput by increasing the total number of target
+	// database transactions.
+	FlushEveryTimestamp bool
+
 	// Coalesce timestamps within a resolved-timestamp window until
 	// at least this many mutations have been collected.
 	IdealFlushBatchSize int
@@ -61,6 +68,9 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		panic(err)
 	}
 
+	f.BoolVar(&c.FlushEveryTimestamp, "flushEveryTimestamp", false,
+		"preserve intermediate updates from the source in transactional mode; "+
+			"may negatively impact throughput")
 	f.IntVar(&c.IdealFlushBatchSize, "idealFlushBatchSize", defaultFlushBatchSize,
 		"try to apply at least this many mutations per resolved-timestamp window")
 	f.IntVar(&c.NDJsonBuffer, "ndjsonBufferSize", defaultNDJsonBuffer,

@@ -413,6 +413,12 @@ func (r *resolver) process(
 				// and flush it once we hit our soft limit, since we
 				// can resume at any point.
 				needsFlush = flushCounter >= r.cfg.IdealFlushBatchSize
+			} else if r.cfg.FlushEveryTimestamp {
+				// The user wants to preserve all intermediate updates
+				// to a row, rather than fast-forwarding the values of a
+				// row to the latest transactionally-consistent state.
+				// We'll flush on every MVCC boundary change.
+				needsFlush = epoch != hlc.Zero() && hlc.Compare(mut.Time, epoch) > 0
 			} else {
 				// We're receiving data ordered by MVCC timestamp. Flush
 				// data when we see a new epoch after accumulating a
