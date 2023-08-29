@@ -665,8 +665,8 @@ func ScanForTargetSchemas(
 	defer rows.Close()
 	var ret []ident.Schema
 	for rows.Next() {
-		var db, schemaRaw string
-		if err := rows.Scan(&db, &schemaRaw); err != nil {
+		var schemaRaw string
+		if err := rows.Scan(&schemaRaw); err != nil {
 			return nil, errors.WithStack(err)
 		}
 

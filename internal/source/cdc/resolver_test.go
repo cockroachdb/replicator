@@ -63,8 +63,14 @@ func TestResolverDeQueue(t *testing.T) {
 		r.NoError(resolver.Mark(ctx, hlc.New(i+1, 0)))
 		r.NoError(resolver.Mark(ctx, hlc.New(i, 0)))
 	}
-
 	log.Info("marked")
+
+	// Ensure that we could resume processing.
+	schemas, err := ScanForTargetSchemas(ctx, fixture.StagingPool, fixture.Resolvers.metaTable)
+	r.NoError(err)
+	if a.Len(schemas, 1) {
+		a.True(ident.Equal(tbl.Name().Schema(), schemas[0]))
+	}
 
 	var committed hlc.Time
 	for i := 0; i < rowCount; i++ {
@@ -82,4 +88,9 @@ func TestResolverDeQueue(t *testing.T) {
 	// transaction to commit.
 	_, err = resolver.selectTimestamp(ctx, committed)
 	a.Equal(errNoWork, err)
+
+	// Resuming now should be a no-op.
+	schemas, err = ScanForTargetSchemas(ctx, fixture.StagingPool, fixture.Resolvers.metaTable)
+	r.NoError(err)
+	a.Empty(schemas)
 }
