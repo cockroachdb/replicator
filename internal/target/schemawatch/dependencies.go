@@ -20,6 +20,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -73,38 +74,15 @@ WITH parent_refs AS (SELECT OWNER tbl_owner, TABLE_NAME tbl_name, R_OWNER parent
                 UNION ALL
                 SELECT lvl, tbl_owner, tbl_name
                 FROM levels)
-SELECT tbl_owner, tbl_name, max(lvl) - 1 lvl
+SELECT tbl_name, max(lvl) - 1 lvl
 FROM cyclic
 WHERE tbl_owner = (:owner)
-GROUP BY tbl_owner, tbl_name
-ORDER BY 3, 1, 2`
+GROUP BY tbl_name
+ORDER BY lvl, tbl_name`
 
-// depOrderTemplatePg computes the "referential depth" of tables based on
-// foreign-key constraints. Note that this only works with acyclic FK
-// dependency graphs. This is ok because CRDB's lack of deferrable
-// constraints means that a cyclic dependency graph would be unusable.
-// Once CRDB has deferrable constraints, the need for computing this
-// dependency ordering goes away.
-//
-// The query is structured as follows:
-//   - tables: A list of (schema, table) pairs for all tables in the db.
-//   - refs: Maps referring tables (child) to referenced tables
-//     (parent). Table self-references are excluded from this query.
-//   - roots: Tables that contain no FK references to ensure that
-//     cyclical references remain unprocessed.
-//   - depths: A recursive CTE that builds up from the roots. In each
-//     step of the recursion, we select the child tables of the previous
-//     iteration whose parent table has a known depth and use the maximum
-//     parent's depth to derive the child's (updated) depth. The recursion
-//     halts when the previous iteration contains only leaf tables.
-//   - The top-level query then finds the maximum depth for each table.
-//     Any tables for which a depth cannot be computed (e.g. cyclical
-//     references) are assigned a sentinel value.
-//
-// One limitation in this query is that the information_schema doesn't
-// appear to provide any way to know about the schema in which the
-// referenced table is defined.
-const depOrderTemplatePg = `
+// depOrderLegacyCRDB supports versions of CRDB <= v21.2 which experience
+// an infinite loop when executing depOrderTemplatePg.
+const depOrderLegacyCRDB = `
 WITH RECURSIVE
  tables AS (
    SELECT schema_name AS sch, table_name AS tbl
@@ -118,7 +96,7 @@ WITH RECURSIVE
  roots AS (
    SELECT tables.sch, tables.tbl, 0 AS depth
    FROM tables
-   WHERE (tables.sch, tables.tbl) NOT IN (SELECT (child_sch, child_tbl) FROM refs) 
+   WHERE (tables.sch, tables.tbl) NOT IN (SELECT (child_sch, child_tbl) FROM refs)
  ),
  depths AS (
    SELECT * FROM roots
@@ -128,11 +106,120 @@ WITH RECURSIVE
     WHERE refs.parent_tbl = depths.tbl
     GROUP BY 1, 2
  )
-SELECT sch, tbl, max(depth)
+SELECT tbl, max(depth)
 FROM (SELECT *, -1 AS depth FROM tables UNION ALL SELECT * FROM depths)
-GROUP BY 1, 2
-ORDER BY 3, 1, 2
-`
+GROUP BY 1
+ORDER BY 2, 1`
+
+// depOrderTemplatePg computes the "referential depth" of tables based on
+// foreign-key constraints. Note that this only works with acyclic FK
+// dependency graphs. This is ok because CRDB's lack of deferrable
+// constraints means that a cyclic dependency graph would be unusable.
+// Once CRDB has deferrable constraints, the need for computing this
+// dependency ordering goes away.
+//
+// The query is structured as follows:
+//   - constraints: Used to resolve constraint names (i.e. primary or
+//     unique indexes) to the table that defines them.
+//   - tables: A list of all tables in the db.
+//   - refs: Maps referring tables (child) to referenced tables
+//     (parent). Table self-references are excluded from this query.
+//   - roots: Tables that contain no FK references to ensure that
+//     cyclical references remain unprocessed.
+//   - depths: A recursive CTE that builds up from the roots. In each
+//     step of the recursion, we select the child tables of the previous
+//     iteration whose parent table has a known depth and use the maximum
+//     parent's depth to derive the child's (updated) depth. The recursion
+//     halts when the previous iteration contains only leaf tables.
+//   - cycle_detect: Adds a sentinel depth value (-1) for all tables.
+//   - The top-level query then finds the maximum depth for each table.
+//     Any tables for which a depth cannot be computed (e.g. cyclical
+//     references) will return the sentinel value from cycle_detect.
+//
+// One limitation in this query is that the information_schema doesn't
+// appear to provide any way to know about the schema in which the
+// referenced table is defined.
+const depOrderTemplatePg = `
+WITH RECURSIVE
+  constraints
+    AS (
+      SELECT
+        table_catalog, table_schema, table_name, constraint_name
+      FROM
+        %[1]s.information_schema.table_constraints
+    ),
+  tables
+    AS (
+      SELECT
+        table_catalog, table_schema, table_name
+      FROM
+        %[1]s.information_schema.tables
+    ),
+  refs
+    AS (
+      SELECT
+        ref.constraint_catalog AS child_catalog,
+        ref.constraint_schema AS child_schema,
+        child.table_name AS child_table_name,
+        ref.unique_constraint_catalog AS parent_catalog,
+        ref.unique_constraint_schema AS parent_schema,
+        parent.table_name AS parent_table_name
+      FROM
+        %[1]s.information_schema.referential_constraints AS ref
+        JOIN constraints AS child ON
+            ref.constraint_catalog = child.table_catalog
+            AND ref.constraint_schema = child.table_schema
+            AND ref.constraint_name = child.constraint_name
+        JOIN constraints AS parent ON
+            ref.unique_constraint_catalog = parent.table_catalog
+            AND ref.unique_constraint_schema = parent.table_schema
+            AND ref.unique_constraint_name = parent.constraint_name
+      WHERE
+        (child.table_catalog, child.table_catalog, child.table_name)
+        != (parent.table_catalog, parent.table_catalog, parent.table_name)
+    ),
+  roots
+    AS (
+      SELECT
+        tables.table_catalog, tables.table_schema, tables.table_name
+      FROM
+        tables
+      WHERE
+        (tables.table_catalog, tables.table_schema, tables.table_name)
+        NOT IN (SELECT child_catalog, child_schema, child_table_name FROM refs)
+    ),
+  depths
+    AS (
+      SELECT table_catalog, table_schema, table_name, 0 AS depth FROM roots
+      UNION ALL
+        SELECT
+          refs.child_catalog,
+          refs.child_schema,
+          refs.child_table_name,
+          depths.depth + 1
+        FROM
+          depths, refs
+        WHERE
+          refs.parent_catalog = depths.table_catalog
+          AND refs.parent_schema = depths.table_schema
+          AND refs.parent_table_name = depths.table_name
+    ),
+  cycle_detect
+    AS (
+      SELECT table_catalog, table_schema, table_name, -1 AS depth FROM tables
+      UNION ALL
+        SELECT table_catalog, table_schema, table_name, depth FROM depths
+    )
+SELECT
+  table_name, max(depth) AS depth
+FROM
+  cycle_detect
+WHERE
+  table_catalog = $1 AND table_schema = $2
+GROUP BY
+  table_name
+ORDER BY
+  depth, table_name`
 
 // getDependencyOrder returns equivalency groups of tables defined
 // within the given database. The order of the slice will satisfy
@@ -145,8 +232,18 @@ func getDependencyOrder(
 	switch tx.Product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// Extract just the database name to refer to information_schema.
-		dbName, _ := db.Split()
-		stmt = fmt.Sprintf(depOrderTemplatePg, db, dbName)
+		parts := db.Idents(make([]ident.Ident, 0, 2))
+		if len(parts) != 2 {
+			return nil, errors.Errorf("expecting two schema parts, had %d", len(parts))
+		}
+
+		if tx.Product == types.ProductCockroachDB && strings.Contains(tx.Version, "v21.") {
+			stmt = fmt.Sprintf(depOrderLegacyCRDB, db, parts[0])
+		} else {
+			stmt = fmt.Sprintf(depOrderTemplatePg, parts[0])
+			args = []any{parts[0].Raw(), parts[1].Raw()}
+		}
+
 	case types.ProductOracle:
 		stmt = depOrderTemplateOra
 		args = []any{sql.Named("owner", db.Raw())}
@@ -163,10 +260,10 @@ func getDependencyOrder(
 
 		currentOrder := -1
 		for rows.Next() {
-			var schemaName, tableName string
+			var tableName string
 			var nextOrder int
 
-			if err := rows.Scan(&schemaName, &tableName, &nextOrder); err != nil {
+			if err := rows.Scan(&tableName, &nextOrder); err != nil {
 				return err
 			}
 

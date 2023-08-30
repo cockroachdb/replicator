@@ -71,9 +71,11 @@ func TestGetColumns(t *testing.T) {
 			dataCols:    []string{"a", "b"},
 		},
 		// Basic array type.
+		// Multidimensional array type. Not supported in CRDB yet.
+		// https://github.com/cockroachdb/cockroach/issues/32552
 		{
 			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
-			tableSchema: "a INT PRIMARY KEY, b INT8[]",
+			tableSchema: "a INT8 PRIMARY KEY, b INT8[]",
 			primaryKeys: []string{"a"},
 			dataCols:    []string{"b"},
 			types: ident.MapOf[string](
@@ -106,30 +108,46 @@ func TestGetColumns(t *testing.T) {
 		},
 		// Ensure that computed data columns are ignored.
 		{
+			// Virtual not implemented by any version of PostgreSQL.
+			products: []types.Product{types.ProductCockroachDB, types.ProductOracle},
 			tableSchema: "a INT, b INT, " +
-				"c INT AS (a + b) VIRTUAL, " +
+				"c INT GENERATED ALWAYS AS (a + b) VIRTUAL, " +
 				"PRIMARY KEY (a,b)",
 			primaryKeys: []string{"a", "b"},
 			dataCols:    []string{"ignored_c"},
 		},
-		// Ensure that computed pk columns are retained.
-		{
-			tableSchema: "a INT, b INT, " +
-				"c INT AS (a + b) VIRTUAL, " +
-				"PRIMARY KEY (a,c,b)",
-			primaryKeys: []string{"a", "ignored_c", "b"},
-			// Virtual PK columns not supported before 22.X releases.
-			skip: fixture.TargetPool.Product == types.ProductCockroachDB &&
-				strings.Contains(fixture.TargetPool.Version, "v21."),
-		},
 		{
 			products: []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
 			tableSchema: "a INT, b INT, " +
-				"c INT AS (a + b) STORED, " +
-				"d INT AS (a + b) VIRTUAL, " +
+				"c INT GENERATED ALWAYS AS (a + b) STORED, " +
+				"PRIMARY KEY (a,b)",
+			primaryKeys: []string{"a", "b"},
+			dataCols:    []string{"ignored_c"},
+			// Generated columns first added in PG12
+			skip: strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11"),
+		},
+		// Ensure that computed pk columns are retained.
+		{
+			// Virtual not implemented by any version of PostgreSQL.
+			products: []types.Product{types.ProductCockroachDB},
+			tableSchema: "a INT, b INT, " +
+				"c INT GENERATED ALWAYS AS (a + b) VIRTUAL, " +
+				"PRIMARY KEY (a,c,b)",
+			primaryKeys: []string{"a", "ignored_c", "b"},
+			// Virtual PK columns not supported before 22.X releases.
+			skip: strings.Contains(fixture.TargetPool.Version, "v21."),
+		},
+		{
+			// Virtual not implemented by any version of PostgreSQL.
+			products: []types.Product{types.ProductCockroachDB},
+			tableSchema: "a INT, b INT, " +
+				"c INT GENERATED ALWAYS AS (a + b) STORED, " +
+				"d INT GENERATED ALWAYS AS (a + b) VIRTUAL, " +
 				"PRIMARY KEY (a,b)",
 			primaryKeys: []string{"a", "b"},
 			dataCols:    []string{"ignored_c", "ignored_d"},
+			skip: fixture.TargetPool.Product == types.ProductPostgreSQL &&
+				strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11"),
 		},
 		// Ensure that the PK constraint may have an arbitrary name.
 		{
@@ -185,7 +203,7 @@ func TestGetColumns(t *testing.T) {
 		// Check array of boring-case UDT enum.
 		{
 			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
-			tableSchema: fmt.Sprintf(`pk INT PRIMARY KEY, val %s.boring_enum[]`, fixture.TargetSchema.Schema()),
+			tableSchema: fmt.Sprintf(`pk INT8 PRIMARY KEY, val %s.boring_enum[]`, fixture.TargetSchema.Schema()),
 			primaryKeys: []string{"pk"},
 			dataCols:    []string{"val"},
 			types: ident.MapOf[string](
@@ -196,7 +214,7 @@ func TestGetColumns(t *testing.T) {
 		// Check array of mixed-case UDT enum.
 		{
 			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
-			tableSchema: fmt.Sprintf(`pk INT PRIMARY KEY, val %s."MyEnum"[]`, fixture.TargetSchema.Schema()),
+			tableSchema: fmt.Sprintf(`pk INT8 PRIMARY KEY, val %s."MyEnum"[]`, fixture.TargetSchema.Schema()),
 			primaryKeys: []string{"pk"},
 			dataCols:    []string{"val"},
 			types: ident.MapOf[string](
@@ -340,8 +358,8 @@ func TestGetColumns(t *testing.T) {
 				}
 
 			}
-			a.Equal(test.primaryKeys, primaryKeys)
-			a.Equal(test.dataCols, dataCols)
+			a.Equal(test.primaryKeys, primaryKeys, "primary keys")
+			a.Equal(test.dataCols, dataCols, "data columns")
 			if test.check != nil {
 				test.check(t, colData)
 			}
