@@ -67,7 +67,7 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema, cleanup8, err := base.ProvideTargetSchema(context, targetPool)
+	targetSchema, cleanup8, err := base.ProvideTargetSchema(context, diagnostics, targetPool)
 	if err != nil {
 		cleanup7()
 		cleanup6()

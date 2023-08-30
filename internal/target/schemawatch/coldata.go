@@ -28,6 +28,8 @@ import (
 	"github.com/pkg/errors"
 )
 
+var pgCatalog = ident.New("pg_catalog")
+
 func colSliceEqual(a, b []types.ColData) bool {
 	if len(a) != len(b) {
 		return false
@@ -87,39 +89,65 @@ ORDER BY POSITION, COLUMN_NAME
 // any remaining non-generated columns.
 //
 // Parts of the CTE:
-// * pk_name: finds the name of the primary key constraint for the table
+// * pk_constraints: finds the primary key constraint for the table
 // * pks: extracts the names of the PK columns and their relative
 // positions. We exclude any "storing" columns to account for rowid
 // value.
 // * cols: extracts all columns, ignoring those with generation
-// expressions (e.g. hash-sharded index clustering column).
+// expressions (e.g. hash-sharded index clustering column). The NOT IN
+// clause supports CRDB <= v22.1 that return a non-standard 'NO' value.
 // * ordered: adds a synthetic seq_in_index to the non-PK columns.
 // * SELECT: aggregates the above, sorting the PK columns in-order
 // before the non-PK columns.
 const sqlColumnsQueryPg = `
-WITH
-pk_name AS (
-	SELECT constraint_name FROM [SHOW CONSTRAINTS FROM %[1]s]
-	WHERE constraint_type = 'PRIMARY KEY'),
-pks AS (
-	SELECT column_name, seq_in_index FROM [SHOW INDEX FROM %[1]s]
-	JOIN pk_name ON (index_name = constraint_name)
-	WHERE NOT storing),
-cols AS (
-	SELECT column_name, data_type, column_default,
-           generation_expression != '' AS ignored
-	FROM [SHOW COLUMNS FROM %[1]s]),
-ordered AS (
-	SELECT column_name, min(ifnull(pks.seq_in_index, 2048)) AS seq_in_index FROM
-	cols LEFT JOIN pks USING (column_name)
-    GROUP BY column_name)
-SELECT cols.column_name, pks.seq_in_index IS NOT NULL,
-       cols.data_type, cols.column_default, cols.ignored
-FROM cols
-JOIN ordered USING (column_name)
-LEFT JOIN pks USING (column_name)
-ORDER BY ordered.seq_in_index, cols.column_name
-`
+    WITH pk_constraints AS (
+                  SELECT table_catalog,
+                         table_schema,
+                         table_name,
+                         constraint_name
+                    FROM %[1]s.information_schema.table_constraints
+                   WHERE constraint_type = 'PRIMARY KEY'
+                 ),
+         pks AS (
+              SELECT table_catalog,
+                     table_schema,
+                     table_name,
+                     column_name,
+                     ordinal_position
+                FROM %[1]s.information_schema.key_column_usage
+                JOIN pk_constraints USING (table_catalog, table_schema, table_name, constraint_name)
+             ),
+         cols AS (
+                SELECT table_catalog,
+                       table_schema,
+                       table_name,
+                       column_name,
+                       quote_ident(udt_catalog) || '.' || quote_ident(udt_schema) || '.' || quote_ident(udt_name) ||
+                       CASE WHEN collation_name IS NOT NULL THEN ' COLLATE ' || collation_name ELSE '' END AS data_type,
+                       column_default,
+                       is_generated NOT IN ('NEVER', 'NO') AS ignored
+                  FROM %[1]s.information_schema.columns
+              ),
+         ordered AS (
+                    SELECT table_catalog,
+                           table_schema,
+                           table_name,
+                           column_name,
+                           min(
+                            COALESCE(pks.ordinal_position, 2048)
+                           ) AS ordinal_position
+                      FROM cols
+                           LEFT JOIN pks USING (table_catalog, table_schema, table_name, column_name)
+                  GROUP BY table_catalog, table_schema, table_name, column_name
+                 )
+  SELECT column_name, pks.ordinal_position IS NOT NULL, data_type, column_default, ignored
+    FROM cols
+    JOIN ordered USING (table_catalog, table_schema, table_name, column_name)
+    LEFT JOIN pks USING (table_catalog, table_schema, table_name, column_name)
+   WHERE table_catalog = $1
+     AND table_schema = $2
+     AND table_name = $3
+ORDER BY ordered.ordinal_position, column_name`
 
 // getColumns returns the column names for the primary key columns in
 // their index-order, followed by all other columns that should be
@@ -130,8 +158,17 @@ func getColumns(
 	var args []any
 	var stmt string
 	switch tx.Product {
-	case types.ProductCockroachDB:
-		stmt = fmt.Sprintf(sqlColumnsQueryPg, table)
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		parts := table.Idents(make([]ident.Ident, 0, 3))
+		if len(parts) != 3 {
+			return nil, errors.Errorf("expecting three table name parts, had %d", len(parts))
+		}
+		stmt = fmt.Sprintf(sqlColumnsQueryPg, parts[0])
+		args = []any{
+			parts[0].Raw(),
+			parts[1].Raw(),
+			parts[2].Raw(),
+		}
 	case types.ProductOracle:
 		parts := table.Idents(make([]ident.Ident, 0, 2))
 		if len(parts) != 2 {
@@ -160,8 +197,8 @@ func getColumns(
 		for rows.Next() {
 			var column types.ColData
 			var defaultExpr sql.NullString
-			var rawColType, name string
-			if err := rows.Scan(&name, &column.Primary, &rawColType, &defaultExpr, &column.Ignored); err != nil {
+			var name string
+			if err := rows.Scan(&name, &column.Primary, &column.Type, &defaultExpr, &column.Ignored); err != nil {
 				return err
 			}
 			column.Name = ident.New(name)
@@ -173,71 +210,50 @@ func getColumns(
 				// Oracle also likes to include some dangling whitespace.
 				column.DefaultExpr = strings.TrimSpace(column.DefaultExpr)
 			}
+			switch tx.Product {
+			case types.ProductCockroachDB, types.ProductPostgreSQL:
+				// Re-parse the type name so that we have a consistent
+				// representation. For example, in the postgres query,
+				// we use the quote_ident() function, which only adds
+				// quotes if necessary. We'll also look for types
+				// defined within the pg_catalog schema (i.e. built-in
+				// types) and use simple names for them.
+				parsed, err := ident.ParseTable(column.Type)
+				if err != nil {
+					return err
+				}
 
-			isArray := strings.HasSuffix(rawColType, "[]")
-			if isArray {
-				rawColType = rawColType[:len(rawColType)-2]
+				parts := parsed.Idents(make([]ident.Ident, 0, 3))
+				if len(parts) != 3 {
+					return errors.Errorf("expected 3, got %d parts when splitting ident: %s",
+						len(parts), parsed)
+				}
+
+				lastRaw := parts[2].Raw()
+				isArray := lastRaw[0] == '_'
+				if isArray {
+					// Drop the leading _ so we can append [] later on
+					// to provide a consistent name.
+					parts[2] = ident.New(lastRaw[1:])
+				}
+
+				if ident.Equal(parts[1], pgCatalog) {
+					// This seems to be necessary for the pgx driver to not treat the "geometry" type as unknown.
+					lastRaw = strings.ToUpper(lastRaw)
+					if isArray {
+						lastRaw = lastRaw[1:] + "[]"
+					}
+					column.Type = lastRaw
+					break
+				}
+
+				column.Type = ident.NewTable(parsed.Schema(), parts[2]).String()
+				if isArray {
+					column.Type += "[]"
+				}
 			}
 
-			// If the column type is a user-defined type, e.g. an enum,
-			// then we want to treat it as a proper database ident, and
-			// not a string.  Fortunately, UDTs can be identified
-			// because they have (at least) the schema name reported by
-			// the introspection query.  We can't blindly treat all type
-			// names as idents, because the introspection query returns
-			// upcased value (e.g. INT8), while the actual type name of
-			// builtin types are lower case (e.g. int8). Thus, the SQL
-			// expression 1::"INT8" is invalid, although 1::"int8" would
-			// be fine. Baking in a list of intrinsic datatypes also
-			// seems somewhat brittle as CRDB evolves.
-			parts := make([]ident.Ident, 0, 3)
-			for remainder := rawColType; remainder != ""; {
-				// Strip leading . from previous loop.
-				if remainder[0] == '.' {
-					remainder = remainder[1:]
-				}
-				var part ident.Ident
-				var err error
-				part, remainder, err = ident.ParseIdent(remainder)
-				if err != nil {
-					return err
-				}
-				parts = append(parts, part)
-			}
-			switch len(parts) {
-			case 1:
-				// Raw type, like INT8 or INT8[]
-				typeName := parts[0].Raw()
-				if isArray {
-					typeName += "[]"
-				}
-				column.Parse = parseHelper(tx.Product, typeName)
-				column.Type = typeName
-			case 2:
-				// UDT for CRDB <= 22.1 only includes schema and name.
-				relSchema, _, err := table.Schema().Relative(parts[0])
-				if err != nil {
-					return err
-				}
-				if isArray {
-					column.Type = ident.NewUDTArray(relSchema, parts[1]).String()
-				} else {
-					column.Type = ident.NewUDT(relSchema, parts[1]).String()
-				}
-			case 3:
-				// Fully-qualified UDT.
-				relSchema, _, err := table.Schema().Relative(parts[0], parts[1])
-				if err != nil {
-					return err
-				}
-				if isArray {
-					column.Type = ident.NewUDTArray(relSchema, parts[2]).String()
-				} else {
-					column.Type = ident.NewUDT(relSchema, parts[2]).String()
-				}
-			default:
-				return errors.Errorf("unexpected type name %q", rawColType)
-			}
+			column.Parse = parseHelper(tx.Product, column.Type)
 
 			columns = append(columns, column)
 		}
