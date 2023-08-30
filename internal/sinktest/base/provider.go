@@ -251,11 +251,39 @@ func ProvideSourceSchema(
 // ProvideTargetSchema create a globally-unique container for tables in
 // the target database.
 func ProvideTargetSchema(
-	ctx context.Context, pool *types.TargetPool,
+	ctx context.Context, diags *diag.Diagnostics, pool *types.TargetPool,
 ) (sinktest.TargetSchema, func(), error) {
-	sch, cancel, err := provideSchema(ctx, pool, "tgt")
+	sch, dropSchema, err := provideSchema(ctx, pool, "tgt")
+	ret := sinktest.TargetSchema(sch)
+	if err != nil {
+		return ret, nil, err
+	}
 	log.Infof("target schema: %s", sch)
-	return sinktest.TargetSchema(sch), cancel, err
+	cancel := dropSchema
+
+	// In PostgresSQL, connections are tightly coupled to the target
+	// database.  Cross-database queries are generally unsupported, as
+	// opposed to CockroachDB, which allows any database to be queried
+	// from any connection.
+	//
+	// To resolve this, we're going to re-open the target database
+	// connection so that the connection uses the schema that we have
+	// just created.
+	if pool.Info().Product == types.ProductPostgreSQL {
+		db, _ := sch.Split()
+		conn := fmt.Sprintf("%s/%s", pool.ConnectionString, db.Raw())
+		next, cancelNext, err := stdpool.OpenPgxAsTarget(ctx, conn, stdpool.WithDiagnostics(diags, "target_reopened"))
+		if err != nil {
+			cancel()
+			return sinktest.TargetSchema{}, nil, err
+		}
+		pool.DB = next.DB
+		cancel = func() {
+			dropSchema()
+			cancelNext()
+		}
+	}
+	return ret, cancel, nil
 }
 
 func provideSchema[P types.AnyPool](
@@ -330,9 +358,11 @@ func CreateSchema[P types.AnyPool](
 		return ident.Schema{}, cancel, errors.WithStack(err)
 	}
 
-	if err := retry.Execute(ctx, pool, fmt.Sprintf(
-		`ALTER DATABASE %s CONFIGURE ZONE USING gc.ttlseconds = 600`, name)); err != nil {
-		return ident.Schema{}, cancel, errors.WithStack(err)
+	if pool.Info().Product == types.ProductCockroachDB {
+		if err := retry.Execute(ctx, pool, fmt.Sprintf(
+			`ALTER DATABASE %s CONFIGURE ZONE USING gc.ttlseconds = 600`, name)); err != nil {
+			return ident.Schema{}, cancel, errors.WithStack(err)
+		}
 	}
 
 	sch, err := ident.NewSchema(name, ident.Public)

@@ -94,7 +94,7 @@ func TestWatch(t *testing.T) {
 		switch fixture.TargetPool.Product {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			r.NoError(retry.Execute(ctx, fixture.TargetPool,
-				fmt.Sprintf("ALTER TABLE %s ADD COLUMN v STRING", tblInfo.Name())))
+				fmt.Sprintf("ALTER TABLE %s ADD COLUMN v VARCHAR", tblInfo.Name())))
 
 		case types.ProductOracle:
 			r.NoError(retry.Execute(ctx, fixture.TargetPool,
