@@ -318,7 +318,7 @@ func (c *conn) onDataTuple(
 				enc[targetCol.Name.Raw()] = string(s)
 			case int64:
 				// if it's a bit need to convert to a string representation
-				if targetCol.Type == mysql.MYSQL_TYPE_BIT {
+				if targetCol.Type == fmt.Sprintf("%d", mysql.MYSQL_TYPE_BIT) {
 					enc[targetCol.Name.Raw()] = strconv.FormatInt(s, 2)
 				} else {
 					enc[targetCol.Name.Raw()] = s
@@ -374,7 +374,7 @@ func (c *conn) onRelation(msg *replication.TableMapEvent) error {
 			Ignored: false,
 			Name:    ident.New(string(msg.ColumnName[idx])),
 			Primary: found,
-			Type:    ctype,
+			Type:    fmt.Sprintf("%d", ctype),
 		}
 	}
 	c.columns.Put(tbl, colData)

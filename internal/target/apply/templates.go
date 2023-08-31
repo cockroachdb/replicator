@@ -36,9 +36,13 @@ var (
 	queries embed.FS
 
 	tmplFuncs = template.FuncMap{
-		"isUDT": func(x any) bool {
-			_, ok := x.(ident.UDT)
-			return ok
+		// The pgx driver has trouble converting from the []any it gets
+		// when the mutation payload is unpacked, since it doesn't
+		// necessarily know the type details of an enum array. This hack
+		// changes the generated SQL so that the substitution parameter
+		// type is a string array, which is then cast to the enum array.
+		"isUDTArray": func(colData types.ColData) bool {
+			return strings.HasSuffix(colData.Type, "[]") && strings.Contains(colData.Type, ".")
 		},
 		// nl is a hack to force the inclusion of newlines in the output
 		// since we generally use the whitespace-consuming template

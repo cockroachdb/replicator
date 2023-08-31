@@ -136,5 +136,6 @@ func TestIdentSize(t *testing.T) {
 	a.Equal(expectedIdentWords, int(unsafe.Sizeof(Ident{})/ptrSize))
 	a.Equal(expectedIdentWords, int(unsafe.Sizeof(Schema{})/ptrSize))
 	a.Equal(expectedIdentWords, int(unsafe.Sizeof(Table{})/ptrSize))
-	a.Equal(expectedIdentWords, int(unsafe.Sizeof(UDT{})/ptrSize))
+	// Plus one for the array field.
+	a.Equal(expectedIdentWords+1, int(unsafe.Sizeof(UDT{})/ptrSize))
 }

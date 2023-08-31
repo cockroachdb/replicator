@@ -95,6 +95,15 @@ func TestParseIdent(t *testing.T) {
 			input: "\"is \uFFFD error\"",
 			err:   "malformed UTF8 input",
 		},
+		{
+			input: `baz[]`,
+			ident: New(`baz[]`),
+		},
+		{
+			input:     `"baz"[]`,
+			ident:     New(`baz`),
+			remainder: "[]",
+		},
 	}
 
 	for idx, tc := range tcs {
