@@ -16,15 +16,39 @@
 
 package ident
 
+import (
+	"encoding/json"
+
+	"github.com/pkg/errors"
+)
+
 // A UDT is the name of a user-defined type, such as an enum.
 type UDT struct {
 	_ noCompare
 	*qualified
+
+	// TODO(bob): Remove this if we add a proper typesystem, since we'd
+	// have an array type, containing an element that represents the
+	// UDT.
+	array bool
 }
 
 // NewUDT constructs an identifier for a user-defined type.
 func NewUDT(enclosing Schema, name Ident) UDT {
 	return UDT{qualified: qualifieds.Get(qualifiedKey{enclosing.array, name.atom})}
+}
+
+// NewUDTArray constructs an identifier for a UDT array.
+func NewUDTArray(enclosing Schema, name Ident) UDT {
+	return UDT{
+		array:     true,
+		qualified: qualifieds.Get(qualifiedKey{enclosing.array, name.atom}),
+	}
+}
+
+// IsArray returns true if the UDT is an array type.
+func (t UDT) IsArray() bool {
+	return t.array
 }
 
 // Name returns the UDT's leaf name identifier.
@@ -35,6 +59,28 @@ func (t UDT) Name() Ident {
 	return Ident{atom: t.qualified.terminal}
 }
 
+// MarshalJSON implements json.Marshaler.
+func (t UDT) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&encodedUDT{
+		Array: t.array,
+		Name:  Table{qualified: t.qualified},
+	})
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (t *UDT) MarshalText() ([]byte, error) {
+	return []byte(t.Raw()), nil
+}
+
+// Raw implements Identifier.
+func (t UDT) Raw() string {
+	ret := t.qualified.Raw()
+	if t.IsArray() {
+		ret += "[]"
+	}
+	return ret
+}
+
 // Schema returns the schema from the UDT.
 func (t UDT) Schema() Schema {
 	if t.qualified == nil {
@@ -43,13 +89,28 @@ func (t UDT) Schema() Schema {
 	return Schema{array: t.qualified.namespace}
 }
 
+// String returns the quoted form of the UDT, possibly with an array
+// suffix.
+func (t UDT) String() string {
+	ret := t.qualified.String()
+	if t.IsArray() {
+		ret += "[]"
+	}
+	return ret
+}
+
 // UnmarshalJSON parses a JSON array.
 func (t *UDT) UnmarshalJSON(data []byte) error {
-	// Borrow the implementation from Table.
-	var tbl Table
-	if err := tbl.UnmarshalJSON(data); err != nil {
-		return err
+	var enc encodedUDT
+	if err := json.Unmarshal(data, &enc); err != nil {
+		return errors.WithStack(err)
 	}
-	t.qualified = tbl.qualified
+	t.array = enc.Array
+	t.qualified = enc.Name.qualified
 	return nil
+}
+
+type encodedUDT struct {
+	Array bool  `json:"array,omitempty"`
+	Name  Table `json:"name,omitempty"` // Borrow encoding implementation.
 }

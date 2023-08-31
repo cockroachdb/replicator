@@ -70,6 +70,17 @@ func TestGetColumns(t *testing.T) {
 			primaryKeys: []string{"rowid"},
 			dataCols:    []string{"a", "b"},
 		},
+		// Basic array type.
+		{
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			tableSchema: "a INT PRIMARY KEY, b INT8[]",
+			primaryKeys: []string{"a"},
+			dataCols:    []string{"b"},
+			types: ident.MapOf[string](
+				"a", "INT8",
+				"b", "INT8[]",
+			),
+		},
 		{
 			tableSchema: "a INT, b INT, PRIMARY KEY (a,b)",
 			primaryKeys: []string{"a", "b"},
@@ -153,19 +164,45 @@ func TestGetColumns(t *testing.T) {
 			dataCols:    []string{"a", "b", "c", "q", "r"},
 			sqlPost:     []string{"CREATE UNIQUE INDEX ind_cab4 ON %s (c,a,b)"},
 		},
+		// UDT enum test with boring case.
+		{
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			tableSchema: fmt.Sprintf(`a %s.boring_enum PRIMARY KEY`, fixture.TargetSchema.Schema()),
+			primaryKeys: []string{"a"},
+			types: ident.MapOf[string](
+				"a", fixture.TargetSchema.Schema().String()+`."boring_enum"`,
+			),
+		},
+		// UDT enum test with mixed case.
 		{
 			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
 			tableSchema: fmt.Sprintf(`a %s."MyEnum" PRIMARY KEY`, fixture.TargetSchema.Schema()),
 			primaryKeys: []string{"a"},
-			check: func(t *testing.T, data []types.ColData) {
-				a := assert.New(t)
-				if a.Len(data, 1) {
-					col := data[0]
-					a.Equal(
-						ident.NewUDT(fixture.TargetSchema.Schema(), ident.New("MyEnum")),
-						col.Type)
-				}
-			},
+			types: ident.MapOf[string](
+				"a", fixture.TargetSchema.Schema().String()+`."MyEnum"`,
+			),
+		},
+		// Check array of boring-case UDT enum.
+		{
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			tableSchema: fmt.Sprintf(`pk INT PRIMARY KEY, val %s.boring_enum[]`, fixture.TargetSchema.Schema()),
+			primaryKeys: []string{"pk"},
+			dataCols:    []string{"val"},
+			types: ident.MapOf[string](
+				"pk", "INT8",
+				"val", fixture.TargetSchema.Schema().String()+`."boring_enum"[]`,
+			),
+		},
+		// Check array of mixed-case UDT enum.
+		{
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			tableSchema: fmt.Sprintf(`pk INT PRIMARY KEY, val %s."MyEnum"[]`, fixture.TargetSchema.Schema()),
+			primaryKeys: []string{"pk"},
+			dataCols:    []string{"val"},
+			types: ident.MapOf[string](
+				"pk", "INT8",
+				"val", fixture.TargetSchema.Schema().String()+`."MyEnum"[]`,
+			),
 		},
 		// Check type extraction.
 		{
@@ -181,6 +218,14 @@ func TestGetColumns(t *testing.T) {
 				"e", "NUMBER(4,2)",
 			),
 		},
+	}
+
+	// Enum with a boring name.
+	if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
+		`CREATE TYPE %s.boring_enum AS ENUM ('foo', 'bar')`,
+		fixture.TargetSchema.Schema()),
+	); !a.NoError(err) {
+		return
 	}
 
 	// Verify user-defined types with mixed-case name.
@@ -252,7 +297,7 @@ func TestGetColumns(t *testing.T) {
 				if test.types != nil {
 					// See above comment.
 					a.Equalf(test.types.GetZero(colData[i].Name),
-						fmt.Sprintf("%s", colData[i].Type),
+						colData[i].Type,
 						"column %s", colData[i].Name)
 				}
 

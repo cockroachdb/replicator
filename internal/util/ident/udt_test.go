@@ -36,3 +36,18 @@ func TestUDTJson(t *testing.T) {
 	a.Same(id.namespace, id2.namespace)
 	a.Same(id.terminal, id2.terminal)
 }
+
+func TestUDTArrayJson(t *testing.T) {
+	a := assert.New(t)
+
+	id := NewUDTArray(MustSchema(New("db"), New("schema")), New("my_enum"))
+	data, err := json.Marshal(id)
+	a.NoError(err)
+
+	var id2 UDT
+	a.NoError(json.Unmarshal(data, &id2))
+	a.Equal(id, id2)
+	a.True(id2.IsArray())
+	a.Same(id.namespace, id2.namespace)
+	a.Same(id.terminal, id2.terminal)
+}

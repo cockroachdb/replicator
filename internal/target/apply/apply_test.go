@@ -950,11 +950,10 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 }
 
 // Verify that user-defined enums with mixed-case identifiers work.
-func TestUTDEnum(t *testing.T) {
-	r := require.New(t)
+func TestUDTEnum(t *testing.T) {
 
 	fixture, cancel, err := all.NewFixture()
-	r.NoError(err)
+	require.NoError(t, err)
 	defer cancel()
 
 	if fixture.TargetPool.Product != types.ProductCockroachDB {
@@ -964,32 +963,56 @@ func TestUTDEnum(t *testing.T) {
 	ctx := fixture.Context
 
 	type Payload struct {
-		PK  int    `json:"pk"`
-		Val string `json:"val"`
+		PK  int `json:"pk"`
+		Val any `json:"val,omitempty"`
 	}
 
 	_, err = fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
 		fixture.TargetSchema.Schema()))
-	r.NoError(err)
+	require.NoError(t, err)
 
-	tbl, err := fixture.CreateTargetTable(ctx,
-		fmt.Sprintf(`CREATE TABLE %%s (pk INT PRIMARY KEY, val %s."MyEnum")`,
-			fixture.TargetSchema.Schema()))
-	r.NoError(err)
-	tblName := sinktest.JumbleTable(tbl.Name())
+	t.Run("scalar", func(t *testing.T) {
+		r := require.New(t)
+		tbl, err := fixture.CreateTargetTable(ctx,
+			fmt.Sprintf(`CREATE TABLE %%s (pk INT PRIMARY KEY, val %s."MyEnum")`,
+				fixture.TargetSchema.Schema()))
+		r.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
 
-	app, err := fixture.Appliers.Get(ctx, tblName)
-	r.NoError(err)
+		app, err := fixture.Appliers.Get(ctx, tblName)
+		r.NoError(err)
 
-	p := Payload{PK: 42, Val: "bar"}
-	bytes, err := json.Marshal(p)
-	r.NoError(err)
+		p := Payload{PK: 42, Val: "bar"}
+		bytes, err := json.Marshal(p)
+		r.NoError(err)
 
-	r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
-		Data: bytes,
-		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
-	}}))
+		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+			Data: bytes,
+			Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+		}}))
+	})
+
+	t.Run("array", func(t *testing.T) {
+		r := require.New(t)
+		tbl, err := fixture.CreateTargetTable(ctx,
+			fmt.Sprintf(`CREATE TABLE %%s (pk INT PRIMARY KEY, val %s."MyEnum"[])`,
+				fixture.TargetSchema.Schema()))
+		r.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
+
+		app, err := fixture.Appliers.Get(ctx, tblName)
+		r.NoError(err)
+
+		p := Payload{PK: 42, Val: []string{"foo", "bar"}}
+		bytes, err := json.Marshal(p)
+		r.NoError(err)
+
+		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+			Data: bytes,
+			Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+		}}))
+	})
 }
 
 // Ensure that if columns with generation expressions are present, we

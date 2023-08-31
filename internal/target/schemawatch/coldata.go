@@ -20,6 +20,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -163,6 +164,11 @@ func getColumns(
 				foundPrimay = true
 			}
 
+			isArray := strings.HasSuffix(rawColType, "[]")
+			if isArray {
+				rawColType = rawColType[:len(rawColType)-2]
+			}
+
 			// If the column type is a user-defined type, e.g. an enum,
 			// then we want to treat it as a proper database ident, and
 			// not a string.  Fortunately, UDTs can be identified
@@ -190,8 +196,11 @@ func getColumns(
 			}
 			switch len(parts) {
 			case 1:
-				// Raw type, like INT8
+				// Raw type, like INT8 or INT8[]
 				typeName := parts[0].Raw()
+				if isArray {
+					typeName += "[]"
+				}
 				column.Parse = parseHelper(tx.Product, typeName)
 				column.Type = typeName
 			case 2:
@@ -200,14 +209,22 @@ func getColumns(
 				if err != nil {
 					return err
 				}
-				column.Type = ident.NewUDT(relSchema, parts[1])
+				if isArray {
+					column.Type = ident.NewUDTArray(relSchema, parts[1]).String()
+				} else {
+					column.Type = ident.NewUDT(relSchema, parts[1]).String()
+				}
 			case 3:
 				// Fully-qualified UDT.
 				relSchema, _, err := table.Schema().Relative(parts[0], parts[1])
 				if err != nil {
 					return err
 				}
-				column.Type = ident.NewUDT(relSchema, parts[2])
+				if isArray {
+					column.Type = ident.NewUDTArray(relSchema, parts[2]).String()
+				} else {
+					column.Type = ident.NewUDT(relSchema, parts[2]).String()
+				}
 			default:
 				return errors.Errorf("unexpected type name %q", rawColType)
 			}

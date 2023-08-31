@@ -293,7 +293,7 @@ func TestQueryTemplatesPG(t *testing.T) {
 			Name: ident.New("enum"),
 			Type: ident.NewUDT(
 				ident.MustSchema(ident.New("database"), ident.New("schema")),
-				ident.New("MyEnum")),
+				ident.New("MyEnum")).String(),
 		},
 	}
 

@@ -201,8 +201,8 @@ type ColData struct {
 	// used by a target database driver.
 	Parse   func(string) (any, bool)
 	Primary bool
-	// Type of the column. Dialect might choose to use a string representation or a enum.
-	Type any
+	// Type of the column.
+	Type string
 }
 
 // Equal returns true if the two ColData are equivalent under

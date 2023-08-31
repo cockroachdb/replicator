@@ -20,8 +20,8 @@ adds explicit typecasts: ($1::STRING, $2::INT), (...), (...), ...
             {{- if $pairIdx -}},{{- end -}}
             {{- if $pair.Expr -}}
                 ({{ $pair.Expr }})::{{ $pair.Column.Type }}
-            {{- else if isUDT $pair.Column.Type -}}
-                ${{ $pair.Index }}::{{ $pair.Column.Type }}
+            {{- else if isUDTArray $pair.Column -}}
+                ${{ $pair.Index }}::TEXT[]::{{ $pair.Column.Type }}
             {{- else if eq $pair.Column.Type "GEOGRAPHY" -}}
                 st_geogfromgeojson(${{ $pair.Index }}::JSONB)
             {{- else if eq $pair.Column.Type "GEOMETRY" -}}
