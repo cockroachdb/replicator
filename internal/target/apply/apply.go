@@ -327,7 +327,7 @@ func (a *apply) upsertLocked(
 			// in the input data, but that we don't actually want to
 			// make use of the provided value. For example, generated PK
 			// columns.
-			if targetColumn.UpsertPosition < 0 {
+			if targetColumn.UpsertIndex < 0 {
 				return nil
 			}
 
@@ -344,8 +344,15 @@ func (a *apply) upsertLocked(
 				}
 			}
 
+			// This loop is driven by the fields in the incoming
+			// payload, so we can just set the validity flag (if any) to
+			// a non-null value.
+			if targetColumn.ValidityIndex >= 0 {
+				allArgs[argIdx+targetColumn.ValidityIndex] = true
+			}
+
 			// Assign the value to the relevant offset in the args.
-			allArgs[argIdx+targetColumn.UpsertPosition] = value
+			allArgs[argIdx+targetColumn.UpsertIndex] = value
 			return nil
 		})
 		if err != nil {

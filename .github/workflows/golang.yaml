@@ -59,7 +59,7 @@ jobs:
 
       - name: Copyright headers
         if: ${{ always () }}
-        run: go run github.com/google/addlicense -c "The Cockroach Authors" -l apache -s -v  -check .
+        run: go run github.com/google/addlicense -c "The Cockroach Authors" -l apache -s -v  -check  -ignore '**/testdata/**/*.sql' .
 
       - name: Lint
         if: ${{ always() }}
