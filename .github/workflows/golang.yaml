@@ -81,6 +81,10 @@ jobs:
         if: ${{ always() }}
         run: go run github.com/google/go-licenses check .
 
+      - name: Ensure binary starts
+        if: ${{ always () }}
+        run: go run . help
+
   # Integration matrix tests for all supported CRDB and source DBs.
   tests:
     name: Integration Tests

@@ -62,12 +62,6 @@ type Config struct {
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.BaseConfig.Bind(f)
 
-	// We set the targetDB based on the value in the incoming HTTP
-	// request.
-	if err := f.MarkHidden("targetDB"); err != nil {
-		panic(err)
-	}
-
 	f.BoolVar(&c.FlushEveryTimestamp, "flushEveryTimestamp", false,
 		"preserve intermediate updates from the source in transactional mode; "+
 			"may negatively impact throughput")
