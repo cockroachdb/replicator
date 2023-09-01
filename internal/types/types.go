@@ -194,8 +194,10 @@ type Stagers interface {
 
 // ColData hold SQL column metadata.
 type ColData struct {
-	Ignored bool
-	Name    ident.Ident
+	// A SQL expression to use with sparse payloads.
+	DefaultExpr string
+	Ignored     bool
+	Name        ident.Ident
 	// A Parse function may be supplied to allow a string representation
 	// of a complex datatype to be converted into a type more readily
 	// used by a target database driver.
@@ -208,7 +210,8 @@ type ColData struct {
 // Equal returns true if the two ColData are equivalent under
 // case-insensitivity.
 func (d ColData) Equal(o ColData) bool {
-	return d.Ignored == o.Ignored &&
+	return d.DefaultExpr == o.DefaultExpr &&
+		d.Ignored == o.Ignored &&
 		ident.Equal(d.Name, o.Name) &&
 		// Parse is excluded, since functions are not comparable.
 		d.Primary == o.Primary &&

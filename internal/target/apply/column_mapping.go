@@ -39,20 +39,23 @@ type columnMapping struct {
 	Columns                      []types.ColData    // All columns named in an upsert statement.
 	Data                         []types.ColData    // Non-PK, non-ignored columns.
 	Deadlines                    types.Deadlines    // Allow too-old data to just be dropped.
+	DeleteParameterCount         int                // The number of SQL arguments.
 	Exprs                        *ident.Map[string] // Value-replacement expressions.
 	ExtrasColIdx                 int                // Position of the extras column, or -1 if unconfigured.
 	Product                      types.Product      // Target database product.
 	PK                           []types.ColData    // The names of the PK columns.
 	PKDelete                     []types.ColData    // The names of the PK columns to delete.
 	TableName                    ident.Table        // The target table.
-	UpsertParameterCount         int                // The number of SQL arguments.
+	UpsertParameterCount         int                // The number of SQL (validity) arguments.
 }
 
 // positionalColumn augments ColData with the offset of the positional
-// substitution parameter to be used within a batch of values.
+// substitution parameter offsets to be used within a batch of values.
 type positionalColumn struct {
 	types.ColData
-	UpsertPosition int
+	DeleteIndex   int
+	UpsertIndex   int
+	ValidityIndex int
 }
 
 func newColumnMapping(
@@ -81,7 +84,9 @@ func newColumnMapping(
 		}
 
 		// PK columns are always mentioned in DELETE statements.
+		deletePosition := -1
 		if col.Primary {
+			deletePosition = len(ret.PKDelete)
 			ret.PKDelete = append(ret.PKDelete, col)
 		}
 
@@ -89,7 +94,11 @@ func newColumnMapping(
 		// negative value allows us to remember that the column exists,
 		// but that we don't intend to do anything with incoming data
 		// for that column.
-		positionalParameterIndex := -1
+		upsertPosition := -1
+		// Columns with SQL DEFAULT values require a flag to distinguish
+		// between unset fields in the incoming payload and explicit
+		// NULL values.
+		validityPosition := -1
 		// We also determine whether the column appears in an upsert
 		// statement at all.
 		willUpsert := false
@@ -106,7 +115,12 @@ func newColumnMapping(
 			// the template will bake in a fixed expression.
 			willUpsert = true
 		} else {
-			positionalParameterIndex = currentParameterIndex
+			if col.DefaultExpr != "" {
+				validityPosition = currentParameterIndex
+				currentParameterIndex++
+			}
+
+			upsertPosition = currentParameterIndex
 			currentParameterIndex++
 			willUpsert = true
 		}
@@ -116,7 +130,12 @@ func newColumnMapping(
 		// ensures that all data that is part of a mutation has
 		// somewhere to go or has been explicitly ignored, either by the
 		// target database or by the user.
-		ret.Put(col.Name, positionalColumn{col, positionalParameterIndex})
+		ret.Put(col.Name, positionalColumn{
+			ColData:       col,
+			DeleteIndex:   deletePosition,
+			UpsertIndex:   upsertPosition,
+			ValidityIndex: validityPosition,
+		})
 
 		if !willUpsert {
 			continue
@@ -141,9 +160,10 @@ func newColumnMapping(
 			ret.Exprs.Put(col.Name, expr)
 		}
 		if ident.Equal(col.Name, cfg.Extras) {
-			ret.ExtrasColIdx = positionalParameterIndex
+			ret.ExtrasColIdx = upsertPosition
 		}
 	}
+	ret.DeleteParameterCount = len(ret.PKDelete)
 	ret.UpsertParameterCount = currentParameterIndex
 
 	// We also allow the user to force non-existent columns to be
@@ -156,7 +176,9 @@ func newColumnMapping(
 					Name:    tgt,
 					Type:    "VOID",
 				},
-				UpsertPosition: -1,
+				DeleteIndex:   -1,
+				UpsertIndex:   -1,
+				ValidityIndex: -1,
 			})
 		}
 		return nil
