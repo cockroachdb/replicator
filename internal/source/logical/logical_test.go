@@ -76,13 +76,14 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	const numEmits = 100
 	gen.emit(numEmits)
 
-	var dialect logical.Dialect = gen
+	var chaosProb float32
 	if withChaos {
-		dialect = logical.WithChaos(gen, 0.05)
+		chaosProb = 0.1
 	}
 
 	cfg := &logical.BaseConfig{
 		ApplyTimeout:   time.Second, // Increase to make using the debugger easier.
+		ChaosProb:      chaosProb,
 		Immediate:      immediate,
 		RetryDelay:     time.Nanosecond,
 		StagingConn:    fixture.StagingPool.ConnectionString,
@@ -103,7 +104,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	defer cancelFactory()
 
 	loop, cancelLoop, err := factory.Start(&logical.LoopConfig{
-		Dialect:      dialect,
+		Dialect:      gen,
 		LoopName:     "generator",
 		TargetSchema: dbName,
 	})

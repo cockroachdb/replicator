@@ -18,6 +18,7 @@ package logical
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 
 	"github.com/bobvawter/latch"
@@ -34,6 +35,7 @@ import (
 type fanWorkers struct {
 	appliers     types.Appliers
 	batchSize    int
+	chaosProb    float32 // Set in tests via BaseConfig.ChaosProb.
 	pending      *latch.Counter
 	targetPool   *types.TargetPool
 	stamp        stamp.Stamp
@@ -53,6 +55,7 @@ func newFanWorkers(ctx context.Context, loop *loop, stamp stamp.Stamp) *fanWorke
 	ret := &fanWorkers{
 		appliers:   loop.factory.appliers,
 		batchSize:  batches.Size(),
+		chaosProb:  loop.factory.baseConfig.ChaosProb,
 		pending:    latch.New(),
 		targetPool: loop.factory.targetPool,
 		stamp:      stamp,
@@ -132,21 +135,48 @@ func (t *fanWorkers) Wait(ctx context.Context, drain bool) error {
 	}
 }
 
+// chaos sometimes returns an error for testing.
+func (t *fanWorkers) chaos() error {
+	if t.chaosProb != 0 && rand.Float32() < t.chaosProb {
+		return errors.New("fanWorkers.chaos")
+	}
+	return nil
+}
+
 // loop waits for mutations to be enqueued and then applies them.
 func (t *fanWorkers) loop(ctx context.Context) error {
-	for {
+	// Loop extracted to be able to use defer keyword for cleanup.
+	tryLoop := func() (bool, error) {
 		table, muts, moreWork := t.waitForWork()
 		if !moreWork {
-			return nil
+			return false, nil
+		}
+		// Ensure that callers to Flush() aren't blocked if mutations
+		// can't be applied.
+		defer t.pending.Apply(-len(muts))
+
+		// Simulate error when trying to apply data.
+		if err := t.chaos(); err != nil {
+			return false, err
 		}
 		applier, err := t.appliers.Get(ctx, table)
 		if err != nil {
-			return errors.Wrapf(err, "table %s", table)
+			return false, errors.Wrapf(err, "table %s", table)
 		}
 		if err := applier.Apply(ctx, t.targetPool, muts); err != nil {
-			return errors.Wrapf(err, "table %s", table)
+			return false, errors.Wrapf(err, "table %s", table)
 		}
-		t.pending.Apply(-len(muts))
+		return true, nil
+	}
+
+	for {
+		running, err := tryLoop()
+		if err != nil {
+			return err
+		}
+		if !running {
+			return nil
+		}
 	}
 }
 
