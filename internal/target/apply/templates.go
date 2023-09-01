@@ -139,14 +139,19 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 // substitution-parameter index.
 type varPair struct {
 	Column types.ColData
-	// If non-empty, a user-configured SQL expression for the value.
-	// The Index substitution parameter will have been injected into
-	// the expressed.
+	// If non-empty, a user-configured SQL expression for the value
+	// which overrides any other SQL generation that we may perform. The
+	// Index substitution parameter will have been injected into the
+	// expression.
 	Expr string
-	// The 1-based SQL substitution parameter index. A zero value
+	// A 1-based SQL substitution parameter index. A zero value
 	// indicates that the varPair has a constant expression which
 	// does not depend on an injected value.
-	Index int
+	Param int
+	// A 1-based parameter for a boolean value to indicate if a value
+	// for the column was present in the original payload. A zero
+	// value means the template should always expect a value.
+	ValidityParam int
 }
 
 // Vars is a generator function that returns windows of 1-based
@@ -154,39 +159,46 @@ type varPair struct {
 // generate the multi-VALUES ($1,$2, ...), ($55, $56) clauses.
 func (t *templates) Vars() ([][]varPair, error) {
 	ret := make([][]varPair, t.RowCount)
-	pairIdx := 1
-	for row := range ret {
-		cols := t.Columns
-		if t.ForDelete {
-			cols = t.PKDelete
-		}
+	cols := t.Columns
+	if t.ForDelete {
+		cols = t.PKDelete
+	}
 
+	for row := range ret {
 		ret[row] = make([]varPair, len(cols))
 		for colIdx, col := range cols {
-			vp := varPair{
-				Column: col,
-				Index:  pairIdx,
+			vp := varPair{Column: col}
+
+			positions := t.Positions.GetZero(col.Name)
+			if t.ForDelete {
+				offset := row * t.DeleteParameterCount
+				if positions.DeleteIndex >= 0 {
+					vp.Param = offset + positions.DeleteIndex + 1
+				} else {
+					return nil, errors.Errorf("no delete position for %s", col.Name)
+				}
+			} else {
+				offset := row * t.UpsertParameterCount
+				vp.Param = offset + positions.UpsertIndex + 1
+
+				// ValidityIndex is optional.
+				if positions.ValidityIndex >= 0 {
+					vp.ValidityParam = offset + positions.ValidityIndex + 1
+				}
 			}
-			pairIdx++
 
 			if pattern, ok := t.Exprs.Get(col.Name); ok {
 				var reference string
 				switch t.Product {
 				case types.ProductCockroachDB, types.ProductPostgreSQL:
-					reference = fmt.Sprintf("$%d", vp.Index)
+					reference = fmt.Sprintf("$%d", vp.Param)
 				case types.ProductOracle:
-					reference = fmt.Sprintf(":ref%d", vp.Index)
+					reference = fmt.Sprintf(":ref%d", vp.Param)
 				default:
 					return nil, errors.Errorf("unimplemented product %s", t.Product)
 				}
 
-				vp.Expr = strings.ReplaceAll(
-					pattern, applycfg.SubstitutionToken, reference)
-				// A constant expression doesn't occupy an index slot.
-				if vp.Expr == pattern {
-					vp.Index = 0
-					pairIdx--
-				}
+				vp.Expr = strings.ReplaceAll(pattern, applycfg.SubstitutionToken, reference)
 			}
 
 			ret[row][colIdx] = vp

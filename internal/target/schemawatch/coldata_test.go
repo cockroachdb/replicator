@@ -218,6 +218,21 @@ func TestGetColumns(t *testing.T) {
 				"e", "NUMBER(4,2)",
 			),
 		},
+		// Check default value extraction
+		{
+			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT 'Hello World!'",
+			primaryKeys: []string{"a"},
+			dataCols:    []string{"b"},
+			check: func(t *testing.T, data []types.ColData) {
+				for _, col := range data {
+					if ident.Equal(col.Name, ident.New("b")) {
+						assert.Equal(t, "'Hello World!'", col.DefaultExpr)
+						return
+					}
+				}
+				assert.Fail(t, "did not find b column")
+			},
+		},
 	}
 
 	// Enum with a boring name.

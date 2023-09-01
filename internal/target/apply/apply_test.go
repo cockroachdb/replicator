@@ -55,19 +55,22 @@ func TestApply(t *testing.T) {
 	// Note the mixed-case in the json fields. This will ensure that we
 	// can insert data in a case-insensitive fashion.
 	type Payload struct {
-		Pk0 int    `json:"Pk0"`
-		Pk1 string `json:"pK1"`
+		Pk0        int    `json:"Pk0"`
+		Pk1        string `json:"pK1"`
+		HasDefault string `json:"has_default,omitempty"`
 	}
 	var tableSchema string
 	switch fixture.TargetPool.Product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// extras could also be JSONB, but validation is easier if we
 		// control the exact bytes that come back.
-		tableSchema = "CREATE TABLE %s (pk0 INT, pk1 STRING, extras STRING, PRIMARY KEY (pk0,pk1))"
+		tableSchema = "CREATE TABLE %s (pk0 INT, pk1 STRING, extras STRING, " +
+			"has_default STRING NOT NULL DEFAULT 'Hello', PRIMARY KEY (pk0,pk1))"
 	case types.ProductOracle:
 		// The lower-case names in the payload will be matched to the
 		// upper-case names that exist within the database.
-		tableSchema = `CREATE TABLE %s (PK0 INT, PK1 VARCHAR2(4000), EXTRAS VARCHAR2(4000), PRIMARY KEY (PK0,PK1))`
+		tableSchema = "CREATE TABLE %s (PK0 INT, PK1 VARCHAR2(4000), EXTRAS VARCHAR2(4000), " +
+			"HAS_DEFAULT VARCHAR2(4000) DEFAULT 'Hello' NOT NULL, PRIMARY KEY (PK0,PK1))"
 	default:
 		a.FailNow("untested product")
 	}
@@ -75,6 +78,26 @@ func TestApply(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
+
+	// A helper to count the number of rows where has_default = lookFor.
+	countHasDefault := func(lookFor string) (ct int, err error) {
+		var q string
+		switch fixture.TargetPool.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			q = "SELECT count(*) FROM %s WHERE has_default=$1"
+		case types.ProductOracle:
+			q = "SELECT count(*) FROM %s WHERE has_default=:p1"
+		default:
+			panic("unimplemented")
+		}
+
+		err = fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf(q, tbl.Name()),
+			lookFor,
+		).Scan(&ct)
+		return
+	}
+
 	// Use this jumbled name when accessing the API.
 	jumbleName := sinktest.JumbleTable(tbl.Name())
 
@@ -94,6 +117,9 @@ func TestApply(t *testing.T) {
 		dels := make([]types.Mutation, count)
 		for i := range adds {
 			p := Payload{Pk0: i, Pk1: fmt.Sprintf("X%dX", i)}
+			if i%2 == 0 {
+				p.HasDefault = "World"
+			}
 			bytes, err := json.Marshal(p)
 			a.NoError(err)
 			adds[i] = types.Mutation{Data: bytes, Key: bytes}
@@ -109,11 +135,43 @@ func TestApply(t *testing.T) {
 		a.Equal(count, ct)
 		a.NoError(err)
 
+		// Ensure SQL DEFAULT value was set.
+		ct, err = countHasDefault("Hello")
+		a.NoError(err)
+		a.Equal(count/2, ct)
+
+		// Ensure SQL DEFAULT value was replaced
+		ct, err = countHasDefault("World")
+		a.NoError(err)
+		a.Equal(count/2, ct)
+
 		// Verify that they can be deleted.
 		a.NoError(app.Apply(ctx, fixture.TargetPool, dels))
 		ct, err = tbl.RowCount(ctx)
 		a.Equal(0, ct)
 		a.NoError(err)
+	})
+
+	// Document that if the incoming payload has an explicit null value,
+	// we will attempt to send it to the target. This should then fail
+	// the NOT NULL constraint.
+	t.Run("explicit_null", func(t *testing.T) {
+		a := assert.New(t)
+		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+			{
+				Data: []byte(`{"pk0":1, "pk1":0, "has_default":null}`),
+				Key:  []byte(`[1, 0]`),
+			},
+		}); a.Error(err) {
+			switch fixture.TargetPool.Product {
+			case types.ProductCockroachDB, types.ProductPostgreSQL:
+				a.ErrorContains(err, "violates not-null constraint (SQLSTATE 23502)")
+			case types.ProductOracle:
+				a.ErrorContains(err, "ORA-01400: cannot insert NULL into")
+			default:
+				a.Fail("unimplemented")
+			}
+		}
 	})
 
 	// Verify unexpected incoming column

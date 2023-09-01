@@ -28,7 +28,17 @@ pairExpr emits a type-cast SQL expression for a single positional argument.
     {{- if $pair.Expr -}}
         CAST({{ $pair.Expr }} AS {{ $pair.Column.Type }})
     {{- else -}}
-        CAST(:p{{ $pair.Index }} AS {{ $pair.Column.Type }})
+
+        {{- if $pair.ValidityParam -}}
+            CASE WHEN :p{{ $pair.ValidityParam }} IS NOT NULL THEN {{- sp -}}
+        {{- end -}}
+
+        CAST(:p{{ $pair.Param }} AS {{ $pair.Column.Type }})
+
+        {{- if $pair.ValidityParam -}}
+            {{- sp -}} ELSE {{ $pair.Column.DefaultExpr }} END
+        {{- end -}}
+
     {{- end -}}
 {{- end -}}
 

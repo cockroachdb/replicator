@@ -66,6 +66,7 @@ WITH atc AS (
       DATA_TYPE || '(' || DATA_LENGTH || ')'
     ELSE DATA_TYPE
   END DATA_TYPE,
+  DATA_DEFAULT,
   VIRTUAL_COLUMN FROM ALL_TAB_COLS
 ),
      pk_cols  AS (SELECT OWNER, TABLE_NAME, CONSTRAINT_NAME FROM ALL_CONSTRAINTS WHERE CONSTRAINT_TYPE='P'),
@@ -73,6 +74,7 @@ WITH atc AS (
 SELECT COLUMN_NAME,
        COALESCE(IS_PK, 'f'),
        atc.DATA_TYPE,
+       atc.DATA_DEFAULT,
        CASE WHEN atc.VIRTUAL_COLUMN = 'YES' THEN 't' ELSE 'f' END
 FROM atc
 LEFT JOIN pk_cols  USING (OWNER, TABLE_NAME)
@@ -104,13 +106,15 @@ pks AS (
 	JOIN pk_name ON (index_name = constraint_name)
 	WHERE NOT storing),
 cols AS (
-	SELECT column_name, data_type, generation_expression != '' AS ignored
+	SELECT column_name, data_type, column_default,
+           generation_expression != '' AS ignored
 	FROM [SHOW COLUMNS FROM %[1]s]),
 ordered AS (
 	SELECT column_name, min(ifnull(pks.seq_in_index, 2048)) AS seq_in_index FROM
 	cols LEFT JOIN pks USING (column_name)
     GROUP BY column_name)
-SELECT cols.column_name, pks.seq_in_index IS NOT NULL, cols.data_type, cols.ignored
+SELECT cols.column_name, pks.seq_in_index IS NOT NULL,
+       cols.data_type, cols.column_default, cols.ignored
 FROM cols
 JOIN ordered USING (column_name)
 LEFT JOIN pks USING (column_name)
@@ -155,13 +159,27 @@ func getColumns(
 		foundPrimay := false
 		for rows.Next() {
 			var column types.ColData
+			var defaultExpr sql.NullString
 			var rawColType, name string
-			if err := rows.Scan(&name, &column.Primary, &rawColType, &column.Ignored); err != nil {
+			if err := rows.Scan(&name, &column.Primary, &rawColType, &defaultExpr, &column.Ignored); err != nil {
 				return err
 			}
 			column.Name = ident.New(name)
 			if column.Primary {
 				foundPrimay = true
+			}
+			if defaultExpr.Valid {
+				column.DefaultExpr = defaultExpr.String
+				// CockroachDB prior to v23.1 returns the datatype in
+				// the expression (e.g. `Foo`:::STRING). We want to
+				// strip that type assertion out to generate consistent
+				// behavior.
+				castIdx := strings.LastIndex(column.DefaultExpr, ":::")
+				if castIdx != -1 {
+					column.DefaultExpr = column.DefaultExpr[:castIdx]
+				}
+				// Oracle also likes to include some dangling whitespace.
+				column.DefaultExpr = strings.TrimSpace(column.DefaultExpr)
 			}
 
 			isArray := strings.HasSuffix(rawColType, "[]")

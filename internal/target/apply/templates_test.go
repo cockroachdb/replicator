@@ -18,91 +18,75 @@ package apply
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// Set this to true to rewrite the golden-output files.
+const rewriteFiles = false
+
 func TestQueryTemplatesOra(t *testing.T) {
-	cols := []types.ColData{
-		{
-			Name:    ident.New("pk0"),
-			Primary: true,
-			Type:    "VARCHAR(256)",
+	global := &templateGlobal{
+		cols: []types.ColData{
+			{
+				Name:    ident.New("pk0"),
+				Primary: true,
+				Type:    "VARCHAR(256)",
+			},
+			{
+				Name:    ident.New("pk1"),
+				Primary: true,
+				Type:    "INT",
+			},
+			{
+				Name: ident.New("val0"),
+				Type: "VARCHAR(256)",
+			},
+			{
+				Name: ident.New("val1"),
+				Type: "VARCHAR(256)",
+			},
+			{
+				Ignored: true,
+				Name:    ident.New("ignored_pk"),
+				Primary: true,
+				Type:    "INT",
+			},
+			{
+				Ignored: true,
+				Name:    ident.New("ignored_val"),
+				Primary: false,
+				Type:    "INT",
+			},
+			{
+				Name:        ident.New("has_default"),
+				Type:        "INT8",
+				DefaultExpr: "expr()",
+			},
 		},
-		{
-			Name:    ident.New("pk1"),
-			Primary: true,
-			Type:    "INT",
-		},
-		{
-			Name: ident.New("val0"),
-			Type: "VARCHAR(256)",
-		},
-		{
-			Name: ident.New("val1"),
-			Type: "VARCHAR(256)",
-		},
-		{
-			Ignored: true,
-			Name:    ident.New("ignored_pk"),
-			Primary: true,
-			Type:    "INT",
-		},
-		{
-			Ignored: true,
-			Name:    ident.New("ignored_val"),
-			Primary: false,
-			Type:    "INT",
-		},
+		dir:     "ora",
+		product: types.ProductOracle,
+		tableID: ident.NewTable(
+			ident.MustSchema(ident.New("schema")),
+			ident.New("table")),
 	}
 
-	tableID := ident.NewTable(
-		ident.MustSchema(ident.New("schema")),
-		ident.New("table"))
-
-	tcs := []struct {
-		name   string
-		cfg    *applycfg.Config
-		delete string
-		upsert string
-	}{
+	tcs := []*templateTestCase{
 		{
 			name: "base",
-			upsert: `MERGE INTO "schema"."table" USING (
-WITH data ("pk0","pk1","val0","val1") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:p2 AS INT), CAST(:p3 AS VARCHAR(256)), CAST(:p4 AS VARCHAR(256)) FROM DUAL UNION ALL 
-SELECT CAST(:p5 AS VARCHAR(256)), CAST(:p6 AS INT), CAST(:p7 AS VARCHAR(256)), CAST(:p8 AS VARCHAR(256)) FROM DUAL
-)
-SELECT * FROM data) x ON ("schema"."table"."pk0" = x."pk0" AND "schema"."table"."pk1" = x."pk1")
-WHEN NOT MATCHED THEN INSERT ("pk0","pk1","val0","val1") VALUES (x."pk0", x."pk1", x."val0", x."val1")
-WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 		},
 		{
 			name: "cas",
 			cfg: &applycfg.Config{
 				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
 			},
-			upsert: `MERGE INTO "schema"."table" USING (
-WITH data ("pk0","pk1","val0","val1") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:p2 AS INT), CAST(:p3 AS VARCHAR(256)), CAST(:p4 AS VARCHAR(256)) FROM DUAL UNION ALL 
-SELECT CAST(:p5 AS VARCHAR(256)), CAST(:p6 AS INT), CAST(:p7 AS VARCHAR(256)), CAST(:p8 AS VARCHAR(256)) FROM DUAL
-),
-active AS (
-SELECT "pk0","pk1", "table"."val1","table"."val0"
-FROM "schema"."table" JOIN data USING ("pk0","pk1")),
-action AS (
-SELECT "pk0","pk1", data."val0",data."val1" FROM data
-LEFT JOIN active USING ("pk0","pk1") WHERE active."val1" IS NULL OR
-(data."val1",data."val0") > (active."val1",active."val0"))
-SELECT * FROM action) x ON ("schema"."table"."pk0" = x."pk0" AND "schema"."table"."pk1" = x."pk1")
-WHEN NOT MATCHED THEN INSERT ("pk0","pk1","val0","val1") VALUES (x."pk0", x."pk1", x."val0", x."val1")
-WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 		},
 		{
 			name: "deadline",
@@ -112,15 +96,6 @@ WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 					ident.New("val0"), time.Hour,
 				),
 			},
-			upsert: `MERGE INTO "schema"."table" USING (
-WITH data ("pk0","pk1","val0","val1") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:p2 AS INT), CAST(:p3 AS VARCHAR(256)), CAST(:p4 AS VARCHAR(256)) FROM DUAL UNION ALL 
-SELECT CAST(:p5 AS VARCHAR(256)), CAST(:p6 AS INT), CAST(:p7 AS VARCHAR(256)), CAST(:p8 AS VARCHAR(256)) FROM DUAL
-),
-deadlined AS (SELECT * FROM data WHERE("val0"> (CURRENT_TIMESTAMP - NUMTODSINTERVAL(3600, 'SECOND')))AND("val1"> (CURRENT_TIMESTAMP - NUMTODSINTERVAL(1, 'SECOND'))))
-SELECT * FROM deadlined) x ON ("schema"."table"."pk0" = x."pk0" AND "schema"."table"."pk1" = x."pk1")
-WHEN NOT MATCHED THEN INSERT ("pk0","pk1","val0","val1") VALUES (x."pk0", x."pk1", x."val0", x."val1")
-WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 		},
 		{
 			name: "casDeadline",
@@ -131,22 +106,6 @@ WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 					ident.New("val1"), time.Second,
 				),
 			},
-			upsert: `MERGE INTO "schema"."table" USING (
-WITH data ("pk0","pk1","val0","val1") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:p2 AS INT), CAST(:p3 AS VARCHAR(256)), CAST(:p4 AS VARCHAR(256)) FROM DUAL UNION ALL 
-SELECT CAST(:p5 AS VARCHAR(256)), CAST(:p6 AS INT), CAST(:p7 AS VARCHAR(256)), CAST(:p8 AS VARCHAR(256)) FROM DUAL
-),
-deadlined AS (SELECT * FROM data WHERE("val0"> (CURRENT_TIMESTAMP - NUMTODSINTERVAL(3600, 'SECOND')))AND("val1"> (CURRENT_TIMESTAMP - NUMTODSINTERVAL(1, 'SECOND')))),
-active AS (
-SELECT "pk0","pk1", "table"."val1","table"."val0"
-FROM "schema"."table" JOIN deadlined USING ("pk0","pk1")),
-action AS (
-SELECT "pk0","pk1", deadlined."val0",deadlined."val1" FROM deadlined
-LEFT JOIN active USING ("pk0","pk1") WHERE active."val1" IS NULL OR
-(deadlined."val1",deadlined."val0") > (active."val1",active."val0"))
-SELECT * FROM action) x ON ("schema"."table"."pk0" = x."pk0" AND "schema"."table"."pk1" = x."pk1")
-WHEN NOT MATCHED THEN INSERT ("pk0","pk1","val0","val1") VALUES (x."pk0", x."pk1", x."val0", x."val1")
-WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 		},
 		{
 			// This ignore setup results in a PK-only table.
@@ -156,13 +115,6 @@ WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 					"val0", true,
 					"val1", true,
 				)},
-			upsert: `MERGE INTO "schema"."table" USING (
-WITH data ("pk0","pk1") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:p2 AS INT) FROM DUAL UNION ALL 
-SELECT CAST(:p3 AS VARCHAR(256)), CAST(:p4 AS INT) FROM DUAL
-)
-SELECT * FROM data) x ON ("schema"."table"."pk0" = x."pk0" AND "schema"."table"."pk1" = x."pk1")
-WHEN NOT MATCHED THEN INSERT ("pk0","pk1") VALUES (x."pk0", x."pk1")`,
 		},
 		{
 			// Changing the source names should have no effect on the
@@ -175,14 +127,6 @@ WHEN NOT MATCHED THEN INSERT ("pk0","pk1") VALUES (x."pk0", x."pk1")`,
 					ident.New("unknown"), ident.New("is ok"),
 				),
 			},
-			upsert: `MERGE INTO "schema"."table" USING (
-WITH data ("pk0","pk1","val0","val1") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:p2 AS INT), CAST(:p3 AS VARCHAR(256)), CAST(:p4 AS VARCHAR(256)) FROM DUAL UNION ALL 
-SELECT CAST(:p5 AS VARCHAR(256)), CAST(:p6 AS INT), CAST(:p7 AS VARCHAR(256)), CAST(:p8 AS VARCHAR(256)) FROM DUAL
-)
-SELECT * FROM data) x ON ("schema"."table"."pk0" = x."pk0" AND "schema"."table"."pk1" = x."pk1")
-WHEN NOT MATCHED THEN INSERT ("pk0","pk1","val0","val1") VALUES (x."pk0", x."pk1", x."val0", x."val1")
-WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 		},
 		{
 			// Verify user-configured expressions, with zero, one, and
@@ -199,147 +143,86 @@ WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 					ident.New("geog"), true,
 				),
 			},
-			delete: `DELETE FROM "schema"."table" WHERE ("pk0","pk1","ignored_pk")IN((CAST(:p1 AS VARCHAR(256)),CAST(:ref2+:ref2 AS INT),CAST(:p3 AS INT)),
-(CAST(:p4 AS VARCHAR(256)),CAST(:ref5+:ref5 AS INT),CAST(:p6 AS INT)))`,
-			upsert: `MERGE INTO "schema"."table" USING (
-WITH data ("pk0","pk1","val0","val1") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:ref2+:ref2 AS INT), CAST('fixed' AS VARCHAR(256)), CAST(:ref3||'foobar' AS VARCHAR(256)) FROM DUAL UNION ALL 
-SELECT CAST(:p4 AS VARCHAR(256)), CAST(:ref5+:ref5 AS INT), CAST('fixed' AS VARCHAR(256)), CAST(:ref6||'foobar' AS VARCHAR(256)) FROM DUAL
-)
-SELECT * FROM data) x ON ("schema"."table"."pk0" = x."pk0" AND "schema"."table"."pk1" = x."pk1")
-WHEN NOT MATCHED THEN INSERT ("pk0","pk1","val0","val1") VALUES (x."pk0", x."pk1", x."val0", x."val1")
-WHEN MATCHED THEN UPDATE SET "val0" = x."val0", "val1" = x."val1"`,
 		},
 	}
 
-	const typicalDelete = `DELETE FROM "schema"."table" WHERE ("pk0","pk1","ignored_pk")IN((CAST(:p1 AS VARCHAR(256)),CAST(:p2 AS INT),CAST(:p3 AS INT)),
-(CAST(:p4 AS VARCHAR(256)),CAST(:p5 AS INT),CAST(:p6 AS INT)))`
-
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			a := assert.New(t)
-			r := require.New(t)
-			cfg := applycfg.NewConfig()
-			if tc.cfg != nil {
-				cfg.Patch(tc.cfg)
-			}
-
-			mapping, err := newColumnMapping(cfg, cols, types.ProductOracle, tableID)
-			r.NoError(err)
-
-			tmpls, err := newTemplates(mapping)
-			r.NoError(err)
-
-			s, err := tmpls.deleteExpr(2)
-			a.NoError(err)
-			if tc.delete == "" {
-				a.Equal(typicalDelete, s)
-			} else {
-				a.Equal(tc.delete, s)
-			}
-
-			s, err = tmpls.upsertExpr(2)
-
-			fmt.Println(s)
-
-			a.NoError(err)
-			a.Equal(tc.upsert, s)
+			checkTemplate(t, global, tc)
 		})
 	}
 }
 
 func TestQueryTemplatesPG(t *testing.T) {
-	cols := []types.ColData{
-		{
-			Name:    ident.New("pk0"),
-			Primary: true,
-			Type:    "STRING",
+	global := &templateGlobal{
+		cols: []types.ColData{
+			{
+				Name:    ident.New("pk0"),
+				Primary: true,
+				Type:    "STRING",
+			},
+			{
+				Name:    ident.New("pk1"),
+				Primary: true,
+				Type:    "INT8",
+			},
+			{
+				Name: ident.New("val0"),
+				Type: "STRING",
+			},
+			{
+				Name: ident.New("val1"),
+				Type: "STRING",
+			},
+			{
+				Ignored: true,
+				Name:    ident.New("ignored_pk"),
+				Primary: true,
+				Type:    "STRING",
+			},
+			{
+				Ignored: true,
+				Name:    ident.New("ignored_val"),
+				Primary: false,
+				Type:    "STRING",
+			},
+			// Field types with special handling
+			{
+				Name: ident.New("geom"),
+				Type: "GEOMETRY",
+			},
+			{
+				Name: ident.New("geog"),
+				Type: "GEOGRAPHY",
+			},
+			{
+				Name: ident.New("enum"),
+				Type: ident.NewUDT(
+					ident.MustSchema(ident.New("database"), ident.New("schema")),
+					ident.New("MyEnum")).String(),
+			},
+			{
+				Name:        ident.New("has_default"),
+				Type:        "INT8",
+				DefaultExpr: "expr()",
+			},
 		},
-		{
-			Name:    ident.New("pk1"),
-			Primary: true,
-			Type:    "INT8",
-		},
-		{
-			Name: ident.New("val0"),
-			Type: "STRING",
-		},
-		{
-			Name: ident.New("val1"),
-			Type: "STRING",
-		},
-		{
-			Ignored: true,
-			Name:    ident.New("ignored_pk"),
-			Primary: true,
-			Type:    "STRING",
-		},
-		{
-			Ignored: true,
-			Name:    ident.New("ignored_val"),
-			Primary: false,
-			Type:    "STRING",
-		},
-		// Field types with special handling
-		{
-			Name: ident.New("geom"),
-			Type: "GEOMETRY",
-		},
-		{
-			Name: ident.New("geog"),
-			Type: "GEOGRAPHY",
-		},
-		{
-			Name: ident.New("enum"),
-			Type: ident.NewUDT(
-				ident.MustSchema(ident.New("database"), ident.New("schema")),
-				ident.New("MyEnum")).String(),
-		},
+		dir:     "pg",
+		product: types.ProductCockroachDB,
+		tableID: ident.NewTable(
+			ident.MustSchema(ident.New("database"), ident.New("schema")),
+			ident.New("table")),
 	}
 
-	tableID := ident.NewTable(
-		ident.MustSchema(ident.New("database"), ident.New("schema")),
-		ident.New("table"))
-
-	const typicalDelete = `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1","ignored_pk")IN(($1::STRING,$2::INT8,$3::STRING),
-($4::STRING,$5::INT8,$6::STRING))`
-
-	tcs := []struct {
-		name   string
-		cfg    *applycfg.Config
-		delete string
-		upsert string
-	}{
+	tcs := []*templateTestCase{
 		{
 			name: "base",
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","geom","geog","enum"
-) VALUES
-($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB),$7::"database"."schema"."MyEnum"),
-($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum")`,
 		},
 		{
 			name: "cas",
 			cfg: &applycfg.Config{
 				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
 			},
-			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
-VALUES
-($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB),$7::"database"."schema"."MyEnum"),
-($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum")),
-current AS (
-SELECT "pk0","pk1", "table"."val1","table"."val0"
-FROM "database"."schema"."table"
-JOIN data
-USING ("pk0","pk1")),
-action AS (
-SELECT data.* FROM data
-LEFT JOIN current
-USING ("pk0","pk1")
-WHERE current."pk0" IS NULL OR
-(data."val1",data."val0") > (current."val1",current."val0"))
-UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum")
-SELECT * FROM action`,
 		},
 		{
 			name: "deadline",
@@ -349,13 +232,6 @@ SELECT * FROM action`,
 					ident.New("val0"), time.Hour,
 				),
 			},
-			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
-VALUES
-($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB),$7::"database"."schema"."MyEnum"),
-($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum")),
-deadlined AS (SELECT * FROM data WHERE("val0">now()-'1h0m0s'::INTERVAL)AND("val1">now()-'1s'::INTERVAL))
-UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum")
-SELECT * FROM deadlined`,
 		},
 		{
 			name: "casDeadline",
@@ -366,24 +242,6 @@ SELECT * FROM deadlined`,
 					ident.New("val1"), time.Second,
 				),
 			},
-			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
-VALUES
-($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB),$7::"database"."schema"."MyEnum"),
-($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum")),
-deadlined AS (SELECT * FROM data WHERE("val0">now()-'1h0m0s'::INTERVAL)AND("val1">now()-'1s'::INTERVAL)),
-current AS (
-SELECT "pk0","pk1", "table"."val1","table"."val0"
-FROM "database"."schema"."table"
-JOIN deadlined
-USING ("pk0","pk1")),
-action AS (
-SELECT deadlined.* FROM deadlined
-LEFT JOIN current
-USING ("pk0","pk1")
-WHERE current."pk0" IS NULL OR
-(deadlined."val1",deadlined."val0") > (current."val1",current."val0"))
-UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum")
-SELECT * FROM action`,
 		},
 		{
 			name: "ignore",
@@ -393,17 +251,12 @@ SELECT * FROM action`,
 					ident.New("geog"), true,
 				),
 			},
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","enum"
-) VALUES
-($1::STRING,$2::INT8,$3::STRING,$4::STRING,$5::"database"."schema"."MyEnum"),
-($6::STRING,$7::INT8,$8::STRING,$9::STRING,$10::"database"."schema"."MyEnum")`,
 		},
 		{
 			// Changing the source names should have no effect on the
 			// SQL that gets generated; we only care about the different
 			// value when looking up values in the incoming mutation.
-			name: "source names",
+			name: "source_names",
 			cfg: &applycfg.Config{
 				SourceNames: ident.MapOf[applycfg.SourceColumn](
 					ident.New("val1"), ident.New("valRenamed"),
@@ -411,11 +264,6 @@ SELECT * FROM action`,
 					ident.New("unknown"), ident.New("is ok"),
 				),
 			},
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","geom","geog","enum"
-) VALUES
-($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB),$7::"database"."schema"."MyEnum"),
-($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum")`,
 		},
 		{
 			// Verify user-configured expressions, with zero, one, and
@@ -432,41 +280,78 @@ SELECT * FROM action`,
 					ident.New("geog"), true,
 				),
 			},
-			delete: `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1","ignored_pk")IN(($1::STRING,($2+$2)::INT8,$3::STRING),
-($4::STRING,($5+$5)::INT8,$6::STRING))`,
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","enum"
-) VALUES
-($1::STRING,($2+$2)::INT8,('fixed')::STRING,($3||'foobar')::STRING,$4::"database"."schema"."MyEnum"),
-($5::STRING,($6+$6)::INT8,('fixed')::STRING,($7||'foobar')::STRING,$8::"database"."schema"."MyEnum")`,
 		},
 	}
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			r := require.New(t)
-			cfg := applycfg.NewConfig()
-			if tc.cfg != nil {
-				cfg.Patch(tc.cfg)
-			}
-
-			mapping, err := newColumnMapping(cfg, cols, types.ProductCockroachDB, tableID)
-			r.NoError(err)
-
-			tmpls, err := newTemplates(mapping)
-			r.NoError(err)
-
-			s, err := tmpls.deleteExpr(2)
-			r.NoError(err)
-			if tc.delete == "" {
-				r.Equal(typicalDelete, s)
-			} else {
-				r.Equal(tc.delete, s)
-			}
-
-			s, err = tmpls.upsertExpr(2)
-			r.NoError(err)
-			r.Equal(tc.upsert, s)
+			checkTemplate(t, global, tc)
 		})
+	}
+}
+
+type templateGlobal struct {
+	cols    []types.ColData
+	dir     string
+	product types.Product
+	tableID ident.Table
+}
+
+type templateTestCase struct {
+	name string
+	cfg  *applycfg.Config
+}
+
+func checkTemplate(t *testing.T, global *templateGlobal, tc *templateTestCase) {
+	t.Helper()
+	r := require.New(t)
+	cfg := applycfg.NewConfig()
+	if tc.cfg != nil {
+		cfg.Patch(tc.cfg)
+	}
+
+	mapping, err := newColumnMapping(cfg, global.cols, global.product, global.tableID)
+	r.NoError(err)
+
+	tmpls, err := newTemplates(mapping)
+	r.NoError(err)
+
+	t.Run("upsert", func(t *testing.T) {
+		r := require.New(t)
+		s, err := tmpls.upsertExpr(2)
+		r.NoError(err)
+		checkFile(t,
+			fmt.Sprintf("testdata/%s/%s.upsert.sql", global.dir, tc.name),
+			s)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		r := require.New(t)
+		s, err := tmpls.deleteExpr(2)
+		r.NoError(err)
+		checkFile(t,
+			fmt.Sprintf("testdata/%s/%s.delete.sql", global.dir, tc.name),
+			s)
+	})
+}
+
+func checkFile(t *testing.T, path string, contents string) {
+	t.Helper()
+	r := require.New(t)
+
+	upsertFile, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	r.NoError(err)
+	defer upsertFile.Close()
+
+	if rewriteFiles {
+		_, err := upsertFile.Seek(0, 0)
+		r.NoError(err)
+		count, err := io.WriteString(upsertFile, contents)
+		r.NoError(err)
+		r.NoError(upsertFile.Truncate(int64(count)))
+	} else {
+		upsert, err := io.ReadAll(upsertFile)
+		r.NoError(err)
+		r.Equal(string(upsert), contents)
 	}
 }
