@@ -32,8 +32,12 @@ import (
 var ErrChaos = errors.New("chaos")
 
 // WithChaos returns a wrapper around a Dialect that will inject errors
-// at various points throughout the execution.
+// at various points throughout the execution. The dialect will be
+// returned if prob is less than or equal to zero.
 func WithChaos(delegate Dialect, prob float32) Dialect {
+	if prob <= 0 {
+		return delegate
+	}
 	ret := &chaosDialect{
 		delegate: delegate,
 		prob:     prob,
@@ -133,13 +137,11 @@ type chaosEvents struct {
 
 var _ Events = (*chaosEvents)(nil)
 
-func (e *chaosEvents) Backfill(
-	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
-) error {
+func (e *chaosEvents) Backfill(ctx context.Context, loopName string, backfiller Backfiller) error {
 	if rand.Float32() < e.prob {
 		return doChaos("Backfill")
 	}
-	return e.delegate.Backfill(ctx, loopName, backfiller, options...)
+	return e.delegate.Backfill(ctx, loopName, backfiller)
 }
 
 func (e *chaosEvents) Flush(ctx context.Context) error {

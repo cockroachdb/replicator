@@ -29,6 +29,8 @@ import (
 // Config adds dialect-specific configuration to the core logical loop.
 type Config struct {
 	logical.BaseConfig
+	logical.LoopConfig
+
 	// The number of documents to load at once during a backfill operation.
 	BackfillBatchSize int
 	// A JSON service-account key for the Firestore API.
@@ -58,11 +60,13 @@ type Config struct {
 // Bind adds flags to the pflag.FlagSet to populate the Config.
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.BaseConfig.Bind(f)
-
 	// Always opt into backfilling, since we never have transactional
 	// boundaries to contend with. Values assigned in Preflight()
 	f.Lookup("backfillWindow").Hidden = true
 	f.Lookup("immediate").Hidden = true
+
+	c.LoopConfig.LoopName = "fslogical"
+	c.LoopConfig.Bind(f)
 
 	f.IntVar(&c.BackfillBatchSize, "backfillBatchSize", 10_000,
 		"the number of documents to load when backfilling")
@@ -73,8 +77,6 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"the column name (likely the primary key) to populate with the document id")
 	f.BoolVar(&c.Idempotent, "idempotent", true,
 		"track received document ids and server times to prevent reprocessing")
-	f.StringVar(&c.LoopName, "loopName", "fslogical",
-		"identifies the logical replication loops in metrics")
 	f.StringVar(&c.ProjectID, "projectID", "",
 		"override the project id contained in the credentials file")
 	f.StringVar(&c.TombstoneCollection, "tombstoneCollection", "",
@@ -93,6 +95,9 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 // Preflight adds additional checks to the base logical.Config.
 func (c *Config) Preflight() error {
 	if err := c.BaseConfig.Preflight(); err != nil {
+		return err
+	}
+	if err := c.LoopConfig.Preflight(); err != nil {
 		return err
 	}
 

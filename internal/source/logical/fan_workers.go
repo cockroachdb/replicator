@@ -54,14 +54,14 @@ func newFanWorkers(ctx context.Context, loop *loop, stamp stamp.Stamp) *fanWorke
 		appliers:   loop.factory.appliers,
 		batchSize:  batches.Size(),
 		pending:    latch.New(),
-		targetPool: loop.targetPool,
+		targetPool: loop.factory.targetPool,
 		stamp:      stamp,
 	}
 	ret.mu.data = &ident.TableMap[[]types.Mutation]{}
 	ret.mu.updated = make(chan struct{})
 
 	eg, egCtx := errgroup.WithContext(ctx)
-	for i := 0; i < loop.config.FanShards; i++ {
+	for i := 0; i < loop.factory.baseConfig.FanShards; i++ {
 		eg.Go(func() error {
 			return ret.loop(egCtx)
 		})

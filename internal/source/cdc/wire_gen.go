@@ -47,15 +47,24 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		cleanup()
 		return nil, nil, err
 	}
-	metaTable := ProvideMetaTable(config)
-	stagers := fixture.Stagers
-	watchers := fixture.Watchers
-	resolvers, cleanup2, err := ProvideResolvers(context, config, typesLeases, metaTable, stagingPool, stagers, watchers)
+	configs := fixture.Configs
+	memo := fixture.Memo
+	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup3, err := logical.ProvideTargetPool(context, baseConfig)
+	watchers := fixture.Watchers
+	checker := fixture.VersionChecker
+	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, memo, loader, stagingPool, targetPool, watchers, checker)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	metaTable := ProvideMetaTable(config)
+	stagers := fixture.Stagers
+	resolvers, cleanup3, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup2()
 		cleanup()

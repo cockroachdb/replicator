@@ -43,7 +43,6 @@ func TestResolverDeQueue(t *testing.T) {
 			StagingSchema: baseFixture.StagingDB.Schema(),
 			StagingConn:   baseFixture.StagingPool.ConnectionString,
 			TargetConn:    baseFixture.TargetPool.ConnectionString,
-			TargetSchema:  baseFixture.TargetSchema.Schema(),
 		},
 	})
 	r.NoError(err)

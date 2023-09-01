@@ -50,11 +50,9 @@ func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo[*
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
 			Immediate:     immediate,
-			LoopName:      "changefeed",
 			StagingConn:   baseFixture.StagingPool.ConnectionString,
 			StagingSchema: baseFixture.StagingDB.Schema(),
 			TargetConn:    baseFixture.TargetPool.ConnectionString,
-			TargetSchema:  baseFixture.TargetSchema.Schema(),
 		},
 	})
 	r.NoError(err)
@@ -493,12 +491,10 @@ func testMassBackfillWithForeignKeys(
 				ApplyTimeout:       time.Second,
 				FanShards:          16,
 				ForeignKeysEnabled: true,
-				LoopName:           "changefeed",
 				StagingConn:        baseFixture.StagingPool.ConnectionString,
 				StagingSchema:      baseFixture.StagingDB.Schema(),
 				RetryDelay:         time.Nanosecond,
 				TargetConn:         baseFixture.TargetPool.ConnectionString,
-				TargetSchema:       baseFixture.TargetSchema.Schema(),
 			},
 		}
 		for _, fn := range fns {

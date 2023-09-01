@@ -27,6 +27,7 @@ import (
 // mandatory.
 type Config struct {
 	logical.BaseConfig
+	logical.LoopConfig
 
 	// The name of the publication to attach to.
 	Publication string
@@ -39,7 +40,10 @@ type Config struct {
 // Bind adds flags to the set.
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.BaseConfig.Bind(f)
-	f.StringVar(&c.LoopName, "loopName", "pglogical", "identify the replication loop in metrics")
+
+	c.LoopConfig.LoopName = "pglogical"
+	c.LoopConfig.Bind(f)
+
 	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&c.Publication, "publicationName", "",
@@ -51,6 +55,9 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 // provided.
 func (c *Config) Preflight() error {
 	if err := c.BaseConfig.Preflight(); err != nil {
+		return err
+	}
+	if err := c.LoopConfig.Preflight(); err != nil {
 		return err
 	}
 	if c.Publication == "" {

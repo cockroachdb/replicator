@@ -18,7 +18,7 @@ import (
 
 // Injectors from injector.go:
 
-func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), error) {
+func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), error) {
 	scriptConfig, err := ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, nil, err
@@ -62,18 +62,8 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema := ProvideUserScriptTarget(baseConfig)
-	userScript, err := script.ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
-	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, cleanup6, err := ProvideFactory(ctx, appliers, config, memoMemo, stagingPool, targetPool, userScript, watchers, checker)
+	factory, err := ProvideFactory(ctx, appliers, configs, baseConfig, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -82,18 +72,7 @@ func Start(ctx context.Context, config Config, dialect Dialect) (*Loop, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	logicalLoop, err := ProvideLoop(ctx, factory, dialect)
-	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	return logicalLoop, func() {
-		cleanup6()
+	return factory, func() {
 		cleanup5()
 		cleanup4()
 		cleanup3()
