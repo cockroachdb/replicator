@@ -14,10 +14,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-FROM golang:1.20 AS builder
+# This Dockerfile is based on the example in
+# https://www.docker.com/blog/faster-multi-platform-builds-dockerfile-cross-compilation-guide/
+#
+# The go compiler will run using the host architecture, but
+# cross-compile to the desired target platform given to buildx.
+FROM --platform=$BUILDPLATFORM golang:1.20 AS builder
 WORKDIR /tmp/compile
-COPY . .
-RUN CGO_ENABLED=0 go build -v -ldflags="-s -w" -o /usr/bin/cdc-sink .
+ARG TARGETOS TARGETARCH
+RUN --mount=target=. \
+    --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -v -ldflags="-s -w" -o /usr/bin/cdc-sink .
 
 # Create a single-binary docker image, including a set of core CA
 # certificates so that we can call out to any external APIs.
