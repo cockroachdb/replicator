@@ -83,14 +83,12 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 
 	cfg := &logical.BaseConfig{
 		ApplyTimeout:   time.Second, // Increase to make using the debugger easier.
-		LoopName:       "generator",
 		Immediate:      immediate,
 		RetryDelay:     time.Nanosecond,
 		StagingConn:    fixture.StagingPool.ConnectionString,
 		StagingSchema:  fixture.StagingDB.Schema(),
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.ConnectionString,
-		TargetSchema:   dbName,
 	}
 	if allowBackfill {
 		cfg.BackfillWindow = time.Minute
@@ -98,11 +96,20 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 		cfg.BackfillWindow = 0
 	}
 
-	loop, cancelLoop, err := logical.Start(ctx, cfg, dialect)
+	factory, cancelFactory, err := logical.NewFactoryForTests(ctx, cfg)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancelLoop()
+	defer cancelFactory()
+
+	loop, cancelLoop, err := factory.Start(&logical.LoopConfig{
+		Dialect:      dialect,
+		LoopName:     "generator",
+		TargetSchema: dbName,
+	})
+	if !a.NoError(err) {
+		return
+	}
 
 	// Start a goroutine to await the end consistent point.
 	endConsistent := make(chan stamp.Stamp, 1)
@@ -197,13 +204,11 @@ func TestUserScript(t *testing.T) {
 
 	cfg := &logical.BaseConfig{
 		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
-		LoopName:       "generator",
 		Immediate:      false,
 		StagingConn:    fixture.StagingPool.ConnectionString,
 		StagingSchema:  fixture.StagingDB.Schema(),
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.ConnectionString,
-		TargetSchema:   dbName,
 
 		ScriptConfig: script.Config{
 			MainPath: "/main.ts",
@@ -238,7 +243,15 @@ api.configureTable("t_2", {
 	const numEmits = 100
 	gen.emit(numEmits)
 
-	_, cancelLoop, err := logical.Start(ctx, cfg, gen)
+	factory, cancelFactory, err := logical.NewFactoryForTests(ctx, cfg)
+	r.NoError(err)
+	defer cancelFactory()
+
+	_, cancelLoop, err := factory.Start(&logical.LoopConfig{
+		Dialect:      gen,
+		LoopName:     "generator",
+		TargetSchema: dbName,
+	})
 	r.NoError(err)
 	defer cancelLoop()
 

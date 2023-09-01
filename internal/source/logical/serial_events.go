@@ -38,10 +38,8 @@ type serialEvents struct {
 var _ Events = (*serialEvents)(nil)
 
 // Backfill implements Events. It delegates to the enclosing loop.
-func (e *serialEvents) Backfill(
-	ctx context.Context, source string, backfiller Backfiller, options ...Option,
-) error {
-	return e.loop.doBackfill(ctx, source, backfiller, options...)
+func (e *serialEvents) Backfill(ctx context.Context, source string, backfiller Backfiller) error {
+	return e.loop.doBackfill(ctx, source, backfiller)
 }
 
 // Flush returns nil, since OnData() writes values immediately.

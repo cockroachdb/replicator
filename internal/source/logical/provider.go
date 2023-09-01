@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -33,13 +34,11 @@ import (
 // Set is used by Wire.
 var Set = wire.NewSet(
 	ProvideFactory,
-	ProvideLoop,
 	ProvideBaseConfig,
 	ProvideStagingDB,
 	ProvideStagingPool,
 	ProvideTargetPool,
 	ProvideUserScriptConfig,
-	ProvideUserScriptTarget,
 )
 
 // ProvideBaseConfig is called by wire to extract the BaseConfig from
@@ -59,41 +58,36 @@ func ProvideBaseConfig(config Config, _ *script.Loader) (*BaseConfig, error) {
 func ProvideFactory(
 	ctx context.Context,
 	appliers types.Appliers,
-	config Config,
+	applyConfigs *applycfg.Configs,
+	baseConfig *BaseConfig,
 	memo types.Memo,
+	scriptLoader *script.Loader,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
-	userscript *script.UserScript,
 	watchers types.Watchers,
 	versionCheck *version.Checker,
-) (*Factory, func(), error) {
+) (*Factory, error) {
 	warnings, err := versionCheck.Check(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if len(warnings) > 0 {
 		for _, w := range warnings {
 			log.Warn(w)
 		}
-		return nil, nil, errors.New("manual schema change required")
+		return nil, errors.New("manual schema change required")
 	}
 
-	f := &Factory{
-		appliers:    appliers,
-		cfg:         config,
-		memo:        memo,
-		stagingPool: stagingPool,
-		targetPool:  targetPool,
-		watchers:    watchers,
-		userscript:  userscript,
-	}
-	f.mu.loops = make(map[string]*Loop)
-	return f, f.Close, nil
-}
-
-// ProvideLoop is called by Wire to create a singleton replication loop.
-func ProvideLoop(ctx context.Context, factory *Factory, dialect Dialect) (*Loop, error) {
-	return factory.Get(ctx, dialect)
+	return &Factory{
+		appliers:     appliers,
+		applyConfigs: applyConfigs,
+		baseConfig:   baseConfig,
+		memo:         memo,
+		scriptLoader: scriptLoader,
+		stagingPool:  stagingPool,
+		targetPool:   targetPool,
+		watchers:     watchers,
+	}, nil
 }
 
 // ProvideStagingDB is called by Wire to retrieve the name of the
@@ -159,16 +153,6 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPo
 		return nil, nil, err
 	}
 
-	// This sanity-checks the configured schema against the product. For
-	// Cockroach and Postgres, we'll add any missing "public" schema
-	// names.
-	sch, err := ret.Product.ExpandSchema(config.TargetSchema)
-	if err != nil {
-		cancel()
-		return nil, nil, err
-	}
-	config.TargetSchema = sch
-
 	return ret, cancel, err
 }
 
@@ -177,10 +161,4 @@ func ProvideTargetPool(ctx context.Context, config *BaseConfig) (*types.TargetPo
 func ProvideUserScriptConfig(config Config) (*script.Config, error) {
 	ret := &config.Base().ScriptConfig
 	return ret, ret.Preflight()
-}
-
-// ProvideUserScriptTarget is called by Wire and returns the public
-// schema of the target database.
-func ProvideUserScriptTarget(config *BaseConfig) script.TargetSchema {
-	return script.TargetSchema(config.TargetSchema)
 }

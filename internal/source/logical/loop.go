@@ -53,7 +53,7 @@ func (l *Loop) AwaitConsistentPoint(
 
 // Dialect returns the logical.Dialect in use.
 func (l *Loop) Dialect() Dialect {
-	return l.loop.dialect
+	return l.loop.loopConfig.Dialect
 }
 
 // GetConsistentPoint returns current consistent-point stamp.
@@ -77,11 +77,6 @@ func (l *Loop) Stopped() <-chan struct{} {
 // loop is not internally synchronized; it assumes that it is being
 // driven by a serial stream of data.
 type loop struct {
-	// The active configuration.
-	config *BaseConfig
-	// The Dialect contains message-processing, specific to a particular
-	// source database.
-	dialect Dialect
 	// Various strategies for implementing the Events interface.
 	events struct {
 		fan    Events
@@ -89,15 +84,11 @@ type loop struct {
 	}
 	// The Factory that created the loop.
 	factory *Factory
-	// Optional checkpoint saved into the target database
-	memo types.Memo
+	// Loop-specific configuration.
+	loopConfig *LoopConfig
 	// This is controlled by the call to run. That is, when run exits,
 	// this Context will be stopped.
 	running *stopper.Context
-	// Used to update the consistentPoint in the staging database.
-	stagingPool *types.StagingPool
-	// Destination for mutations.
-	targetPool *types.TargetPool
 
 	// This represents a position in the source's transaction log.
 	consistentPoint struct {
@@ -114,8 +105,8 @@ type loop struct {
 // loadConsistentPoint will return the latest consistent-point stamp,
 // the value of Config.DefaultConsistentPoint, or Dialect.ZeroStamp.
 func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
-	ret := l.dialect.ZeroStamp()
-	data, err := l.memo.Get(ctx, l.stagingPool, l.config.LoopName)
+	ret := l.loopConfig.Dialect.ZeroStamp()
+	data, err := l.factory.memo.Get(ctx, l.factory.stagingPool, l.loopConfig.LoopName)
 	if err != nil {
 		return nil, err
 	}
@@ -123,9 +114,9 @@ func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
 		return ret, json.Unmarshal(data, ret)
 	}
 	// Support bootstrapping the consistent point from flag values.
-	if l.config.DefaultConsistentPoint != "" {
+	if l.loopConfig.DefaultConsistentPoint != "" {
 		if x, ok := ret.(encoding.TextUnmarshaler); ok {
-			return ret, x.UnmarshalText([]byte(l.config.DefaultConsistentPoint))
+			return ret, x.UnmarshalText([]byte(l.loopConfig.DefaultConsistentPoint))
 		}
 	}
 	return ret, nil
@@ -139,13 +130,13 @@ func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 
 	// Notify Dialect instances that have explicit coordination needs
 	// that the consistent point is about to advance.
-	if cb, ok := l.dialect.(ConsistentCallback); ok {
+	if cb, ok := l.loopConfig.Dialect.(ConsistentCallback); ok {
 		if err := cb.OnConsistent(p); err != nil {
 			return errors.Wrap(err, "consistent point not advancing")
 		}
 	}
 
-	log.Tracef("loop %s new consistent point %s -> %s", l.config.LoopName, l.consistentPoint.stamp, p)
+	log.Tracef("loop %s new consistent point %s -> %s", l.loopConfig.LoopName, l.consistentPoint.stamp, p)
 	l.consistentPoint.stamp = p
 	close(l.consistentPoint.updated)
 	l.consistentPoint.updated = make(chan struct{})
@@ -153,7 +144,7 @@ func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 	if err := l.storeConsistentPoint(p); err != nil {
 		return errors.Wrap(err, "could not persistent consistent point")
 	}
-	log.Tracef("Saved checkpoint for %s", l.config.LoopName)
+	log.Tracef("Saved checkpoint for %s", l.loopConfig.LoopName)
 	return nil
 }
 
@@ -163,8 +154,8 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	return l.memo.Put(context.Background(),
-		l.stagingPool, l.config.LoopName, data,
+	return l.factory.memo.Put(context.Background(),
+		l.factory.stagingPool, l.loopConfig.LoopName, data,
 	)
 }
 
@@ -177,7 +168,7 @@ func (l *loop) GetConsistentPoint() stamp.Stamp {
 
 // GetTargetDB implements State.
 func (l *loop) GetTargetDB() ident.Schema {
-	return l.config.TargetSchema
+	return l.loopConfig.TargetSchema
 }
 
 // NotifyConsistentPoint implements State.
@@ -229,7 +220,7 @@ func (l *loop) Stopping() <-chan struct{} {
 
 // run blocks while the connection is processing messages.
 func (l *loop) run() {
-	defer log.Debugf("replication loop %q shut down", l.config.LoopName)
+	defer log.Debugf("replication loop %q shut down", l.loopConfig.LoopName)
 
 	for {
 		err := l.runOnce(l.running)
@@ -237,11 +228,11 @@ func (l *loop) run() {
 		// Otherwise, log any error, and sleep for a bit.
 		if err != nil {
 			log.WithError(err).Errorf("error in replication loop %s; retrying in %s",
-				l.config.LoopName, l.config.RetryDelay)
+				l.loopConfig.LoopName, l.factory.baseConfig.RetryDelay)
 		}
 
 		select {
-		case <-time.After(l.config.RetryDelay):
+		case <-time.After(l.factory.baseConfig.RetryDelay):
 			// On a clean exit, we still want to sleep for a bit before
 			// running a new iteration.
 			continue
@@ -256,7 +247,7 @@ func (l *loop) run() {
 // behavior, a lease will be obtained before any further action is
 // taken.
 func (l *loop) runOnce(ctx context.Context) error {
-	if lessor, ok := l.dialect.(Lessor); ok {
+	if lessor, ok := l.loopConfig.Dialect.(Lessor); ok {
 		// Loop until we can acquire a lease.
 		var lease types.Lease
 		for {
@@ -264,13 +255,13 @@ func (l *loop) runOnce(ctx context.Context) error {
 			lease, err = lessor.Acquire(ctx)
 			// Lease acquired.
 			if err == nil {
-				log.Tracef("lease %s acquired", l.config.LoopName)
+				log.Tracef("lease %s acquired", l.loopConfig.LoopName)
 				break
 			}
 			// If busy, wait until the expiration.
 			if busy, ok := types.IsLeaseBusy(err); ok {
 				log.WithField("until", busy.Expiration).Tracef(
-					"lease %s was busy, waiting", l.config.LoopName)
+					"lease %s was busy, waiting", l.loopConfig.LoopName)
 
 				// Add some jitter to the expiration.
 				duration := time.Until(busy.Expiration) +
@@ -312,7 +303,7 @@ func (l *loop) runOnce(ctx context.Context) error {
 
 	// Ensure that the latest point has been saved on a clean exit.
 	return errors.Wrapf(l.storeConsistentPoint(l.GetConsistentPoint()),
-		"could not save consistent point for %s", l.config.LoopName)
+		"could not save consistent point for %s", l.loopConfig.LoopName)
 }
 
 // runOnceUsing is called from runOnce or doBackfill.
@@ -358,7 +349,7 @@ func (l *loop) runOnceUsing(
 				// consistent point.
 				log.WithError(err).Errorf(
 					"error from replication source %s; continuing",
-					l.config.LoopName)
+					l.loopConfig.LoopName)
 				continue
 			case <-ctx.Done():
 				return ctx.Err()
@@ -371,11 +362,11 @@ func (l *loop) runOnceUsing(
 	// This goroutine applies the incoming mutations to the target
 	// database.
 	ctx.Go(func() error {
-		err := l.dialect.Process(ctx, ch, events)
+		err := l.loopConfig.Dialect.Process(ctx, ch, events)
 		// It's an error for Process to return unless the channel
 		// has been closed (i.e. we're switching modes).
 		if err == nil && !ctx.IsStopping() {
-			err = errors.Errorf("%T.Process() returned unexpectedly", l.dialect)
+			err = errors.Errorf("%T.Process() returned unexpectedly", l.loopConfig.Dialect)
 		}
 		err = errors.Wrap(err, "error while applying replication messages")
 
@@ -394,11 +385,11 @@ func (l *loop) runOnceUsing(
 	// Toggle backfilling mode as necessary by triggering a drain.
 	// This will restart the loop, choosing the appropriate
 	// replication mode.
-	_, canBackfill := l.dialect.(Backfiller)
-	canBackfill = canBackfill && l.config.BackfillWindow > 0
+	_, canBackfill := l.loopConfig.Dialect.(Backfiller)
+	canBackfill = canBackfill && l.factory.baseConfig.BackfillWindow > 0
 	if isBackfilling || canBackfill {
 		ctx.Go(func() error {
-			point := l.dialect.ZeroStamp()
+			point := l.loopConfig.Dialect.ZeroStamp()
 			for {
 				// Wait for the consistent point to advance. This method
 				// only returns an error if the context has been
@@ -419,21 +410,21 @@ func (l *loop) runOnceUsing(
 				}
 				delta := time.Since(ts.AsTime())
 				if isBackfilling {
-					if delta < l.config.BackfillWindow {
+					if delta < l.factory.baseConfig.BackfillWindow {
 						log.WithFields(log.Fields{
-							"loop": l.config.LoopName,
+							"loop": l.loopConfig.LoopName,
 							"ts":   ts,
 						}).Debug("backfill has caught up")
-						ctx.Stop(l.config.ApplyTimeout)
+						ctx.Stop(l.factory.baseConfig.ApplyTimeout)
 						return nil
 					}
 				} else if canBackfill {
-					if delta > l.config.BackfillWindow {
+					if delta > l.factory.baseConfig.BackfillWindow {
 						log.WithFields(log.Fields{
-							"loop": l.config.LoopName,
+							"loop": l.loopConfig.LoopName,
 							"ts":   ts,
 						}).Warn("replication has fallen behind, switching to backfill mode")
-						ctx.Stop(l.config.ApplyTimeout)
+						ctx.Stop(l.factory.baseConfig.ApplyTimeout)
 						return nil
 					}
 				}
@@ -442,7 +433,7 @@ func (l *loop) runOnceUsing(
 	}
 
 	// Wait for graceful initialize or cancellation.
-	return errors.Wrapf(ctx.Wait(), "loop %s", l.config.LoopName)
+	return errors.Wrapf(ctx.Wait(), "loop %s", l.loopConfig.LoopName)
 }
 
 type fillFn = func(context.Context, chan<- Message, State) error
@@ -450,19 +441,19 @@ type fillFn = func(context.Context, chan<- Message, State) error
 // chooseFillStrategy returns the strategy that will be used for
 // generating replication messages.
 func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bool) {
-	choice = l.dialect.ReadInto
-	if l.config.Immediate {
+	choice = l.loopConfig.Dialect.ReadInto
+	if l.factory.baseConfig.Immediate {
 		events = l.events.fan
 	} else {
 		events = l.events.serial
 	}
 	// Is backfilling supported?
-	back, ok := l.dialect.(Backfiller)
+	back, ok := l.loopConfig.Dialect.(Backfiller)
 	if !ok {
 		return
 	}
 	// Is backfilling enabled by the user?
-	if l.config.BackfillWindow <= 0 {
+	if l.factory.baseConfig.BackfillWindow <= 0 {
 		return
 	}
 	// Is the last consistent point sufficiently old to backfill?
@@ -471,7 +462,7 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 		return
 	}
 	delta := time.Since(ts.AsTime())
-	if delta < l.config.BackfillWindow {
+	if delta < l.factory.baseConfig.BackfillWindow {
 		return
 	}
 	choice = back.BackfillInto
@@ -479,29 +470,29 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 	isBackfill = true
 	log.WithFields(log.Fields{
 		"delta": delta,
-		"loop":  l.config.LoopName,
+		"loop":  l.loopConfig.LoopName,
 		"ts":    ts,
 	}).Debug("using backfill strategy")
 	return
 }
 
 // doBackfill provides the implementation of Events.Backfill.
-func (l *loop) doBackfill(
-	ctx context.Context, loopName string, backfiller Backfiller, options ...Option,
-) error {
-	options = append(options, WithName(loopName))
-	cfg := l.config.Copy()
-	for _, option := range options {
-		option(cfg)
-	}
+func (l *loop) doBackfill(ctx context.Context, loopName string, backfiller Backfiller) error {
+	// Create a copy of the individual loop configuration, with an
+	// updated name.
+	cfg := l.loopConfig.Copy()
+	cfg.Dialect = backfiller
+	cfg.LoopName = loopName
 
-	filler, err := l.factory.newLoop(ctx, cfg, backfiller)
+	// The incoming context should already be a stopper.
+	stop := stopper.WithContext(ctx)
+	filler, err := l.factory.newLoop(stop, cfg)
 	if err != nil {
 		return err
 	}
 
 	return filler.loop.runOnceUsing(
-		stopper.From(ctx),
+		stop,
 		backfiller.BackfillInto,
 		filler.loop.events.fan,
 		true /* isBackfilling */)

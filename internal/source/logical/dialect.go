@@ -109,7 +109,7 @@ type Events interface {
 	// Backfill will execute a single pass of the given Backfiller in a
 	// blocking fashion. This is useful when sources are discovered
 	// dynamically.
-	Backfill(ctx context.Context, loopName string, backfiller Backfiller, options ...Option) error
+	Backfill(ctx context.Context, loopName string, backfiller Backfiller) error
 	// Flush can be called after OnData() to ensure that any writes
 	// have been flushed to the database. This is necessary when
 	// using foreign keys and fan mode.

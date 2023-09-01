@@ -17,6 +17,7 @@
 package mylogical
 
 import (
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -25,11 +26,15 @@ import (
 )
 
 // Set is used by Wire.
-var Set = wire.NewSet(ProvideDialect)
+var Set = wire.NewSet(
+	ProvideDialect,
+	ProvideLoop,
+)
 
 // ProvideDialect is called by Wire to construct this package's
-// logical.Dialect implementation.
-func ProvideDialect(config *Config) (logical.Dialect, error) {
+// logical.Dialect implementation. There's a fake dependency on
+// the script loader so that flags can be evaluated first.
+func ProvideDialect(config *Config, _ *script.Loader) (logical.Dialect, error) {
 	if err := config.Preflight(); err != nil {
 		return nil, err
 	}
@@ -54,4 +59,13 @@ func ProvideDialect(config *Config) (logical.Dialect, error) {
 		relations:    make(map[uint64]ident.Table),
 		sourceConfig: cfg,
 	}, nil
+}
+
+// ProvideLoop is called by Wire to construct the sole logical loop used
+// in the mylogical mode.
+func ProvideLoop(
+	cfg *Config, dialect logical.Dialect, loops *logical.Factory,
+) (*logical.Loop, func(), error) {
+	cfg.Dialect = dialect
+	return loops.Start(&cfg.LoopConfig)
 }

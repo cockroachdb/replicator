@@ -7,7 +7,10 @@
 package script
 
 import (
+	"context"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 )
 
 import (
@@ -16,9 +19,18 @@ import (
 
 // Injectors from injector.go:
 
+// Evaluate the loaded script.
+func Evaluate(ctx context.Context, loader *Loader, configs *applycfg.Configs, stagingPool *types.StagingPool, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
+	userScript, err := ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
+	if err != nil {
+		return nil, err
+	}
+	return userScript, nil
+}
+
 func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema TargetSchema) (*UserScript, error) {
 	baseFixture := fixture.Fixture
-	context := baseFixture.Context
+	contextContext := baseFixture.Context
 	configs := fixture.Configs
 	loader, err := ProvideLoader(config)
 	if err != nil {
@@ -26,7 +38,7 @@ func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema Tar
 	}
 	stagingPool := baseFixture.StagingPool
 	watchers := fixture.Watchers
-	userScript, err := ProvideUserScript(context, configs, loader, stagingPool, targetSchema, watchers)
+	userScript, err := ProvideUserScript(contextContext, configs, loader, stagingPool, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}

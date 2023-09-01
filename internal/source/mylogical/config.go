@@ -32,6 +32,7 @@ import (
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
 	logical.BaseConfig
+	logical.LoopConfig
 
 	SourceConn string // Connection string for the source db.
 	ProcessID  uint32 // A unique ID to identify this process to the master.
@@ -48,12 +49,17 @@ type Config struct {
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.BaseConfig.Bind(f)
-	f.StringVar(&c.DefaultConsistentPoint, "defaultGTIDSet", "",
+
+	c.LoopConfig.LoopName = "mylogical"
+	c.LoopConfig.Bind(f)
+	// TODO(bob): Could DefaultConsistent point be used as the Dialect's
+	// ZeroStamp value, eliminating the need for this field to be in
+	// LoopConfig?
+	f.StringVar(&c.LoopConfig.DefaultConsistentPoint, "defaultGTIDSet", "",
 		"default GTIDSet. Used if no state is persisted")
+
 	f.Uint32Var(&c.ProcessID, "replicationProcessID", 10,
 		"the replication process id to report to the source database")
-	f.StringVar(&c.LoopName, "loopName", "mylogical",
-		"identify the replication loop in metrics")
 	f.StringVar(&c.SourceConn, "sourceConn", "",
 		"the source database's connection string")
 }
@@ -105,6 +111,9 @@ func newClientTLSConfig(
 // provided.
 func (c *Config) Preflight() error {
 	if err := c.BaseConfig.Preflight(); err != nil {
+		return err
+	}
+	if err := c.LoopConfig.Preflight(); err != nil {
 		return err
 	}
 	if c.LoopName == "" {

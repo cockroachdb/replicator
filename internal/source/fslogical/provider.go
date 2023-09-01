@@ -68,6 +68,13 @@ func ProvideLoops(
 	ret := make([]*logical.Loop, userscript.Sources.Len())
 	recurseFilter := &ident.Map[struct{}]{}
 
+	cancels := make([]func(), userscript.Sources.Len())
+	cancel := func() {
+		for _, fn := range cancels {
+			fn()
+		}
+	}
+
 	err := userscript.Sources.Range(func(sourceName ident.Ident, source *script.Source) error {
 		var sourcePath string
 		var q firestore.Query
@@ -82,8 +89,8 @@ func ProvideLoops(
 			q = coll.Query
 		}
 
-		var err error
-		ret[idx], err = loops.Get(ctx, &Dialect{
+		loopCfg := cfg.LoopConfig.Copy()
+		loopCfg.Dialect = &Dialect{
 			backfillBatchSize: cfg.BackfillBatchSize,
 			docIDProperty:     cfg.DocumentIDProperty.Raw(),
 			fs:                fs,
@@ -98,7 +105,11 @@ func ProvideLoops(
 			sourceCollection:  sourceName,
 			sourcePath:        sourcePath,
 			updatedAtProperty: cfg.UpdatedAtProperty,
-		}, logical.WithName(sourceName.Raw()))
+		}
+		loopCfg.LoopName = sourceName.Raw()
+
+		var err error
+		ret[idx], cancels[idx], err = loops.Start(loopCfg)
 		if err != nil {
 			return err
 		}
@@ -107,11 +118,11 @@ func ProvideLoops(
 		return nil
 	})
 	if err != nil {
-		loops.Close()
+		cancel()
 		return nil, nil, err
 	}
 
-	return ret, loops.Close, nil
+	return ret, cancel, nil
 }
 
 // ProvideFirestoreClient is called by wire. If a local emulator is in
@@ -151,19 +162,21 @@ func ProvideFirestoreClient(
 	}, nil
 }
 
+// ProvideScriptTarget exports [Config.TargetSchema] for the script
+// engine.
+func ProvideScriptTarget(cfg *Config) script.TargetSchema {
+	return script.TargetSchema(cfg.TargetSchema)
+}
+
 // ProvideTombstones is called by wire to construct a helper that
 // manages document tombstones.
 func ProvideTombstones(
-	ctx context.Context,
-	cfg *Config,
-	fs *firestore.Client,
-	loops *logical.Factory,
-	userscript *script.UserScript,
-) (*Tombstones, error) {
+	cfg *Config, fs *firestore.Client, loops *logical.Factory, userscript *script.UserScript,
+) (*Tombstones, func(), error) {
 	ret := &Tombstones{cfg: cfg}
 	if cfg.TombstoneCollection == "" {
 		log.Trace("no tombstone collection was configured")
-		return ret, nil
+		return ret, nil, nil
 	}
 
 	ret.coll = fs.Collection(cfg.TombstoneCollection)
@@ -172,13 +185,19 @@ func ProvideTombstones(
 		ret.deletesTo.Put(source, dest.DeletesTo)
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ret.source = ident.New(cfg.TombstoneCollection)
 	ret.mu.cache = &lru.Cache{MaxEntries: 1_000_000}
 
-	_, err := loops.Get(ctx, ret, logical.WithName(cfg.TombstoneCollection))
-	return ret, err
+	loopConfig := cfg.LoopConfig.Copy()
+	loopConfig.Dialect = ret
+	loopConfig.LoopName = cfg.TombstoneCollection
+	_, cancel, err := loops.Start(loopConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ret, cancel, nil
 }
 
 // Wipe any leftover documents from testing.

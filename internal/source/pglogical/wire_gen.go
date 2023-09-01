@@ -30,6 +30,10 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	dialect, err := ProvideDialect(ctx, config, loader)
+	if err != nil {
+		return nil, nil, err
+	}
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
 		return nil, nil, err
@@ -65,18 +69,8 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema := logical.ProvideUserScriptTarget(baseConfig)
-	userScript, err := script.ProvideUserScript(ctx, configs, loader, stagingPool, targetSchema, watchers)
-	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, cleanup6, err := logical.ProvideFactory(ctx, appliers, config, memoMemo, stagingPool, targetPool, userScript, watchers, checker)
+	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -85,19 +79,8 @@ func Start(ctx context.Context, config *Config) (*logical.Loop, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	dialect, err := ProvideDialect(ctx, config)
+	loop, cleanup6, err := ProvideLoop(config, dialect, factory)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	loop, err := logical.ProvideLoop(ctx, factory, dialect)
-	if err != nil {
-		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()

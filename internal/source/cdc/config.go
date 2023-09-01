@@ -84,10 +84,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 
 // Preflight implements logical.Config.
 func (c *Config) Preflight() error {
-	c.BaseConfig.LoopName = "changefeed"
-	c.BaseConfig.TargetSchema = ident.MustSchema(ident.New("__filled_in_later__"))
-
-	if err := c.Base().Preflight(); err != nil {
+	if err := c.BaseConfig.Preflight(); err != nil {
 		return err
 	}
 

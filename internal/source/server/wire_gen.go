@@ -13,7 +13,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
+	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
+	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -95,9 +97,32 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
+	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, memoMemo, loader, stagingPool, targetPool, watchers, checker)
+	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema)
-	resolvers, cleanup8, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, metaTable, stagingPool, stagers, watchers)
+	resolvers, cleanup8, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -210,9 +235,32 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
+	memoMemo, err := memo.ProvideMemo(contextContext, stagingPool, stagingSchema)
+	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, memoMemo, loader, stagingPool, targetPool, watchers, checker)
+	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema)
-	resolvers, cleanup8, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, metaTable, stagingPool, stagers, watchers)
+	resolvers, cleanup8, err := cdc.ProvideResolvers(contextContext, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup7()
 		cleanup6()
