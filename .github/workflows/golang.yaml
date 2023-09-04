@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: warm-build-cache
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -144,7 +144,7 @@ jobs:
       JUNIT_OUT: junit-${{ strategy.job-index }}.xml
       TEST_OUT: go-test-${{ strategy.job-index }}.json
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v4

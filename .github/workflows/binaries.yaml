@@ -61,7 +61,7 @@ jobs:
             ext: .exe
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Pick up a symbolic name for the build (e.g. "v1.0.1") and a guaranteed SHA or tag value.
       - id: names
