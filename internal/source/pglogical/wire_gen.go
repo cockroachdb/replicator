@@ -130,11 +130,3 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		cleanup()
 	}, nil
 }
-
-// injector.go:
-
-// PGLogical is a PostgreSQL logical replication loop.
-type PGLogical struct {
-	Diagnostics *diag.Diagnostics
-	Loop        *logical.Loop
-}

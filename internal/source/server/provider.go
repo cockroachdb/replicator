@@ -37,8 +37,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -103,19 +101,9 @@ func ProvideListener(config *Config, diags *diag.Diagnostics) (net.Listener, fun
 // ProvideMux is called by Wire to construct the http.ServeMux that
 // routes requests.
 func ProvideMux(
-	auth types.Authenticator,
-	handler *cdc.Handler,
-	diags *diag.Diagnostics,
-	stagingPool *types.StagingPool,
-	targetPool *types.TargetPool,
+	handler *cdc.Handler, stagingPool *types.StagingPool, targetPool *types.TargetPool,
 ) *http.ServeMux {
 	mux := &http.ServeMux{}
-	// The pprof handlers attach themselves to the system-default mux.
-	// The index page also assumes that the handlers are reachable from
-	// this specific prefix. It seems unlikely that this would collide
-	// with an actual database schema.
-	mux.Handle("/debug/pprof/", http.DefaultServeMux)
-	mux.Handle("/_/diag", diags.Handler(auth))
 	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := stagingPool.Ping(r.Context()); err != nil {
 			log.WithError(err).Warn("health check failed for staging pool")
@@ -129,16 +117,6 @@ func ProvideMux(
 		}
 		http.Error(w, "OK", http.StatusOK)
 	})
-	mux.Handle("/_/varz", promhttp.InstrumentMetricHandler(
-		prometheus.DefaultRegisterer,
-		promhttp.HandlerFor(
-			prometheus.DefaultGatherer,
-			promhttp.HandlerOpts{
-				EnableOpenMetrics: true,
-				ErrorLog:          log.StandardLogger().WithField("promhttp", "true"),
-			}),
-	))
-	mux.Handle("/_/", http.NotFoundHandler()) // Reserve all under /_/
 	mux.Handle("/", logWrapper(handler))
 	return mux
 }
@@ -148,7 +126,11 @@ func ProvideMux(
 // goroutine and will gracefully drain the server when the cancel
 // function is called.
 func ProvideServer(
-	listener net.Listener, mux *http.ServeMux, tlsConfig *tls.Config,
+	auth types.Authenticator,
+	diags *diag.Diagnostics,
+	listener net.Listener,
+	mux *http.ServeMux,
+	tlsConfig *tls.Config,
 ) (*Server, func()) {
 	srv := &http.Server{
 		Handler:   h2c.NewHandler(mux, &http2.Server{}),
@@ -171,7 +153,7 @@ func ProvideServer(
 		log.WithError(err).Error("unable to serve requests")
 	}()
 
-	return &Server{ch}, func() {
+	return &Server{auth, diags, mux, ch}, func() {
 		log.Info("Server shutting down")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

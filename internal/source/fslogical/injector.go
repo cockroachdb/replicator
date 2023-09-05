@@ -34,9 +34,10 @@ import (
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(context.Context, *Config) ([]*logical.Loop, func(), error) {
+func Start(context.Context, *Config) (*FSLogical, func(), error) {
 	panic(wire.Build(
 		wire.Bind(new(logical.Config), new(*Config)),
+		wire.Struct(new(FSLogical), "*"),
 		ProvideFirestoreClient,
 		ProvideLoops,
 		ProvideScriptTarget,

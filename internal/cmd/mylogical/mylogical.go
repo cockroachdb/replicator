@@ -19,83 +19,20 @@
 package mylogical
 
 import (
-	"net"
-	"net/http"
-
 	"github.com/cockroachdb/cdc-sink/internal/source/mylogical"
-	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	log "github.com/sirupsen/logrus"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 	"github.com/spf13/cobra"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 // Command returns the pglogical subcommand.
 func Command() *cobra.Command {
 	cfg := &mylogical.Config{}
-	var metricsAddr string
-	cmd := &cobra.Command{
-		Args:  cobra.NoArgs,
+	return stdlogical.New(&stdlogical.Template{
+		Bind:  cfg.Bind,
 		Short: "start a mySQL replication feed",
-		Use:   "mylogical",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			repl, cancelLoop, err := mylogical.Start(cmd.Context(), cfg)
-			if err != nil {
-				return err
-			}
-			if metricsAddr != "" {
-				if err := metricsServer(metricsAddr, repl.Diagnostics); err != nil {
-					return err
-				}
-			}
-			// Pause any log.Exit() or log.Fatal() until the server exits.
-			log.DeferExitHandler(func() {
-				cancelLoop()
-				<-repl.Loop.Stopped()
-			})
-			// Wait for shutdown. The main function uses log.Exit()
-			// to call the above handler.
-			<-cmd.Context().Done()
-			return nil
+		Start: func(cmd *cobra.Command) (any, func(), error) {
+			return mylogical.Start(cmd.Context(), cfg)
 		},
-	}
-	cfg.Bind(cmd.Flags())
-	cmd.Flags().StringVar(&metricsAddr, "metricsAddr", "",
-		"a host:port to serve metrics from at /_/varz")
-	return cmd
-}
-
-// metricsServer starts a trivial prometheus endpoint server which runs
-// until the context is canceled.
-func metricsServer(bindAddr string, diags *diag.Diagnostics) error {
-	mux := &http.ServeMux{}
-	mux.Handle("/_/diag", diags.Handler(trust.New()))
-	mux.HandleFunc("/_/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		Use: "mylogical",
 	})
-	mux.Handle("/_/varz", promhttp.InstrumentMetricHandler(
-		prometheus.DefaultRegisterer,
-		promhttp.HandlerFor(
-			prometheus.DefaultGatherer,
-			promhttp.HandlerOpts{
-				EnableOpenMetrics: true,
-				ErrorLog:          log.StandardLogger().WithField("promhttp", "true"),
-			})))
-	mux.Handle("/", http.NotFoundHandler())
-
-	l, err := net.Listen("tcp", bindAddr)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	srv := &http.Server{
-		Handler: h2c.NewHandler(mux, &http2.Server{}),
-	}
-	log.Infof("metrics server bound to %s", l.Addr())
-	go srv.Serve(l)
-	return nil
 }

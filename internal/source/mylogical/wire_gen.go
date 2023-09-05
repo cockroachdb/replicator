@@ -130,11 +130,3 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 		cleanup()
 	}, nil
 }
-
-// injector.go:
-
-// MYLogical isa MySQL/MariaDB logical replication loop.
-type MYLogical struct {
-	Diagnostics *diag.Diagnostics
-	Loop        *logical.Loop
-}

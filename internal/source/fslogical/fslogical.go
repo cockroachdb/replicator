@@ -31,6 +31,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/iterator"
@@ -623,4 +624,29 @@ type processedPayload struct {
 // shouldProcess.
 func processedKey(ref *firestore.DocumentRef) string {
 	return fmt.Sprintf("fs-doc-%s", ref.Path)
+}
+
+// FSLogical is the top-level injection type.
+type FSLogical struct {
+	Diagnostics *diag.Diagnostics
+	Loops       []*logical.Loop
+}
+
+var (
+	_ stdlogical.HasDiagnostics = (*FSLogical)(nil)
+	_ stdlogical.HasStoppable   = (*FSLogical)(nil)
+)
+
+// GetDiagnostics implements stdlogical.HasDiagnostics.
+func (l *FSLogical) GetDiagnostics() *diag.Diagnostics {
+	return l.Diagnostics
+}
+
+// GetStoppable implements stdlogical.HasStoppable.
+func (l *FSLogical) GetStoppable() types.Stoppable {
+	ret := make(types.Stoppables, len(l.Loops))
+	for idx, loop := range l.Loops {
+		ret[idx] = loop
+	}
+	return ret
 }

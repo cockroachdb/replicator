@@ -23,7 +23,7 @@ import (
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(contextContext context.Context, config *Config) ([]*logical.Loop, func(), error) {
+func Start(contextContext context.Context, config *Config) (*FSLogical, func(), error) {
 	diagnostics, cleanup := diag.New(contextContext)
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
@@ -147,7 +147,11 @@ func Start(contextContext context.Context, config *Config) ([]*logical.Loop, fun
 		cleanup()
 		return nil, nil, err
 	}
-	return v, func() {
+	fsLogical := &FSLogical{
+		Diagnostics: diagnostics,
+		Loops:       v,
+	}
+	return fsLogical, func() {
 		cleanup9()
 		cleanup8()
 		cleanup7()

@@ -33,6 +33,7 @@ import (
 	jwtAuth "github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 	joonix "github.com/joonix/log"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -105,6 +106,8 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	})
 	r.NoError(err)
 	defer cancel()
+	// This is normally taken care of by stdlogical.Command.
+	stdlogical.AddHandlers(targetFixture.Authenticator, targetFixture.Server.mux, targetFixture.Diagnostics)
 
 	// Set up source and target tables.
 	source, err := sourceFixture.CreateSourceTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")
