@@ -170,14 +170,6 @@ func getColumns(
 			}
 			if defaultExpr.Valid {
 				column.DefaultExpr = defaultExpr.String
-				// CockroachDB prior to v23.1 returns the datatype in
-				// the expression (e.g. `Foo`:::STRING). We want to
-				// strip that type assertion out to generate consistent
-				// behavior.
-				castIdx := strings.LastIndex(column.DefaultExpr, ":::")
-				if castIdx != -1 {
-					column.DefaultExpr = column.DefaultExpr[:castIdx]
-				}
 				// Oracle also likes to include some dangling whitespace.
 				column.DefaultExpr = strings.TrimSpace(column.DefaultExpr)
 			}

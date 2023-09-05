@@ -226,11 +226,34 @@ func TestGetColumns(t *testing.T) {
 			check: func(t *testing.T, data []types.ColData) {
 				for _, col := range data {
 					if ident.Equal(col.Name, ident.New("b")) {
-						assert.Equal(t, "'Hello World!'", col.DefaultExpr)
+						// Different versions of CRDB will return
+						// varying type-assertion syntax.
+						assert.Contains(t, col.DefaultExpr, "'Hello World!'")
 						return
 					}
 				}
 				assert.Fail(t, "did not find b column")
+			},
+		},
+		// Default with a function.
+		{
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT replace('Hello World!', ' ', '+')",
+			primaryKeys: []string{"a"},
+			dataCols:    []string{"b"},
+			check: func(t *testing.T, data []types.ColData) {
+				a := assert.New(t)
+				for _, col := range data {
+					if ident.Equal(col.Name, ident.New("b")) {
+						// Type assertion syntax will vary between CRDB versions.
+						a.True(
+							strings.HasPrefix(col.DefaultExpr, "replace('Hello World!'"),
+							col.DefaultExpr)
+						a.True(strings.HasSuffix(col.DefaultExpr, ")"), col.DefaultExpr)
+						return
+					}
+				}
+				a.Fail("did not find b column")
 			},
 		},
 	}
