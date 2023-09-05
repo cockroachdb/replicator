@@ -14,25 +14,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package pglogical contains a command to perform logical replication
-// from a PostgreSQL source server.
-package pglogical
+package mylogical
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/source/pglogical"
-	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
-	"github.com/spf13/cobra"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-// Command returns the pglogical subcommand.
-func Command() *cobra.Command {
-	cfg := &pglogical.Config{}
-	return stdlogical.New(&stdlogical.Template{
-		Bind:  cfg.Bind,
-		Short: "start a pg logical replication feed",
-		Start: func(cmd *cobra.Command) (any, func(), error) {
-			return pglogical.Start(cmd.Context(), cfg)
-		},
-		Use: "pglogical",
-	})
+// TestCommand ensures that the CLI command can be constructed and
+// that all flag binding works.
+func TestCommand(t *testing.T) {
+	r := require.New(t)
+	r.NoError(Command().Help())
 }

@@ -14,33 +14,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build wireinject
-// +build wireinject
-
 package mylogical
 
 import (
-	"context"
-
-	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/google/wire"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 )
 
-// Start creates a MySQL/MariaDB logical replication loop using the
-// provided configuration.
-func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
-	panic(wire.Build(
-		wire.Bind(new(logical.Config), new(*Config)),
-		wire.Struct(new(MYLogical), "*"),
-		Set,
-		diag.New,
-		logical.Set,
-		script.Set,
-		staging.Set,
-		target.Set,
-	))
+// MYLogical is a MySQL/MariaDB logical replication loop.
+type MYLogical struct {
+	Diagnostics *diag.Diagnostics
+	Loop        *logical.Loop
+}
+
+var (
+	_ stdlogical.HasDiagnostics = (*MYLogical)(nil)
+	_ stdlogical.HasStoppable   = (*MYLogical)(nil)
+)
+
+// GetDiagnostics implements [stdlogical.HasDiagnostics].
+func (l *MYLogical) GetDiagnostics() *diag.Diagnostics {
+	return l.Diagnostics
+}
+
+// GetStoppable implements [stdlogical.HasStoppable].
+func (l *MYLogical) GetStoppable() types.Stoppable {
+	return l.Loop
 }

@@ -24,51 +24,43 @@ import (
 	"net"
 )
 
-import (
-	_ "net/http/pprof"
-)
-
 // Injectors from injector.go:
 
 func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 	diagnostics, cleanup := diag.New(ctx)
-	listener, cleanup2, err := ProvideListener(config, diagnostics)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
-		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
-		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup3, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
+	stagingPool, cleanup2, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
-		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
-		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	authenticator, cleanup4, err := ProvideAuthenticator(ctx, diagnostics, config, stagingPool, stagingSchema)
+	authenticator, cleanup3, err := ProvideAuthenticator(ctx, diagnostics, config, stagingPool, stagingSchema)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	listener, cleanup4, err := ProvideListener(config, diagnostics)
 	if err != nil {
 		cleanup3()
 		cleanup2()
@@ -174,7 +166,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		Stores:        stagers,
 		TargetPool:    targetPool,
 	}
-	serveMux := ProvideMux(authenticator, handler, diagnostics, stagingPool, targetPool)
+	serveMux := ProvideMux(handler, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
 		cleanup9()
@@ -188,7 +180,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup10 := ProvideServer(listener, serveMux, tlsConfig)
+	server, cleanup10 := ProvideServer(authenticator, diagnostics, listener, serveMux, tlsConfig)
 	return server, func() {
 		cleanup10()
 		cleanup9()
@@ -347,7 +339,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		Stores:        stagers,
 		TargetPool:    targetPool,
 	}
-	serveMux := ProvideMux(authenticator, handler, diagnostics, stagingPool, targetPool)
+	serveMux := ProvideMux(handler, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
 		cleanup9()
@@ -361,7 +353,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup10 := ProvideServer(listener, serveMux, tlsConfig)
+	server, cleanup10 := ProvideServer(authenticator, diagnostics, listener, serveMux, tlsConfig)
 	serverTestFixture := &testFixture{
 		Authenticator: authenticator,
 		Config:        config,

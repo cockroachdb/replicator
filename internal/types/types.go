@@ -331,6 +331,31 @@ type StagingPool struct {
 	_ noCopy
 }
 
+// A Stoppable object can indicate when it has reached a terminal state.
+type Stoppable interface {
+	Stopped() <-chan struct{}
+}
+
+// Stoppables aggregates multiple Stoppable instances.
+type Stoppables []Stoppable
+
+// Stopped implements Stoppable to return a channel that is closed
+// when all enclosed elements have been stopped.
+func (s Stoppables) Stopped() <-chan struct{} {
+	chans := make([]<-chan struct{}, len(s))
+	for idx, stoppable := range s {
+		chans[idx] = stoppable.Stopped()
+	}
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		for _, sub := range chans {
+			<-sub
+		}
+	}()
+	return ch
+}
+
 // SourcePool is an injection point for a connection to a source
 // database.
 type SourcePool struct {

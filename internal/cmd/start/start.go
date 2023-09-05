@@ -19,34 +19,19 @@ package start
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/source/server"
-	log "github.com/sirupsen/logrus"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 	"github.com/spf13/cobra"
 )
 
 // Command returns the command to start the server.
 func Command() *cobra.Command {
 	var cfg server.Config
-	cmd := &cobra.Command{
-		Args:  cobra.NoArgs,
+	return stdlogical.New(&stdlogical.Template{
+		Bind:  cfg.Bind,
 		Short: "start the server",
-		Use:   "start",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, cancel, err := server.NewServer(cmd.Context(), &cfg)
-			if err != nil {
-				return err
-			}
-			// Pause any log.Exit() or log.Fatal() until the server exits.
-			log.DeferExitHandler(func() {
-				cancel()
-				<-s.Stopped()
-			})
-			// Wait for shutdown. The main function uses log.Exit()
-			// to call the above handler.
-			<-cmd.Context().Done()
-			return nil
+		Start: func(cmd *cobra.Command) (any, func(), error) {
+			return server.NewServer(cmd.Context(), &cfg)
 		},
-	}
-	cfg.Bind(cmd.Flags())
-
-	return cmd
+		Use: "start",
+	})
 }
