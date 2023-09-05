@@ -39,13 +39,14 @@ type fanWorkers struct {
 	pending      *latch.Counter
 	targetPool   *types.TargetPool
 	stamp        stamp.Stamp
-	workerStatus func() error
+	workerStatus func() error // Blocking call to get errgroup status.
 
 	mu struct {
-		sync.Mutex
-		data    *ident.TableMap[[]types.Mutation]
-		drain   bool          // Graceful drain condition.
-		updated chan struct{} // Closed and replaced when mu changes.
+		sync.RWMutex
+		data         *ident.TableMap[[]types.Mutation] // Mutations to apply.
+		drain        bool                              // Graceful drain condition.
+		updated      chan struct{}                     // Closed and replaced when mu changes.
+		workerExited bool                              // Set when any loop() worker has returned.
 	}
 }
 
@@ -94,11 +95,47 @@ func (t *fanWorkers) Enqueue(table ident.Table, mut []types.Mutation) error {
 // This is useful for ensuring that dependency ordering of mutations is
 // maintained.
 func (t *fanWorkers) Flush(ctx context.Context) error {
-	select {
-	case <-t.pending.Wait():
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	// Check that worker goroutines are still running.
+	checkErr := func() (waitFor <-chan struct{}, err error) {
+		t.mu.RLock()
+		muUpdated := t.mu.updated
+		exited := t.mu.workerExited
+		// Not deferred, since t.workerStatus() is blocking.
+		t.mu.RUnlock()
+
+		if exited {
+			return nil, errors.Wrap(t.workerStatus(), "error during concurrent loop behavior")
+		}
+		return muUpdated, nil
+	}
+
+	// Perform an early check for loops that have already exited.
+	checkForError, err := checkErr()
+	if err != nil {
+		return err
+	}
+
+	// Request notification when the count of in-flight mutations
+	// reaches zero (perhaps instantaneously).
+	workDone := t.pending.Wait()
+
+	for {
+		select {
+		case <-workDone:
+			// No work in flight, ideal state.
+			return nil
+
+		case <-checkForError:
+			// State in fanWorkers has changed, re-verify state.
+			checkForError, err = checkErr()
+			if err != nil {
+				return err
+			}
+
+		case <-ctx.Done():
+			// Cancelled.
+			return ctx.Err()
+		}
 	}
 }
 
@@ -147,7 +184,7 @@ func (t *fanWorkers) chaos() error {
 func (t *fanWorkers) loop(ctx context.Context) error {
 	// Loop extracted to be able to use defer keyword for cleanup.
 	tryLoop := func() (bool, error) {
-		table, muts, moreWork := t.waitForWork()
+		table, muts, moreWork := t.waitForWork(ctx)
 		if !moreWork {
 			return false, nil
 		}
@@ -169,9 +206,22 @@ func (t *fanWorkers) loop(ctx context.Context) error {
 		return true, nil
 	}
 
+	// Set a flag to indicate that one or more loop goroutines have
+	// exited.
+	defer func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if !t.mu.workerExited {
+			t.mu.workerExited = true
+			close(t.mu.updated)
+			t.mu.updated = make(chan struct{})
+		}
+	}()
+
 	for {
 		running, err := tryLoop()
 		if err != nil {
+			// This error will be available from workerStatus.
 			return err
 		}
 		if !running {
@@ -185,8 +235,10 @@ var errStop = errors.New("ignored")
 
 // waitForWork finds some mutations to apply to a table. If there are no
 // remaining mutations and the fanWorkers is stopped, this method will
-// return false.
-func (t *fanWorkers) waitForWork() (table ident.Table, mut []types.Mutation, moreWork bool) {
+// return false. The wait can be interrupted by cancelling the context.
+func (t *fanWorkers) waitForWork(
+	ctx context.Context,
+) (table ident.Table, mut []types.Mutation, moreWork bool) {
 	tryDequeue := func() (waitFor chan struct{}) {
 		t.mu.Lock()
 		defer t.mu.Unlock()
@@ -232,6 +284,11 @@ func (t *fanWorkers) waitForWork() (table ident.Table, mut []types.Mutation, mor
 		if waitFor == nil {
 			return
 		}
-		<-waitFor
+		select {
+		case <-waitFor:
+			// Something changed, loop around.
+		case <-ctx.Done():
+			return
+		}
 	}
 }

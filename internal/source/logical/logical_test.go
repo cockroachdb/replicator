@@ -18,6 +18,7 @@ package logical_test
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	log "github.com/sirupsen/logrus"
@@ -33,16 +35,92 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testLogicalSmoke(t, false, false, false) })
-	t.Run("consistent-backfill", func(t *testing.T) { testLogicalSmoke(t, true, false, false) })
-	t.Run("consistent-chaos", func(t *testing.T) { testLogicalSmoke(t, false, false, true) })
-	t.Run("consistent-chaos-backfill", func(t *testing.T) { testLogicalSmoke(t, true, false, true) })
-	t.Run("immediate", func(t *testing.T) { testLogicalSmoke(t, false, true, false) })
-	t.Run("immediate-chaos", func(t *testing.T) { testLogicalSmoke(t, false, true, true) })
+type logicalTestMode struct {
+	backfill  bool
+	chaos     bool
+	immediate bool
+	fk        bool
 }
 
-func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
+func TestLogical(t *testing.T) {
+	tcs := []struct {
+		name string
+		mode *logicalTestMode
+	}{
+		{
+			name: "consistent",
+			mode: &logicalTestMode{},
+		},
+		{
+			name: "consistent-backfill",
+			mode: &logicalTestMode{
+				backfill: true,
+			},
+		},
+		{
+			name: "consistent-chaos",
+			mode: &logicalTestMode{
+				chaos: true,
+			},
+		},
+		{
+			name: "consistent-chaos-backfill",
+			mode: &logicalTestMode{
+				backfill: true,
+				chaos:    true,
+			},
+		},
+		{
+			name: "fk",
+			mode: &logicalTestMode{
+				fk: true,
+			},
+		},
+		{
+			name: "fk-backfill",
+			mode: &logicalTestMode{
+				backfill: true,
+				fk:       true,
+			},
+		},
+		{
+			name: "fk-backfill-chaos",
+			mode: &logicalTestMode{
+				backfill: true,
+				chaos:    true,
+				fk:       true,
+			},
+		},
+		{
+			name: "fk-chaos",
+			mode: &logicalTestMode{
+				chaos: true,
+				fk:    true,
+			},
+		},
+		{
+			name: "immediate",
+			mode: &logicalTestMode{
+				immediate: true,
+			},
+		},
+		{
+			name: "immediate-chaos",
+			mode: &logicalTestMode{
+				chaos:     true,
+				immediate: true,
+			},
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			testLogicalSmoke(t, tc.mode)
+		})
+	}
+}
+
+func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	log.SetLevel(log.TraceLevel)
 	a := assert.New(t)
 
@@ -58,40 +136,52 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	pool := fixture.TargetPool
 
 	// Create some tables.
-	tgts := []ident.Table{
-		ident.NewTable(dbName, ident.New("t1")),
-		ident.NewTable(dbName, ident.New("t2")),
-		ident.NewTable(dbName, ident.New("t3")),
-		ident.NewTable(dbName, ident.New("t4")),
+	const tableCount = 4
+	tgts := make([]ident.Table, tableCount)
+	for idx := range tgts {
+		tgts[idx] = ident.NewTable(dbName, ident.New(fmt.Sprintf("t%d", idx)))
 	}
 
-	for _, tgt := range tgts {
-		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048))`, tgt)
+	// In FK mode, declare tables to enforce ordering.
+	for idx, tgt := range tgts {
+		var schema string
+		if mode.fk && idx > 0 {
+			schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT REFERENCES %s NOT NULL)`,
+				tgt, tgts[idx-1])
+		} else {
+			schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT)`, tgt)
+		}
 		if _, err := pool.ExecContext(ctx, schema); !a.NoError(err) {
 			return
 		}
 	}
 
+	// Ensure that sorting must happen.
+	rand.Shuffle(tableCount, func(i, j int) {
+		tgts[i], tgts[j] = tgts[j], tgts[i]
+	})
+
 	gen := newGenerator(tgts)
-	const numEmits = 100
+	numEmits := 3 * batches.Size()
 	gen.emit(numEmits)
 
 	var chaosProb float32
-	if withChaos {
+	if mode.chaos {
 		chaosProb = 0.1
 	}
 
 	cfg := &logical.BaseConfig{
-		ApplyTimeout:   time.Second, // Increase to make using the debugger easier.
-		ChaosProb:      chaosProb,
-		Immediate:      immediate,
-		RetryDelay:     time.Nanosecond,
-		StagingConn:    fixture.StagingPool.ConnectionString,
-		StagingSchema:  fixture.StagingDB.Schema(),
-		StandbyTimeout: 5 * time.Millisecond,
-		TargetConn:     pool.ConnectionString,
+		ApplyTimeout:       time.Second, // Increase to make using the debugger easier.
+		ChaosProb:          chaosProb,
+		ForeignKeysEnabled: mode.fk,
+		Immediate:          mode.immediate,
+		RetryDelay:         time.Nanosecond,
+		StagingConn:        fixture.StagingPool.ConnectionString,
+		StagingSchema:      fixture.StagingDB.Schema(),
+		StandbyTimeout:     5 * time.Millisecond,
+		TargetConn:         pool.ConnectionString,
 	}
-	if allowBackfill {
+	if mode.backfill {
 		cfg.BackfillWindow = time.Minute
 	} else {
 		cfg.BackfillWindow = 0
@@ -146,7 +236,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	case <-time.After(time.Second):
 		a.Fail("timed out waiting for shutdown")
 	}
-	if !withChaos && !allowBackfill {
+	if !mode.chaos && !mode.backfill {
 		a.Equal(int32(1), gen.atomic.processExits.Load())
 		a.Equal(int32(1), gen.atomic.readIntoExits.Load())
 	}
@@ -198,7 +288,7 @@ func TestUserScript(t *testing.T) {
 	}
 
 	for _, tgt := range tgts {
-		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048))`, tgt)
+		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT)`, tgt)
 		_, err := pool.ExecContext(ctx, schema)
 		r.NoError(err)
 	}

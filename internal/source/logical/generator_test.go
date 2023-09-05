@@ -183,11 +183,16 @@ func (g *generatorDialect) Process(
 		for _, tbl := range g.tables {
 			mut := types.Mutation{
 				Key:  []byte(fmt.Sprintf(`[%d]`, msg.Index)),
-				Data: []byte(fmt.Sprintf(`{"k":%d,"v":"%d"}`, msg.Index, msg.Index)),
+				Data: []byte(fmt.Sprintf(`{"k":%[1]d,"v":"%[1]d","ref": %[1]d}`, msg.Index)),
 			}
 			if err := events.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut}); err != nil {
 				return err
 			}
+		}
+
+		// Ensure that we can wait for data in flight, if necessary.
+		if err := events.Flush(ctx); err != nil {
+			return err
 		}
 
 		if err := events.OnCommit(ctx); err != nil {
