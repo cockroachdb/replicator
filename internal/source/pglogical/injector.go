@@ -30,12 +30,6 @@ import (
 	"github.com/google/wire"
 )
 
-// PGLogical is a PostgreSQL logical replication loop.
-type PGLogical struct {
-	Diagnostics *diag.Diagnostics
-	Loop        *logical.Loop
-}
-
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
 func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {

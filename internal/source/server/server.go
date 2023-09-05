@@ -20,12 +20,48 @@ package server
 
 // This file contains code repackaged from main.go
 
-import _ "net/http/pprof" // Register pprof debugging endpoints.
+import (
+	"net/http"
+
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+)
 
 // A Server receives incoming CockroachDB changefeed messages and
 // applies them to a target cluster.
 type Server struct {
+	auth    types.Authenticator
+	diags   *diag.Diagnostics
+	mux     *http.ServeMux
 	stopped chan struct{}
+}
+
+var (
+	_ stdlogical.HasAuthenticator = (*Server)(nil)
+	_ stdlogical.HasDiagnostics   = (*Server)(nil)
+	_ stdlogical.HasServeMux      = (*Server)(nil)
+	_ stdlogical.HasStoppable     = (*Server)(nil)
+)
+
+// GetAuthenticator implements [stdlogical.HasAuthenticator].
+func (s *Server) GetAuthenticator() types.Authenticator {
+	return s.auth
+}
+
+// GetDiagnostics implements [stdlogical.HasDiagnostics].
+func (s *Server) GetDiagnostics() *diag.Diagnostics {
+	return s.diags
+}
+
+// GetServeMux implements [stdlogical.HasServeMux].
+func (s *Server) GetServeMux() *http.ServeMux {
+	return s.mux
+}
+
+// GetStoppable implements [stdlogical.HasStoppable].
+func (s *Server) GetStoppable() types.Stoppable {
+	return s
 }
 
 // Stopped returns a channel that will be closed when the server has
