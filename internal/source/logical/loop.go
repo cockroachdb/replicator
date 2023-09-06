@@ -131,6 +131,15 @@ func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 	l.consistentPoint.Lock()
 	defer l.consistentPoint.Unlock()
 
+	if !l.loopConfig.SuppressStampOrderChecks {
+		if c := stamp.Compare(p, l.consistentPoint.stamp); c < 0 {
+			return errors.Errorf("consistent point going backwards: %s vs %s",
+				p, l.consistentPoint.stamp)
+		} else if c == 0 {
+			return errors.Errorf("consistent point stalled: %s", p)
+		}
+	}
+
 	// Notify Dialect instances that have explicit coordination needs
 	// that the consistent point is about to advance.
 	if cb, ok := l.loopConfig.Dialect.(ConsistentCallback); ok {
@@ -432,6 +441,19 @@ func (l *loop) runOnceUsing(
 							"ts":   ts,
 						}).Debug("backfill has caught up")
 						ctx.Stop(l.factory.baseConfig.ApplyTimeout)
+
+						// Add a testing hook to validate backfill
+						// behaviors before switching to consistent
+						// mode.
+						if ch := l.loopConfig.WaitAfterBackfill; ch != nil {
+							log.Info("waiting to continue after backfill")
+							select {
+							case <-ch:
+								log.Info("continuing after backfill")
+							case <-ctx.Done():
+								return ctx.Err()
+							}
+						}
 						return nil
 					}
 				} else if canBackfill {

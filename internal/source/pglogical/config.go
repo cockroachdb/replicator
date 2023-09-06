@@ -60,6 +60,8 @@ func (c *Config) Preflight() error {
 	if err := c.LoopConfig.Preflight(); err != nil {
 		return err
 	}
+	// See discussion on the field.
+	c.LoopConfig.SuppressStampOrderChecks = true
 	if c.Publication == "" {
 		return errors.New("no publication name was configured")
 	}

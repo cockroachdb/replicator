@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -49,6 +50,7 @@ type Dialect struct {
 	memo              types.Memo           // Durable logging of processed doc ids.
 	pool              *types.StagingPool   // Database access.
 	query             firestore.Query      // The base query build from.
+	queryIsGroup      bool                 // query is a collection group, affects pagination.
 	recurse           bool                 // Scan for dynamic, nested collections.
 	recurseFilter     *ident.Map[struct{}] // Ignore nested collections with these names.
 	sourceCollection  ident.Ident          // Identifies the loop to the user-script.
@@ -86,25 +88,37 @@ type (
 func (d *Dialect) BackfillInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
-	prev, _ := state.GetConsistentPoint().(*consistentPoint)
-	to := time.Now()
+	cp, _ := state.GetConsistentPoint().(*consistentPoint)
+pickCatchUpTime:
 	for {
-		log.Tracef("backfilling %s from %s", d.sourcePath, prev)
+		// Pick a fixed time to catch up to.  Consume old documents before trying to catch up again.
+		docsUpdatedBefore := time.Now().UTC()
+	processCatchUpTime:
+		for {
+			log.Tracef("backfilling %s from %s until %s", d.sourcePath, cp, docsUpdatedBefore)
 
-		err := d.backfillOneBatch(ctx, ch, to, prev, state)
+			err := d.backfillOneBatch(ctx, ch, docsUpdatedBefore, cp)
+			if err != nil {
+				return errors.Wrap(err, d.sourcePath)
+			}
 
-		if err != nil {
-			return errors.Wrap(err, d.sourcePath)
-		}
-
-		select {
-		case next := <-state.NotifyConsistentPoint(ctx, logical.AwaitGT, prev):
-			prev = next.(*consistentPoint)
-			continue
-		case <-state.Stopping():
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
+			select {
+			case next := <-state.NotifyConsistentPoint(ctx, logical.AwaitGT, cp):
+				// Wait for that iteration of the loop to be processed
+				// (or not), and continue into the next loop.
+				cp = next.(*consistentPoint)
+				if cp.Time.Before(docsUpdatedBefore) {
+					continue processCatchUpTime
+				}
+				// We've caught up to our target time. Pick a new one,
+				// although the loop might decide to stop us to switch
+				// out of backfill mode.
+				continue pickCatchUpTime
+			case <-state.Stopping():
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 }
@@ -113,76 +127,33 @@ func (d *Dialect) BackfillInto(
 // It will return the next incremental consistentPoint and whether the
 // backfill is expected to continue.
 func (d *Dialect) backfillOneBatch(
-	ctx context.Context,
-	ch chan<- logical.Message,
-	now time.Time,
-	cp *consistentPoint,
-	state logical.State,
+	ctx context.Context, ch chan<- logical.Message, docsUpdatedBefore time.Time, cp *consistentPoint,
 ) error {
-	// We need to make the call to snaps.Next() interruptable.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		select {
-		case <-state.Stopping():
-			// Cancel early to interrupt call to snaps.Next() below.
-			cancel()
-		case <-ctx.Done():
-			// Expected path when backfillOneBatch exits.
-		}
-	}()
-
 	// Iterate over the collection by (updated_at, __doc_id__) using
 	// a cursor-like approach so that we can checkpoint along the way.
 	q := d.query.
 		OrderBy(d.updatedAtProperty.Raw(), firestore.Asc).
 		OrderBy(firestore.DocumentID, firestore.Asc).
-		Where(d.updatedAtProperty.Raw(), "<=", now).
+		Where(d.updatedAtProperty.Raw(), "<", docsUpdatedBefore).
 		Limit(d.backfillBatchSize)
 	if !cp.IsZero() {
 		if cp.AsID() == "" {
+			// Can't use StartAt(), since we don't have an ID.
 			q = q.Where(d.updatedAtProperty.Raw(), ">=", cp.AsTime())
 		} else {
 			q = q.StartAfter(cp.AsTime(), cp.AsID())
 		}
-	}
-	snaps := q.Snapshots(ctx)
-	defer snaps.Stop()
-
-	snap, err := snaps.Next()
-	if err != nil {
-		// Mask cancellation errors.
-		if status.Code(err) == codes.Canceled || errors.Is(err, iterator.Done) {
-			return nil
-		}
-		return errors.WithStack(err)
 	}
 
 	// We're going to call GetAll since we're running with a reasonable
 	// limit value.  This allows us to peek at the id of the last
 	// document, so we can compute the eventual consistent point for
 	// this batch of docs.
-	docs, err := snap.Documents.GetAll()
+	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	log.Tracef("received %d documents from %s", len(docs), d.sourcePath)
-
-	// Workaround / BUG? It appears that the StartAfter call above
-	// sometimes returns the last document from the previous backfill
-	// loop. This loop ensures that the effective consistent point
-	// always goes forward in time.
-	for len(docs) > 0 {
-		firstCP, err := d.backfillPoint(docs[0])
-		if err != nil {
-			return err
-		}
-		if stamp.Compare(firstCP, cp) > 0 {
-			break
-		}
-		log.Tracef("filtering")
-		docs = docs[1:]
-	}
 
 	// Helper for interruptible send idiom.
 	send := func(msg logical.Message) error {
@@ -198,7 +169,7 @@ func (d *Dialect) backfillOneBatch(
 	// collection, we want the consistent-point to jump forward in time
 	// to the server read-time.
 	if len(docs) == 0 {
-		cp = streamPoint(snap.ReadTime)
+		cp = streamPoint(docsUpdatedBefore)
 		return send(backfillEnd{cp})
 	}
 
@@ -437,24 +408,42 @@ func (d *Dialect) ZeroStamp() stamp.Stamp {
 	return &consistentPoint{}
 }
 
-// Compute the query-relative document start id. We need to do this so
-// that sub-collections can be accessed in a consistent way.
+// backfillPoint computes the query-relative document start id. When
+// querying a collection, we can use the short document ID for
+// pagination. The SDK will prefix the collection path when the
+// [firestore.DocumentID] sentinel is used. This collection+id allows
+// the backend to start scanning from the correct location in the master
+// document index. If we're querying a collection group, the
+// [firestore.DocumentID] must refer to a portion of the document's
+// complete path, since the same document id could, theoretically, exist
+// in multiple collections within the same group.
 //
-// 2022-08-29: One way that does not work is to call Query.StartAfter()
-// and then use Query.Serialize to hand the status over to the next
-// backfill cycle.
+// https://stackoverflow.com/a/58104104
+// https://groups.google.com/g/google-cloud-firestore-discuss/c/wpQCMjyGNfw/m/t7aX1OGtEgAJ
 func (d *Dialect) backfillPoint(doc *firestore.DocumentSnapshot) (*consistentPoint, error) {
-	topCollection := doc.Ref.Parent
-	for topCollection.Parent != nil {
-		// collection -> parent doc -> parent collection
-		topCollection = topCollection.Parent.Parent
-	}
-	relativePath := fmt.Sprintf("documents/%s/%s",
-		topCollection.ID, doc.Ref.Path[len(topCollection.Path)+1:])
 	updateTime, err := d.docUpdatedAt(doc)
 	if err != nil {
 		return nil, err
 	}
+	if !d.queryIsGroup {
+		return &consistentPoint{
+			BackfillID: doc.Ref.ID,
+			Time:       updateTime,
+		}, nil
+	}
+
+	// Assemble path components in reverse order as we traverse the
+	// parent hierarchy.
+	parts := make([]string, 0, 8)
+	for ref := doc.Ref; ref != nil; ref = ref.Parent.Parent {
+		parts = append(parts, ref.ID, ref.Parent.ID)
+	}
+	parts = append(parts, "documents")
+	// Reverse the slice; use go 1.21 API when available.
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+	relativePath := strings.Join(parts, "/")
 	return &consistentPoint{
 		BackfillID: relativePath,
 		Time:       updateTime,
@@ -547,7 +536,7 @@ func (d *Dialect) doRecurse(
 	it := doc.Collections(ctx)
 	for {
 		coll, err := it.Next()
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			return nil
 		}
 		if err != nil {
@@ -559,6 +548,7 @@ func (d *Dialect) doRecurse(
 		}
 
 		fork := *d
+		fork.queryIsGroup = false
 		fork.query = coll.Query
 		fork.sourcePath = coll.Path
 

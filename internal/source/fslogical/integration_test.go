@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 
 func TestSmoke(t *testing.T) {
 	t.Run("normal", func(t *testing.T) { testSmoke(t, 0) })
-	t.Run("chaos", func(t *testing.T) { testSmoke(t, 0.001) })
+	t.Run("chaos", func(t *testing.T) { testSmoke(t, 0.01) })
 }
 
 func testSmoke(t *testing.T, chaosProb float32) {
@@ -82,6 +82,9 @@ func testSmoke(t *testing.T, chaosProb float32) {
 	r.NoError(err)
 
 	now := time.Now().UTC()
+	// Insert all documents with the same timestamp; this will ensure
+	// that ID-based pagination actually works.
+	yesterday := now.Add(-24 * time.Hour)
 
 	// Create a connection to the emulator, to populate source docs. The
 	// source docs are created with timestamps that are well in the
@@ -95,7 +98,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 	for i := range docRefs {
 		docRefs[i], _, err = coll.Add(ctx, map[string]any{
 			"v":          fmt.Sprintf("value %d", i),
-			"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
+			"updated_at": yesterday,
 		})
 		r.NoError(err)
 		log.Tracef("inserted %s", docRefs[i].Path)
@@ -104,7 +107,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 		subRefs[i], _, err = docRefs[i].Collection("subcollection").
 			Add(ctx, map[string]any{
 				"v":          fmt.Sprintf("value %d", i),
-				"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
+				"updated_at": yesterday,
 			})
 		r.NoError(err)
 
@@ -112,7 +115,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 		dynRefs[i], _, err = subRefs[i].Collection(fmt.Sprintf("dynamic_%d", i)).
 			Add(ctx, map[string]any{
 				"v":          fmt.Sprintf("value %d", i),
-				"updated_at": now.Add(-time.Hour + time.Duration(i)*time.Second),
+				"updated_at": yesterday,
 			})
 		r.NoError(err)
 	}
@@ -127,6 +130,8 @@ func testSmoke(t *testing.T, chaosProb float32) {
 	for _, doc := range dynRefs {
 		x[doc.ID] = struct{}{}
 	}
+
+	waitAfterBackfill := make(chan struct{})
 
 	cfg := &Config{
 		BaseConfig: logical.BaseConfig{
@@ -160,8 +165,9 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 			},
 		},
 		LoopConfig: logical.LoopConfig{
-			LoopName:     "fslogicaltest",
-			TargetSchema: fixture.TargetSchema.Schema(),
+			LoopName:          "fslogicaltest",
+			TargetSchema:      fixture.TargetSchema.Schema(),
+			WaitAfterBackfill: waitAfterBackfill,
 		},
 		BackfillBatchSize:           10,
 		DocumentIDProperty:          ident.New("id"), // Map doc id metadata to target column.
@@ -214,6 +220,7 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 	}
 
 	log.Info("backfill done, sending document updates")
+	close(waitAfterBackfill)
 
 	// Update previous documents in batches. The FS API limits
 	// the maximum transaction batch size.
