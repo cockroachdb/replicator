@@ -199,9 +199,22 @@ type LoopConfig struct {
 	Dialect Dialect
 	// Uniquely identifies the replication loop.
 	LoopName string
+	// SuppressStampOrderChecks guards a sanity-check that's
+	// incompatible with the current implementation of the pglogical
+	// dialect. We're currently using the LSN of the transaction start
+	// in the WAL; these are not necessarily well-ordered.  Instead, we
+	// would want to use some combination of the XID (with wraparound)
+	// and/or LSN positions of the commit message. This may also require
+	// a change to the Events interface, to allow the in-flight
+	// transaction stamp to be replaced prior to commit.
+	SuppressStampOrderChecks bool
 	// The SQL schema in the target cluster to write into. This value is
 	// optional if a userscript dispatch function is present.
 	TargetSchema ident.Schema
+	// For testing; the loop will backfill and then wait for this
+	// channel to be closed before switching to incremental operation.
+	// This allows tests to validate the backfill behavior.
+	WaitAfterBackfill <-chan struct{} `json:"-"`
 }
 
 // Bind adds flags to the set. This method only makes sense for
@@ -228,6 +241,8 @@ func (c *LoopConfig) Bind(f *pflag.FlagSet) {
 // Copy returns a deep copy of the config.
 func (c *LoopConfig) Copy() *LoopConfig {
 	ret := *c
+	// Propagating this behavior is undesirable.
+	ret.WaitAfterBackfill = nil
 	return &ret
 }
 

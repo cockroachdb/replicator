@@ -76,9 +76,11 @@ func ProvideLoops(
 	}
 
 	err := userscript.Sources.Range(func(sourceName ident.Ident, source *script.Source) error {
+		var isGroup bool
 		var sourcePath string
 		var q firestore.Query
 		if r := sourceName.Raw(); strings.HasPrefix(r, GroupPrefix) {
+			isGroup = true
 			sourcePath = r
 			tail := r[len(GroupPrefix):]
 			q = fs.CollectionGroup(tail).Query
@@ -99,6 +101,7 @@ func ProvideLoops(
 			memo:              memo,
 			pool:              pool,
 			query:             q,
+			queryIsGroup:      isGroup,
 			tombstones:        st,
 			recurse:           source.Recurse,
 			recurseFilter:     recurseFilter,
