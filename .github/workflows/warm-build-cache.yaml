@@ -14,30 +14,38 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Ensure that all go modules are cached within the local GitHub cache
+# before executing the full test matrix. We've been seeing some requests
+# to the upstream module cache fail due to network rate-limiting.
 name: Warm Golang Build Cache
 permissions:
   contents: read
 on:
   workflow_call:
+  workflow_dispatch:
 jobs:
-  # Ensure that all go modules are cached within the local GitHub cache
-  # before executing the full test matrix. We've been seeing some
-  # requests to the upstream module cache fail due to network
-  # rate-limiting.
   warm-build-cache:
     name: Warm build cache
     runs-on: ubuntu-latest
+    concurrency:
+      group: warm-cache
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Go
+        id: setup
         uses: actions/setup-go@v4
         with:
           go-version-file: 'go.mod'
 
       - name: Download modules
+        if: ${{ steps.setup.outputs.cache-hit != 'true' }}
         run: go mod download
 
       # This should also wind up in the cache.
       - name: Prebuild
-        run: go build ./...
+        if: ${{ steps.setup.outputs.cache-hit != 'true' }}
+        # Keep options in sync with golang.yaml
+        run: |
+          go build ./...
+          CGO_ENABLED=0 go build ./...
