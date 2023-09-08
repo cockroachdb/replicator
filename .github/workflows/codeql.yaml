@@ -40,6 +40,9 @@ on:
 
 jobs:
   warm-build-cache:
+    permissions:
+      contents: read
+      packages: read
     uses: ./.github/workflows/warm-build-cache.yaml
 
   # This scan is heavy, so it's pulled out into its own job.

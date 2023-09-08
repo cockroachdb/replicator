@@ -20,6 +20,7 @@
 name: Warm Golang Build Cache
 permissions:
   contents: read
+  packages: read
 on:
   workflow_call:
   workflow_dispatch:
@@ -54,3 +55,21 @@ jobs:
         run: |
           go build ./...
           CGO_ENABLED=0 go build ./...
+
+      - name: Cache Docker images
+        uses: ScribeMD/docker-cache@0.3.5
+        with:
+          # # Keep in sync with golang.yaml
+          key: docker-${{ runner.os }}-${{ join('.github/docker-compose.yml') }}
+
+      # Ensure we can grab any private images we need for testing.
+      - name: Log in to GitHub Package Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull Docker images into cache
+        working-directory: .github
+        run: docker-compose pull

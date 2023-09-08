@@ -36,6 +36,9 @@ on:
 
 jobs:
   warm-build-cache:
+    permissions:
+      contents: read
+      packages: read
     uses: ./.github/workflows/warm-build-cache.yaml
 
   binaries:
