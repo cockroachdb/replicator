@@ -440,17 +440,14 @@ func getFlavor(config *Config) (string, error) {
 			}
 		}
 		return mysql.MariaDBFlavor, nil
-	} else if strings.Contains(version, "MySQL") || version == "Source distribution" {
-		for _, v := range mySQLSystemSettings {
-			err = checkSystemSetting(c, v[0], v[1])
-			if err != nil {
-				return "", err
-			}
-		}
-		return mysql.MySQLFlavor, nil
-	} else {
-		return "", errors.New("unknown server")
 	}
+	for _, v := range mySQLSystemSettings {
+		err = checkSystemSetting(c, v[0], v[1])
+		if err != nil {
+			return "", err
+		}
+	}
+	return mysql.MySQLFlavor, nil
 }
 
 func checkSystemSetting(c *client.Conn, variable string, expected string) error {
