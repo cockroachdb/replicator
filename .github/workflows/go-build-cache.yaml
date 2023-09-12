@@ -23,13 +23,6 @@ permissions:
 on:
   workflow_call:
   workflow_dispatch:
-concurrency:
-  # Using github.workflow here would inherit the name from the caller,
-  # which isn't what we want to do. We want to serialize multiple
-  # callers so that the cache and build happen exactly once.
-  # https://github.com/orgs/community/discussions/30708#discussioncomment-3518412
-  group: warm-cache-${{ github.ref }}
-  cancel-in-progress: false
 jobs:
   warm-build-cache:
     name: Warm build cache

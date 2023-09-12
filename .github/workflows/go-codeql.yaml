@@ -14,41 +14,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: CodeQL
+# Run GitHub CodeQL sanity-checks.
+name: Golang CodeQL
 permissions:
   contents: read
   security-events: write
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 on:
-  pull_request:
-    paths:
-      - 'go.mod'
-      - 'go.sum'
-      - '**/*.go'
-      - '.github/workflows/codeql.yaml'
-  push:
-    branches:
-      - 'master'
-    paths:
-      - 'go.mod'
-      - 'go.sum'
-      - '**/*.go'
-      - '.github/workflows/codeql.yaml'
-
+  workflow_call:
+  workflow_dispatch:
 jobs:
-  warm-build-cache:
-    uses: ./.github/workflows/warm-build-cache.yaml
-
-  # This scan is heavy, so it's pulled out into its own job.
   codeql:
     name: CodeQL security scanning
     runs-on: ubuntu-latest
-    needs: warm-build-cache
-    permissions:
-      security-events: write
     steps:
       - uses: actions/checkout@v4
 
