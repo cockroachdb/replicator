@@ -24,9 +24,29 @@ on:
   workflow_call:
   workflow_dispatch:
 jobs:
-  warm-build-cache:
-    name: Warm build cache
+  # This is the usual case, where we just want to see if the cache exists.
+  check:
+    name: Check if cache exists
     runs-on: ubuntu-latest
+    outputs:
+      cache-hit: ${{ steps.setup.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        id: setup
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+
+  # Start a job on a larger machine only when we need to build.
+  build:
+    name: Regenerate build cache
+    # Managed by dev-inf team.
+    runs-on: ubuntu-latest-8-core
+    needs: check
+    # Outputs are strings, not booleans.
+    if: ${{ needs.check.outputs.cache-hit != 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,13 +57,10 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Download modules
-        if: ${{ steps.setup.outputs.cache-hit != 'true' }}
         run: go mod download
 
-      # This should also wind up in the cache.
       - name: Prebuild
-        if: ${{ steps.setup.outputs.cache-hit != 'true' }}
         # Keep options in sync with golang.yaml
         run: |
-          go build ./...
-          CGO_ENABLED=0 go build ./...
+          go build . ./...
+          CGO_ENABLED=0 go build . ./...
