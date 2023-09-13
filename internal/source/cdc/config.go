@@ -18,6 +18,7 @@ package cdc
 
 import (
 	"bufio"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -56,6 +57,13 @@ type Config struct {
 
 	// The number of rows to retrieve when loading staged data.
 	SelectBatchSize int
+
+	// Retain staged, applied data for an extra amount of time. This
+	// allows, for example, additional time to validate what was staged
+	// versus what was applied. When set to zero, staged mutations may
+	// be retired as soon as there is a resolved timestamp greater than
+	// the timestamp of the mutation.
+	RetireOffset time.Duration
 }
 
 // Bind adds configuration flags to the set.
@@ -74,6 +82,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"the name of the table in which to store resolved timestamps")
 	f.IntVar(&c.SelectBatchSize, "selectBatchSize", defaultSelectBatchSize,
 		"the number of rows to select at once when reading staged data")
+	f.DurationVar(&c.RetireOffset, "retireOffset", 0,
+		"retain staged, applied data for an extra duration")
 }
 
 // Preflight implements logical.Config.
@@ -93,6 +103,9 @@ func (c *Config) Preflight() error {
 	}
 	if c.SelectBatchSize == 0 {
 		c.SelectBatchSize = defaultSelectBatchSize
+	}
+	if c.RetireOffset < 0 {
+		return errors.New("retireOffset must be >= 0")
 	}
 
 	return nil

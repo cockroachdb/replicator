@@ -552,6 +552,10 @@ func (r *resolver) retireLoop(ctx context.Context) {
 					log.WithError(err).Warnf("could not acquire stager for %s", table)
 					return nil
 				}
+				// Retain staged data for an extra amount of time.
+				if off := r.cfg.RetireOffset; off > 0 {
+					next = hlc.New(next.Nanos()-off.Nanoseconds(), next.Logical())
+				}
 				if err := stager.Retire(ctx, r.pool, next); err != nil {
 					if errors.Is(err, context.Canceled) {
 						return err
