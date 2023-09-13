@@ -17,16 +17,20 @@
 name: Wiki Maintenance
 permissions:
   contents: write
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 on:
+  workflow_call:
+    inputs:
+      push:
+        default: false
+        required: true
+        type: boolean
   workflow_dispatch:
-  push:
-    branches: [ master ]
-  pull_request:
-    paths:
-      - .github/workflows/wiki.yaml
+    inputs:
+      push:
+        default: true
+        description: Push updates to wiki repository
+        required: true
+        type: boolean
 
 jobs:
   wiki:
@@ -53,8 +57,9 @@ jobs:
       - name: Refresh wiki files
         run: go run ./internal/cmd/marksub ./wiki
 
-      - name: Maybe push
-        id: detect
+      - name: Push
+        id: push
+        if: ${{ inputs.push }}
         run: |
           cd wiki
 

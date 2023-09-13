@@ -81,3 +81,14 @@ jobs:
       packages: read
       statuses: write
     secrets: inherit
+
+  go-wiki:
+    uses: ./.github/workflows/go-wiki.yaml
+    needs:
+      - go-build-cache
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      # Only update the wiki if we're pushing to the master branch.
+      push: ${{ github.event.push.ref == 'refs/heads/master' }}
