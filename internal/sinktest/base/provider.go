@@ -277,6 +277,7 @@ func ProvideTargetSchema(
 			cancel()
 			return sinktest.TargetSchema{}, nil, err
 		}
+		pool.ConnectionString = conn
 		pool.DB = next.DB
 		cancel = func() {
 			dropSchema()

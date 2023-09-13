@@ -32,6 +32,11 @@ import (
 // Set this to true to rewrite the golden-output files.
 const rewriteFiles = false
 
+// Ensure that we can't merge this test if rewrite is true.
+func TestRewriteShouldBeFalse(t *testing.T) {
+	require.False(t, rewriteFiles)
+}
+
 func TestQueryTemplatesOra(t *testing.T) {
 	global := &templateGlobal{
 		cols: []types.ColData{
@@ -154,6 +159,12 @@ func TestQueryTemplatesOra(t *testing.T) {
 }
 
 func TestQueryTemplatesPG(t *testing.T) {
+	t.Run("crdb", func(t *testing.T) { testQueryTemplates(t, types.ProductCockroachDB) })
+	t.Run("pg", func(t *testing.T) { testQueryTemplates(t, types.ProductPostgreSQL) })
+}
+
+func testQueryTemplates(t *testing.T, product types.Product) {
+	t.Helper()
 	global := &templateGlobal{
 		cols: []types.ColData{
 			{
@@ -207,11 +218,19 @@ func TestQueryTemplatesPG(t *testing.T) {
 				DefaultExpr: "expr()",
 			},
 		},
-		dir:     "pg",
-		product: types.ProductCockroachDB,
+		product: product,
 		tableID: ident.NewTable(
 			ident.MustSchema(ident.New("database"), ident.New("schema")),
 			ident.New("table")),
+	}
+
+	switch product {
+	case types.ProductCockroachDB:
+		global.dir = "crdb"
+	case types.ProductPostgreSQL:
+		global.dir = "pg"
+	default:
+		t.Fatalf("unimplemented: %s", product)
 	}
 
 	tcs := []*templateTestCase{
