@@ -122,6 +122,23 @@ jobs:
             runs-on: ubuntu-latest-8-core
             target: oracle-v21.3
             targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
+
+          # Test CRDB -> PostgreSQL for migration backfill use cases.
+          - cockroachdb: v23.1
+            target: postgresql-v11
+            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+          - cockroachdb: v23.1
+            target: postgresql-v12
+            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+          - cockroachdb: v23.1
+            target: postgresql-v13
+            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+          - cockroachdb: v23.1
+            target: postgresql-v14
+            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+          - cockroachdb: v23.1
+            target: postgresql-v15
+            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out
       DOCKER_LOGS_OUT: docker-${{ strategy.job-index }}.log

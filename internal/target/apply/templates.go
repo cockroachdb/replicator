@@ -95,6 +95,11 @@ type templateCache struct {
 type templates struct {
 	*columnMapping
 
+	// CRDB doesn't support the ROW() expression where PG requires it.
+	// This value will either be "ROW" (pg) or the empty string (CRDB).
+	// https://github.com/cockroachdb/cockroach/issues/79081/
+	Bug79081 string
+
 	cache       *templateCache // Memoize calls to delete() and upsert().
 	conditional *template.Template
 	delete      *template.Template
@@ -118,15 +123,21 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 	}
 
 	switch mapping.Product {
-	case types.ProductCockroachDB, types.ProductPostgreSQL:
+	case types.ProductCockroachDB:
 		ret.conditional = tmplPG.Lookup("conditional.tmpl")
 		ret.delete = tmplPG.Lookup("delete.tmpl")
-		ret.upsert = tmplPG.Lookup("upsert.tmpl")
+		ret.upsert = tmplPG.Lookup("upsert_crdb.tmpl")
 
 	case types.ProductOracle:
 		ret.delete = tmplOra.Lookup("delete.tmpl")
 		ret.upsert = tmplOra.Lookup("upsert.tmpl")
 		ret.conditional = ret.upsert
+
+	case types.ProductPostgreSQL:
+		ret.Bug79081 = "ROW"
+		ret.conditional = tmplPG.Lookup("conditional.tmpl")
+		ret.delete = tmplPG.Lookup("delete.tmpl")
+		ret.upsert = tmplPG.Lookup("upsert_iocdu.tmpl")
 
 	default:
 		return nil, errors.Errorf("unsupported product %s", mapping.Product)

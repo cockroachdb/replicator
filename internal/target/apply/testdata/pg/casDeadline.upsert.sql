@@ -14,5 +14,7 @@ LEFT JOIN current
 USING ("pk0","pk1")
 WHERE current."pk0" IS NULL OR
 (deadlined."val1",deadlined."val0") > (current."val1",current."val0"))
-UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum","has_default")
+INSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum","has_default")
 SELECT * FROM action
+ON CONFLICT ( "pk0","pk1" )
+DO UPDATE SET ("val0","val1","geom","geog","enum","has_default") = ROW(excluded."val0",excluded."val1",excluded."geom",excluded."geog",excluded."enum",excluded."has_default")

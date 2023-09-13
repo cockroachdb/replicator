@@ -78,11 +78,26 @@ WHERE current.{{ (index .PK 0).Name }}{{/* >= v21.2 lets us say "current IS NULL
 The main clause is to then upsert the actionable rows into the
 target table.
 
-UPSERT INTO table (pk0, pk1, ....)
-  SELECT * FROM dataSource
+INSERT INTO table (pk0, pk1, ....)
+SELECT * FROM dataSource
+ON CONFLICT (pk0, pk1)
+DO UPDATE SET (col0, col1) = ROW(excluded.col0, excluded.col1)
 */ -}}
 {{- nl -}}
-UPSERT INTO {{ .TableName }} ({{ template "names" .Columns }})
+INSERT INTO {{ .TableName }} (
+{{- template "names" .Columns -}}
+)
+{{- nl -}}
 SELECT * FROM {{ $dataSource }}
+{{- nl -}}
+{{- /* For a PK-only table, there would be nothing to update */ -}}
+{{- if .Data -}}
+ON CONFLICT ( {{ template "names" .PK }} ) {{- nl -}}
+DO UPDATE SET ( {{- template "names" .Data -}} ) = {{ .Bug79081 }}(
+{{- template "join" (qualify "excluded" .Data) -}}
+)
+{{- else -}}
+ON CONFLICT DO NOTHING
+{{- end -}}
 
 {{- /* Trim whitespace */ -}}

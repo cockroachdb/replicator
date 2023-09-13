@@ -18,6 +18,7 @@ package stdpool
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +32,7 @@ type withTransactionTimeout struct{ d time.Duration }
 
 func (o *withTransactionTimeout) option() {}
 func (o *withTransactionTimeout) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) error {
-	cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = o.d.String()
+	cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] =
+		fmt.Sprintf("%d", o.d.Milliseconds())
 	return nil
 }

@@ -6,4 +6,4 @@ deadlined AS (SELECT * FROM data WHERE("val0">now()-'1h0m0s'::INTERVAL)AND("val1
 INSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum","has_default")
 SELECT * FROM deadlined
 ON CONFLICT ( "pk0","pk1" )
-DO UPDATE SET ("val0","val1","geom","geog","enum","has_default") = ROW(excluded."val0",excluded."val1",excluded."geom",excluded."geog",excluded."enum",excluded."has_default")
+DO UPDATE SET ("val0","val1","geom","geog","enum","has_default") = (excluded."val0",excluded."val1",excluded."geom",excluded."geog",excluded."enum",excluded."has_default")
