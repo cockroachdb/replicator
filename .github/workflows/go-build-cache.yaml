@@ -24,9 +24,36 @@ on:
   workflow_call:
   workflow_dispatch:
 jobs:
-  warm-build-cache:
-    name: Warm build cache
+  # This is the usual case, where we just want to see if the cache exists.
+  check:
+    name: Check if cache exists
     runs-on: ubuntu-latest
+    outputs:
+      cache-hit: ${{ steps.setup.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        id: setup
+        uses: actions/setup-go@v4
+        with:
+          # This step is going to create a mostly-empty cache; there's
+          # no argument to use-but-don't-push the cache. We'll tweak the
+          # dependency-path to include another file, so that this step
+          # uses a sentinel cache key that's separate from the default.
+          cache-dependency-path: |
+            go.sum
+            ./.github/workflows/go-build-cache.yaml
+          go-version-file: 'go.mod'
+
+  # Start a job on a larger machine only when we need to build.
+  build:
+    name: Regenerate build cache
+    # Managed by dev-inf team.
+    runs-on: ubuntu-latest-8-core
+    needs: check
+    # Outputs are strings, not booleans.
+    if: ${{ needs.check.outputs.cache-hit != 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,13 +64,11 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Download modules
-        if: ${{ steps.setup.outputs.cache-hit != 'true' }}
         run: go mod download
 
-      # This should also wind up in the cache.
       - name: Prebuild
-        if: ${{ steps.setup.outputs.cache-hit != 'true' }}
         # Keep options in sync with golang.yaml
+        # The extra . is to build the cdc-sink binary itself.
         run: |
-          go build ./...
-          CGO_ENABLED=0 go build ./...
+          go build . ./...
+          CGO_ENABLED=0 go build . ./...
