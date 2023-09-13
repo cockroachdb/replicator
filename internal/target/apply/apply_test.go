@@ -34,6 +34,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -64,8 +65,8 @@ func TestApply(t *testing.T) {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// extras could also be JSONB, but validation is easier if we
 		// control the exact bytes that come back.
-		tableSchema = "CREATE TABLE %s (pk0 INT, pk1 STRING, extras STRING, " +
-			"has_default STRING NOT NULL DEFAULT 'Hello', PRIMARY KEY (pk0,pk1))"
+		tableSchema = "CREATE TABLE %s (pk0 INT, pk1 VARCHAR(2048), extras VARCHAR(2048), " +
+			"has_default VARCHAR(2048) NOT NULL DEFAULT 'Hello', PRIMARY KEY (pk0,pk1))"
 	case types.ProductOracle:
 		// The lower-case names in the payload will be matched to the
 		// upper-case names that exist within the database.
@@ -345,6 +346,7 @@ var (
 		{name: `bool`, columnType: `BOOL`, sqlValue: `true`, indexable: true},
 		{name: `bool_array`, columnType: `BOOL[]`, sqlValue: `{true, false, true}`},
 		{name: `bool_null`, columnType: `BOOL`},
+		{name: `bytea`, columnType: `BYTEA`, sqlValue: `b'\141\061\142\062\143\063'`, indexable: true},
 		{name: `bytes`, columnType: `BYTES`, sqlValue: `b'\141\061\142\062\143\063'`, indexable: true},
 		{name: `collate`, columnType: `STRING COLLATE de`, sqlValue: `'a1b2c3' COLLATE de`, indexable: true},
 		{name: `collate_null`, columnType: `STRING COLLATE de`},
@@ -448,7 +450,7 @@ var (
 			`,
 		},
 		{name: `jsonb_null`, columnType: `JSONB`},
-		{name: `serial`, columnType: `SERIAL`, sqlValue: `148591304110702593`, indexable: true},
+		{name: `serial`, columnType: `SERIAL8`, sqlValue: `148591304110702593`, indexable: true},
 		// serial cannot be null
 		{name: `string`, columnType: `STRING`, sqlValue: `a1b2c3`, indexable: true},
 		{name: `string_null`, columnType: `STRING`},
@@ -461,6 +463,10 @@ var (
 		{name: `timestamptz_null`, columnType: `TIMESTAMPTZ`},
 		{name: `uuid`, columnType: `UUID`, sqlValue: `7f9c24e8-3b12-4fef-91e0-56a2d5a246ec`, indexable: true},
 		{name: `uuid_null`, columnType: `UUID`},
+		{name: `varchar`, columnType: `VARCHAR(2048)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `varchar_null`, columnType: `VARCHAR(2048)`},
+		{name: `varchar_array`, columnType: `VARCHAR(2048)[]`, sqlValue: `{"sky","road","car"}`},
+		{name: `varchar_array_null`, columnType: `VARCHAR(2048)[]`},
 	}
 )
 
@@ -480,7 +486,7 @@ func TestAllDataTypes(t *testing.T) {
 		switch fixture.TargetPool.Product {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			testcases = pgDataTypeTests
-			readBackQ = "SELECT ifnull(to_json(val)::string, 'null') FROM %s"
+			readBackQ = "SELECT COALESCE(to_json(val)::VARCHAR(2048), 'null') FROM %s"
 		case types.ProductOracle:
 			testcases = oraDataTypeTests
 			// JSON_QUERY in older versions refuses to return raw scalars.
@@ -494,7 +500,7 @@ func TestAllDataTypes(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := assert.New(t)
+			r := require.New(t)
 
 			// Creating a new database for each loop is, as of v22.2 and
 			// v23.1 faster than dropping the table between iterations.
@@ -517,16 +523,24 @@ func TestAllDataTypes(t *testing.T) {
 				create = fmt.Sprintf("CREATE TABLE %%s (k int primary key, val %s)", tc.columnType)
 			}
 
+			// Try to create the table. If the data type is unknown or
+			// unimplemented, skip the test. This is justified because
+			// the user couldn't have created a table in the target
+			// database using this type.
 			tbl, err := fixture.CreateTargetTable(ctx, create)
-			if !a.NoError(err) {
-				return
+			if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
+				switch pgErr.Code {
+				case "42704", // Unknown data type
+					"0A000": // Feature not implemented, e.g. SERIAL[]
+					t.Skipf("data type %s not supported by %s", tc.columnType,
+						fixture.TargetPool.Version)
+				}
 			}
+			r.NoError(err)
 			tblName := sinktest.JumbleTable(tbl.Name())
 
 			app, err := fixture.Appliers.Get(ctx, tblName)
-			if !a.NoError(err) {
-				return
-			}
+			r.NoError(err)
 
 			// Use the staging connection to create a reasonable JSON blob.
 			var jsonValue string
@@ -537,10 +551,8 @@ func TestAllDataTypes(t *testing.T) {
 				if tc.sourceType != "" {
 					sourceType = tc.sourceType
 				}
-				q := fmt.Sprintf("SELECT to_json($1::%s)::string", sourceType)
-				if !a.NoError(fixture.StagingPool.QueryRow(ctx, q, tc.sqlValue).Scan(&jsonValue)) {
-					return
-				}
+				q := fmt.Sprintf("SELECT to_json($1::%s)::VARCHAR(2048)", sourceType)
+				r.NoError(fixture.StagingPool.QueryRow(ctx, q, tc.sqlValue).Scan(&jsonValue))
 			}
 			log.Info(jsonValue)
 
@@ -548,10 +560,10 @@ func TestAllDataTypes(t *testing.T) {
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
 				Key:  []byte(`[1]`),
 			}
-			a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
+			r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
 
 			var readBack string
-			a.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			r.NoError(fixture.TargetPool.QueryRowContext(ctx,
 				fmt.Sprintf(readBackQ, tbl),
 			).Scan(&readBack))
 
@@ -559,13 +571,34 @@ func TestAllDataTypes(t *testing.T) {
 			if expectArrayWrapper {
 				readBack = readBack[1 : len(readBack)-1]
 			}
+			expectJSON := readBack
 			if tc.expectJSON != "" {
-				a.Equal(tc.expectJSON, readBack)
-			} else {
-				a.Equal(jsonValue, readBack)
+				expectJSON = tc.expectJSON
 			}
+
+			// Normalize the JSON representations before comparing them.
+			expectJSON, err = normalizeJSON(expectJSON)
+			r.NoError(err)
+
+			readBack, err = normalizeJSON(readBack)
+			r.NoError(err)
+			r.Equal(expectJSON, readBack)
 		})
 	}
+}
+
+// normalizeJSON re-encodes the json data. This makes it easy to perform
+// semantic comparisons of JSON data without needing to consider
+// non-essential differences in formatting.
+func normalizeJSON(data string) (string, error) {
+	var value any
+	dec := json.NewDecoder(strings.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&value); err != nil {
+		return "", err
+	}
+	buf, err := json.Marshal(value)
+	return string(buf), err
 }
 
 // This tests compare-and-set behaviors.
@@ -942,14 +975,33 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 	defer cancel()
 
+	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
+		t.Skip("PostgreSQL v11 doesn't support generated columns")
+	}
+
 	ctx := fixture.Context
 
 	type Payload struct {
 		Pk0 int    `json:"pk0"`
 		Val string `json:"val"`
 	}
-	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk0 INT PRIMARY KEY, ignored INT AS (1) VIRTUAL, val VARCHAR(2048))")
+
+	// VIRTUAL vs. STORED
+	var tblSchema string
+	switch fixture.TargetPool.Product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		tblSchema = "CREATE TABLE %s (pk0 INT PRIMARY KEY, " +
+			"ignored INT GENERATED ALWAYS AS (1) STORED, " +
+			"val VARCHAR(2048))"
+	case types.ProductOracle:
+		tblSchema = "CREATE TABLE %s (pk0 INT PRIMARY KEY, " +
+			"ignored INT GENERATED ALWAYS AS (1) VIRTUAL, " +
+			"val VARCHAR(2048))"
+	default:
+		t.Fatalf("unimplemented: %s", fixture.TargetPool.Product)
+	}
+
+	tbl, err := fixture.CreateTargetTable(ctx, tblSchema)
 	if !a.NoError(err) {
 		return
 	}
@@ -1085,6 +1137,10 @@ func TestVirtualColumns(t *testing.T) {
 	}
 	defer cancel()
 
+	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
+		t.Skip("PostgreSQL v11 doesn't support generated columns")
+	}
+
 	ctx := fixture.Context
 
 	type Payload struct {
@@ -1097,12 +1153,14 @@ func TestVirtualColumns(t *testing.T) {
 
 	tblDef := "CREATE TABLE %s (" +
 		"a INT, " +
-		"ck INT AS (a + b) VIRTUAL, " +
+		"ck INT GENERATED ALWAYS AS (a + b) VIRTUAL, " +
 		"b INT, " +
-		"c INT AS (a + b + 1) VIRTUAL, " +
+		"c INT GENERATED ALWAYS AS (a + b + 1) VIRTUAL, " +
 		"PRIMARY KEY (a,ck,b))"
-	// v21 didn't yet implement virtual columns in PKs.
-	if strings.Contains(fixture.TargetPool.Version, "v21.") {
+	// CRDB v21 didn't yet implement virtual columns in PKs.
+	// PostgreSQL has no virtual column support at all.
+	if fixture.TargetPool.Product == types.ProductPostgreSQL ||
+		strings.Contains(fixture.TargetPool.Version, "v21.") {
 		tblDef = strings.ReplaceAll(tblDef, "VIRTUAL", "STORED")
 	}
 	tbl, err := fixture.CreateTargetTable(ctx, tblDef)

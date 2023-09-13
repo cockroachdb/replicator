@@ -1,0 +1,57 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+
+{{- /* names produces a comma-separated list of column names: foo, bar, baz*/ -}}
+{{- define "names" -}}
+    {{- range $idx, $col := . }}
+        {{- if $idx -}},{{- end -}}
+        {{$col.Name}}
+    {{- end -}}
+{{- end -}}
+
+{{- /*
+exprs produces a comma-separated list of substitution params tuples with
+adds explicit typecasts: ($1::STRING, $2::INT), (...), (...), ...
+
+If the target column has a SQL DEFAULT expression, we add an additional
+validity check using a CASE expression:
+  CASE WHEN $1::BOOLEAN THEN $2::STRING ELSE 'Default Value' END
+The validity check allows us to distinguish null vs. unset in the payload.
+*/ -}}
+{{- define "exprs" -}}
+    {{- range $groupIdx, $pairs := $.Vars -}}
+        {{- if $groupIdx -}},{{- nl -}}{{- end -}}
+        (
+        {{- range $pairIdx, $pair := $pairs -}}
+            {{- if $pairIdx -}},{{- end -}}
+
+            {{- if $pair.ValidityParam -}}
+                CASE WHEN ${{ $pair.ValidityParam }}::BOOLEAN THEN {{- sp -}}
+            {{- end -}}
+
+            {{- if $pair.Expr -}}
+                ({{ $pair.Expr }})::{{ $pair.Column.Type }}
+            {{- else if isUDTArray $pair.Column -}}
+                ${{ $pair.Param }}::TEXT[]::{{ $pair.Column.Type }}
+            {{- else if eq $pair.Column.Type "GEOGRAPHY" -}}
+                st_geogfromgeojson(${{ $pair.Param }}::JSONB)
+            {{- else if eq $pair.Column.Type "GEOMETRY" -}}
+                st_geomfromgeojson(${{ $pair.Param }}::JSONB)
+            {{- else -}}
+                ${{ $pair.Param }}::{{ $pair.Column.Type }}
+            {{- end -}}
+
+            {{- if $pair.ValidityParam -}}
+                {{- sp -}} ELSE {{ $pair.Column.DefaultExpr }} END
+            {{- end -}}
+        {{- end -}}
+        )
+    {{- end -}}
+{{- end -}}
+
+{{- /* join creates a comma-separated list of its input: a, b, c, ... */ -}}
+{{- define "join" -}}
+    {{- range $idx, $val := . }}
+        {{- if $idx -}},{{- end -}}
+        {{- $val -}}
+    {{- end -}}
+{{- end -}}

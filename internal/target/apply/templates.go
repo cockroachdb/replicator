@@ -79,8 +79,9 @@ var (
 		},
 	}
 
-	tmplOra = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/ora/*.tmpl"))
-	tmplPG  = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/pg/*.tmpl"))
+	tmplCRDB = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/crdb/*.tmpl"))
+	tmplOra  = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/ora/*.tmpl"))
+	tmplPG   = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/pg/*.tmpl"))
 )
 
 // A templateCache stores variations of the delete and upsert commands
@@ -118,15 +119,20 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 	}
 
 	switch mapping.Product {
-	case types.ProductCockroachDB, types.ProductPostgreSQL:
-		ret.conditional = tmplPG.Lookup("conditional.tmpl")
-		ret.delete = tmplPG.Lookup("delete.tmpl")
-		ret.upsert = tmplPG.Lookup("upsert.tmpl")
+	case types.ProductCockroachDB:
+		ret.conditional = tmplCRDB.Lookup("conditional.tmpl")
+		ret.delete = tmplCRDB.Lookup("delete.tmpl")
+		ret.upsert = tmplCRDB.Lookup("upsert.tmpl")
 
 	case types.ProductOracle:
 		ret.delete = tmplOra.Lookup("delete.tmpl")
 		ret.upsert = tmplOra.Lookup("upsert.tmpl")
 		ret.conditional = ret.upsert
+
+	case types.ProductPostgreSQL:
+		ret.conditional = tmplPG.Lookup("conditional.tmpl")
+		ret.delete = tmplPG.Lookup("delete.tmpl")
+		ret.upsert = tmplPG.Lookup("upsert.tmpl")
 
 	default:
 		return nil, errors.Errorf("unsupported product %s", mapping.Product)
