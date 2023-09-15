@@ -34,9 +34,25 @@ type scriptEvents struct {
 
 var _ Events = (*scriptEvents)(nil)
 
-// OnData implements Events and calls any mapping logic provided by the
+// OnBegin implements Events.
+func (e *scriptEvents) OnBegin(ctx context.Context) (Batch, error) {
+	delegate, err := e.Events.OnBegin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &scriptBatch{delegate, e.Script}, nil
+}
+
+type scriptBatch struct {
+	Batch
+	Script *script.UserScript
+}
+
+var _ Batch = (*scriptBatch)(nil)
+
+// OnData implements Batch and calls any mapping logic provided by the
 // user-script for the given table.
-func (e *scriptEvents) OnData(
+func (e *scriptBatch) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	cfg, ok := e.Script.Sources.Get(source)
@@ -59,7 +75,7 @@ func (e *scriptEvents) OnData(
 					"cannot apply delete from %s because there is no "+
 						"table configured for receiving the delete", source)
 			}
-			if err := e.Events.OnData(ctx, source, deletesTo, []types.Mutation{mut}); err != nil {
+			if err := e.Batch.OnData(ctx, source, deletesTo, []types.Mutation{mut}); err != nil {
 				return err
 			}
 			continue
@@ -82,16 +98,16 @@ func (e *scriptEvents) OnData(
 
 // sendToTarget applies any per-target logic in the user-script and
 // then delegates to Events.OnData.
-func (e *scriptEvents) sendToTarget(
+func (e *scriptBatch) sendToTarget(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	cfg, ok := e.Script.Targets.Get(target)
 	if !ok {
-		return e.Events.OnData(ctx, source, target, muts)
+		return e.Batch.OnData(ctx, source, target, muts)
 	}
 	mapperFn := cfg.Map
 	if mapperFn == nil {
-		return e.Events.OnData(ctx, source, target, muts)
+		return e.Batch.OnData(ctx, source, target, muts)
 	}
 
 	// Filter with replacement.
@@ -111,5 +127,5 @@ func (e *scriptEvents) sendToTarget(
 		return nil
 	}
 	muts = muts[:idx]
-	return e.Events.OnData(ctx, source, target, muts)
+	return e.Batch.OnData(ctx, source, target, muts)
 }

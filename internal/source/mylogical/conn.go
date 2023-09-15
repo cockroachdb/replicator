@@ -89,6 +89,12 @@ func (c *conn) Diagnostic(_ context.Context) any {
 func (c *conn) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
+	var batch logical.Batch
+	defer func() {
+		if batch != nil {
+			_ = batch.OnRollback(ctx)
+		}
+	}()
 	// This is the expected consistent point (i.e. transaction id) that
 	// we expect to see, given all previous messages on the wire. It is
 	// set, and reset, any time the upstream producer (re-)starts a read
@@ -98,8 +104,11 @@ func (c *conn) Process(
 	for msg := range ch {
 		// Ensure that we resynchronize.
 		if logical.IsRollback(msg) {
-			if err := events.OnRollback(ctx, msg); err != nil {
-				return err
+			if batch != nil {
+				if err := batch.OnRollback(ctx); err != nil {
+					return err
+				}
+				batch = nil
 			}
 			continue
 		}
@@ -137,7 +146,17 @@ func (c *conn) Process(
 			// On commit should preserve the GTIDs so we can verify consistency,
 			// and restart the process from the last committed transaction.
 			log.Tracef("Commit")
-			if err := events.OnCommit(ctx); err != nil {
+			select {
+			case err := <-batch.OnCommit(ctx):
+				if err != nil {
+					return err
+				}
+				batch = nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			if err := events.SetConsistentPoint(ctx, streamCP); err != nil {
 				return err
 			}
 
@@ -169,7 +188,8 @@ func (c *conn) Process(
 			if err != nil {
 				return err
 			}
-			if err := events.OnBegin(ctx, streamCP); err != nil {
+			batch, err = events.OnBegin(ctx)
+			if err != nil {
 				return err
 			}
 
@@ -178,7 +198,9 @@ func (c *conn) Process(
 			// DDL statement would also sent here.
 			log.Tracef("Query:  %s %+v\n", e.Query, e.GSet)
 			if bytes.Equal(e.Query, []byte("BEGIN")) {
-				if err := events.OnBegin(ctx, streamCP); err != nil {
+				var err error
+				batch, err = events.OnBegin(ctx)
+				if err != nil {
 					return err
 				}
 			}
@@ -201,7 +223,7 @@ func (c *conn) Process(
 				return errors.Errorf("Operation not supported %s", ev.Header.EventType)
 			}
 			mutationCount.With(prometheus.Labels{"type": operation.String()}).Inc()
-			if err := c.onDataTuple(ctx, events, e, operation); err != nil {
+			if err := c.onDataTuple(ctx, batch, events.GetTargetDB(), e, operation); err != nil {
 				return err
 			}
 
@@ -218,7 +240,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	syncer := replication.NewBinlogSyncer(c.sourceConfig)
 	defer syncer.Close()
 
-	cp := state.GetConsistentPoint()
+	cp, _ := state.GetConsistentPoint()
 	if cp == nil {
 		return errors.New("missing gtidset")
 	}
@@ -297,13 +319,17 @@ func (c *conn) ZeroStamp() stamp.Stamp {
 }
 
 func (c *conn) onDataTuple(
-	ctx context.Context, events logical.Events, tuple *replication.RowsEvent, operation mutationType,
+	ctx context.Context,
+	batch logical.Batch,
+	filter ident.Schema,
+	tuple *replication.RowsEvent,
+	operation mutationType,
 ) error {
 	tbl, ok := c.relations[tuple.TableID]
 	if !ok {
 		return errors.Errorf("unknown relation id %d", tuple.TableID)
 	}
-	if !events.GetTargetDB().Contains(tbl) {
+	if !filter.Contains(tbl) {
 		log.Tracef("Skipping update on %s because it is not in the target schema", tbl)
 		return nil
 	}
@@ -356,7 +382,7 @@ func (c *conn) onDataTuple(
 				return err
 			}
 		}
-		err = events.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
+		err = batch.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
 		if err != nil {
 			return err
 		}

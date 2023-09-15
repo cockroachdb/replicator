@@ -88,7 +88,7 @@ type (
 func (d *Dialect) BackfillInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
-	cp, _ := state.GetConsistentPoint().(*consistentPoint)
+	cp, cpUpdated := state.GetConsistentPoint()
 pickCatchUpTime:
 	for {
 		// Pick a fixed time to catch up to.  Consume old documents before trying to catch up again.
@@ -97,17 +97,17 @@ pickCatchUpTime:
 		for {
 			log.Tracef("backfilling %s from %s until %s", d.sourcePath, cp, docsUpdatedBefore)
 
-			err := d.backfillOneBatch(ctx, ch, docsUpdatedBefore, cp)
+			err := d.backfillOneBatch(ctx, ch, docsUpdatedBefore, cp.(*consistentPoint))
 			if err != nil {
 				return errors.Wrap(err, d.sourcePath)
 			}
 
+			// Wait for that iteration of the loop to be processed
+			// (or not), and continue into the next loop.
 			select {
-			case next := <-state.NotifyConsistentPoint(ctx, logical.AwaitGT, cp):
-				// Wait for that iteration of the loop to be processed
-				// (or not), and continue into the next loop.
-				cp = next.(*consistentPoint)
-				if cp.Time.Before(docsUpdatedBefore) {
+			case <-cpUpdated:
+				cp, cpUpdated = state.GetConsistentPoint()
+				if cp.(*consistentPoint).Time.Before(docsUpdatedBefore) {
 					continue processCatchUpTime
 				}
 				// We've caught up to our target time. Pick a new one,
@@ -209,11 +209,11 @@ func (d *Dialect) ReadInto(
 		}
 	}()
 
-	cp, _ := state.GetConsistentPoint().(*consistentPoint)
+	cp, _ := state.GetConsistentPoint()
 	// Stream from the last updated time.
 	q := d.query.
 		OrderBy(d.updatedAtProperty.Raw(), firestore.Asc).
-		StartAt(cp.AsTime().Truncate(time.Second))
+		StartAt(cp.(*consistentPoint).AsTime().Truncate(time.Second))
 	snaps := q.Snapshots(ctx)
 	defer snaps.Stop()
 
@@ -295,36 +295,47 @@ func (d *Dialect) Diagnostic(_ context.Context) any {
 func (d *Dialect) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
+	var batch logical.Batch
+	defer func() {
+		if batch != nil {
+			_ = batch.OnRollback(ctx)
+		}
+	}()
+
 	// Only write idempotency mark when we've committed a db transaction.
 	type mark struct {
 		ref  *firestore.DocumentRef
 		time time.Time
 	}
+	var nextCP *consistentPoint
 	var toMark []mark
 
 	for msg := range ch {
 		if logical.IsRollback(msg) {
-			if err := events.OnRollback(ctx, msg); err != nil {
-				return err
+			if batch != nil {
+				if err := batch.OnRollback(ctx); err != nil {
+					return err
+				}
+				batch = nil
 			}
 			continue
 		}
 
 		switch t := msg.(type) {
 		case backfillEnd:
-			// Just advance the consistent point.
-			if err := events.OnBegin(ctx, t.cp); err != nil {
-				return err
-			}
-			if err := events.OnCommit(ctx); err != nil {
+			// Advance the consistent point.
+			if err := events.SetConsistentPoint(ctx, t.cp); err != nil {
 				return err
 			}
 
 		case batchStart:
-			toMark = toMark[:0]
-			if err := events.OnBegin(ctx, t.cp); err != nil {
+			var err error
+			batch, err = events.OnBegin(ctx)
+			if err != nil {
 				return err
 			}
+			nextCP = t.cp
+			toMark = toMark[:0]
 
 		case batchDoc:
 			doc := t.doc
@@ -347,7 +358,7 @@ func (d *Dialect) Process(
 
 			// Pass an empty destination table, because we know that
 			// this is configured via a user-script.
-			if err := events.OnData(ctx,
+			if err := batch.OnData(ctx,
 				d.sourceCollection, ident.Table{}, []types.Mutation{mut}); err != nil {
 				return err
 			}
@@ -376,7 +387,7 @@ func (d *Dialect) Process(
 
 			// Pass an empty destination table, because we know that
 			// this is configured via a user-script.
-			if err := events.OnData(ctx,
+			if err := batch.OnData(ctx,
 				d.sourceCollection, ident.Table{}, []types.Mutation{mut}); err != nil {
 				return err
 			}
@@ -386,7 +397,18 @@ func (d *Dialect) Process(
 			}
 
 		case batchEnd:
-			if err := events.OnCommit(ctx); err != nil {
+			select {
+			case err := <-batch.OnCommit(ctx):
+				if err != nil {
+					return err
+				}
+				batch = nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			// Advance the consistent point.
+			if err := events.SetConsistentPoint(ctx, nextCP); err != nil {
 				return err
 			}
 

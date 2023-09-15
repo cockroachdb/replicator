@@ -20,14 +20,15 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -55,11 +56,11 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 // Resolver instances are created for each destination schema.
 type resolver struct {
 	cfg         *Config
-	fastWakeup  chan struct{}
 	leases      types.Leases
-	loop        *logical.Loop // Reference to driving loop, for testing.
+	loop        *logical.Loop        // Reference to driving loop, for testing.
+	marked      notify.Var[hlc.Time] // Called by Mark.
 	pool        *types.StagingPool
-	retirements chan hlc.Time // Drives a goroutine to remove applied mutations.
+	retirements notify.Var[hlc.Time] // Drives a goroutine to remove applied mutations.
 	stagers     types.Stagers
 	target      ident.Schema
 	watcher     types.Watcher
@@ -72,10 +73,9 @@ type resolver struct {
 }
 
 var (
-	_ logical.Backfiller         = (*resolver)(nil)
-	_ logical.ConsistentCallback = (*resolver)(nil)
-	_ logical.Dialect            = (*resolver)(nil)
-	_ logical.Lessor             = (*resolver)(nil)
+	_ logical.Backfiller = (*resolver)(nil)
+	_ logical.Dialect    = (*resolver)(nil)
+	_ logical.Lessor     = (*resolver)(nil)
 )
 
 func newResolver(
@@ -94,14 +94,12 @@ func newResolver(
 	}
 
 	ret := &resolver{
-		cfg:         cfg,
-		fastWakeup:  make(chan struct{}, 1),
-		leases:      leases,
-		pool:        pool,
-		retirements: make(chan hlc.Time, 16),
-		stagers:     stagers,
-		target:      target,
-		watcher:     watcher,
+		cfg:     cfg,
+		leases:  leases,
+		pool:    pool,
+		stagers: stagers,
+		target:  target,
+		watcher: watcher,
 	}
 	ret.sql.selectTimestamp = fmt.Sprintf(selectTimestampTemplate, metaTable)
 	ret.sql.mark = fmt.Sprintf(markTemplate, metaTable)
@@ -157,7 +155,7 @@ func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
 		"resolved": ts,
 	}).Trace("marked new resolved timestamp")
 
-	r.wake()
+	r.marked.Set(ts)
 
 	return nil
 }
@@ -185,53 +183,71 @@ func (r *resolver) ReadInto(
 func (r *resolver) readInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State, backfill bool,
 ) error {
+	// Backup polling interval for work.
+	const dbPollInterval = 1 * time.Second
+
+	cp, cpUpdated := r.loop.GetConsistentPoint()
+	initial := true
+
 	// Resume deletions on restart.
-	r.retirements <- state.GetConsistentPoint().(*resolvedStamp).CommittedTime
+	if rs, ok := cp.(*resolvedStamp); ok && rs.CommittedTime != hlc.Zero() {
+		r.retirements.Set(rs.CommittedTime)
+	}
 
-	const dbPollInterval = 100 * time.Millisecond
-
+	// Internal notification path to look for more work.
+	_, wakeup := r.marked.Get()
 	for {
-		prev := state.GetConsistentPoint().(*resolvedStamp)
-		proposed, err := r.nextProposedStamp(ctx, prev, backfill)
+		// Look for work to do if we're just starting up or if we
+		// have just finished processing a resolved timestamp.
+		if initial || cp.(*resolvedStamp).ProposedTime == hlc.Zero() {
+			initial = false
+			proposed, err := r.nextProposedStamp(ctx, cp.(*resolvedStamp), backfill)
 
-		switch err {
-		case nil:
-			// We have work to do, send it down the channel.
-			select {
-			case ch <- proposed:
-			case <-state.Stopping():
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
+			switch {
+			case err == nil:
+				// Send new proposed timestamp.
+				select {
+				case ch <- proposed:
+				case <-state.Stopping():
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
+				// Wait for the proposed stamp to be processed before
+				// reading the next stamp.
+				select {
+				case <-cpUpdated:
+					cp, cpUpdated = r.loop.GetConsistentPoint()
+					continue
+				case <-state.Stopping():
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
+			case errors.Is(err, errNoWork):
+				// OK, just wait for something to happen.
+
+			default:
+				return err
 			}
+		}
 
-			// Wait for the proposed stamp to be processed before
-			// reading the next stamp.
-			select {
-			case <-state.NotifyConsistentPoint(ctx, logical.AwaitGTE, proposed):
-				continue
-			case <-state.Stopping():
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-
-		case errNoWork:
-			// We've consumed all available work, become idle.
-			select {
-			case <-r.fastWakeup:
-				// Triggered by a calls to Mark and to OnConsistent.
-			case <-time.After(dbPollInterval):
-				// Backup polling interval.
-			case <-state.Stopping():
-				// Clean shutdown
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-
-		default:
-			return err
+		// We've consumed all available work, become idle.
+		select {
+		case <-cpUpdated:
+			cp, cpUpdated = r.loop.GetConsistentPoint()
+		case <-wakeup:
+			// Triggered by a calls to Mark.
+			_, wakeup = r.marked.Get()
+		case <-time.After(dbPollInterval):
+			// Backup polling interval.
+		case <-state.Stopping():
+			// Clean shutdown
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
@@ -256,7 +272,7 @@ func (r *resolver) nextProposedStamp(
 		return nil, err
 	}
 
-	// Propagate the backfilling flag. This could already be set if
+	// Propagate the backfilling flag.
 	if backfill {
 		ret.Backfill = true
 	}
@@ -271,13 +287,11 @@ func (r *resolver) Process(
 ) error {
 	for msg := range ch {
 		if logical.IsRollback(msg) {
-			if err := events.OnRollback(ctx, msg); err != nil {
-				return err
-			}
+			// We don't have any state that needs to be cleaned up.
 			continue
 		}
 
-		if _, err := r.process(ctx, msg.(*resolvedStamp), events); err != nil {
+		if err := r.process(ctx, msg.(*resolvedStamp), events); err != nil {
 			return err
 		}
 	}
@@ -304,34 +318,6 @@ func (r *resolver) Record(ctx context.Context, ts hlc.Time) error {
 	return errors.WithStack(err)
 }
 
-// OnConsistent implements logical.ConsistentCallback. It is called once
-// the enclosing logical loop has advanced to a new consistent point. We
-// know that it's safe to commit the transaction which has drained the
-// various datasources.  Once this transaction is closed, it will unlock
-// the resolved-timestamp table, allowing us (or another instance) to
-// loop around. Should the drain transaction fail to commit, we would
-// retry the same collections of mutations on the next loop.
-func (r *resolver) OnConsistent(cp stamp.Stamp) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	rs := cp.(*resolvedStamp)
-	// Commit the transaction marking the resolved timestamp as complete.
-	if rs.ProposedTime == hlc.Zero() {
-		if err := r.Record(ctx, rs.CommittedTime); err != nil {
-			return errors.Wrap(err, "could not commit resolved-timestamp update")
-		}
-		log.Tracef("committed resolvedStamp transaction for %s", rs)
-
-		// Retire mutations as the committed time advances.
-		r.retirements <- rs.CommittedTime
-	}
-
-	// Kick the drain loop.
-	r.wake()
-	return nil
-}
-
 // ZeroStamp implements logical.Dialect.
 func (r *resolver) ZeroStamp() stamp.Stamp {
 	return &resolvedStamp{}
@@ -340,9 +326,7 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 // process makes incremental progress in fulfilling the given
 // resolvedStamp. It returns the state to which the resolved timestamp
 // has been advanced.
-func (r *resolver) process(
-	ctx context.Context, rs *resolvedStamp, events logical.Events,
-) (*resolvedStamp, error) {
+func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logical.Events) error {
 	start := time.Now()
 	targets := r.watcher.Get().Order
 
@@ -357,16 +341,18 @@ func (r *resolver) process(
 		Targets:     targets,
 	}
 
-	flush := func(toApply *ident.TableMap[[]types.Mutation]) error {
+	flush := func(toApply *ident.TableMap[[]types.Mutation], final bool) error {
 		flushStart := time.Now()
 
 		ctx, cancel := context.WithTimeout(ctx, r.cfg.ApplyTimeout)
 		defer cancel()
 
 		// Apply the retrieved data.
-		if err := events.OnBegin(ctx, rs); err != nil {
+		batch, err := events.OnBegin(ctx)
+		if err != nil {
 			return err
 		}
+		defer func() { _ = batch.OnRollback(ctx) }()
 
 		for _, tables := range targets {
 			for _, table := range tables {
@@ -374,29 +360,48 @@ func (r *resolver) process(
 				if len(muts) == 0 {
 					continue
 				}
-
-				if err := events.OnData(ctx, table.Table(), table, muts); err != nil {
+				if err := batch.OnData(ctx, table.Table(), table, muts); err != nil {
 					return err
 				}
 			}
 		}
-		// Note that the data isn't necessarily committed to the database
-		// at this point. We need to wait for a call to OnConsistent to
-		// know that the data is safe.
-		if err := events.OnCommit(ctx); err != nil {
-			return err
+
+		// OnCommit is asynchronous to support (a future)
+		// unified-immediate mode. We'll wait for the data to be
+		// committed.
+		select {
+		case err := <-batch.OnCommit(ctx):
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 
-		// Advance the stamp once the flush has completed. The flush
-		// cycle can add some intermediate checkpoints for FK ordering,
-		// so we don't want to truly advance the ratchet until we know
-		// that everything's been committed.
-		rs = rs.NewProgress(cursor)
+		// Advance and save the stamp once the flush has completed.
+		if final {
+			rs, err = rs.NewCommitted()
+			if err != nil {
+				return err
+			}
+			// Mark the timestamp has being processed.
+			if err := r.Record(ctx, rs.CommittedTime); err != nil {
+				return err
+			}
+			// Allow applied mutations to be deleted.
+			r.retirements.Set(rs.CommittedTime)
+		} else {
+			rs = rs.NewProgress(cursor)
+		}
+		if err := events.SetConsistentPoint(ctx, rs); err != nil {
+			return err
+		}
 
 		log.WithFields(log.Fields{
 			"duration": time.Since(flushStart),
 			"schema":   r.target,
 		}).Debugf("flushed mutations")
+
 		return nil
 	}
 
@@ -429,7 +434,7 @@ func (r *resolver) process(
 					hlc.Compare(mut.Time, epoch) > 0
 			}
 			if needsFlush {
-				if err := flush(toApply); err != nil {
+				if err := flush(toApply, false /* interim */); err != nil {
 					return err
 				}
 				total += flushCounter
@@ -446,16 +451,12 @@ func (r *resolver) process(
 			epoch = mut.Time
 			return nil
 		}); err != nil {
-		return rs, err
+		return err
 	}
 
 	// Final flush cycle to commit the final stamp.
-	rs, err := rs.NewCommitted()
-	if err != nil {
-		return rs, err
-	}
-	if err := flush(toApply); err != nil {
-		return rs, err
+	if err := flush(toApply, true /* final */); err != nil {
+		return err
 	}
 	total += flushCounter
 	log.WithFields(log.Fields{
@@ -464,7 +465,7 @@ func (r *resolver) process(
 		"duration":  time.Since(start),
 		"schema":    r.target,
 	}).Debugf("processed resolved timestamp")
-	return rs, nil
+	return nil
 }
 
 // $1 target_schema
@@ -506,38 +507,12 @@ func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Tim
 	return hlc.New(sourceNanos, sourceLogical), nil
 }
 
-// retireLoop starts goroutines to ensure that old mutations are
-// eventually discarded. This method will return immediately. The
-// goroutines which it spawns will terminate when the context is
-// canceled.
-func (r *resolver) retireLoop(ctx context.Context) {
-	var toRetire atomic.Pointer[hlc.Time]
-	wakeup := make(chan struct{}, 1)
-
-	// Coalesce incoming candidates value. This goroutine will exit
-	// when the enclosing context is canceled.
-	go func() {
-		defer close(wakeup)
+// retireLoop starts a goroutine to ensure that old mutations are
+// eventually discarded. This method will return immediately.
+func (r *resolver) retireLoop(ctx *stopper.Context) {
+	ctx.Go(func() error {
+		next, nextUpdated := r.retirements.Get()
 		for {
-			select {
-			case retire := <-r.retirements:
-				toRetire.Store(&retire)
-				select {
-				case wakeup <- struct{}{}:
-				default:
-				}
-
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Perform the work, taking however much time is needed. This loop
-	// will exit when the wakeup channel has been closed.
-	go func() {
-		for range wakeup {
-			next := *toRetire.Load()
 			log.Tracef("retiring mutations in %s <= %s", r.target, next)
 
 			targetTables := r.watcher.Get().Columns
@@ -564,19 +539,19 @@ func (r *resolver) retireLoop(ctx context.Context) {
 				}
 				return nil
 			}); err != nil {
-				// We only see an error on cancellation, so just exit.
-				return
+				log.WithError(err).Warnf("error in retire loop for %s", r.target)
+			}
+
+			select {
+			case <-nextUpdated:
+				next, nextUpdated = r.retirements.Get()
+			case <-ctx.Stopping():
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
-	}()
-}
-
-// wake triggers a nonblocking send to the wakeup channel.
-func (r *resolver) wake() {
-	select {
-	case r.fastWakeup <- struct{}{}:
-	default:
-	}
+	})
 }
 
 // Resolvers is a factory for Resolver instances.
@@ -646,10 +621,13 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 	r.mu.instances.Put(target, ret)
 
 	// Start a goroutine to retire old data.
-	retireCtx, cancelRetire := context.WithCancel(context.Background())
-	ret.retireLoop(retireCtx)
+	stop := stopper.WithContext(context.Background())
+	ret.retireLoop(stop)
 
-	r.mu.cleanups = append(r.mu.cleanups, cleanup, cancelRetire)
+	r.mu.cleanups = append(r.mu.cleanups,
+		cleanup,
+		func() { stop.Stop(time.Second) },
+	)
 	return ret, nil
 }
 
