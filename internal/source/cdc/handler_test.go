@@ -18,7 +18,10 @@ package cdc
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io"
+	"io/fs"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
@@ -40,46 +44,92 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func createFixture(t *testing.T, immediate bool) (*testFixture, base.TableInfo[*types.TargetPool]) {
+//go:embed testdata/*
+var scriptFS embed.FS
+
+type fixtureConfig struct {
+	immediate bool
+	script    bool
+}
+
+func TestHandler(t *testing.T) {
+	tcs := []struct {
+		name string
+		cfg  *fixtureConfig
+	}{
+		{"deferred", &fixtureConfig{}},
+		{"deferred-script", &fixtureConfig{script: true}},
+		{"immediate", &fixtureConfig{immediate: true}},
+		{"immediate-script", &fixtureConfig{immediate: true, script: true}},
+	}
+
+	for _, tc := range tcs {
+		t.Run(fmt.Sprintf("%s-feed", tc.name), func(t *testing.T) { testHandler(t, tc.cfg) })
+		t.Run(fmt.Sprintf("%s-query", tc.name), func(t *testing.T) { testQueryHandler(t, tc.cfg) })
+	}
+}
+
+func createFixture(
+	t *testing.T, htc *fixtureConfig,
+) (*testFixture, base.TableInfo[*types.TargetPool]) {
 	t.Helper()
 	r := require.New(t)
 	baseFixture, cancel, err := all.NewFixture()
 	r.NoError(err)
 	t.Cleanup(cancel)
-	fixture, cancel, err := newTestFixture(baseFixture, &Config{
+
+	// Ensure that the dispatch and mapper functions must have been
+	// called by using a column name that's only known to the mapper
+	// function.
+	var schema string
+	if htc.script {
+		schema = `CREATE TABLE %s (pk INT PRIMARY KEY, v_mapped INT NOT NULL)`
+	} else {
+		schema = `CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`
+	}
+
+	ctx := baseFixture.Context
+	tableInfo, err := baseFixture.CreateTargetTable(ctx, schema)
+	r.NoError(err)
+
+	cfg := &Config{
 		MetaTableName: ident.New("resolved_timestamps"),
 		BaseConfig: logical.BaseConfig{
-			Immediate:     immediate,
+			Immediate:     htc.immediate,
 			StagingConn:   baseFixture.StagingPool.ConnectionString,
 			StagingSchema: baseFixture.StagingDB.Schema(),
 			TargetConn:    baseFixture.TargetPool.ConnectionString,
 		},
-	})
+	}
+
+	if htc.script {
+		cfg.ScriptConfig = script.Config{
+			FS: &substitutingFS{
+				FS: scriptFS,
+				replacer: strings.NewReplacer(
+					"{{ SCHEMA }}", tableInfo.Name().Schema().Raw(),
+					"{{ TABLE }}", tableInfo.Name().Table().Raw(),
+				),
+			},
+			MainPath: "/testdata/main.ts",
+		}
+	}
+	fixture, cancel, err := newTestFixture(baseFixture, cfg)
 	r.NoError(err)
 	t.Cleanup(cancel)
-
-	ctx := fixture.Context
-	tableInfo, err := fixture.CreateTargetTable(ctx,
-		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
-	r.NoError(err)
 
 	return fixture, tableInfo
 }
 
-func TestQueryHandler(t *testing.T) {
-	t.Run("deferred", func(t *testing.T) { testQueryHandler(t, false) })
-	t.Run("immediate", func(t *testing.T) { testQueryHandler(t, true) })
-}
-
-func testQueryHandler(t *testing.T, immediate bool) {
+func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 	t.Helper()
-	fixture, tableInfo := createFixture(t, immediate)
+	fixture, tableInfo := createFixture(t, htc)
 	ctx := fixture.Context
 	h := fixture.Handler
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
 	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
-		if immediate {
+		if htc.immediate {
 			return nil
 		}
 		resolver, err := h.Resolvers.get(ctx, target.Schema())
@@ -215,20 +265,12 @@ func testQueryHandler(t *testing.T, immediate bool) {
 	})
 }
 
-func TestHandler(t *testing.T) {
-	t.Run("deferred", func(t *testing.T) { testHandler(t, false) })
-	t.Run("immediate", func(t *testing.T) { testHandler(t, true) })
-}
-func testHandler(t *testing.T, immediate bool) {
+func testHandler(t *testing.T, cfg *fixtureConfig) {
 	t.Helper()
-	r := require.New(t)
-	fixture, tableInfo := createFixture(t, immediate)
+	fixture, tableInfo := createFixture(t, cfg)
 	ctx := fixture.Context
 	h := fixture.Handler
 
-	tableInfo, err := fixture.CreateTargetTable(ctx,
-		`CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`)
-	r.NoError(err)
 	// Ensure that we can handle identifiers that don't align with
 	// what's actually in the target database.
 	jumbleName := func() ident.Table {
@@ -238,7 +280,7 @@ func testHandler(t *testing.T, immediate bool) {
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
 	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
-		if immediate {
+		if cfg.immediate {
 			return nil
 		}
 		resolver, err := h.Resolvers.get(ctx, target.Schema())
@@ -588,4 +630,40 @@ func testMassBackfillWithForeignKeys(
 			time.Sleep(time.Second)
 		}
 	}
+}
+
+// substitutingFS performs string substitution on returned files.
+// This is used to replace sentinel values in the userscript with
+// dynamically generated values.
+type substitutingFS struct {
+	fs.FS
+	replacer *strings.Replacer
+}
+
+func (f *substitutingFS) Open(path string) (fs.File, error) {
+	file, err := f.FS.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	buf, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	s := f.replacer.Replace(string(buf))
+	return &substitutingFile{info, io.NopCloser(strings.NewReader(s))}, nil
+}
+
+type substitutingFile struct {
+	fs.FileInfo
+	io.ReadCloser
+}
+
+var _ fs.File = (*substitutingFile)(nil)
+
+func (s *substitutingFile) Stat() (fs.FileInfo, error) {
+	return s.FileInfo, nil
 }

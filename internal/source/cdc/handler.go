@@ -40,9 +40,9 @@ var sanitizer = strings.NewReplacer("\n", " ", "\r", " ")
 // Handler is an http.Handler for processing webhook requests
 // from a CockroachDB changefeed.
 type Handler struct {
-	Appliers      types.Appliers      // Update tables within TargetDb.
 	Authenticator types.Authenticator // Access checks.
 	Config        *Config             // Runtime options.
+	Immediate     *Immediate          // Non-transactional mutations.
 	Resolvers     *Resolvers          // Process resolved timestamps.
 	StagingPool   *types.StagingPool  // Access to the staging cluster.
 	Stores        types.Stagers       // Record incoming json blobs.

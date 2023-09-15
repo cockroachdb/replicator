@@ -18,11 +18,13 @@ package logical
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
@@ -39,6 +41,38 @@ type Factory struct {
 	stagingPool  *types.StagingPool
 	targetPool   *types.TargetPool
 	watchers     types.Watchers
+}
+
+// Immediate supports use cases where it is desirable to write directly
+// into the target schema.
+func (f *Factory) Immediate(ctx context.Context, target ident.Schema) (Batcher, func(), error) {
+	// Construct a fake loop and then steal the parts of the
+	// implementation that are useful. We want to build the Batcher that
+	// is returned by this method using the same code-path that we would
+	// use to construct any other loop. There's a non-trivial amount of
+	// conditional wiring needed to set up the processing pipeline. It
+	// seems like there's less risk of behavioral drift over time
+	// between immediate and transactional modes if we only ever use a
+	// single newLoop() method.
+	//
+	// An alternate approach that could be taken is to write an
+	// ImmediateDialect that has ReadInto and Process methods that are
+	// no-ops and wait to exit. The implementation of Process would make
+	// the Events / Batcher available externally. This has the downside
+	// of actually needing to start the loop goroutines.
+	fake, cancel, err := f.newLoop(stopper.From(ctx), &LoopConfig{
+		Dialect:      &fakeDialect{},
+		LoopName:     fmt.Sprintf("immediate-%s", target.Raw()),
+		TargetSchema: target,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if f.baseConfig.Immediate {
+		return fake.loop.events.fan, cancel, nil
+	}
+	return fake.loop.events.serial, cancel, nil
 }
 
 // Start constructs a new replication Loop.

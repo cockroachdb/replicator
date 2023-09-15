@@ -88,10 +88,13 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 		}
 		toProcess.Put(table, append(toProcess.GetZero(table), mut))
 	}
-	return h.processMutations(ctx, toProcess)
+	if h.Config.Immediate {
+		return h.processMutationsImmediate(ctx, target, toProcess)
+	}
+	return h.processMutationsDeferred(ctx, toProcess)
 }
 
-func (h *Handler) processMutations(
+func (h *Handler) processMutationsDeferred(
 	ctx context.Context, toProcess *ident.TableMap[[]types.Mutation],
 ) error {
 	// Create Store instances up front. The first time a target table is
@@ -110,27 +113,6 @@ func (h *Handler) processMutations(
 	}
 
 	return retry.Retry(ctx, func(ctx context.Context) error {
-		if h.Config.Immediate {
-			tx, err := h.TargetPool.BeginTx(ctx, nil)
-			if err != nil {
-				return err
-			}
-			defer tx.Rollback()
-
-			// Stage or apply the per-target mutations.
-			if err := toProcess.Range(func(target ident.Table, muts []types.Mutation) error {
-				applier, err := h.Appliers.Get(ctx, target)
-				if err != nil {
-					return err
-				}
-				return applier.Apply(ctx, tx, muts)
-			}); err != nil {
-				return err
-			}
-
-			return tx.Commit()
-		}
-
 		pool := h.StagingPool.Pool
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -147,4 +129,36 @@ func (h *Handler) processMutations(
 
 		return tx.Commit(ctx)
 	})
+}
+func (h *Handler) processMutationsImmediate(
+	ctx context.Context, target ident.Schema, toProcess *ident.TableMap[[]types.Mutation],
+) error {
+	batcher, err := h.Immediate.Get(ctx, target)
+	if err != nil {
+		return err
+	}
+
+	batch, err := batcher.OnBegin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = batch.OnRollback(ctx) }()
+
+	source := scriptSource(target)
+	if err := toProcess.Range(func(tbl ident.Table, muts []types.Mutation) error {
+		for idx := range muts {
+			// Index needed since it's not a pointer type.
+			muts[idx].Meta = scriptMeta(tbl, muts[idx])
+		}
+		return batch.OnData(ctx, source, tbl, muts)
+	}); err != nil {
+		return err
+	}
+
+	select {
+	case err := <-batch.OnCommit(ctx):
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

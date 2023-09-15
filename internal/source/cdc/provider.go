@@ -30,6 +30,7 @@ import (
 // Set is used by Wire.
 var Set = wire.NewSet(
 	wire.Struct(new(Handler), "*"), // Handler is itself trivial.
+	ProvideImmediate,
 	ProvideMetaTable,
 	ProvideResolvers,
 )
@@ -39,6 +40,12 @@ type MetaTable ident.Table
 
 // Table returns the underlying table identifier.
 func (t MetaTable) Table() ident.Table { return ident.Table(t) }
+
+// ProvideImmediate is called by wire.
+func ProvideImmediate(loops *logical.Factory) (*Immediate, func(), error) {
+	imm := &Immediate{loops: loops}
+	return imm, imm.cleanup, nil
+}
 
 // ProvideMetaTable is called by wire. It returns the
 // "_cdc_sink.public.resolved_timestamps" table per the flags.
