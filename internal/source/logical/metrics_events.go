@@ -57,7 +57,6 @@ var (
 // metricsEvents decorates an Events implementation with metrics.
 type metricsEvents struct {
 	Events
-	point stamp.Stamp
 
 	metrics struct {
 		commitSuccess prometheus.Counter
@@ -70,24 +69,23 @@ type metricsEvents struct {
 
 var _ Events = (*metricsEvents)(nil)
 
-func (e *metricsEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
-	e.point = point
-	return e.Events.OnBegin(ctx, point)
+func (e *metricsEvents) OnBegin(ctx context.Context) (Batch, error) {
+	delegate, err := e.Events.OnBegin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &metricsBatch{delegate, e}, nil
 }
 
-func (e *metricsEvents) OnCommit(ctx context.Context) error {
-	err := e.Events.OnCommit(ctx)
-	if err != nil {
-		e.metrics.commitFailure.Inc()
+func (e *metricsEvents) SetConsistentPoint(ctx context.Context, cp stamp.Stamp) error {
+	if err := e.Events.SetConsistentPoint(ctx, cp); err != nil {
 		return err
 	}
-
-	e.metrics.commitSuccess.Inc()
-	if x, ok := e.point.(TimeStamp); ok {
+	if x, ok := cp.(TimeStamp); ok {
 		e.metrics.commitLatency.Set(time.Since(x.AsTime()).Seconds())
 		e.metrics.commitTime.Set(float64(x.AsTime().UnixNano()))
 	}
-	if x, ok := e.point.(OffsetStamp); ok {
+	if x, ok := cp.(OffsetStamp); ok {
 		e.metrics.commitOffset.Set(float64(x.AsOffset()))
 	}
 	return nil
@@ -100,4 +98,51 @@ func (e *metricsEvents) withLoopName(name string) *metricsEvents {
 	e.metrics.commitOffset = commitOffset.WithLabelValues(name)
 	e.metrics.commitTime = commitTime.WithLabelValues(name)
 	return e
+}
+
+// metricsBatch wraps a Batch to record OnCommit outcomes.
+type metricsBatch struct {
+	Batch
+	parent *metricsEvents
+}
+
+func (e *metricsBatch) OnCommit(ctx context.Context) <-chan error {
+	resultCh := e.Batch.OnCommit(ctx)
+
+	// The result may be available synchronously, depending on the
+	// configuration. Avoid goroutine startup if we don't need it.
+	select {
+	case err := <-resultCh:
+		if err == nil {
+			e.parent.metrics.commitSuccess.Inc()
+		} else {
+			e.parent.metrics.commitFailure.Inc()
+		}
+		return singletonChannel(err)
+
+	default:
+	}
+
+	// Start a goroutine to spy on the result.
+	ret := make(chan error, 1)
+	go func() {
+		var err error
+		select {
+		case err = <-resultCh:
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
+		// Send result downsteam.
+		ret <- err
+		close(ret)
+
+		// Update statistics.
+		if err != nil {
+			e.parent.metrics.commitFailure.Inc()
+			return
+		}
+
+		e.parent.metrics.commitSuccess.Inc()
+	}()
+	return ret
 }

@@ -44,14 +44,6 @@ type Backfiller interface {
 	BackfillInto(ctx context.Context, ch chan<- Message, state State) error
 }
 
-// ConsistentCallback is an optional interface that may be implemented
-// by a Dialect.
-type ConsistentCallback interface {
-	// OnConsistent will be called whenever the Dialect's logical loop
-	// has advanced to a new consistent point. This callback will block
-	OnConsistent(cp stamp.Stamp) error
-}
-
 // Dialect encapsulates the source-specific implementation details.
 type Dialect interface {
 	// ReadInto represents a potentially-fragile source of
@@ -110,16 +102,32 @@ type Events interface {
 	// blocking fashion. This is useful when sources are discovered
 	// dynamically.
 	Backfill(ctx context.Context, loopName string, backfiller Backfiller) error
+
+	// OnBegin denotes the beginning of a (transactional) batch in the
+	// underlying logical feed.
+	OnBegin(ctx context.Context) (Batch, error)
+}
+
+// A Batch of mutations to apply to some number of tables. It is likely,
+// but not necessarily the case that data added to a batch will be
+// committed in a single transaction.
+type Batch interface {
 	// Flush can be called after OnData() to ensure that any writes
 	// have been flushed to the database. This is necessary when
 	// using foreign keys and fan mode.
 	Flush(ctx context.Context) error
-	// OnBegin denotes the beginning of a transactional block in the
-	// underlying logical feed.
-	OnBegin(ctx context.Context, point stamp.Stamp) error
-	// OnCommit denotes the end of a transactional black in the underlying
-	// logical feed.
-	OnCommit(ctx context.Context) error
+	// OnCommit denotes the end of a transactional block in the
+	// underlying logical feed. OnCommit is not necessarily synchronous
+	// with respect to writing the data to the target and returns a
+	// channel to provide notification of the outcome. This channel will
+	// emit a single error or a nil value when the data has been
+	// persisted.
+	//
+	// It is likely the case, but is not required, that a call to
+	// OnCommit is associated with a call to [State.SetConsistentPoint].
+	// That is, calling Commit does not automatically advance the
+	// consistent point associated with the loop.
+	OnCommit(ctx context.Context) <-chan error
 	// OnData adds data to the transaction block. The source is a name
 	// to pass to the user-script, and will generally be the name of a
 	// table, doc-collection, or other named data product.
@@ -127,39 +135,21 @@ type Events interface {
 	// OnRollback must be called by Dialect.Process when a rollback
 	// message is encountered, to ensure that all internal state has
 	// been resynchronized.
-	OnRollback(ctx context.Context, msg Message) error
-
-	// drain is called after any attempt to run a replication loop.
-	// Implementations should block until any pending mutations have
-	// been committed.
-	drain(ctx context.Context) error
+	OnRollback(ctx context.Context) error
 }
-
-// AwaitComparison is used with [State.AwaitConsistentPoint].
-type AwaitComparison int
-
-const (
-	// AwaitGTE waits until the consistent point is greater than or
-	// equal to some other point.
-	AwaitGTE AwaitComparison = 0
-	// AwaitGT waits until the consistent point is greater than some
-	// other point.
-	AwaitGT AwaitComparison = 1
-)
 
 // State provides information about a replication loop.
 type State interface {
 	// GetConsistentPoint returns the most recent consistent point that
 	// has been committed to the target database or the value returned
-	// from Dialect.ZeroStamp.
-	GetConsistentPoint() stamp.Stamp
+	// from Dialect.ZeroStamp. The returned channel will be closed
+	// when the consistent point has been updated.
+	GetConsistentPoint() (stamp.Stamp, <-chan struct{})
 	// GetTargetDB returns the target database schema name.
 	GetTargetDB() ident.Schema
-	// NotifyConsistentPoint returns a channel that emits the next
-	// consistent point that satisfies the comparison with the given
-	// stamp. If the context is cancelled, the channel will be closed
-	// without emitting a value.
-	NotifyConsistentPoint(ctx context.Context, comparison AwaitComparison, point stamp.Stamp) <-chan stamp.Stamp
+	// SetConsistentPoint stores a value to be returned by a future call
+	// to GetConsistentPoint.
+	SetConsistentPoint(ctx context.Context, cp stamp.Stamp) error
 	// Stopping returns a channel that will be closed to allow for
 	// graceful draining or to switch in and out of backfill mode. This
 	// should be checked  on occasion by [Dialect.ReadInto] and

@@ -43,14 +43,14 @@ type lsnStamp struct {
 }
 
 var (
-	_ stamp.Stamp         = lsnStamp{}
-	_ logical.OffsetStamp = lsnStamp{}
+	_ stamp.Stamp         = (*lsnStamp)(nil)
+	_ logical.OffsetStamp = (*lsnStamp)(nil)
 )
 
-func (s lsnStamp) AsLSN() pglogrepl.LSN        { return s.LSN }
-func (s lsnStamp) AsTime() time.Time           { return s.TxTime }
-func (s lsnStamp) AsOffset() uint64            { return uint64(s.LSN) }
-func (s lsnStamp) Less(other stamp.Stamp) bool { return s.LSN < other.(lsnStamp).LSN }
+func (s *lsnStamp) AsLSN() pglogrepl.LSN        { return s.LSN }
+func (s *lsnStamp) AsTime() time.Time           { return s.TxTime }
+func (s *lsnStamp) AsOffset() uint64            { return uint64(s.LSN) }
+func (s *lsnStamp) Less(other stamp.Stamp) bool { return s.LSN < other.(*lsnStamp).LSN }
 
 // A conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
@@ -75,11 +75,28 @@ var _ logical.Dialect = (*conn)(nil)
 func (c *conn) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
+	var batch logical.Batch
+	defer func() {
+		if batch != nil {
+			_ = batch.OnRollback(ctx)
+		}
+	}()
+
+	// We rely on the upstream database to replay events in the case of
+	// errors, so we may receive events that we've already processed.
+	// We use the COMMIT LSN offset as the consistent point, which is
+	// written in the WAL synchronously with the upstream transaction.
+	ignoreBefore, _ := events.GetConsistentPoint()
+	ignoreLSN := ignoreBefore.(*lsnStamp).AsLSN()
+
 	for msg := range ch {
 		// Ensure that we resynchronize.
 		if logical.IsRollback(msg) {
-			if err := events.OnRollback(ctx, msg); err != nil {
-				return err
+			if batch != nil {
+				if err := batch.OnRollback(ctx); err != nil {
+					return err
+				}
+				batch = nil
 			}
 			continue
 		}
@@ -94,19 +111,44 @@ func (c *conn) Process(
 			c.onRelation(msg, events.GetTargetDB())
 
 		case *pglogrepl.BeginMessage:
-			err = events.OnBegin(ctx, lsnStamp{msg.FinalLSN, msg.CommitTime})
+			if msg.FinalLSN <= ignoreLSN {
+				log.Tracef("ignoring BeginMessage at %s before %s",
+					msg.FinalLSN, ignoreLSN)
+				continue
+			}
+			batch, err = events.OnBegin(ctx)
 
 		case *pglogrepl.CommitMessage:
-			err = events.OnCommit(ctx)
+			if msg.CommitLSN <= ignoreLSN {
+				log.Tracef("ignoring CommitMessage at %s before %s",
+					msg.CommitLSN, ignoreLSN)
+				continue
+			}
+			select {
+			case err := <-batch.OnCommit(ctx):
+				batch = nil
+				if err != nil {
+					return err
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			// The COMMIT records are written in order, so they're a
+			// better marker to record.
+			if err := events.SetConsistentPoint(ctx, &lsnStamp{msg.CommitLSN, msg.CommitTime}); err != nil {
+				return err
+			}
+			ignoreLSN = msg.CommitLSN
 
 		case *pglogrepl.DeleteMessage:
-			err = c.onDataTuple(ctx, events, msg.RelationID, msg.OldTuple, true /* isDelete */)
+			err = c.onDataTuple(ctx, batch, msg.RelationID, msg.OldTuple, true /* isDelete */)
 
 		case *pglogrepl.InsertMessage:
-			err = c.onDataTuple(ctx, events, msg.RelationID, msg.Tuple, false /* isDelete */)
+			err = c.onDataTuple(ctx, batch, msg.RelationID, msg.Tuple, false /* isDelete */)
 
 		case *pglogrepl.UpdateMessage:
-			err = c.onDataTuple(ctx, events, msg.RelationID, msg.NewTuple, false /* isDelete */)
+			err = c.onDataTuple(ctx, batch, msg.RelationID, msg.NewTuple, false /* isDelete */)
 
 		case *pglogrepl.TruncateMessage:
 			err = errors.Errorf("the TRUNCATE operation cannot be supported on table %d", msg.RelationNum)
@@ -131,8 +173,9 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	}
 	defer replConn.Close(context.Background())
 
+	cp, _ := state.GetConsistentPoint()
 	var startLogPos pglogrepl.LSN
-	if x, ok := state.GetConsistentPoint().(lsnStamp); ok {
+	if x, ok := cp.(*lsnStamp); ok {
 		startLogPos = x.AsLSN()
 	}
 	if err := pglogrepl.StartReplication(ctx,
@@ -159,13 +202,14 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 		}
 		if time.Now().After(standbyDeadline) {
 			standbyDeadline = time.Now().Add(standbyTimeout)
-			if cp, ok := state.GetConsistentPoint().(lsnStamp); ok {
+			cp, _ := state.GetConsistentPoint()
+			if lsn, ok := cp.(*lsnStamp); ok {
 				if err := pglogrepl.SendStandbyStatusUpdate(ctx, replConn, pglogrepl.StandbyStatusUpdate{
-					WALWritePosition: cp.AsLSN(),
+					WALWritePosition: lsn.AsLSN(),
 				}); err != nil {
 					return errors.WithStack(err)
 				}
-				log.WithField("WALWritePosition", cp.AsLSN()).Trace("sent Standby status message")
+				log.WithField("WALWritePosition", lsn.AsLSN()).Trace("sent Standby status message")
 			} else {
 				log.Warn("have yet to reach any consistent point")
 			}
@@ -312,11 +356,15 @@ func (c *conn) decodeMutation(
 // possibly flushing it when the batch size limit is reached.
 func (c *conn) onDataTuple(
 	ctx context.Context,
-	events logical.Events,
+	batch logical.Batch,
 	relation uint32,
 	tuple *pglogrepl.TupleData,
 	isDelete bool,
 ) error {
+	// Will be nil if we're ignoring replayed messages.
+	if batch == nil {
+		return nil
+	}
 	traceTuple(tuple)
 	tbl, ok := c.relations[relation]
 	if !ok {
@@ -327,7 +375,7 @@ func (c *conn) onDataTuple(
 		return err
 	}
 
-	return events.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
+	return batch.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
 }
 
 // learn updates the source database namespace mappings.

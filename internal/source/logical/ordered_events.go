@@ -21,9 +21,7 @@ import (
 	"reflect"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/pkg/errors"
 )
 
@@ -40,28 +38,18 @@ type deferredData struct {
 type orderedEvents struct {
 	Events
 	Watcher types.Watcher
-
-	// This only contains values for deferred mutations. That is,
-	// mutations to be applied to "root" tables will never be added
-	// here; they're immediately passed through.
-	deferred [][]deferredData
 	// Remember the last configuration.
 	lastDeps [][]ident.Table
 	// The table dependency tree.
 	levels *ident.TableMap[int]
 }
 
-// OnBegin implements Events. It will initialize the orderedEvents
+// OnBegin implements Events. It will (re-)initialize the orderedEvents
 // fields in response to updated schema information.
-func (e *orderedEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
-	e.reset()
+func (e *orderedEvents) OnBegin(ctx context.Context) (Batch, error) {
 	deps := e.Watcher.Get().Order
 	if !reflect.DeepEqual(deps, e.lastDeps) {
 		e.lastDeps = deps
-		e.deferred = make([][]deferredData, len(deps)-1)
-		for idx := range e.deferred {
-			e.deferred[idx] = make([]deferredData, 0, batches.Size())
-		}
 		e.levels = &ident.TableMap[int]{}
 		for level, tbls := range deps {
 			for _, tbl := range tbls {
@@ -69,53 +57,68 @@ func (e *orderedEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
 			}
 		}
 	}
-	return errors.Wrap(e.Events.OnBegin(ctx, point), "orderedEvents onBegin")
+
+	delegate, err := e.Events.OnBegin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &orderedBatch{
+		Batch:    delegate,
+		deferred: make([][]deferredData, len(deps)-1),
+		parent:   e,
+	}, nil
 }
 
+type orderedBatch struct {
+	Batch
+	// This only contains values for deferred mutations. That is,
+	// mutations to be applied to "root" tables will never be added
+	// here; they're immediately passed through.
+	deferred [][]deferredData
+	parent   *orderedEvents
+}
+
+var _ Batch = (*orderedBatch)(nil)
+
 // OnCommit implements Events. It will flush any deferred updates.
-func (e *orderedEvents) OnCommit(ctx context.Context) error {
-	defer e.reset()
+func (e *orderedBatch) OnCommit(ctx context.Context) <-chan error {
+	defer func() { e.deferred = nil }()
+
 	for _, defs := range e.deferred {
 		// Ensure that previous levels have been completely written out
 		// before we write the next level.
-		if err := e.Events.Flush(ctx); err != nil {
-			return errors.Wrap(err, "orderedEvents flush")
+		if err := e.Batch.Flush(ctx); err != nil {
+			return singletonChannel(errors.Wrap(err, "orderedEvents flush"))
 		}
 		for _, def := range defs {
-			if err := e.Events.OnData(ctx, def.source, def.target, def.muts); err != nil {
-				return errors.Wrap(err, "orderedEvents OnData")
+			if err := e.Batch.OnData(ctx, def.source, def.target, def.muts); err != nil {
+				return singletonChannel(errors.Wrap(err, "orderedEvents OnData"))
 			}
 		}
 	}
-	return errors.Wrap(e.Events.OnCommit(ctx), "orderedEvents OnCommit")
+	return e.Batch.OnCommit(ctx)
 }
 
 // OnData implements Events. Updates to root tables will pass through
 // immediately.  Other updates will be assigned to their dependency
 // level, to be flushed by OnCommit.
-func (e *orderedEvents) OnData(
+func (e *orderedBatch) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
-	destLevel, ok := e.levels.Get(target)
+	destLevel, ok := e.parent.levels.Get(target)
 	if !ok {
 		return errors.Errorf("unknown destination table %s", target)
 	}
 	if destLevel == 0 {
-		return errors.Wrap(e.Events.OnData(ctx, source, target, muts), "orderedEvents OnData")
+		return errors.Wrap(e.Batch.OnData(ctx, source, target, muts), "orderedEvents OnData")
 	}
 	e.deferred[destLevel-1] = append(e.deferred[destLevel-1], deferredData{muts, source, target})
 	return nil
 }
 
-// OnRollback implements Events. It resets the internal state.
-func (e *orderedEvents) OnRollback(ctx context.Context, msg Message) error {
-	e.reset()
-	return e.Events.OnRollback(ctx, msg)
-}
-
-// reset cleans up the internal state, ready for a call to OnBegin.
-func (e *orderedEvents) reset() {
-	for idx, defs := range e.deferred {
-		e.deferred[idx] = defs[:0:batches.Size()]
-	}
+// OnRollback implements Events. It clears the internal state.
+func (e *orderedBatch) OnRollback(ctx context.Context) error {
+	e.deferred = nil
+	return errors.Wrap(e.Batch.OnRollback(ctx), "orderedEvents OnRollback")
 }
