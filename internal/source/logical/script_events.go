@@ -65,11 +65,15 @@ func (e *scriptBatch) OnData(
 		return e.sendToTarget(ctx, source, target, muts)
 	}
 	for _, mut := range muts {
-		// For deletes, we won't have anything more than the original
-		// key, so the best that we can do is to route the deletion to a
-		// table and allow FK's to perform the cascade.
+		// For deletes, we will allow the user to specify an alternate
+		// table to send the delete to. Depending on the setup, we may
+		// or may not have a default table that's specified by a payload
+		// or other configuration.
 		if mut.IsDelete() {
 			deletesTo := cfg.DeletesTo
+			if deletesTo.Empty() {
+				deletesTo = target
+			}
 			if deletesTo.Empty() {
 				return errors.Errorf(
 					"cannot apply delete from %s because there is no "+

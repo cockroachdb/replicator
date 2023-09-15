@@ -18,10 +18,11 @@ import (
 // Injectors from test_fixture.go:
 
 func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(), error) {
-	appliers := fixture.Appliers
 	authenticator := trust.New()
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
+	appliers := fixture.Appliers
+	configs := fixture.Configs
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, nil, err
@@ -35,25 +36,12 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		return nil, nil, err
 	}
 	diagnostics, cleanup := diag.New(context)
+	memo := fixture.Memo
 	stagingPool, cleanup2, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	configs := fixture.Configs
-	memo := fixture.Memo
 	targetPool, cleanup3, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
 		cleanup2()
@@ -69,19 +57,43 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		cleanup()
 		return nil, nil, err
 	}
-	metaTable := ProvideMetaTable(config)
-	stagers := fixture.Stagers
-	resolvers, cleanup4, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	immediate, cleanup4, err := ProvideImmediate(factory)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
+	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	metaTable := ProvideMetaTable(config)
+	stagers := fixture.Stagers
+	resolvers, cleanup5, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	handler := &Handler{
-		Appliers:      appliers,
 		Authenticator: authenticator,
 		Config:        config,
+		Immediate:     immediate,
 		Resolvers:     resolvers,
 		StagingPool:   stagingPool,
 		Stores:        stagers,
@@ -93,6 +105,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()

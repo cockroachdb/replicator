@@ -18,11 +18,13 @@ package logical
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
@@ -39,6 +41,26 @@ type Factory struct {
 	stagingPool  *types.StagingPool
 	targetPool   *types.TargetPool
 	watchers     types.Watchers
+}
+
+// Immediate supports use cases where it is desirable to write directly
+// into the target schema.
+func (f *Factory) Immediate(ctx context.Context, target ident.Schema) (Batcher, func(), error) {
+	// Construct a fake loop and then steal the parts of the
+	// implementation that are useful.
+	fake, cancel, err := f.newLoop(stopper.From(ctx), &LoopConfig{
+		Dialect:      &fakeDialect{},
+		LoopName:     fmt.Sprintf("immediate-%s", target.Raw()),
+		TargetSchema: target,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if f.baseConfig.Immediate {
+		return fake.loop.events.fan, cancel, nil
+	}
+	return fake.loop.events.serial, cancel, nil
 }
 
 // Start constructs a new replication Loop.
