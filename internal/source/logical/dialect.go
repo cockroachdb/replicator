@@ -97,12 +97,16 @@ func IsRollback(m Message) bool {
 
 // Events extends State to drive the state of the replication loop.
 type Events interface {
+	Batcher
 	State
 	// Backfill will execute a single pass of the given Backfiller in a
 	// blocking fashion. This is useful when sources are discovered
 	// dynamically.
 	Backfill(ctx context.Context, loopName string, backfiller Backfiller) error
+}
 
+// A Batcher processes batches of mutations.
+type Batcher interface {
 	// OnBegin denotes the beginning of a (transactional) batch in the
 	// underlying logical feed.
 	OnBegin(ctx context.Context) (Batch, error)
