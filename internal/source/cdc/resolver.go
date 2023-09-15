@@ -341,6 +341,7 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		Targets:     targets,
 	}
 
+	source := scriptSource(r.target)
 	flush := func(toApply *ident.TableMap[[]types.Mutation], final bool) error {
 		flushStart := time.Now()
 
@@ -360,7 +361,7 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 				if len(muts) == 0 {
 					continue
 				}
-				if err := batch.OnData(ctx, table.Table(), table, muts); err != nil {
+				if err := batch.OnData(ctx, source, table, muts); err != nil {
 					return err
 				}
 			}
@@ -447,6 +448,7 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 			}
 
 			flushCounter++
+			mut.Meta = scriptMeta(tbl, mut)
 			toApply.Put(tbl, append(toApply.GetZero(tbl), mut))
 			epoch = mut.Time
 			return nil

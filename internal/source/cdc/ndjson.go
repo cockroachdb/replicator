@@ -72,29 +72,54 @@ func parseNdjsonMutation(_ context.Context, _ *request, rawBytes []byte) (types.
 // Stager will store duplicate values in an idempotent manner,
 // should the request fail partway through.
 func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation) error {
-	eg, egCtx := errgroup.WithContext(ctx)
 	target := req.target.(ident.Table)
 
-	// The flush function will start a new goroutine and add it to eg.
-	// In immediate mode, we want to apply the mutations immediately.
-	// The CDC feed guarantees in-order delivery for individual rows.
-	var flush func(muts []types.Mutation)
+	var commit func() error
+	var flush func(muts []types.Mutation) error
+
 	if h.Config.Immediate {
-		applier, err := h.Appliers.Get(ctx, target)
+		batcher, err := h.Immediate.Get(ctx, target.Schema())
 		if err != nil {
 			return err
 		}
-		flush = func(muts []types.Mutation) {
-			eg.Go(func() error { return applier.Apply(egCtx, h.TargetPool, muts) })
+		batch, err := batcher.OnBegin(ctx)
+		if err != nil {
+			return err
 		}
+		source := scriptSource(target)
+		// Push the data into the pipeline.
+		flush = func(muts []types.Mutation) error {
+			for idx := range muts {
+				// Index needed since it's not a pointer type. We don't
+				// create metadata in the scan phase, because this
+				// computation is only relevant to immediate mode. It's
+				// going to be re-computed in deferred mode.
+				muts[idx].Meta = scriptMeta(target, muts[idx])
+			}
+			return batch.OnData(ctx, source, target, muts)
+		}
+		commit = func() error {
+			select {
+			case err := <-batch.OnCommit(ctx):
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
 	} else {
+		eg, egCtx := errgroup.WithContext(ctx)
+
 		store, err := h.Stores.Get(ctx, target)
 		if err != nil {
 			return err
 		}
-		flush = func(muts []types.Mutation) {
-			eg.Go(func() error { return store.Store(ctx, h.StagingPool, muts) })
+		// Start a goroutine to stage the data so we can keep decoding.
+		flush = func(muts []types.Mutation) error {
+			eg.Go(func() error { return store.Store(egCtx, h.StagingPool, muts) })
+			return nil
 		}
+		commit = eg.Wait
 	}
 
 	muts := make([]types.Mutation, 0, batches.Size())
@@ -112,7 +137,9 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		}
 		muts = append(muts, mut)
 		if len(muts) == cap(muts) {
-			flush(muts)
+			if err := flush(muts); err != nil {
+				return err
+			}
 			muts = make([]types.Mutation, 0, batches.Size())
 		}
 	}
@@ -120,8 +147,10 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		return err
 	}
 	if len(muts) > 0 {
-		flush(muts)
+		if err := flush(muts); err != nil {
+			return err
+		}
 	}
 
-	return eg.Wait()
+	return commit()
 }

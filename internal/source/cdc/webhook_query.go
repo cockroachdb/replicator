@@ -79,5 +79,8 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		}
 		toProcess.Put(table, append(toProcess.GetZero(table), mut))
 	}
-	return h.processMutations(ctx, toProcess)
+	if h.Config.Immediate {
+		return h.processMutationsImmediate(ctx, table.Schema(), toProcess)
+	}
+	return h.processMutationsDeferred(ctx, toProcess)
 }
