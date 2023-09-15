@@ -99,12 +99,11 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 		loopConfig: config,
 		running:    ctx,
 	}
-	loop.consistentPoint.updated = make(chan struct{})
 	initialPoint, err := loop.loadConsistentPoint(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	loop.consistentPoint.stamp = initialPoint
+	loop.consistentPoint.Set(initialPoint)
 
 	loop.events.fan = &fanEvents{
 		loop: loop,
@@ -179,4 +178,13 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 	}
 
 	return &Loop{loop, initialPoint}, cancel, nil
+}
+
+// singletonChannel returns a channel that emits a single value and is
+// closed.
+func singletonChannel[T any](val T) <-chan T {
+	ch := make(chan T, 1)
+	ch <- val
+	close(ch)
+	return ch
 }

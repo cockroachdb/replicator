@@ -39,10 +39,10 @@ type fakeMessage struct {
 
 var _ stamp.Stamp = (*fakeMessage)(nil)
 
-func (f fakeMessage) AsInt() int        { return f.Index }
-func (f fakeMessage) AsTime() time.Time { return f.TS }
+func (f *fakeMessage) AsInt() int        { return f.Index }
+func (f *fakeMessage) AsTime() time.Time { return f.TS }
 
-func (f fakeMessage) Less(other stamp.Stamp) bool {
+func (f *fakeMessage) Less(other stamp.Stamp) bool {
 	return f.AsInt() < other.(*fakeMessage).AsInt()
 }
 
@@ -111,7 +111,8 @@ func (g *generatorDialect) ReadInto(
 
 	var nextBatchNumber int
 	// If we're recovering from a failure condition, reset to a consistent point.
-	if prev := state.GetConsistentPoint(); prev != nil {
+	prev, _ := state.GetConsistentPoint()
+	if prev != nil {
 		nextBatchNumber = prev.(*fakeMessage).AsInt() + 1
 		log.Tracef("restarting at %d", nextBatchNumber)
 	}
@@ -126,7 +127,7 @@ func (g *generatorDialect) ReadInto(
 			log.Tracef("sending %d", nextBatchNumber)
 			// Non-blocking send if the ctx is shut down.
 			select {
-			case ch <- fakeMessage{nextBatchNumber, time.Now()}:
+			case ch <- &fakeMessage{nextBatchNumber, time.Now()}:
 				g.readIntoMu.Lock()
 				g.readIntoMu.lastBatchSent = nextBatchNumber
 				g.readIntoMu.Unlock()
@@ -161,6 +162,7 @@ func (g *generatorDialect) Process(
 	log.Trace("Process starting")
 	defer g.atomic.processExits.Add(1)
 
+	var batch logical.Batch
 	for m := range ch {
 		g.processMu.Lock()
 		g.processMu.messages = append(g.processMu.messages, m)
@@ -168,15 +170,20 @@ func (g *generatorDialect) Process(
 
 		// Ensure that rollbacks result in proper resynchronization.
 		if logical.IsRollback(m) {
-			if err := events.OnRollback(ctx, m); err != nil {
-				return err
+			if batch != nil {
+				if err := batch.OnRollback(ctx); err != nil {
+					return err
+				}
 			}
+			batch = nil
 			continue
 		}
-		msg := m.(fakeMessage)
+		msg := m.(*fakeMessage)
 		log.Tracef("received %d", msg.Index)
 
-		if err := events.OnBegin(ctx, &msg); err != nil {
+		var err error
+		batch, err = events.OnBegin(ctx)
+		if err != nil {
 			return err
 		}
 
@@ -185,19 +192,31 @@ func (g *generatorDialect) Process(
 				Key:  []byte(fmt.Sprintf(`[%d]`, msg.Index)),
 				Data: []byte(fmt.Sprintf(`{"k":%[1]d,"v":"%[1]d","ref": %[1]d}`, msg.Index)),
 			}
-			if err := events.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut}); err != nil {
+			if err := batch.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut}); err != nil {
 				return err
 			}
 		}
 
 		// Ensure that we can wait for data in flight, if necessary.
-		if err := events.Flush(ctx); err != nil {
+		if err := batch.Flush(ctx); err != nil {
 			return err
 		}
 
-		if err := events.OnCommit(ctx); err != nil {
+		select {
+		case err := <-batch.OnCommit(ctx):
+			if err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		// Record success.
+		if err := events.SetConsistentPoint(ctx, msg); err != nil {
 			return err
 		}
+
+		batch = nil
 	}
 	return nil
 }

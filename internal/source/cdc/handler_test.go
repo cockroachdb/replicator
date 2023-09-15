@@ -87,9 +87,15 @@ func testQueryHandler(t *testing.T, immediate bool) {
 			return err
 		}
 		waitFor := &resolvedStamp{CommittedTime: expect}
-		resolver.fastWakeup <- struct{}{}
-		for resolver.loop.GetConsistentPoint().Less(waitFor) && ctx.Err() == nil {
-			time.Sleep(time.Millisecond)
+		resolver.marked.Notify()
+		// Wait for the consistent point to advance.
+		for cp, updated := resolver.loop.GetConsistentPoint(); cp.Less(waitFor); {
+			select {
+			case <-updated:
+				cp, updated = resolver.loop.GetConsistentPoint()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		return nil
 	}
@@ -240,9 +246,14 @@ func testHandler(t *testing.T, immediate bool) {
 			return err
 		}
 		waitFor := &resolvedStamp{CommittedTime: expect}
-		resolver.fastWakeup <- struct{}{}
-		for resolver.loop.GetConsistentPoint().Less(waitFor) && ctx.Err() == nil {
-			time.Sleep(time.Millisecond)
+		resolver.marked.Notify()
+		for cp, updated := resolver.loop.GetConsistentPoint(); cp.Less(waitFor); {
+			select {
+			case <-updated:
+				cp, updated = resolver.loop.GetConsistentPoint()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		return nil
 	}

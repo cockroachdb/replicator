@@ -30,9 +30,6 @@ type serialEvents struct {
 	appliers   types.Appliers
 	loop       *loop
 	targetPool *types.TargetPool
-
-	stamp stamp.Stamp    // the latest value passed to OnCommit.
-	tx    types.TargetTx // db transaction created by OnCommit.
 }
 
 var _ Events = (*serialEvents)(nil)
@@ -42,72 +39,26 @@ func (e *serialEvents) Backfill(ctx context.Context, source string, backfiller B
 	return e.loop.doBackfill(ctx, source, backfiller)
 }
 
-// Flush returns nil, since OnData() writes values immediately.
-func (e *serialEvents) Flush(context.Context) error {
-	return nil
-}
-
 // GetConsistentPoint implements State. It delegates to the loop.
-func (e *serialEvents) GetConsistentPoint() stamp.Stamp { return e.loop.GetConsistentPoint() }
+func (e *serialEvents) GetConsistentPoint() (stamp.Stamp, <-chan struct{}) {
+	return e.loop.GetConsistentPoint()
+}
 
 // GetTargetDB implements State. It delegates to the loop.
 func (e *serialEvents) GetTargetDB() ident.Schema { return e.loop.GetTargetDB() }
 
-// NotifyConsistentPoint implements State.  It delegates to the loop.
-func (e *serialEvents) NotifyConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) <-chan stamp.Stamp {
-	return e.loop.NotifyConsistentPoint(ctx, comparison, point)
-}
-
 // OnBegin implements Events.
-func (e *serialEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
-	if e.tx != nil {
-		return errors.Errorf("OnBegin already called at %s", e.stamp)
-	}
-	e.stamp = point
-
-	// Avoid storing TargetTx(nil) into struct field.
+func (e *serialEvents) OnBegin(ctx context.Context) (Batch, error) {
 	tx, err := e.targetPool.BeginTx(ctx, nil)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
-	e.tx = tx
-	return nil
+	return &serialBatch{e, tx}, nil
 }
 
-// OnCommit implements Events.
-func (e *serialEvents) OnCommit(_ context.Context) error {
-	if e.tx == nil {
-		return errors.New("OnCommit called without matching OnBegin")
-	}
-
-	err := e.tx.Commit()
-	e.tx = nil
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	return e.loop.setConsistentPoint(e.stamp)
-}
-
-// OnData implements Events.
-func (e *serialEvents) OnData(
-	ctx context.Context, _ ident.Ident, target ident.Table, muts []types.Mutation,
-) error {
-	app, err := e.appliers.Get(ctx, target)
-	if err != nil {
-		return err
-	}
-	return app.Apply(ctx, e.tx, muts)
-}
-
-// OnRollback implements Events and delegates to drain.
-func (e *serialEvents) OnRollback(ctx context.Context, msg Message) error {
-	if !IsRollback(msg) {
-		return errors.New("the rollback message must be passed to OnRollback")
-	}
-	return e.drain(ctx)
+// SetConsistentPoint implements State.
+func (e *serialEvents) SetConsistentPoint(ctx context.Context, cp stamp.Stamp) error {
+	return e.loop.SetConsistentPoint(ctx, cp)
 }
 
 // Stopping implements State and delegates to the enclosing loop.
@@ -115,12 +66,51 @@ func (e *serialEvents) Stopping() <-chan struct{} {
 	return e.loop.Stopping()
 }
 
-// drain implements Events.
-func (e *serialEvents) drain(_ context.Context) error {
+// A serialBatch corresponds exactly to a database transaction.
+type serialBatch struct {
+	parent *serialEvents
+
+	tx types.TargetTx
+}
+
+var _ Batch = (*serialBatch)(nil)
+
+// Flush returns nil, since OnData() writes values immediately.
+func (e *serialBatch) Flush(context.Context) error {
+	return nil
+}
+
+// OnCommit implements Events.
+func (e *serialBatch) OnCommit(_ context.Context) <-chan error {
+	if e.tx == nil {
+		return singletonChannel(errors.New("OnCommit called without matching OnBegin"))
+	}
+
+	err := e.tx.Commit()
+	e.tx = nil
+	if err != nil {
+		return singletonChannel(errors.WithStack(err))
+	}
+
+	return singletonChannel[error](nil)
+}
+
+// OnData implements Events.
+func (e *serialBatch) OnData(
+	ctx context.Context, _ ident.Ident, target ident.Table, muts []types.Mutation,
+) error {
+	app, err := e.parent.appliers.Get(ctx, target)
+	if err != nil {
+		return err
+	}
+	return app.Apply(ctx, e.tx, muts)
+}
+
+// OnRollback implements Events and delegates to drain.
+func (e *serialBatch) OnRollback(_ context.Context) error {
 	if e.tx != nil {
 		_ = e.tx.Rollback()
+		e.tx = nil
 	}
-	e.stamp = nil
-	e.tx = nil
 	return nil
 }

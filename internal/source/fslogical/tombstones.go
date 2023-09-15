@@ -120,10 +120,10 @@ func (t *Tombstones) ReadInto(
 		}
 	}()
 
-	cp, _ := state.GetConsistentPoint().(*consistentPoint)
+	cp, _ := state.GetConsistentPoint()
 	q := t.coll.
 		OrderBy(t.cfg.UpdatedAtProperty.Raw(), firestore.Asc).
-		StartAt(cp.AsTime().Truncate(time.Second))
+		StartAt(cp.(*consistentPoint).AsTime().Truncate(time.Second))
 	snaps := q.Snapshots(ctx)
 
 	for {
@@ -186,9 +186,21 @@ func (t *Tombstones) ReadInto(
 func (t *Tombstones) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
+	var batch logical.Batch
+	defer func() {
+		if batch != nil {
+			_ = batch.OnRollback(ctx)
+		}
+	}()
 	for msg := range ch {
 		if logical.IsRollback(msg) {
-			return events.OnRollback(ctx, msg)
+			if batch != nil {
+				if err := batch.OnRollback(ctx); err != nil {
+					return err
+				}
+				batch = nil
+			}
+			continue
 		}
 
 		evt := msg.(tombstoneBatch)
@@ -201,7 +213,10 @@ func (t *Tombstones) Process(
 		t.mu.Unlock()
 
 		// Now, we'll set up the actual DB deletions.
-		if err := events.OnBegin(ctx, &consistentPoint{Time: evt.ts}); err != nil {
+		var err error
+		cp := &consistentPoint{Time: evt.ts}
+		batch, err = events.OnBegin(ctx)
+		if err != nil {
 			return err
 		}
 
@@ -223,12 +238,23 @@ func (t *Tombstones) Process(
 				return err
 			}
 
-			if err := events.OnData(ctx, t.source, tbl, []types.Mutation{mut}); err != nil {
+			if err := batch.OnData(ctx, t.source, tbl, []types.Mutation{mut}); err != nil {
 				return err
 			}
 		}
 
-		if err := events.OnCommit(ctx); err != nil {
+		select {
+		case err := <-batch.OnCommit(ctx):
+			if err != nil {
+				return err
+			}
+			batch = nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		// Save our status.
+		if err := events.SetConsistentPoint(ctx, cp); err != nil {
 			return err
 		}
 

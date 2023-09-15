@@ -58,9 +58,8 @@ type chaosBackfiller struct {
 }
 
 var (
-	_ Backfiller         = (*chaosBackfiller)(nil)
-	_ ConsistentCallback = (*chaosBackfiller)(nil)
-	_ Dialect            = (*chaosBackfiller)(nil)
+	_ Backfiller = (*chaosBackfiller)(nil)
+	_ Dialect    = (*chaosBackfiller)(nil)
 )
 
 func (d *chaosBackfiller) BackfillInto(ctx context.Context, ch chan<- Message, state State) error {
@@ -79,9 +78,8 @@ type chaosDialect struct {
 }
 
 var (
-	_ ConsistentCallback = (*chaosDialect)(nil)
-	_ Dialect            = (*chaosDialect)(nil)
-	_ Lessor             = (*chaosDialect)(nil)
+	_ Dialect = (*chaosDialect)(nil)
+	_ Lessor  = (*chaosDialect)(nil)
 )
 
 // Acquire will simulate busy leases, failures to acquire a lease, or
@@ -99,17 +97,6 @@ func (d *chaosDialect) Acquire(ctx context.Context) (types.Lease, error) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	return &fakeLease{ctx, cancel}, nil
-}
-
-func (d *chaosDialect) OnConsistent(cp stamp.Stamp) error {
-	if real, ok := d.delegate.(ConsistentCallback); ok {
-		// Only return a chaos error if the real dialect can fail out.
-		if rand.Float32() < d.prob {
-			return doChaos("OnConsistent")
-		}
-		return real.OnConsistent(cp)
-	}
-	return nil
 }
 
 func (d *chaosDialect) ReadInto(ctx context.Context, ch chan<- Message, state State) error {
@@ -131,6 +118,7 @@ func (d *chaosDialect) ZeroStamp() stamp.Stamp {
 }
 
 type chaosEvents struct {
+	// Don't embed, we want the compile to break on new methods.
 	delegate Events
 	prob     float32
 }
@@ -144,14 +132,7 @@ func (e *chaosEvents) Backfill(ctx context.Context, loopName string, backfiller 
 	return e.delegate.Backfill(ctx, loopName, backfiller)
 }
 
-func (e *chaosEvents) Flush(ctx context.Context) error {
-	if rand.Float32() < e.prob {
-		return doChaos("Flush")
-	}
-	return e.delegate.Flush(ctx)
-}
-
-func (e *chaosEvents) GetConsistentPoint() stamp.Stamp {
+func (e *chaosEvents) GetConsistentPoint() (stamp.Stamp, <-chan struct{}) {
 	return e.delegate.GetConsistentPoint()
 }
 
@@ -159,29 +140,54 @@ func (e *chaosEvents) GetTargetDB() ident.Schema {
 	return e.delegate.GetTargetDB()
 }
 
-// NotifyConsistentPoint implements State. It delegates to the loop and
-// never injects an error.
-func (e *chaosEvents) NotifyConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) <-chan stamp.Stamp {
-	return e.delegate.NotifyConsistentPoint(ctx, comparison, point)
-}
-
-func (e *chaosEvents) OnBegin(ctx context.Context, point stamp.Stamp) error {
+func (e *chaosEvents) OnBegin(ctx context.Context) (Batch, error) {
 	if rand.Float32() < e.prob {
-		return doChaos("OnBegin")
+		return nil, doChaos("OnBegin")
 	}
-	return e.delegate.OnBegin(ctx, point)
+	delegate, err := e.delegate.OnBegin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &chaosBatch{delegate, e.prob}, nil
 }
 
-func (e *chaosEvents) OnCommit(ctx context.Context) error {
+func (e *chaosEvents) SetConsistentPoint(ctx context.Context, cp stamp.Stamp) error {
 	if rand.Float32() < e.prob {
-		return doChaos("OnCommit")
+		return doChaos("SetConsistentPoint")
+	}
+	return e.delegate.SetConsistentPoint(ctx, cp)
+}
+
+func (e *chaosEvents) Stopping() <-chan struct{} {
+	return e.delegate.Stopping()
+}
+
+type chaosBatch struct {
+	// Don't embed, we want the compile to break on new methods.
+	delegate Batch
+	prob     float32
+}
+
+var _ Batch = (*chaosBatch)(nil)
+
+func (e *chaosBatch) Flush(ctx context.Context) error {
+	if rand.Float32() < e.prob {
+		return doChaos("Flush")
+	}
+	return e.delegate.Flush(ctx)
+}
+
+func (e *chaosBatch) OnCommit(ctx context.Context) <-chan error {
+	if rand.Float32() < e.prob {
+		ch := make(chan error, 1)
+		ch <- doChaos("OnCommit")
+		close(ch)
+		return ch
 	}
 	return e.delegate.OnCommit(ctx)
 }
 
-func (e *chaosEvents) OnData(
+func (e *chaosBatch) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
 	if rand.Float32() < e.prob {
@@ -190,19 +196,11 @@ func (e *chaosEvents) OnData(
 	return e.delegate.OnData(ctx, source, target, muts)
 }
 
-func (e *chaosEvents) OnRollback(ctx context.Context, msg Message) error {
+func (e *chaosBatch) OnRollback(ctx context.Context) error {
 	if rand.Float32() < e.prob {
 		return doChaos("OnRollback")
 	}
-	return e.delegate.OnRollback(ctx, msg)
-}
-
-func (e *chaosEvents) Stopping() <-chan struct{} {
-	return e.delegate.Stopping()
-}
-
-func (e *chaosEvents) drain(ctx context.Context) error {
-	return e.delegate.drain(ctx)
+	return e.delegate.OnRollback(ctx)
 }
 
 // doChaos is a convenient place to set a breakpoint.
