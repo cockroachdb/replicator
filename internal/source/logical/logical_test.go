@@ -207,9 +207,19 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	go func() {
 		defer close(endConsistent)
 
-		found, err := loop.AwaitConsistentPoint(ctx, logical.AwaitGTE, &fakeMessage{Index: numEmits - 1})
-		if a.NoError(err) {
-			endConsistent <- found
+		for {
+			cp, updated := loop.GetConsistentPoint()
+			if stamp.Compare(cp, &fakeMessage{Index: numEmits - 1}) >= 0 {
+				endConsistent <- cp
+				return
+			}
+
+			select {
+			case <-updated:
+			case <-ctx.Done():
+				a.Fail("timed out")
+				return
+			}
 		}
 	}()
 
@@ -260,7 +270,7 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	// tests.
 	found := make(map[int]struct{})
 	for _, msg := range gen.processMu.messages {
-		if fake, ok := msg.(fakeMessage); ok {
+		if fake, ok := msg.(*fakeMessage); ok {
 			found[fake.Index] = struct{}{}
 		}
 	}

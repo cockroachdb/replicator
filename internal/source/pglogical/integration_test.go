@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -105,18 +106,44 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 	rowCount := 10 * batches.Size()
 	keys := make([]int, rowCount)
 	vals := make([]string, rowCount)
-	for i := range keys {
-		keys[i] = i
-		vals[i] = fmt.Sprintf("v=%d", i)
-	}
 
+	// Insert data into source tables with overlapping transactions.
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(128)
 	for _, tgt := range tgts {
-		if _, err := pgPool.Exec(ctx,
-			fmt.Sprintf("INSERT INTO %s VALUES (unnest($1::int[]), unnest($2::text[]))", tgt),
-			keys, vals,
-		); !a.NoError(err) {
-			return
+		tgt := tgt // Capture
+		for i := 0; i < len(vals); i += 2 {
+			i := i // Capture
+			eg.Go(func() error {
+				keys[i] = i
+				keys[i+1] = i + 1
+				vals[i] = fmt.Sprintf("v=%d", i)
+				vals[i+1] = fmt.Sprintf("v=%d", i+1)
+
+				tx, err := pgPool.Begin(egCtx)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(egCtx,
+					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", tgt),
+					keys[i], vals[i],
+				)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(egCtx,
+					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", tgt),
+					keys[i+1], vals[i+1],
+				)
+				if err != nil {
+					return err
+				}
+				return tx.Commit(egCtx)
+			})
 		}
+	}
+	if !a.NoError(eg.Wait()) {
+		return
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.

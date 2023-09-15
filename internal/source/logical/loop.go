@@ -22,12 +22,12 @@ import (
 	"encoding"
 	"encoding/json"
 	"math/rand"
-	"sync"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
@@ -44,22 +44,15 @@ type Loop struct {
 	initialPoint stamp.Stamp
 }
 
-// AwaitConsistentPoint waits until the consistent point has advanced to
-// the requested value or until the context is cancelled.
-func (l *Loop) AwaitConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) (stamp.Stamp, error) {
-	return <-l.loop.NotifyConsistentPoint(ctx, comparison, point), ctx.Err()
-}
-
 // Dialect returns the logical.Dialect in use.
 func (l *Loop) Dialect() Dialect {
 	return l.loop.loopConfig.Dialect
 }
 
-// GetConsistentPoint returns current consistent-point stamp.
-func (l *Loop) GetConsistentPoint() stamp.Stamp {
-	return l.loop.GetConsistentPoint()
+// GetConsistentPoint returns current consistent-point stamp and a
+// channel that will be closed when the value has changed again.
+func (l *Loop) GetConsistentPoint() (stamp.Stamp, <-chan struct{}) {
+	return l.loop.consistentPoint.Get()
 }
 
 // GetInitialPoint returns the consistent-point stamp that the
@@ -92,18 +85,17 @@ type loop struct {
 	running *stopper.Context
 
 	// This represents a position in the source's transaction log.
-	consistentPoint struct {
-		sync.RWMutex
-		stamp   stamp.Stamp
-		updated chan struct{} // Closed and replaced when updated.
-	}
+	consistentPoint notify.Var[stamp.Stamp]
 
 	metrics struct {
 		backfillStatus prometheus.Gauge
 	}
 }
 
-var _ diag.Diagnostic = (*loop)(nil)
+var (
+	_ diag.Diagnostic = (*loop)(nil)
+	_ State           = (*loop)(nil)
+)
 
 // loadConsistentPoint will return the latest consistent-point stamp,
 // the value of Config.DefaultConsistentPoint, or Dialect.ZeroStamp.
@@ -125,52 +117,6 @@ func (l *loop) loadConsistentPoint(ctx context.Context) (stamp.Stamp, error) {
 	return ret, nil
 }
 
-// setConsistentPoint is safe to call from any goroutine. It will
-// occasionally persist the consistent point to the memo table.
-func (l *loop) setConsistentPoint(p stamp.Stamp) error {
-	l.consistentPoint.Lock()
-	defer l.consistentPoint.Unlock()
-
-	if !l.loopConfig.SuppressStampOrderChecks {
-		if c := stamp.Compare(p, l.consistentPoint.stamp); c < 0 {
-			return errors.Errorf("consistent point going backwards: %s vs %s",
-				p, l.consistentPoint.stamp)
-		} else if c == 0 {
-			return errors.Errorf("consistent point stalled: %s", p)
-		}
-	}
-
-	// Notify Dialect instances that have explicit coordination needs
-	// that the consistent point is about to advance.
-	if cb, ok := l.loopConfig.Dialect.(ConsistentCallback); ok {
-		if err := cb.OnConsistent(p); err != nil {
-			return errors.Wrap(err, "consistent point not advancing")
-		}
-	}
-
-	log.Tracef("loop %s new consistent point %s -> %s", l.loopConfig.LoopName, l.consistentPoint.stamp, p)
-	l.consistentPoint.stamp = p
-	close(l.consistentPoint.updated)
-	l.consistentPoint.updated = make(chan struct{})
-
-	if err := l.storeConsistentPoint(p); err != nil {
-		return errors.Wrap(err, "could not persistent consistent point")
-	}
-	log.Tracef("Saved checkpoint for %s", l.loopConfig.LoopName)
-	return nil
-}
-
-// storeConsistentPoint commits the given stamp to the memo table.
-func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
-	data, err := json.Marshal(p)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return l.factory.memo.Put(context.Background(),
-		l.factory.stagingPool, l.loopConfig.LoopName, data,
-	)
-}
-
 // Diagnostic implements [diag.Diagnostic].
 func (l *loop) Diagnostic(ctx context.Context) any {
 	ret := make(map[string]any)
@@ -179,16 +125,14 @@ func (l *loop) Diagnostic(ctx context.Context) any {
 	if x, ok := l.loopConfig.Dialect.(diag.Diagnostic); ok {
 		ret["dialect"] = x.Diagnostic(ctx)
 	}
-	ret["stamp"] = l.GetConsistentPoint()
+	ret["stamp"], _ = l.GetConsistentPoint()
 
 	return ret
 }
 
 // GetConsistentPoint implements State.
-func (l *loop) GetConsistentPoint() stamp.Stamp {
-	l.consistentPoint.RLock()
-	defer l.consistentPoint.RUnlock()
-	return l.consistentPoint.stamp
+func (l *loop) GetConsistentPoint() (stamp.Stamp, <-chan struct{}) {
+	return l.consistentPoint.Get()
 }
 
 // GetTargetDB implements State.
@@ -196,45 +140,29 @@ func (l *loop) GetTargetDB() ident.Schema {
 	return l.loopConfig.TargetSchema
 }
 
-// NotifyConsistentPoint implements State.
-func (l *loop) NotifyConsistentPoint(
-	ctx context.Context, comparison AwaitComparison, point stamp.Stamp,
-) <-chan stamp.Stamp {
-	result := make(chan stamp.Stamp, 1)
-
-	// Fast-path
-	if found := l.GetConsistentPoint(); stamp.Compare(found, point) >= int(comparison) {
-		result <- found
-		close(result)
-		return result
+// SetConsistentPoint implements State and is safe to call from any
+// goroutine. It will persist the consistent point to the memo table.
+func (l *loop) SetConsistentPoint(_ context.Context, next stamp.Stamp) error {
+	_, _, err := l.consistentPoint.Update(func(old stamp.Stamp) (stamp.Stamp, error) {
+		if c := stamp.Compare(next, old); c < 0 {
+			return nil, errors.Errorf("consistent point going backwards: %s vs %s",
+				next, old)
+		} else if c == 0 {
+			return nil, errors.Errorf("consistent point stalled: %s", next)
+		}
+		log.Tracef("loop %s new consistent point %s -> %s",
+			l.loopConfig.LoopName, old, next)
+		return next, nil
+	})
+	if err != nil {
+		return err
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-
-	go func() {
-		defer cancel()
-		defer close(result)
-
-		for {
-			l.consistentPoint.RLock()
-			found := l.consistentPoint.stamp
-			updated := l.consistentPoint.updated
-			l.consistentPoint.RUnlock()
-
-			if stamp.Compare(found, point) >= int(comparison) {
-				result <- found
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-updated:
-				continue
-			}
-		}
-	}()
-
-	return result
+	if err := l.storeConsistentPoint(next); err != nil {
+		return errors.Wrap(err, "could not persistent consistent point")
+	}
+	log.Tracef("Saved checkpoint for %s", l.loopConfig.LoopName)
+	return nil
 }
 
 // Stopping implements State. See also [stopperEvents], which is passed
@@ -312,23 +240,12 @@ func (l *loop) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	l.consistentPoint.Lock()
-	l.consistentPoint.stamp = point
-	close(l.consistentPoint.updated)
-	l.consistentPoint.updated = make(chan struct{})
-	l.consistentPoint.Unlock()
+	l.consistentPoint.Set(point)
 
 	// Determine how to perform the filling.
 	source, events, isBackfilling := l.chooseFillStrategy()
 
-	if err := l.runOnceUsing(stopper.From(ctx), source, events, isBackfilling); err != nil {
-		return err
-	}
-
-	// Ensure that the latest point has been saved on a clean exit.
-	return errors.Wrapf(l.storeConsistentPoint(l.GetConsistentPoint()),
-		"could not save consistent point for %s", l.loopConfig.LoopName)
+	return l.runOnceUsing(stopper.From(ctx), source, events, isBackfilling)
 }
 
 // runOnceUsing is called from runOnce or doBackfill.
@@ -393,18 +310,7 @@ func (l *loop) runOnceUsing(
 		if err == nil && !ctx.IsStopping() {
 			err = errors.Errorf("%T.Process() returned unexpectedly", l.loopConfig.Dialect)
 		}
-		err = errors.Wrap(err, "error while applying replication messages")
-
-		// Ensure that any in-flight mutations are drained.
-		if drainErr := events.drain(ctx); drainErr != nil {
-			if err == nil {
-				err = drainErr
-			} else {
-				log.WithError(drainErr).Error("could not drain pending mutations")
-			}
-		}
-
-		return err
+		return errors.Wrap(err, "error while applying replication messages")
 	})
 
 	// Toggle backfilling mode as necessary by triggering a drain.
@@ -414,20 +320,8 @@ func (l *loop) runOnceUsing(
 	canBackfill = canBackfill && l.factory.baseConfig.BackfillWindow > 0
 	if isBackfilling || canBackfill {
 		ctx.Go(func() error {
-			point := l.loopConfig.Dialect.ZeroStamp()
+			point, pointChanged := l.consistentPoint.Get()
 			for {
-				// Wait for the consistent point to advance. This method
-				// only returns an error if the context has been
-				// canceled.
-				select {
-				case point = <-l.NotifyConsistentPoint(ctx, AwaitGT, point):
-				// OK
-				case <-ctx.Stopping():
-					// Graceful shutdown.
-					return nil
-				case <-ctx.Done():
-					return ctx.Err()
-				}
 				ts, ok := point.(TimeStamp)
 				if !ok {
 					log.Warn("dialect implements Backfiller, but doesn't use TimeStamp stamps")
@@ -466,6 +360,18 @@ func (l *loop) runOnceUsing(
 						return nil
 					}
 				}
+
+				// Wait for the consistent point to advance, for
+				// shutdown, or for cancellation.
+				select {
+				case <-pointChanged:
+					point, pointChanged = l.consistentPoint.Get()
+				case <-ctx.Stopping():
+					// Graceful shutdown.
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		})
 	}
@@ -495,7 +401,8 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 		return
 	}
 	// Is the last consistent point sufficiently old to backfill?
-	ts, ok := l.GetConsistentPoint().(TimeStamp)
+	cp, _ := l.consistentPoint.Get()
+	ts, ok := cp.(TimeStamp)
 	if !ok {
 		return
 	}
@@ -535,6 +442,17 @@ func (l *loop) doBackfill(ctx context.Context, loopName string, backfiller Backf
 		backfiller.BackfillInto,
 		filler.loop.events.fan,
 		true /* isBackfilling */)
+}
+
+// storeConsistentPoint commits the given stamp to the memo table.
+func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return l.factory.memo.Put(context.Background(),
+		l.factory.stagingPool, l.loopConfig.LoopName, data,
+	)
 }
 
 // stopperEvents exposes the iteration stop signal to the Dialect.
