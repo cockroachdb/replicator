@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -342,7 +343,7 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		Targets:     targets,
 	}
 
-	source := scriptSource(r.target)
+	source := script.SourceName(r.target)
 	flush := func(toApply *ident.TableMap[[]types.Mutation], final bool) error {
 		flushStart := time.Now()
 
@@ -449,7 +450,7 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 			}
 
 			flushCounter++
-			mut.Meta = scriptMeta(tbl, mut)
+			script.AddMeta("cdc", tbl, &mut)
 			toApply.Put(tbl, append(toApply.GetZero(tbl), mut))
 			epoch = mut.Time
 			return nil

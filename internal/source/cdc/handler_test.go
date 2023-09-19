@@ -18,10 +18,7 @@ package cdc
 
 import (
 	"context"
-	"embed"
 	"fmt"
-	"io"
-	"io/fs"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -33,6 +30,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/scripttest"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/reject"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -43,9 +41,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
-
-//go:embed testdata/*
-var scriptFS embed.FS
 
 type fixtureConfig struct {
 	immediate bool
@@ -104,14 +99,8 @@ func createFixture(
 
 	if htc.script {
 		cfg.ScriptConfig = script.Config{
-			FS: &substitutingFS{
-				FS: scriptFS,
-				replacer: strings.NewReplacer(
-					"{{ SCHEMA }}", tableInfo.Name().Schema().Raw(),
-					"{{ TABLE }}", tableInfo.Name().Table().Raw(),
-				),
-			},
-			MainPath: "/testdata/main.ts",
+			FS:       scripttest.ScriptFSFor(tableInfo.Name()),
+			MainPath: "/testdata/logical_test.ts",
 		}
 	}
 	fixture, cancel, err := newTestFixture(baseFixture, cfg)
@@ -630,40 +619,4 @@ func testMassBackfillWithForeignKeys(
 			time.Sleep(time.Second)
 		}
 	}
-}
-
-// substitutingFS performs string substitution on returned files.
-// This is used to replace sentinel values in the userscript with
-// dynamically generated values.
-type substitutingFS struct {
-	fs.FS
-	replacer *strings.Replacer
-}
-
-func (f *substitutingFS) Open(path string) (fs.File, error) {
-	file, err := f.FS.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	buf, err := io.ReadAll(file)
-	if err != nil {
-		return nil, err
-	}
-	s := f.replacer.Replace(string(buf))
-	return &substitutingFile{info, io.NopCloser(strings.NewReader(s))}, nil
-}
-
-type substitutingFile struct {
-	fs.FileInfo
-	io.ReadCloser
-}
-
-var _ fs.File = (*substitutingFile)(nil)
-
-func (s *substitutingFile) Stat() (fs.FileInfo, error) {
-	return s.FileInfo, nil
 }

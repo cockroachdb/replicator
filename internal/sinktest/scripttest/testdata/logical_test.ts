@@ -23,7 +23,7 @@ import {Document, Table} from "cdc-sink@v1";
 // "my_db.public" or "my_db" depending on the target product.
 api.configureSource("{{ SCHEMA }}", {
     dispatch: (doc: Document, meta: Document): Record<Table, Document[]> => {
-        console.log(JSON.stringify(doc), JSON.stringify(meta));
+        console.trace(JSON.stringify(doc), JSON.stringify(meta));
         let ret: Record<Table, Document> = {};
         ret[meta.table] = [
             {
@@ -41,7 +41,7 @@ api.configureSource("{{ SCHEMA }}", {
 // The sentinel name would be replaced by "my_table".
 api.configureTable("{{ TABLE }}", {
     map: (doc: Document): Document => {
-        console.log("map", JSON.stringify(doc));
+        console.trace("map", JSON.stringify(doc));
         if (doc.v_dispatched === undefined) {
             throw "did not find expected property";
         }

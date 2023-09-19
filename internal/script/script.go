@@ -77,7 +77,7 @@ type Target struct {
 	applycfg.Config
 	// A user-provided function to modify or filter mutations bound for
 	// the target table.
-	Map Map
+	Map Map `json:"-"`
 }
 
 // UserScript encapsulates a user-provided configuration expressed as a

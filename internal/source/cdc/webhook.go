@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"io"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -144,11 +145,11 @@ func (h *Handler) processMutationsImmediate(
 	}
 	defer func() { _ = batch.OnRollback(ctx) }()
 
-	source := scriptSource(target)
+	source := script.SourceName(target)
 	if err := toProcess.Range(func(tbl ident.Table, muts []types.Mutation) error {
 		for idx := range muts {
 			// Index needed since it's not a pointer type.
-			muts[idx].Meta = scriptMeta(tbl, muts[idx])
+			script.AddMeta("cdc", tbl, &muts[idx])
 		}
 		return batch.OnData(ctx, source, tbl, muts)
 	}); err != nil {
