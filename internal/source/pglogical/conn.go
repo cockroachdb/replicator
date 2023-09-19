@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -374,8 +375,9 @@ func (c *conn) onDataTuple(
 	if err != nil {
 		return err
 	}
+	script.AddMeta("pglogical", tbl, &mut)
 
-	return batch.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
+	return batch.OnData(ctx, script.SourceName(tbl), tbl, []types.Mutation{mut})
 }
 
 // learn updates the source database namespace mappings.
