@@ -27,9 +27,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/scripttest"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -51,20 +53,43 @@ func TestMain(m *testing.M) {
 	all.IntegrationMain(m, all.PostgreSQLName)
 }
 
+type fixtureConfig struct {
+	backfill  bool
+	chaosProb float32
+	immediate bool
+	script    bool
+}
+
 // This is a general smoke-test of the logical replication feed.
 //
 // The probabilities are chosen to make the tests pass within a
 // reasonable timeframe, given the large number of rows that we insert.
 func TestPGLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testPGLogical(t, false, false, 0) })
-	t.Run("consistent-chaos", func(t *testing.T) { testPGLogical(t, false, false, 0.0005) })
-	t.Run("consistent-backfill", func(t *testing.T) { testPGLogical(t, true, false, 0) })
-	t.Run("consistent-backfill-chaos", func(t *testing.T) { testPGLogical(t, true, false, 0.0005) })
-	t.Run("immediate", func(t *testing.T) { testPGLogical(t, false, true, 0) })
-	t.Run("immediate-chaos", func(t *testing.T) { testPGLogical(t, false, true, 0.0005) })
+	t.Run("consistent", func(t *testing.T) { testPGLogical(t, &fixtureConfig{}) })
+	t.Run("consistent-backfill", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{backfill: true})
+	})
+	t.Run("consistent-backfill-chaos", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{backfill: true, chaosProb: 0.0005})
+	})
+	t.Run("consistent-chaos", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{chaosProb: 0.0005})
+	})
+	t.Run("consistent-script", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{script: true})
+	})
+	t.Run("immediate", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{immediate: true})
+	})
+	t.Run("immediate-chaos", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{immediate: true, chaosProb: 0.0005})
+	})
+	t.Run("immediate-script", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{immediate: true, script: true})
+	})
 }
 
-func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb float32) {
+func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -86,17 +111,36 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 	defer cancel()
 
 	// Create the schema in both locations.
-	tgts := []ident.Table{
-		ident.NewTable(dbSchema, ident.New("t1")),
-		ident.NewTable(dbSchema, ident.New("t2")),
+	var tgts []ident.Table
+	if fc.script {
+		// The logical_test script rig is only set up to deal with one
+		// table. We really just want to verify that the end-to-end
+		// wiring is in place.
+		tgts = []ident.Table{
+			ident.NewTable(dbSchema, ident.New("script_tbl")),
+		}
+	} else {
+		tgts = []ident.Table{
+			ident.NewTable(dbSchema, ident.New("t1")),
+			ident.NewTable(dbSchema, ident.New("t2")),
+		}
 	}
 
+	var crdbCol string
 	for _, tgt := range tgts {
-		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v TEXT)`, tgt)
-		if _, err := pgPool.Exec(ctx, schema); !a.NoError(err) {
+		var crdbSchema, pgSchema string
+		pgSchema = fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v TEXT)`, tgt)
+		crdbSchema = pgSchema
+		crdbCol = "v"
+		if fc.script {
+			// Ensure that script is wired up by renaming a column.
+			crdbSchema = fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v_mapped TEXT)`, tgt)
+			crdbCol = "v_mapped"
+		}
+		if _, err := pgPool.Exec(ctx, pgSchema); !a.NoError(err) {
 			return
 		}
-		if _, err := crdbPool.ExecContext(ctx, schema); !a.NoError(err) {
+		if _, err := crdbPool.ExecContext(ctx, crdbSchema); !a.NoError(err) {
 			return
 		}
 	}
@@ -150,8 +194,8 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 	cfg := &Config{
 		BaseConfig: logical.BaseConfig{
 			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
-			ChaosProb:     withChaosProb,
-			Immediate:     immediate,
+			ChaosProb:     fc.chaosProb,
+			Immediate:     fc.immediate,
 			RetryDelay:    time.Nanosecond,
 			StagingSchema: fixture.StagingDB.Schema(),
 			TargetConn:    crdbPool.ConnectionString,
@@ -164,10 +208,16 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 		Slot:        dbName.Raw(),
 		SourceConn:  *pgConnString + dbName.Raw(),
 	}
-	if allowBackfill {
+	if fc.backfill {
 		cfg.BackfillWindow = time.Minute
 	} else {
 		cfg.BackfillWindow = 0
+	}
+	if fc.script {
+		cfg.ScriptConfig = script.Config{
+			FS:       scripttest.ScriptFSFor(tgts[0]),
+			MainPath: "/testdata/logical_test.ts",
+		}
 	}
 	repl, cancelLoop, err := Start(ctx, cfg)
 	if !a.NoError(err) {
@@ -209,7 +259,7 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 		for {
 			var count int
 			if err := crdbPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+				fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
 				return
 			}
 			log.Trace("update count", count)
@@ -226,7 +276,7 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 		return
 	}
 	for _, tgt := range tgts {
-		if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE k < 50", tgt)); !a.NoError(err) {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE pk < 50", tgt)); !a.NoError(err) {
 			return
 		}
 	}
@@ -239,7 +289,7 @@ func testPGLogical(t *testing.T, allowBackfill, immediate bool, withChaosProb fl
 		for {
 			var count int
 			if err := crdbPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+				fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
 				return
 			}
 			log.Trace("delete count", count)
