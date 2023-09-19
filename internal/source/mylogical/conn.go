@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -382,7 +383,8 @@ func (c *conn) onDataTuple(
 				return err
 			}
 		}
-		err = batch.OnData(ctx, tbl.Table(), tbl, []types.Mutation{mut})
+		script.AddMeta("mylogical", tbl, &mut)
+		err = batch.OnData(ctx, script.SourceName(tbl), tbl, []types.Mutation{mut})
 		if err != nil {
 			return err
 		}
