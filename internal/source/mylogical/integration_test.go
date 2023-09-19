@@ -25,8 +25,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/scripttest"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
@@ -52,13 +54,40 @@ func (f startStamp) MarshalText() (text []byte, err error) {
 func TestMain(m *testing.M) {
 	all.IntegrationMain(m, all.MySQLName)
 }
-func TestMYLogical(t *testing.T) {
-	t.Run("backfill", func(t *testing.T) { testMYLogical(t, true, false) })
-	t.Run("consistent", func(t *testing.T) { testMYLogical(t, false, false) })
-	t.Run("immediate", func(t *testing.T) { testMYLogical(t, false, true) })
+
+type fixtureConfig struct {
+	backfill  bool
+	chaosProb float32
+	immediate bool
+	script    bool
 }
 
-func testMYLogical(t *testing.T, backfill, immediate bool) {
+func TestMYLogical(t *testing.T) {
+	t.Run("consistent", func(t *testing.T) { testMYLogical(t, &fixtureConfig{}) })
+	t.Run("consistent-backfill", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{backfill: true})
+	})
+	t.Run("consistent-backfill-chaos", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{backfill: true, chaosProb: 0.0005})
+	})
+	t.Run("consistent-chaos", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{chaosProb: 0.0005})
+	})
+	t.Run("consistent-script", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{script: true})
+	})
+	t.Run("immediate", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{immediate: true})
+	})
+	t.Run("immediate-chaos", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{immediate: true, chaosProb: 0.0005})
+	})
+	t.Run("immediate-script", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{immediate: true, script: true})
+	})
+}
+
+func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -72,11 +101,15 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	dbName := fixture.TargetSchema.Schema()
 	crdbPool := fixture.TargetPool
 
+	// Create the schema in both locations.
+	tgt := ident.NewTable(dbName, ident.New("t"))
+
 	config := &Config{
 		BaseConfig: logical.BaseConfig{
 			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:     immediate,
-			RetryDelay:    10 * time.Second,
+			ChaosProb:     fc.chaosProb,
+			Immediate:     fc.immediate,
+			RetryDelay:    time.Nanosecond,
 			StagingSchema: fixture.StagingDB.Schema(),
 			TargetConn:    crdbPool.ConnectionString,
 		},
@@ -87,8 +120,14 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
 		ProcessID:  123456,
 	}
-	if backfill {
+	if fc.backfill {
 		config.BackfillWindow = time.Minute
+	}
+	if fc.script {
+		config.ScriptConfig = script.Config{
+			FS:       scripttest.ScriptFSFor(tgt),
+			MainPath: "/testdata/logical_test.ts",
+		}
 	}
 	err = config.Preflight()
 	if !a.NoError(err) {
@@ -103,18 +142,23 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	}
 	defer cancel()
 
-	// Create the schema in both locations.
-	tgt := ident.NewTable(dbName, ident.New("t"))
-
 	// MySQL only has a single-level namespace; that is, no user-defined schemas.
 	if _, err := myExec(ctx, myPool,
-		fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v varchar(20))`, tgt.Table().Raw()),
+		fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v varchar(20))`, tgt.Table().Raw()),
 	); !a.NoError(err) {
 		log.Fatal(err)
 		return
 	}
-	if _, err := crdbPool.ExecContext(ctx,
-		fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v string)`, tgt)); !a.NoError(err) {
+
+	var crdbCol, crdbSchema string
+	if fc.script {
+		crdbSchema = fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v_mapped string)`, tgt)
+		crdbCol = "v_mapped"
+	} else {
+		crdbSchema = fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v string)`, tgt)
+		crdbCol = "v"
+	}
+	if _, err := crdbPool.ExecContext(ctx, crdbSchema); !a.NoError(err) {
 		return
 	}
 
@@ -191,7 +235,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	for {
 		var count int
 		if err := crdbPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+			fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
 			return
 		}
 		log.Trace("update count", count)
@@ -207,7 +251,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 				return nil, err
 			}
 			defer conn.Rollback()
-			conn.Execute(fmt.Sprintf("DELETE FROM %s WHERE k < 50", tgt.Table().Raw()))
+			conn.Execute(fmt.Sprintf("DELETE FROM %s WHERE pk < 50", tgt.Table().Raw()))
 			return nil, conn.Commit()
 		})
 
@@ -220,7 +264,7 @@ func testMYLogical(t *testing.T, backfill, immediate bool) {
 	for {
 		var count int
 		if err := crdbPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT count(*) FROM %s WHERE v = 'updated'", tgt)).Scan(&count); !a.NoError(err) {
+			fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
 			return
 		}
 		log.Trace("delete count", count)
