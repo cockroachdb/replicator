@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -86,7 +87,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		if err != nil {
 			return err
 		}
-		source := scriptSource(target)
+		source := script.SourceName(target)
 		// Push the data into the pipeline.
 		flush = func(muts []types.Mutation) error {
 			for idx := range muts {
@@ -94,7 +95,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 				// create metadata in the scan phase, because this
 				// computation is only relevant to immediate mode. It's
 				// going to be re-computed in deferred mode.
-				muts[idx].Meta = scriptMeta(target, muts[idx])
+				script.AddMeta("cdc", target, &muts[idx])
 			}
 			return batch.OnData(ctx, source, target, muts)
 		}

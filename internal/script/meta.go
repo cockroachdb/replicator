@@ -14,27 +14,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package cdc
+package script
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
-// scriptSource returns the canonical name of a schema for use with
-// the configureSource() function in the userscript API.
-func scriptSource(target ident.Schematic) ident.Ident {
-	return ident.New(target.Schema().Canonical().Raw())
-}
-
-// scriptMeta create a userscript metadata map for a mutation being
-// applied to a table.
-func scriptMeta(tbl ident.Table, mut types.Mutation) map[string]any {
-	return map[string]any{
-		"cdc":     true,
+// AddMeta decorates the mutation with a standard set of properties.
+func AddMeta(source string, tbl ident.Table, mut *types.Mutation) {
+	meta := map[string]any{
+		source:    true,
 		"logical": mut.Time.Logical(),
 		"nanos":   mut.Time.Nanos(),
 		"schema":  tbl.Schema().Raw(),
 		"table":   tbl.Table().Raw(),
 	}
+	// Almost always the case.
+	if mut.Meta == nil {
+		mut.Meta = meta
+		return
+	}
+	for k, v := range meta {
+		mut.Meta[k] = v
+	}
+}
+
+// SourceName returns a standardized representation of a source name.
+func SourceName(target ident.Schematic) ident.Ident {
+	return ident.New(target.Schema().Canonical().Raw())
 }
