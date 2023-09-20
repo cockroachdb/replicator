@@ -40,8 +40,8 @@ import (
 
 // apply will upsert mutations and deletions into a target table.
 type apply struct {
-	product types.Product
-	target  ident.Table
+	pool   *types.TargetPool
+	target ident.Table
 
 	deletes   prometheus.Counter
 	durations prometheus.Observer
@@ -50,7 +50,8 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
-		templates *templates
+		// This cache is replaced whenever a schema change is detected.
+		cache *stmtCache
 	}
 }
 
@@ -58,7 +59,7 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	product types.Product, inTarget ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
+	pool *types.TargetPool, inTarget ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
 	// Start a background goroutine to refresh the templates.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,8 +80,8 @@ func newApply(
 
 	labelValues := metrics.TableValues(target)
 	a := &apply{
-		product: product,
-		target:  target,
+		pool:   pool,
+		target: target,
 
 		deletes:   applyDeletes.WithLabelValues(labelValues...),
 		durations: applyDurations.WithLabelValues(labelValues...),
@@ -168,7 +169,7 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if a.mu.templates.Positions.Len() == 0 {
+	if a.mu.cache.Positions.Len() == 0 {
 		return errors.Errorf("no ColumnData available for %s", a.target)
 	}
 
@@ -208,10 +209,6 @@ func (a *apply) deleteLocked(
 	if len(muts) == 0 {
 		return nil
 	}
-	sql, err := a.mu.templates.deleteExpr(len(muts))
-	if err != nil {
-		return err
-	}
 
 	keyGroups := make([][]any, len(muts))
 	if err := pjson.Decode(ctx, keyGroups, func(i int) []byte {
@@ -220,16 +217,16 @@ func (a *apply) deleteLocked(
 		return err
 	}
 
-	allArgs := make([]any, 0, len(a.mu.templates.PKDelete)*len(muts))
+	allArgs := make([]any, 0, len(a.mu.cache.PKDelete)*len(muts))
 	for i, keyGroup := range keyGroups {
-		if len(keyGroup) != len(a.mu.templates.PKDelete) {
+		if len(keyGroup) != len(a.mu.cache.PKDelete) {
 			return errors.Errorf(
 				"schema drift detected in %s: "+
 					"inconsistent number of key columns: "+
 					"received %d expect %d: "+
 					"key %s@%s",
 				a.target,
-				len(keyGroup), len(a.mu.templates.PKDelete),
+				len(keyGroup), len(a.mu.cache.PKDelete),
 				string(muts[i].Key), muts[i].Time)
 		}
 		allArgs = append(allArgs, keyGroup...)
@@ -242,9 +239,22 @@ func (a *apply) deleteLocked(
 		}
 	}
 
-	tag, err := db.ExecContext(ctx, sql, allArgs...)
+	if a.mu.cache.ColumnarDelete {
+		var err error
+		allArgs, err = toColumns(len(a.mu.cache.PKDelete), len(muts), allArgs)
+		if err != nil {
+			return err
+		}
+	}
+
+	stmt, err := a.mu.cache.Delete(ctx, db, len(muts))
 	if err != nil {
-		return errors.Wrap(err, sql)
+		return err
+	}
+
+	tag, err := stmt.ExecContext(ctx, allArgs...)
+	if err != nil {
+		return errors.WithStack(err)
 	}
 	affected, err := tag.RowsAffected()
 	if err != nil {
@@ -268,14 +278,9 @@ func (a *apply) upsertLocked(
 	}
 	start := time.Now()
 
-	sql, err := a.mu.templates.upsertExpr(len(muts))
-	if err != nil {
-		return err
-	}
-
 	// Allocate a slice for all mutation data. We'll reset the length
 	// once we know how many elements we actually have.
-	allArgs := make([]any, a.mu.templates.UpsertParameterCount*len(muts))
+	allArgs := make([]any, a.mu.cache.UpsertParameterCount*len(muts))
 	argIdx := 0
 
 	// Decode the mutations into an actionable map.
@@ -288,7 +293,7 @@ func (a *apply) upsertLocked(
 
 	for idx, rowData := range allPayloadData {
 		var extrasData *ident.Map[any]
-		if a.mu.templates.ExtrasColIdx != -1 {
+		if a.mu.cache.ExtrasColIdx != -1 {
 			extrasData = &ident.Map[any]{}
 		}
 
@@ -296,14 +301,14 @@ func (a *apply) upsertLocked(
 		// the incoming payload. This improves the error returned when
 		// there are unexpected columns.
 		missingPKs := &ident.Map[struct{}]{}
-		for _, pk := range a.mu.templates.PK {
+		for _, pk := range a.mu.cache.PK {
 			missingPKs.Put(pk.Name, struct{}{})
 		}
 
 		var unexpectedColumns []string
 
-		err = rowData.Range(func(incomingColName ident.Ident, value any) error {
-			targetColumn, ok := a.mu.templates.Positions.Get(incomingColName)
+		err := rowData.Range(func(incomingColName ident.Ident, value any) error {
+			targetColumn, ok := a.mu.cache.Positions.Get(incomingColName)
 
 			// The incoming data didn't map to a column. Report an error
 			// if no extras column has been configured or accumulate it
@@ -394,17 +399,33 @@ func (a *apply) upsertLocked(
 			if err != nil {
 				return errors.Wrap(err, "could not encode extras column value")
 			}
-			allArgs[argIdx+a.mu.templates.ExtrasColIdx] = string(extraJSONBytes)
+			allArgs[argIdx+a.mu.cache.ExtrasColIdx] = string(extraJSONBytes)
 		}
 
-		argIdx += a.mu.templates.UpsertParameterCount
+		argIdx += a.mu.cache.UpsertParameterCount
 	}
-	allArgs = allArgs[:argIdx]
+	if argIdx != len(allArgs) {
+		return errors.Errorf("did not fill argument array. Had %d vs %d", argIdx, len(allArgs))
+	}
 
-	tag, err := db.ExecContext(ctx, sql, allArgs...)
-	if err != nil {
-		return errors.Wrap(err, sql)
+	if a.mu.cache.ColumnarUpsert {
+		var err error
+		allArgs, err = toColumns(a.mu.cache.UpsertParameterCount, len(allPayloadData), allArgs)
+		if err != nil {
+			return err
+		}
 	}
+
+	stmt, err := a.mu.cache.Upsert(ctx, db, len(muts))
+	if err != nil {
+		return err
+	}
+
+	tag, err := stmt.ExecContext(ctx, allArgs...)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
 	affected, err := tag.RowsAffected()
 	if err != nil {
 		return errors.WithStack(err)
@@ -428,20 +449,28 @@ func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.
 	}
 
 	// Extract column metadata.
-	columnMapping, err := newColumnMapping(configData, schemaData, a.product, a.target)
+	columnMapping, err := newColumnMapping(configData, schemaData, a.pool.Product, a.target)
 	if err != nil {
 		return err
 	}
 
-	// Build template cache.
+	// Build template generator.
 	tmpl, err := newTemplates(columnMapping)
 	if err != nil {
 		return err
 	}
 
+	// Build prepared-statement cache.
+	stmts := newStmtCache(a.pool, tmpl)
+
+	// Swap and clean up.
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.mu.templates = tmpl
+	old := a.mu.cache
+	a.mu.cache = stmts
+	a.mu.Unlock()
+	if old != nil {
+		old.Invalidate()
+	}
 	return nil
 }
 
@@ -493,4 +522,19 @@ func (a *apply) validate(configData *applycfg.Config, schemaData []types.ColData
 		return err
 	}
 	return nil
+}
+
+func toColumns(columns, rows int, data []any) ([]any, error) {
+	if rows*columns != len(data) {
+		return nil, errors.Errorf("expecting %d*%d elements, had %d", columns, rows, data)
+	}
+	colData := make([]any, columns)
+	for colIdx := range colData {
+		rowData := make([]any, rows)
+		colData[colIdx] = rowData
+		for rowIdx := range rowData {
+			rowData[rowIdx] = data[rowIdx*columns+colIdx]
+		}
+	}
+	return colData, nil
 }

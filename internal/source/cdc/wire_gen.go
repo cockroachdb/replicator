@@ -12,6 +12,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
@@ -21,44 +23,64 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	authenticator := trust.New()
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
-	appliers := fixture.Appliers
 	configs := fixture.Configs
-	scriptConfig, err := logical.ProvideUserScriptConfig(config)
-	if err != nil {
-		return nil, nil, err
-	}
-	loader, err := script.ProvideLoader(scriptConfig)
-	if err != nil {
-		return nil, nil, err
-	}
-	baseConfig, err := logical.ProvideBaseConfig(config, loader)
-	if err != nil {
-		return nil, nil, err
-	}
 	diagnostics, cleanup := diag.New(context)
-	memo := fixture.Memo
-	stagingPool, cleanup2, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup3, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	loader, err := script.ProvideLoader(scriptConfig)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup3, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers := fixture.Watchers
-	checker := fixture.VersionChecker
-	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memo, loader, stagingPool, targetPool, watchers, checker)
+	appliers, cleanup4, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	immediate, cleanup4, err := ProvideImmediate(factory)
+	memo := fixture.Memo
+	stagingPool, cleanup5, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	checker := fixture.VersionChecker
+	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memo, loader, stagingPool, targetPool, watchers, checker)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	immediate, cleanup6, err := ProvideImmediate(factory)
+	if err != nil {
+		cleanup5()
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
@@ -66,6 +88,8 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
+		cleanup6()
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -74,6 +98,8 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	}
 	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup6()
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -82,8 +108,10 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	}
 	metaTable := ProvideMetaTable(config)
 	stagers := fixture.Stagers
-	resolvers, cleanup5, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	resolvers, cleanup7, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
+		cleanup6()
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -105,6 +133,8 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
+		cleanup7()
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()

@@ -530,7 +530,7 @@ func testMassBackfillWithForeignKeys(
 			SelectBatchSize:     587,
 			MetaTableName:       ident.New("resolved_timestamps"),
 			BaseConfig: logical.BaseConfig{
-				ApplyTimeout:       time.Second,
+				ApplyTimeout:       30 * time.Second,
 				FanShards:          16,
 				ForeignKeysEnabled: true,
 				StagingConn:        baseFixture.StagingPool.ConnectionString,

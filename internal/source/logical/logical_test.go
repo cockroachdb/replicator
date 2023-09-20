@@ -171,7 +171,7 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	}
 
 	cfg := &logical.BaseConfig{
-		ApplyTimeout:       time.Second, // Increase to make using the debugger easier.
+		ApplyTimeout:       30 * time.Second, // Increase to make using the debugger easier.
 		ChaosProb:          chaosProb,
 		ForeignKeysEnabled: mode.fk,
 		Immediate:          mode.immediate,

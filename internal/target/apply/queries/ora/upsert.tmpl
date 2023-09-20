@@ -7,7 +7,7 @@ deadline operations.
 It will be useful to refer to the templates_test.go file to see how
 this template expands into SQL.
 */ -}}
-MERGE INTO {{ .TableName }} USING ( {{- nl -}}
+MERGE /*+ parallel(8) enable_parallel_dml */ INTO {{ .TableName }} USING ( {{- nl -}}
 
 {{- /*
 We start by defining a data section that is a sequence of

@@ -187,41 +187,32 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		return nil, nil, err
 	}
 	targetSchema := ProvideScriptTarget(config)
-	watchers := fixture.Watchers
+	targetPool, cleanup2, err := logical.ProvideTargetPool(contextContext, baseConfig, diagnostics)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup3, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	userScript, err := script.ProvideUserScript(contextContext, configs, loader, diagnostics, stagingPool, targetSchema, watchers)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	client, cleanup2, err := ProvideFirestoreClient(contextContext, config, userScript)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	appliers := fixture.Appliers
-	typesMemo := fixture.Memo
-	targetPool, cleanup3, err := logical.ProvideTargetPool(contextContext, baseConfig, diagnostics)
-	if err != nil {
+		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	checker := fixture.VersionChecker
-	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, diagnostics, typesMemo, loader, stagingPool, targetPool, watchers, checker)
+	client, cleanup4, err := ProvideFirestoreClient(contextContext, config, userScript)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	tombstones, cleanup4, err := ProvideTombstones(config, client, factory, userScript)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	v, cleanup5, err := ProvideLoops(contextContext, config, client, factory, typesMemo, stagingPool, tombstones, userScript)
+	appliers, cleanup5, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -229,7 +220,39 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		cleanup()
 		return nil, nil, err
 	}
+	typesMemo := fixture.Memo
+	checker := fixture.VersionChecker
+	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, diagnostics, typesMemo, loader, stagingPool, targetPool, watchers, checker)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	tombstones, cleanup6, err := ProvideTombstones(config, client, factory, userScript)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	v, cleanup7, err := ProvideLoops(contextContext, config, client, factory, typesMemo, stagingPool, tombstones, userScript)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	return v, func() {
+		cleanup7()
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()

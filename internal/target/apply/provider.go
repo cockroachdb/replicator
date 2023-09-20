@@ -40,7 +40,7 @@ func ProvideFactory(
 ) (types.Appliers, func(), error) {
 	f := &factory{
 		configs:  configs,
-		product:  target.Product,
+		pool:     target,
 		watchers: watchers,
 	}
 	f.mu.instances = &ident.TableMap[*apply]{}
