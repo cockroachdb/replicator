@@ -35,10 +35,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Backup polling interval for work. This is a belt-and-suspenders
-// approach when looking for data to process.
-const dbPollInterval = 1 * time.Second
-
 // Schema declared here for ease of reference, but it's actually created
 // in the factory.
 //
@@ -172,13 +168,7 @@ func (r *resolver) BackfillInto(
 	return r.readInto(ctx, ch, state, true)
 }
 
-// ReadInto implements logical.Dialect. It incrementally applies batches
-// of mutations within a resolved timeslice to be committed within a
-// single transaction.
-//
-// The dequeuing query uses a SELECT FOR UPDATE NOWAIT query to block
-// other instances of cdc-sink that may be running. The transaction will
-// be committed when the logical loop's consistent point advances.
+// ReadInto implements logical.Dialect.
 func (r *resolver) ReadInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
@@ -188,63 +178,101 @@ func (r *resolver) ReadInto(
 func (r *resolver) readInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State, backfill bool,
 ) error {
+	// This will either be from a previous iteration or ZeroStamp.
 	cp, cpUpdated := r.loop.GetConsistentPoint()
-	initial := true
+	resumeFrom := cp.(*resolvedStamp)
 
 	// Resume deletions on restart.
-	if rs, ok := cp.(*resolvedStamp); ok && rs.CommittedTime != hlc.Zero() {
-		r.retirements.Set(rs.CommittedTime)
+	if resumeFrom.CommittedTime != hlc.Zero() {
+		r.retirements.Set(resumeFrom.CommittedTime)
 	}
 
-	// Internal notification path to look for more work.
+	// See discussion on BackupPolling field. A timer is preferred to
+	// time.After() since After always creates a new goroutine.
+	backupTimer := time.NewTimer(r.cfg.BackupPolling)
+	defer backupTimer.Stop()
+
+	// Internal notification path when Mark is called.
 	_, wakeup := r.marked.Get()
 	for {
-		// Look for work to do if we're just starting up or if we
-		// have just finished processing a resolved timestamp.
-		if initial || cp.(*resolvedStamp).ProposedTime == hlc.Zero() {
-			initial = false
-			proposed, err := r.nextProposedStamp(ctx, cp.(*resolvedStamp), backfill)
+		if resumeFrom != nil {
+			var toSend *resolvedStamp
 
-			switch {
-			case err == nil:
-				// Send new proposed timestamp.
+			// If we're resuming from an in-progress checkpoint, just
+			// send it. This covers the case where cdc-sink was
+			// restarted in the middle of a backfill.
+			if resumeFrom.ProposedTime != hlc.Zero() {
+				log.WithFields(log.Fields{
+					"loop":       r.target,
+					"resumeFrom": resumeFrom,
+				}).Trace("loop resuming from partial progress")
+
+				toSend = resumeFrom
+				resumeFrom = nil
+			} else {
+				// We're looping around with a committed timestamp, so
+				// look for work to do and send it.
+				proposed, err := r.nextProposedStamp(ctx, resumeFrom, backfill)
+				switch {
+				case err == nil:
+					log.WithFields(log.Fields{
+						"loop":       r.target,
+						"proposed":   proposed,
+						"resumeFrom": resumeFrom,
+					}).Trace("loop advancing from consistent")
+
+					toSend = proposed
+					resumeFrom = nil
+
+				case errors.Is(err, errNoWork):
+					// OK, just wait for something to happen.
+
+				default:
+					return err
+				}
+			}
+
+			// Send new timestamp.
+			if toSend != nil {
 				select {
-				case ch <- proposed:
+				case ch <- toSend:
 				case <-state.Stopping():
 					return nil
 				case <-ctx.Done():
 					return ctx.Err()
 				}
-
-				// Wait for the proposed stamp to be processed before
-				// reading the next stamp.
-				select {
-				case <-cpUpdated:
-					cp, cpUpdated = r.loop.GetConsistentPoint()
-					continue
-				case <-state.Stopping():
-					return nil
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-
-			case errors.Is(err, errNoWork):
-				// OK, just wait for something to happen.
-
-			default:
-				return err
 			}
 		}
 
-		// We've consumed all available work, become idle.
+		// Drain timer channel and reset.
+		backupTimer.Stop()
+		select {
+		case <-backupTimer.C:
+		default:
+		}
+		backupTimer.Reset(r.cfg.BackupPolling)
+
 		select {
 		case <-cpUpdated:
+			// When the consistent point has advanced to a committed
+			// state (i.e. we're not in a partially-backfilled state),
+			// update the resume-from point to look for the next
+			// resolved timestamp.
 			cp, cpUpdated = r.loop.GetConsistentPoint()
+			if next, ok := cp.(*resolvedStamp); ok && next.ProposedTime == hlc.Zero() {
+				resumeFrom = next
+				// Allow applied mutations to be deleted.
+				r.retirements.Set(next.CommittedTime)
+				log.WithFields(log.Fields{
+					"loop":       r.target,
+					"resumeFrom": resumeFrom,
+				}).Trace("loop is resuming")
+			}
 		case <-wakeup:
-			// Triggered by a calls to Mark.
+			// Triggered when Mark() adds a new unresolved timestamp.
 			_, wakeup = r.marked.Get()
-		case <-time.After(dbPollInterval):
-			// Backup polling interval.
+		case <-backupTimer.C:
+			// Looks for work added by other cdc-sink instances.
 		case <-state.Stopping():
 			// Clean shutdown
 			return nil
@@ -391,8 +419,6 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 			if err := r.Record(ctx, rs.CommittedTime); err != nil {
 				return err
 			}
-			// Allow applied mutations to be deleted.
-			r.retirements.Set(rs.CommittedTime)
 		} else {
 			rs = rs.NewProgress(cursor)
 		}
@@ -503,7 +529,6 @@ func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Tim
 		after.Logical(),
 	).Scan(&sourceNanos, &sourceLogical); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			log.WithField("schema", r.target).Trace("no work")
 			return hlc.Zero(), errNoWork
 		}
 		return hlc.Zero(), errors.WithStack(err)

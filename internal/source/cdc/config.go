@@ -27,6 +27,7 @@ import (
 )
 
 const (
+	defaultBackupPolling   = 100 * time.Millisecond
 	defaultFlushBatchSize  = 1_000
 	defaultSelectBatchSize = 10_000
 	defaultNDJsonBuffer    = bufio.MaxScanTokenSize // 64k
@@ -35,6 +36,12 @@ const (
 // Config adds CDC-specific configuration to the core logical loop.
 type Config struct {
 	logical.BaseConfig
+
+	// A polling loop is necessary when cdc-sink is deployed as a
+	// replicated network service. There's no guarantee that the
+	// instance of cdc-sink that holds the lease for resolving
+	// timestamps will receive the incoming resolved-timestamp message.
+	BackupPolling time.Duration
 
 	// Don't coalesce updates from different source MVCC timestamps into
 	// a single destination transaction. Setting this will preserve the
@@ -70,6 +77,8 @@ type Config struct {
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.BaseConfig.Bind(f)
 
+	f.DurationVar(&c.BackupPolling, "backupPolling", defaultBackupPolling,
+		"poll for resolved timestamps from other instances of cdc-sink")
 	f.BoolVar(&c.FlushEveryTimestamp, "flushEveryTimestamp", false,
 		"preserve intermediate updates from the source in transactional mode; "+
 			"may negatively impact throughput")
@@ -92,6 +101,9 @@ func (c *Config) Preflight() error {
 		return err
 	}
 
+	if c.BackupPolling == 0 {
+		c.BackupPolling = defaultBackupPolling
+	}
 	if c.IdealFlushBatchSize == 0 {
 		c.IdealFlushBatchSize = defaultFlushBatchSize
 	}
