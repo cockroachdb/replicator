@@ -33,12 +33,14 @@ var Set = wire.NewSet(
 // function will, in turn, destroy the per-schema types.Applier
 // instances.
 func ProvideFactory(
+	cache *types.TargetStatements,
 	configs *applycfg.Configs,
 	diags *diag.Diagnostics,
 	target *types.TargetPool,
 	watchers types.Watchers,
 ) (types.Appliers, func(), error) {
 	f := &factory{
+		cache:    cache,
 		configs:  configs,
 		product:  target.Product,
 		watchers: watchers,

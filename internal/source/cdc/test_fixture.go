@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
+	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/google/wire"
 )
@@ -41,11 +42,12 @@ func newTestFixture(*all.Fixture, *Config) (*testFixture, func(), error) {
 		Set,
 		wire.FieldsOf(new(*base.Fixture), "Context"),
 		wire.FieldsOf(new(*all.Fixture),
-			"Appliers", "Configs", "Fixture", "Memo", "Stagers", "VersionChecker", "Watchers"),
+			"Configs", "Fixture", "Memo", "Stagers", "VersionChecker"),
 		diag.New,
 		leases.Set,
 		logical.Set,
 		script.Set,
+		target.Set,
 		trust.New, // Is valid to use as a provider.
 		wire.Struct(new(testFixture), "*"),
 		wire.Bind(new(logical.Config), new(*Config)),

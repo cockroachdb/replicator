@@ -12,6 +12,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
@@ -21,8 +23,6 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	authenticator := trust.New()
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
-	appliers := fixture.Appliers
-	configs := fixture.Configs
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, nil, err
@@ -36,29 +36,59 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		return nil, nil, err
 	}
 	diagnostics, cleanup := diag.New(context)
-	memo := fixture.Memo
-	stagingPool, cleanup2, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup3, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	targetStatements, cleanup3, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers := fixture.Watchers
-	checker := fixture.VersionChecker
-	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memo, loader, stagingPool, targetPool, watchers, checker)
+	configs := fixture.Configs
+	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	immediate, cleanup4, err := ProvideImmediate(factory)
+	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
 	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	memo := fixture.Memo
+	stagingPool, cleanup6, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	checker := fixture.VersionChecker
+	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memo, loader, stagingPool, targetPool, watchers, checker)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	immediate, cleanup7, err := ProvideImmediate(factory)
+	if err != nil {
+		cleanup6()
+		cleanup5()
+		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()
@@ -66,6 +96,9 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -74,6 +107,9 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	}
 	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -82,8 +118,11 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	}
 	metaTable := ProvideMetaTable(config)
 	stagers := fixture.Stagers
-	resolvers, cleanup5, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	resolvers, cleanup8, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
+		cleanup7()
+		cleanup6()
+		cleanup5()
 		cleanup4()
 		cleanup3()
 		cleanup2()
@@ -105,6 +144,9 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
+		cleanup8()
+		cleanup7()
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()

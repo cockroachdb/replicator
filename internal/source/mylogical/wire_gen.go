@@ -44,31 +44,25 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup2, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
+	targetPool, cleanup2, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	configs, cleanup3, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
+	targetStatements, cleanup3, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup4, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
+	stagingPool, cleanup4, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup5, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -76,8 +70,26 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup6, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
+	configs, cleanup5, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup6, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup7, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -87,6 +99,7 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -98,6 +111,7 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -106,8 +120,9 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loop, cleanup7, err := ProvideLoop(config, dialect, factory)
+	loop, cleanup8, err := ProvideLoop(config, dialect, factory)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -121,6 +136,7 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 		Loop:        loop,
 	}
 	return myLogical, func() {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()

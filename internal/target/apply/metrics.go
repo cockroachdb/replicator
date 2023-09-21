@@ -36,14 +36,6 @@ var (
 		Name: "apply_errors_total",
 		Help: "the number of times an error was encountered while applying mutations",
 	}, metrics.TableLabels)
-	applyTemplateHits = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "apply_template_hits_total",
-		Help: "the number of times the apply template cache hit",
-	}, []string{"name"})
-	applyTemplateMisses = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "apply_template_misses_total",
-		Help: "the number of times the apply template cache missed",
-	}, []string{"name"})
 	applyUpserts = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "apply_upserts_total",
 		Help: "the number of rows upserted",

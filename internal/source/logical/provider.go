@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
+	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -39,6 +40,7 @@ var Set = wire.NewSet(
 	ProvideStagingDB,
 	ProvideStagingPool,
 	ProvideTargetPool,
+	ProvideTargetStatements,
 	ProvideUserScriptConfig,
 )
 
@@ -161,6 +163,19 @@ func ProvideTargetPool(
 	}
 
 	return ret, cancel, err
+}
+
+// ProvideTargetStatements is called by Wire to construct a
+// prepared-statement cache. Anywhere the associated TargetPool is
+// reused should also reuse the cache.
+func ProvideTargetStatements(
+	config *BaseConfig, pool *types.TargetPool, diags *diag.Diagnostics,
+) (*types.TargetStatements, func(), error) {
+	ret := stmtcache.New[string](pool.DB, config.TargetStatementCacheSize)
+	if err := diags.Register("targetStatements", ret); err != nil {
+		return nil, nil, err
+	}
+	return &types.TargetStatements{Cache: ret}, ret.Close, nil
 }
 
 // ProvideUserScriptConfig is called by Wire to extract the user-script
