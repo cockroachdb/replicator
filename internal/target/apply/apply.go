@@ -22,6 +22,7 @@ package apply
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,7 @@ import (
 
 // apply will upsert mutations and deletions into a target table.
 type apply struct {
+	cache   *types.TargetStatements
 	product types.Product
 	target  ident.Table
 
@@ -50,6 +52,7 @@ type apply struct {
 
 	mu struct {
 		sync.RWMutex
+		gen       int // Use for prepared-statement cache invalidation.
 		templates *templates
 	}
 }
@@ -58,7 +61,11 @@ var _ types.Applier = (*apply)(nil)
 
 // newApply constructs an apply by inspecting the target table.
 func newApply(
-	product types.Product, inTarget ident.Table, cfgs *applycfg.Configs, watchers types.Watchers,
+	cache *types.TargetStatements,
+	product types.Product,
+	inTarget ident.Table,
+	cfgs *applycfg.Configs,
+	watchers types.Watchers,
 ) (_ *apply, cancel func(), _ error) {
 	// Start a background goroutine to refresh the templates.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -79,6 +86,7 @@ func newApply(
 
 	labelValues := metrics.TableValues(target)
 	a := &apply{
+		cache:   cache,
 		product: product,
 		target:  target,
 
@@ -208,10 +216,6 @@ func (a *apply) deleteLocked(
 	if len(muts) == 0 {
 		return nil
 	}
-	sql, err := a.mu.templates.deleteExpr(len(muts))
-	if err != nil {
-		return err
-	}
 
 	keyGroups := make([][]any, len(muts))
 	if err := pjson.Decode(ctx, keyGroups, func(i int) []byte {
@@ -242,9 +246,19 @@ func (a *apply) deleteLocked(
 		}
 	}
 
-	tag, err := db.ExecContext(ctx, sql, allArgs...)
+	stmt, err := a.cache.Prepare(ctx,
+		db,
+		fmt.Sprintf("delete-%s-%d-%d", a.target, a.mu.gen, len(muts)),
+		func() (string, error) {
+			return a.mu.templates.deleteExpr(len(muts))
+		})
 	if err != nil {
-		return errors.Wrap(err, sql)
+		return err
+	}
+
+	tag, err := stmt.ExecContext(ctx, allArgs...)
+	if err != nil {
+		return errors.WithStack(err)
 	}
 	affected, err := tag.RowsAffected()
 	if err != nil {
@@ -267,11 +281,6 @@ func (a *apply) upsertLocked(
 		return nil
 	}
 	start := time.Now()
-
-	sql, err := a.mu.templates.upsertExpr(len(muts))
-	if err != nil {
-		return err
-	}
 
 	// Allocate a slice for all mutation data. We'll reset the length
 	// once we know how many elements we actually have.
@@ -302,7 +311,7 @@ func (a *apply) upsertLocked(
 
 		var unexpectedColumns []string
 
-		err = rowData.Range(func(incomingColName ident.Ident, value any) error {
+		err := rowData.Range(func(incomingColName ident.Ident, value any) error {
 			targetColumn, ok := a.mu.templates.Positions.Get(incomingColName)
 
 			// The incoming data didn't map to a column. Report an error
@@ -401,9 +410,19 @@ func (a *apply) upsertLocked(
 	}
 	allArgs = allArgs[:argIdx]
 
-	tag, err := db.ExecContext(ctx, sql, allArgs...)
+	stmt, err := a.cache.Prepare(ctx,
+		db,
+		fmt.Sprintf("upsert-%s-%d-%d", a.target, a.mu.gen, len(muts)),
+		func() (string, error) {
+			return a.mu.templates.upsertExpr(len(muts))
+		})
 	if err != nil {
-		return errors.Wrap(err, sql)
+		return err
+	}
+
+	tag, err := stmt.ExecContext(ctx, allArgs...)
+	if err != nil {
+		return errors.WithStack(err)
 	}
 	affected, err := tag.RowsAffected()
 	if err != nil {
@@ -441,6 +460,7 @@ func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.mu.gen++
 	a.mu.templates = tmpl
 	return nil
 }
