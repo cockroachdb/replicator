@@ -20,47 +20,38 @@ import (
 // Injectors from injector.go:
 
 func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), error) {
-	diagnostics, cleanup := diag.New(ctx)
 	scriptConfig, err := ProvideUserScriptConfig(config)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
 	baseConfig, err := ProvideBaseConfig(config, loader)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup2, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
+	diagnostics, cleanup := diag.New(ctx)
+	targetPool, cleanup2, err := ProvideTargetPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	stagingSchema, err := ProvideStagingDB(baseConfig)
-	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	configs, cleanup3, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
+	targetStatements, cleanup3, err := ProvideTargetStatements(baseConfig, targetPool, diagnostics)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup4, err := ProvideTargetPool(ctx, baseConfig, diagnostics)
+	stagingPool, cleanup4, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	watchers, cleanup5, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	stagingSchema, err := ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -68,8 +59,26 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup6, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
+	configs, cleanup5, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	watchers, cleanup6, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup7, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	if err != nil {
+		cleanup6()
 		cleanup5()
 		cleanup4()
 		cleanup3()
@@ -79,6 +88,7 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -90,6 +100,7 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -99,6 +110,7 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 		return nil, nil, err
 	}
 	return factory, func() {
+		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()

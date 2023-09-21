@@ -26,13 +26,14 @@ import (
 )
 
 const (
-	defaultApplyTimeout   = 30 * time.Second
-	defaultBackfillWindow = 10 * time.Minute
-	defaultFanShards      = 16
-	defaultRetryDelay     = 10 * time.Second
-	defaultStandbyTimeout = 5 * time.Second
-	defaultTargetDBConns  = 1024
-	defaultBytesInFlight  = 10 * 1024 * 1024
+	defaultApplyTimeout    = 30 * time.Second
+	defaultBackfillWindow  = 10 * time.Minute
+	defaultFanShards       = 16
+	defaultRetryDelay      = 10 * time.Second
+	defaultStandbyTimeout  = 5 * time.Second
+	defaultTargetCacheSize = 128
+	defaultTargetDBConns   = 1024
+	defaultBytesInFlight   = 10 * 1024 * 1024
 )
 
 // Config is implemented by dialects. This interface exists to allow coordination of
@@ -89,6 +90,11 @@ type BaseConfig struct {
 	// The number of connections to the target database. If zero, a
 	// default value will be used.
 	TargetDBConns int
+	// The number of prepared statements to retain in the target
+	// database connection pool. Depending on the database in question,
+	// there may be more or fewer available resources to retain
+	// statements.
+	TargetStatementCacheSize int
 }
 
 // Base returns the BaseConfig.
@@ -132,6 +138,8 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"the target database's connection string; always required")
 	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
 		"the maximum pool size to the target cluster")
+	f.IntVar(&c.TargetStatementCacheSize, "targetStatementCacheSize", defaultTargetCacheSize,
+		"the maximum number of prepared statements to retain")
 }
 
 // Copy returns a deep copy of the Config.
@@ -180,6 +188,9 @@ func (c *BaseConfig) Preflight() error {
 	}
 	if c.TargetDBConns == 0 {
 		c.TargetDBConns = defaultTargetDBConns
+	}
+	if c.TargetStatementCacheSize == 0 {
+		c.TargetStatementCacheSize = defaultTargetCacheSize
 	}
 	return nil
 }

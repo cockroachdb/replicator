@@ -56,12 +56,14 @@ func startLoopsFromFixture(*all.Fixture, *Config) ([]*logical.Loop, func(), erro
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*base.Fixture), "Context"),
 		wire.FieldsOf(new(*all.Fixture),
-			"Appliers", "Diagnostics", "Fixture", "Configs", "Memo", "VersionChecker", "Watchers"),
+			"Fixture", "Configs", "Memo", "VersionChecker"),
 		ProvideFirestoreClient,
 		ProvideLoops,
 		ProvideScriptTarget,
 		ProvideTombstones,
+		diag.New,
 		logical.Set,
 		script.Set,
+		target.Set,
 	))
 }

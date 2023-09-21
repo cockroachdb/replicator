@@ -59,8 +59,10 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema, cleanup8, err := ProvideTargetSchema(context, diagnostics, targetPool)
+	targetStatements, cleanup8 := ProvideTargetStatements(targetPool)
+	targetSchema, cleanup9, err := ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -76,10 +78,12 @@ func NewFixture() (*Fixture, func(), error) {
 		SourceSchema: sourceSchema,
 		StagingPool:  stagingPool,
 		StagingDB:    stagingSchema,
+		TargetCache:  targetStatements,
 		TargetPool:   targetPool,
 		TargetSchema: targetSchema,
 	}
 	return fixture, func() {
+		cleanup9()
 		cleanup8()
 		cleanup7()
 		cleanup6()

@@ -20,14 +20,11 @@ import (
 	"embed"
 	"fmt"
 	"strings"
-	"sync"
 	"text/template"
 
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/golang/groupcache/lru"
 	"github.com/pkg/errors"
 )
 
@@ -84,19 +81,9 @@ var (
 	tmplPG   = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/pg/*.tmpl"))
 )
 
-// A templateCache stores variations of the delete and upsert commands
-// at varying batch sizes. The map keys are just ints representing the
-// number of rows that the statement should process.
-type templateCache struct {
-	sync.Mutex
-	deletes *lru.Cache
-	upserts *lru.Cache
-}
-
 type templates struct {
 	*columnMapping
 
-	cache       *templateCache // Memoize calls to delete() and upsert().
 	conditional *template.Template
 	delete      *template.Template
 	upsert      *template.Template
@@ -110,13 +97,7 @@ type templates struct {
 // pre-computations to identify primary keys and to filter out ignored
 // columns.
 func newTemplates(mapping *columnMapping) (*templates, error) {
-	ret := &templates{
-		columnMapping: mapping,
-		cache: &templateCache{
-			deletes: lru.New(batches.Size()),
-			upserts: lru.New(batches.Size()),
-		},
-	}
+	ret := &templates{columnMapping: mapping}
 
 	switch mapping.Product {
 	case types.ProductCockroachDB:
@@ -214,16 +195,6 @@ func (t *templates) Vars() ([][]varPair, error) {
 }
 
 func (t *templates) deleteExpr(rowCount int) (string, error) {
-	// Fast lookup
-	t.cache.Lock()
-	found, ok := t.cache.deletes.Get(rowCount)
-	t.cache.Unlock()
-	if ok {
-		applyTemplateHits.WithLabelValues("delete").Inc()
-		return found.(string), nil
-	}
-	applyTemplateMisses.WithLabelValues("delete").Inc()
-
 	// Make a copy that we can tweak.
 	cpy := *t
 	cpy.ForDelete = true
@@ -231,25 +202,10 @@ func (t *templates) deleteExpr(rowCount int) (string, error) {
 
 	var buf strings.Builder
 	err := t.delete.Execute(&buf, &cpy)
-	ret, err := buf.String(), errors.WithStack(err)
-	if err == nil {
-		t.cache.Lock()
-		t.cache.deletes.Add(rowCount, ret)
-		t.cache.Unlock()
-	}
-	return ret, err
+	return buf.String(), errors.WithStack(err)
 }
 
 func (t *templates) upsertExpr(rowCount int) (string, error) {
-	t.cache.Lock()
-	found, ok := t.cache.upserts.Get(rowCount)
-	t.cache.Unlock()
-	if ok {
-		applyTemplateHits.WithLabelValues("upsert").Inc()
-		return found.(string), nil
-	}
-	applyTemplateMisses.WithLabelValues("upsert").Inc()
-
 	// Make a copy that we can tweak.
 	cpy := *t
 	cpy.RowCount = rowCount
@@ -261,11 +217,5 @@ func (t *templates) upsertExpr(rowCount int) (string, error) {
 	} else {
 		err = t.conditional.Execute(&buf, &cpy)
 	}
-	ret, err := buf.String(), errors.WithStack(err)
-	if err == nil {
-		t.cache.Lock()
-		t.cache.upserts.Add(rowCount, ret)
-		t.cache.Unlock()
-	}
-	return ret, err
+	return buf.String(), errors.WithStack(err)
 }
