@@ -29,6 +29,7 @@ import (
 
 // factory vends singleton instance of apply.
 type factory struct {
+	cache    *types.TargetStatements
 	configs  *applycfg.Configs
 	product  types.Product
 	watchers types.Watchers
@@ -83,7 +84,7 @@ func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) 
 	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
-	ret, cancel, err := newApply(product, table, f.configs, f.watchers)
+	ret, cancel, err := newApply(f.cache, product, table, f.configs, f.watchers)
 	if err == nil {
 		f.mu.cleanup = append(f.mu.cleanup, cancel)
 		f.mu.instances.Put(table, ret)

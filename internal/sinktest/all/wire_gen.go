@@ -67,8 +67,10 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	targetSchema, cleanup8, err := base.ProvideTargetSchema(context, diagnostics, targetPool)
+	targetStatements, cleanup8 := base.ProvideTargetStatements(targetPool)
+	targetSchema, cleanup9, err := base.ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
 	if err != nil {
+		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -84,22 +86,11 @@ func NewFixture() (*Fixture, func(), error) {
 		SourceSchema: sourceSchema,
 		StagingPool:  stagingPool,
 		StagingDB:    stagingSchema,
+		TargetCache:  targetStatements,
 		TargetPool:   targetPool,
 		TargetSchema: targetSchema,
 	}
-	configs, cleanup9, err := applycfg.ProvideConfigs(context, diagnostics, stagingPool, stagingSchema)
-	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	watchers, cleanup10, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	configs, cleanup10, err := applycfg.ProvideConfigs(context, diagnostics, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup9()
 		cleanup8()
@@ -112,8 +103,23 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup11, err := apply.ProvideFactory(configs, diagnostics, targetPool, watchers)
+	watchers, cleanup11, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
+		cleanup10()
+		cleanup9()
+		cleanup8()
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup12, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	if err != nil {
+		cleanup11()
 		cleanup10()
 		cleanup9()
 		cleanup8()
@@ -128,6 +134,7 @@ func NewFixture() (*Fixture, func(), error) {
 	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
+		cleanup12()
 		cleanup11()
 		cleanup10()
 		cleanup9()
@@ -145,6 +152,7 @@ func NewFixture() (*Fixture, func(), error) {
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	watcher, err := ProvideWatcher(context, targetSchema, watchers)
 	if err != nil {
+		cleanup12()
 		cleanup11()
 		cleanup10()
 		cleanup9()
@@ -170,6 +178,7 @@ func NewFixture() (*Fixture, func(), error) {
 		Watcher:        watcher,
 	}
 	return allFixture, func() {
+		cleanup12()
 		cleanup11()
 		cleanup10()
 		cleanup9()

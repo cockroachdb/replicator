@@ -33,6 +33,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
+	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -44,6 +45,10 @@ const (
 	envSourceString  = "TEST_SOURCE_CONNECT"
 	envStagingString = "TEST_STAGING_CONNECT"
 	envTargetString  = "TEST_TARGET_CONNECT"
+
+	// chosen arbitrarily, we don't really generate this many different
+	// SQL statements.
+	statementCacheSize = 128
 )
 
 var (
@@ -87,6 +92,7 @@ var TestSet = wire.NewSet(
 	ProvideSourceSchema,
 	ProvideTargetPool,
 	ProvideTargetSchema,
+	ProvideTargetStatements,
 	diag.New,
 
 	wire.Struct(new(Fixture), "*"),
@@ -96,13 +102,14 @@ var TestSet = wire.NewSet(
 // without the other services provided by the target package. One can be
 // constructed by calling NewFixture.
 type Fixture struct {
-	Context      context.Context       // The context for the test.
-	SourcePool   *types.SourcePool     // Access to user-data tables and changefeed creation.
-	SourceSchema sinktest.SourceSchema // A container for tables within SourcePool.
-	StagingPool  *types.StagingPool    // Access to __cdc_sink database.
-	StagingDB    ident.StagingSchema   // The _cdc_sink SQL DATABASE.
-	TargetPool   *types.TargetPool     // Access to the destination.
-	TargetSchema sinktest.TargetSchema // A container for tables within TargetPool.
+	Context      context.Context         // The context for the test.
+	SourcePool   *types.SourcePool       // Access to user-data tables and changefeed creation.
+	SourceSchema sinktest.SourceSchema   // A container for tables within SourcePool.
+	StagingPool  *types.StagingPool      // Access to __cdc_sink database.
+	StagingDB    ident.StagingSchema     // The _cdc_sink SQL DATABASE.
+	TargetCache  *types.TargetStatements // Prepared statements.
+	TargetPool   *types.TargetPool       // Access to the destination.
+	TargetSchema sinktest.TargetSchema   // A container for tables within TargetPool.
 }
 
 // CreateSourceTable creates a test table within the SourcePool and
@@ -251,7 +258,10 @@ func ProvideSourceSchema(
 // ProvideTargetSchema create a globally-unique container for tables in
 // the target database.
 func ProvideTargetSchema(
-	ctx context.Context, diags *diag.Diagnostics, pool *types.TargetPool,
+	ctx context.Context,
+	diags *diag.Diagnostics,
+	pool *types.TargetPool,
+	stmts *types.TargetStatements,
 ) (sinktest.TargetSchema, func(), error) {
 	sch, dropSchema, err := provideSchema(ctx, pool, "tgt")
 	ret := sinktest.TargetSchema(sch)
@@ -268,7 +278,9 @@ func ProvideTargetSchema(
 	//
 	// To resolve this, we're going to re-open the target database
 	// connection so that the connection uses the schema that we have
-	// just created.
+	// just created. We also need to recreate the statement cache so
+	// that it's associated with the newly-constructed database
+	// connection.
 	if pool.Info().Product == types.ProductPostgreSQL {
 		db, _ := sch.Split()
 		conn := fmt.Sprintf("%s/%s", pool.ConnectionString, db.Raw())
@@ -277,14 +289,25 @@ func ProvideTargetSchema(
 			cancel()
 			return sinktest.TargetSchema{}, nil, err
 		}
+		nextCache, clearCache := ProvideTargetStatements(next)
 		pool.ConnectionString = conn
 		pool.DB = next.DB
+		stmts.Cache = nextCache.Cache
 		cancel = func() {
 			dropSchema()
+			clearCache()
 			cancelNext()
 		}
 	}
 	return ret, cancel, nil
+}
+
+// ProvideTargetStatements is called by Wire to construct a
+// prepared-statement cache. Anywhere the associated TargetPool is
+// reused should also reuse the cache.
+func ProvideTargetStatements(pool *types.TargetPool) (*types.TargetStatements, func()) {
+	ret := stmtcache.New[string](pool.DB, statementCacheSize)
+	return &types.TargetStatements{Cache: ret}, ret.Close
 }
 
 func provideSchema[P types.AnyPool](

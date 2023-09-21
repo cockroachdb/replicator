@@ -29,6 +29,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -368,6 +369,7 @@ type SourcePool struct {
 type TargetPool struct {
 	*sql.DB
 	PoolInfo
+
 	_ noCopy
 }
 
@@ -382,6 +384,12 @@ var (
 	_ TargetQuerier = (*sql.DB)(nil)
 	_ TargetQuerier = (*sql.Tx)(nil)
 )
+
+// TargetStatements is an injection point for a cache of prepared
+// statements associated with the TargetPool.
+type TargetStatements struct {
+	*stmtcache.Cache[string]
+}
 
 // TargetTx is implemented by [sql.Tx].
 type TargetTx interface {
