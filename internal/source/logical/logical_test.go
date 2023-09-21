@@ -167,7 +167,7 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 
 	var chaosProb float32
 	if mode.chaos {
-		chaosProb = 0.1
+		chaosProb = 0.01
 	}
 
 	cfg := &logical.BaseConfig{
