@@ -84,6 +84,13 @@ var (
 type templates struct {
 	*columnMapping
 
+	// If true, the templates generate SQL that expects the data to be
+	// provided as N-many equal-length slices, where N is the number of
+	// columns. The SQL is generated as though only a single row is
+	// being operated on.
+	BulkDelete bool
+	BulkUpsert bool
+
 	conditional *template.Template
 	delete      *template.Template
 	upsert      *template.Template
@@ -106,6 +113,9 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 		ret.upsert = tmplCRDB.Lookup("upsert.tmpl")
 
 	case types.ProductOracle:
+		// Bulk execution of DELETE not supported. See:
+		// github.com/sijms/go-ora/v2/command.go
+		ret.BulkUpsert = true
 		ret.delete = tmplOra.Lookup("delete.tmpl")
 		ret.upsert = tmplOra.Lookup("upsert.tmpl")
 		ret.conditional = ret.upsert
@@ -195,6 +205,10 @@ func (t *templates) Vars() ([][]varPair, error) {
 }
 
 func (t *templates) deleteExpr(rowCount int) (string, error) {
+	if t.BulkDelete {
+		rowCount = 1
+	}
+
 	// Make a copy that we can tweak.
 	cpy := *t
 	cpy.ForDelete = true
@@ -206,6 +220,10 @@ func (t *templates) deleteExpr(rowCount int) (string, error) {
 }
 
 func (t *templates) upsertExpr(rowCount int) (string, error) {
+	if t.BulkUpsert {
+		rowCount = 1
+	}
+
 	// Make a copy that we can tweak.
 	cpy := *t
 	cpy.RowCount = rowCount

@@ -256,6 +256,13 @@ func (a *apply) deleteLocked(
 		return err
 	}
 
+	if a.mu.templates.BulkDelete {
+		allArgs, err = toColumns(len(a.mu.templates.PKDelete), len(muts), allArgs)
+		if err != nil {
+			return err
+		}
+	}
+
 	tag, err := stmt.ExecContext(ctx, allArgs...)
 	if err != nil {
 		return errors.WithStack(err)
@@ -420,6 +427,13 @@ func (a *apply) upsertLocked(
 		return err
 	}
 
+	if a.mu.templates.BulkUpsert {
+		allArgs, err = toColumns(a.mu.templates.UpsertParameterCount, len(muts), allArgs)
+		if err != nil {
+			return err
+		}
+	}
+
 	tag, err := stmt.ExecContext(ctx, allArgs...)
 	if err != nil {
 		return errors.WithStack(err)
@@ -513,4 +527,20 @@ func (a *apply) validate(configData *applycfg.Config, schemaData []types.ColData
 		return err
 	}
 	return nil
+}
+
+// toColumns converts a linear slice of arguments into columnar values.
+func toColumns(columns, rows int, data []any) ([]any, error) {
+	if rows*columns != len(data) {
+		return nil, errors.Errorf("expecting %d*%d elements, had %d", columns, rows, data)
+	}
+	colData := make([]any, columns)
+	for colIdx := range colData {
+		rowData := make([]any, rows)
+		colData[colIdx] = rowData
+		for rowIdx := range rowData {
+			rowData[rowIdx] = data[rowIdx*columns+colIdx]
+		}
+	}
+	return colData, nil
 }
