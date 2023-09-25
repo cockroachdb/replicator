@@ -121,17 +121,17 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		if htc.immediate {
 			return nil
 		}
-		resolver, err := h.Resolvers.get(ctx, target.Schema())
+		loop, resolver, err := h.Resolvers.get(ctx, target.Schema())
 		if err != nil {
 			return err
 		}
 		waitFor := &resolvedStamp{CommittedTime: expect}
 		resolver.marked.Notify()
 		// Wait for the consistent point to advance.
-		for cp, updated := resolver.loop.GetConsistentPoint(); cp.Less(waitFor); {
+		for cp, updated := loop.GetConsistentPoint(); cp.Less(waitFor); {
 			select {
 			case <-updated:
-				cp, updated = resolver.loop.GetConsistentPoint()
+				cp, updated = loop.GetConsistentPoint()
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -272,16 +272,16 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 		if cfg.immediate {
 			return nil
 		}
-		resolver, err := h.Resolvers.get(ctx, target.Schema())
+		loop, resolver, err := h.Resolvers.get(ctx, target.Schema())
 		if err != nil {
 			return err
 		}
 		waitFor := &resolvedStamp{CommittedTime: expect}
 		resolver.marked.Notify()
-		for cp, updated := resolver.loop.GetConsistentPoint(); cp.Less(waitFor); {
+		for cp, updated := loop.GetConsistentPoint(); cp.Less(waitFor); {
 			select {
 			case <-updated:
-				cp, updated = resolver.loop.GetConsistentPoint()
+				cp, updated = loop.GetConsistentPoint()
 			case <-ctx.Done():
 				return ctx.Err()
 			}

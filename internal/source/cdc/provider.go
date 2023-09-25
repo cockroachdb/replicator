@@ -77,7 +77,7 @@ func ProvideResolvers(
 		stagers:   stagers,
 		watchers:  watchers,
 	}
-	ret.mu.instances = &ident.SchemaMap[*resolver]{}
+	ret.mu.instances = &ident.SchemaMap[*logical.Loop]{}
 
 	// Resume from previous state.
 	schemas, err := ScanForTargetSchemas(ctx, pool, ret.metaTable)
@@ -85,7 +85,7 @@ func ProvideResolvers(
 		return nil, nil, err
 	}
 	for _, schema := range schemas {
-		if _, err := ret.get(ctx, schema); err != nil {
+		if _, _, err := ret.get(ctx, schema); err != nil {
 			return nil, nil, errors.Wrapf(err, "could not bootstrap resolver for schema %s", schema)
 		}
 	}
