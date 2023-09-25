@@ -58,7 +58,6 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 type resolver struct {
 	cfg         *Config
 	leases      types.Leases
-	loop        *logical.Loop        // Reference to driving loop, for testing.
 	marked      notify.Var[hlc.Time] // Called by Mark.
 	pool        *types.StagingPool
 	retirements notify.Var[hlc.Time] // Drives a goroutine to remove applied mutations.
@@ -179,7 +178,7 @@ func (r *resolver) readInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State, backfill bool,
 ) error {
 	// This will either be from a previous iteration or ZeroStamp.
-	cp, cpUpdated := r.loop.GetConsistentPoint()
+	cp, cpUpdated := state.GetConsistentPoint()
 	resumeFrom := cp.(*resolvedStamp)
 
 	// Resume deletions on restart.
@@ -258,7 +257,7 @@ func (r *resolver) readInto(
 			// state (i.e. we're not in a partially-backfilled state),
 			// update the resume-from point to look for the next
 			// resolved timestamp.
-			cp, cpUpdated = r.loop.GetConsistentPoint()
+			cp, cpUpdated = state.GetConsistentPoint()
 			if next, ok := cp.(*resolvedStamp); ok && next.ProposedTime == hlc.Zero() {
 				resumeFrom = next
 				// Allow applied mutations to be deleted.
@@ -597,7 +596,7 @@ type Resolvers struct {
 	mu struct {
 		sync.Mutex
 		cleanups  []func()
-		instances *ident.SchemaMap[*resolver]
+		instances *ident.SchemaMap[*logical.Loop]
 	}
 }
 
@@ -611,30 +610,33 @@ func (r *Resolvers) close() {
 		cancel()
 	}
 	// Wait for shutdown.
-	_ = r.mu.instances.Range(func(_ ident.Schema, r *resolver) error {
-		<-r.loop.Stopped()
+	_ = r.mu.instances.Range(func(_ ident.Schema, l *logical.Loop) error {
+		<-l.Stopped()
 		return nil
 	})
 	r.mu.cleanups = nil
 	r.mu.instances = nil
 }
 
-func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, error) {
+// get creates or returns the [logical.Loop] and the enclosed resolver.
+func (r *Resolvers) get(
+	ctx context.Context, target ident.Schema,
+) (*logical.Loop, *resolver, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if found, ok := r.mu.instances.Get(target); ok {
-		return found, nil
+		return found, found.Dialect().(*resolver), nil
 	}
 
 	ret, err := newResolver(ctx, r.cfg, r.leases, r.pool, r.metaTable, r.stagers, target, r.watchers)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// For testing, we sometimes want to drive the resolver directly.
 	if r.noStart {
-		return ret, nil
+		return nil, ret, nil
 	}
 
 	loop, cleanup, err := r.loops.Start(&logical.LoopConfig{
@@ -643,11 +645,10 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 		TargetSchema: target,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	ret.loop = loop
 
-	r.mu.instances.Put(target, ret)
+	r.mu.instances.Put(target, loop)
 
 	// Start a goroutine to retire old data.
 	stop := stopper.WithContext(context.Background())
@@ -657,7 +658,7 @@ func (r *Resolvers) get(ctx context.Context, target ident.Schema) (*resolver, er
 		cleanup,
 		func() { stop.Stop(time.Second) },
 	)
-	return ret, nil
+	return loop, ret, nil
 }
 
 const scanForTargetTemplate = `
