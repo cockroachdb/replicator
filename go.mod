@@ -3,7 +3,7 @@ module github.com/cockroachdb/cdc-sink
 go 1.20
 
 require (
-	cloud.google.com/go/firestore v1.12.0
+	cloud.google.com/go/firestore v1.13.0
 	github.com/bobvawter/latch v1.0.2
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20230505164321-461e8663b4b4
