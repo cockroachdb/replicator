@@ -197,3 +197,59 @@ func TestNoDeferrableConstraints(t *testing.T) {
 	a.ErrorContains(err, "deferrable")
 	a.ErrorContains(err, "42601")
 }
+
+// TestCrossSchemaTableReferencesPG verifies that we can handle
+// cross schema constraints, in case a table with the same name
+// is present in two different schemata.
+func TestCrossSchemaTableReferencesPG(t *testing.T) {
+	a := assert.New(t)
+	r := require.New(t)
+
+	fixture, cancel, err := all.NewFixture()
+	r.NoError(err)
+	defer cancel()
+
+	ctx := fixture.Context
+	pool := fixture.TargetPool
+	db, _ := fixture.TargetSchema.Split()
+	switch pool.Product {
+	case types.ProductPostgreSQL:
+		// In Postgres we can only create schemas in the current database
+		// As a workaroud, using information_schema.
+		stm := fmt.Sprintf(`
+		CREATE TABLE %[1]s.parent (pk int primary key);
+		CREATE TABLE %[2]s.child (pk int primary key, parent int references %[1]s.parent);
+		CREATE TABLE %[1]s.child (pk int primary key, parent int references %[2]s.child);
+		`, fixture.TargetSchema, "information_schema")
+		_, err = pool.ExecContext(ctx, stm)
+		r.NoError(err)
+	case types.ProductCockroachDB:
+
+		other, err := ident.NewSchema(db, ident.New("other"))
+		r.NoError(err)
+		stm := fmt.Sprintf(`
+		CREATE SCHEMA %[2]s;
+		CREATE TABLE %[1]s.parent (pk int primary key);
+		CREATE TABLE %[2]s.child (pk int primary key, parent int references %[1]s.parent);
+		CREATE TABLE %[1]s.child (pk int primary key, parent int references %[2]s.child);
+		`, fixture.TargetSchema, other)
+		_, err = pool.ExecContext(ctx, stm)
+		r.NoError(err)
+	default:
+		t.Skip("only for CRDB/Postgres")
+	}
+	r.NoError(fixture.Watcher.Refresh(ctx, pool))
+	snap := fixture.Watcher.Get()
+	for idx, tables := range snap.Order {
+		switch idx {
+		case 0:
+			r.Equal(1, len(tables))
+			a.True(ident.Equal(ident.New("parent"), tables[0].Table()))
+			a.True(ident.Equal(fixture.TargetSchema, tables[0].Schema()))
+		case 2:
+			r.Equal(1, len(tables))
+			a.True(ident.Equal(ident.New("child"), tables[0].Table()))
+			a.True(ident.Equal(fixture.TargetSchema, tables[0].Schema()))
+		}
+	}
+}

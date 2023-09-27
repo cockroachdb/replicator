@@ -20,7 +20,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -80,9 +79,10 @@ WHERE tbl_owner = (:owner)
 GROUP BY tbl_name
 ORDER BY lvl, tbl_name`
 
-// depOrderLegacyCRDB supports versions of CRDB <= v21.2 which experience
-// an infinite loop when executing depOrderTemplatePg.
-const depOrderLegacyCRDB = `
+// depOrderTemplateCRDB uses the SHOW TABLES porcelain to calculate the referential depth.
+// Older version of CRDB (<= 21.2) experience an infinite loop when executing
+// depOrderTemplatePg.
+const depOrderTemplateCRDB = `
 WITH RECURSIVE
  tables AS (
    SELECT schema_name AS sch, table_name AS tbl
@@ -175,8 +175,8 @@ WITH RECURSIVE
             AND ref.unique_constraint_schema = parent.table_schema
             AND ref.unique_constraint_name = parent.constraint_name
       WHERE
-        (child.table_catalog, child.table_catalog, child.table_name)
-        != (parent.table_catalog, parent.table_catalog, parent.table_name)
+        (child.table_catalog, child.table_schema, child.table_name)
+        != (parent.table_catalog, parent.table_schema, parent.table_name)
     ),
   roots
     AS (
@@ -237,8 +237,15 @@ func getDependencyOrder(
 			return nil, errors.Errorf("expecting two schema parts, had %d", len(parts))
 		}
 
-		if tx.Product == types.ProductCockroachDB && strings.Contains(tx.Version, "v21.") {
-			stmt = fmt.Sprintf(depOrderLegacyCRDB, db, parts[0])
+		// We are using a different template for CRDB
+		// Older release (<= 21.2) may experience infinite loops using
+		// More recent releases may fail to report a correct depth
+		// when there are cross-schema dependencies.
+		// See https://github.com/cockroachdb/cockroach/issues/111419
+		// Once the issue above is fixed and we are not supporting 21.2
+		// we can use depOrderTemplatePg for CRDB as well.
+		if tx.Product == types.ProductCockroachDB {
+			stmt = fmt.Sprintf(depOrderTemplateCRDB, db, parts[0])
 		} else {
 			stmt = fmt.Sprintf(depOrderTemplatePg, parts[0])
 			args = []any{parts[0].Raw(), parts[1].Raw()}
@@ -275,9 +282,11 @@ func getDependencyOrder(
 				continue
 			}
 
-			if nextOrder > currentOrder {
-				currentOrder = nextOrder
+			// Allow skipping a level. This might happen if there
+			// are references across schemas.
+			for nextOrder > currentOrder {
 				depOrder = append(depOrder, nil)
+				currentOrder++
 			}
 			depOrder[currentOrder] = append(depOrder[currentOrder], tbl)
 		}
