@@ -40,15 +40,7 @@ func OpenOracleAsTarget(
 	}
 
 	return returnOrStop(ctx, func(ctx *stopper.Context) (*types.TargetPool, error) {
-		unconfigured, err := sql.Open("oracle", "")
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		connector, err := unconfigured.Driver().(*ora.OracleDriver).OpenConnector(connectString)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
+		connector := ora.NewConnector(connectString)
 
 		if err := attachOptions(ctx, connector.(*ora.OracleConnector), options); err != nil {
 			return nil, err
