@@ -175,8 +175,8 @@ WITH RECURSIVE
             AND ref.unique_constraint_schema = parent.table_schema
             AND ref.unique_constraint_name = parent.constraint_name
       WHERE
-        (child.table_catalog, child.table_catalog, child.table_name)
-        != (parent.table_catalog, parent.table_catalog, parent.table_name)
+        (child.table_catalog, child.table_schema, child.table_name)
+        != (parent.table_catalog, parent.table_schema, parent.table_name)
     ),
   roots
     AS (
