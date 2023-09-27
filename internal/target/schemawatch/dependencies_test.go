@@ -197,3 +197,44 @@ func TestNoDeferrableConstraints(t *testing.T) {
 	a.ErrorContains(err, "deferrable")
 	a.ErrorContains(err, "42601")
 }
+
+func TestDifferentSchema(t *testing.T) {
+	a := assert.New(t)
+	r := require.New(t)
+
+	fixture, cancel, err := all.NewFixture()
+	r.NoError(err)
+	defer cancel()
+
+	ctx := fixture.Context
+	pool := fixture.TargetPool
+	switch pool.Product {
+	// TODO (Silvano) add CRDB when https://github.com/cockroachdb/cockroach/issues/111419 is fixed.
+	case types.ProductPostgreSQL:
+		// In Postgres we can only create schemas in the current database
+		// As a workaroud, using information_schema.
+		stm := fmt.Sprintf(`
+		CREATE TABLE %[1]s.parent (pk int primary key);
+		CREATE TABLE %[2]s.child (pk int primary key, parent int references %[1]s.parent);
+		CREATE TABLE %[1]s.child (pk int primary key, parent int references %[2]s.child);
+		`, fixture.TargetSchema, "information_schema")
+		_, err = pool.ExecContext(ctx, stm)
+		r.NoError(err)
+	default:
+		t.Skip("only for CRDB/Postgres")
+	}
+	r.NoError(fixture.Watcher.Refresh(ctx, pool))
+	snap := fixture.Watcher.Get()
+	for idx, tables := range snap.Order {
+		switch idx {
+		case 0:
+			r.Equal(1, len(tables))
+			a.Equal(fmt.Sprintf(`%[1]s."parent"`, fixture.TargetSchema), tables[0].Canonical().String())
+		case 2:
+			r.Equal(1, len(tables))
+			a.Equal(fmt.Sprintf(`%[1]s."child"`, fixture.TargetSchema), tables[0].Canonical().String())
+		}
+
+	}
+
+}
