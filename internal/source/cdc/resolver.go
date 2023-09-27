@@ -359,6 +359,10 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 	start := time.Now()
 	targets := r.watcher.Get().Order
 
+	if len(targets) == 0 {
+		return errors.Errorf("no tables known in schema %s; have they been created?", r.target)
+	}
+
 	cursor := &types.SelectManyCursor{
 		Backfill:    rs.Backfill,
 		End:         rs.ProposedTime,
