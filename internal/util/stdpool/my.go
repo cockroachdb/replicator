@@ -14,24 +14,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Package stdpool creates standardized database connection pools.
 package stdpool
 
 import (
 	"context"
 	"database/sql"
+	sqldriver "database/sql/driver"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	_ "github.com/go-mysql-org/go-mysql/driver" // register driver
 	"github.com/pkg/errors"
-	ora "github.com/sijms/go-ora/v2"
-	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
 )
 
-// OpenOracleAsTarget opens a connection to an Oracle database endpoint and
-// return it as a [types.TargetPool].
-func OpenOracleAsTarget(
+// OpenMySQLAsTarget opens a database connection, returning it as
+// a single connection.
+func OpenMySQLAsTarget(
 	ctx context.Context, connectString string, options ...Option,
 ) (*types.TargetPool, func(), error) {
 	var tc TestControls
@@ -40,17 +41,18 @@ func OpenOracleAsTarget(
 	}
 
 	return returnOrStop(ctx, func(ctx *stopper.Context) (*types.TargetPool, error) {
-		connector := ora.NewConnector(connectString)
+		log.Info(connectString)
 
-		if err := attachOptions(ctx, connector.(*ora.OracleConnector), options); err != nil {
-			return nil, err
+		connector, err := sql.Open("mysql", connectString)
+		if err != nil {
+			return nil, errors.WithStack(err)
 		}
 
 		ret := &types.TargetPool{
-			DB: sql.OpenDB(connector),
+			DB: connector,
 			PoolInfo: types.PoolInfo{
 				ConnectionString: connectString,
-				Product:          types.ProductOracle,
+				Product:          types.ProductMySQL,
 			},
 		}
 
@@ -64,7 +66,7 @@ func OpenOracleAsTarget(
 
 	ping:
 		if err := ret.Ping(); err != nil {
-			if tc.WaitForStartup && isOracleStartupError(err) {
+			if tc.WaitForStartup && isMySQLStartupError(err) {
 				log.WithError(err).Info("waiting for database to become ready")
 				select {
 				case <-ctx.Done():
@@ -76,10 +78,14 @@ func OpenOracleAsTarget(
 			return nil, errors.Wrap(err, "could not ping the database")
 		}
 
-		if err := ret.QueryRow("SELECT banner FROM V$VERSION").Scan(&ret.Version); err != nil {
+		if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
 			return nil, errors.Wrap(err, "could not query version")
 		}
-
+		log.Infof("Version %s", ret.Version)
+		// Setting sql_mode so we can use quotes (") for Ident.
+		if _, err := ret.Exec("SET SESSION sql_mode = 'ansi'"); err != nil {
+			return nil, errors.Wrap(err, "could not set sql_mode to ansi")
+		}
 		if err := attachOptions(ctx, ret.DB, options); err != nil {
 			return nil, err
 		}
@@ -92,18 +98,12 @@ func OpenOracleAsTarget(
 	})
 }
 
-// These have been enumerated through trial and error.
-var oracleStartupErrors = map[int]bool{
-	1017:  true, // Invalid username/password
-	1109:  true, // Database not open
-	12514: true, // TNS listener doesn't know about the service
-	28000: true, // The account is locked
-}
-
-func isOracleStartupError(err error) bool {
-	var oErr *network.OracleError
-	if !errors.As(err, &oErr) {
+// TODO (silvano): verify error codes
+func isMySQLStartupError(err error) bool {
+	switch err {
+	case sqldriver.ErrBadConn:
+		return true
+	default:
 		return false
 	}
-	return oracleStartupErrors[oErr.ErrCode]
 }

@@ -45,6 +45,68 @@ func colSliceEqual(a, b []types.ColData) bool {
 // Retrieve the primary key columns in their index-order.
 //
 // Parts of the CTE:
+// * pk_constraints: finds the primary key constraint for the table
+// https://dev.mysql.com/doc/refman/8.0/en/information-schema-table-constraints-table.html
+// * pks: extracts the names of the PK columns and their relative
+// positions.
+// * cols: extracts all columns, ignoring those with generation
+// expressions by checking the "extra" column.
+// https://dev.mysql.com/doc/refman/8.0/en/information-schema-columns-table.html
+// * ordered: adds a synthetic seq_in_index to the non-PK columns.
+// * SELECT: aggregates the above, sorting the PK columns in-order
+// before the non-PK columns.
+const sqlColumnsQueryMySQL = `
+WITH pk_constraints AS (
+	SELECT
+		   table_schema,
+		   table_name,
+		   constraint_name
+	  FROM information_schema.table_constraints
+	 WHERE constraint_type = 'PRIMARY KEY'
+   ),
+pks AS (
+SELECT
+	   table_schema,
+	   table_name,
+	   column_name,
+	   ordinal_position
+  FROM information_schema.key_column_usage
+  JOIN pk_constraints USING (table_schema, table_name, constraint_name)
+),
+cols AS (
+  SELECT
+		 table_schema,
+		 table_name,
+		 column_name,
+		 data_type,
+		 column_default,
+		 extra IN ('STORED GENERATED', 'VIRTUAL GENERATED') AS ignored
+	FROM information_schema.columns
+),
+ordered AS (
+	  SELECT
+			 table_schema,
+			 table_name,
+			 column_name,
+			 min(
+			  COALESCE(pks.ordinal_position, 2048)
+			 ) AS ordinal_position
+		FROM cols
+			 LEFT JOIN pks USING (table_schema, table_name, column_name)
+	GROUP BY table_schema, table_name, column_name
+   )
+SELECT column_name, pks.ordinal_position IS NOT NULL, data_type, column_default, ignored
+FROM cols
+JOIN ordered USING (table_schema, table_name, column_name)
+LEFT JOIN pks USING (table_schema, table_name, column_name)
+WHERE table_schema = ?
+AND table_name = ?
+ORDER BY ordered.ordinal_position, column_name
+`
+
+// Retrieve the primary key columns in their index-order.
+//
+// Parts of the CTE:
 // * atc: basic information about all columns
 // * pk_cols:  primary-key constraints, which provide PK column ordering
 // * acc: look for the ids of constraints applied to the columns
@@ -169,6 +231,16 @@ func getColumns(
 			parts[1].Raw(),
 			parts[2].Raw(),
 		}
+	case types.ProductMySQL:
+		parts := table.Idents(make([]ident.Ident, 0, 2))
+		if len(parts) != 2 {
+			return nil, errors.Errorf("expecting two table name parts, had %d", len(parts))
+		}
+		stmt = sqlColumnsQueryMySQL
+		args = []any{
+			parts[0].Raw(),
+			parts[1].Raw(),
+		}
 	case types.ProductOracle:
 		parts := table.Idents(make([]ident.Ident, 0, 2))
 		if len(parts) != 2 {
@@ -205,13 +277,11 @@ func getColumns(
 			if column.Primary {
 				foundPrimay = true
 			}
-			if defaultExpr.Valid {
-				column.DefaultExpr = defaultExpr.String
-				// Oracle also likes to include some dangling whitespace.
-				column.DefaultExpr = strings.TrimSpace(column.DefaultExpr)
-			}
 			switch tx.Product {
 			case types.ProductCockroachDB, types.ProductPostgreSQL:
+				if defaultExpr.Valid {
+					column.DefaultExpr = defaultExpr.String
+				}
 				// Re-parse the type name so that we have a consistent
 				// representation. For example, in the postgres query,
 				// we use the quote_ident() function, which only adds
@@ -251,10 +321,28 @@ func getColumns(
 				if isArray {
 					column.Type += "[]"
 				}
+			case types.ProductMySQL:
+				if defaultExpr.Valid {
+					switch column.Type {
+					// MySQL stores default string values in the defaultExpr
+					// without single quotes. Adding them,
+					// to be consistent with our internal representation.
+					case "char", "varchar", "text":
+						column.DefaultExpr = fmt.Sprintf("'%s'", defaultExpr.String)
+					default:
+						column.DefaultExpr = defaultExpr.String
+					}
+				}
+			case types.ProductOracle:
+				if defaultExpr.Valid {
+					// Oracle also likes to include some dangling whitespace.
+					column.DefaultExpr = strings.TrimSpace(defaultExpr.String)
+				}
+			default:
+				return errors.Errorf("unimplemented: %s", tx.Product)
 			}
 
 			column.Parse = parseHelper(tx.Product, column.Type)
-
 			columns = append(columns, column)
 		}
 

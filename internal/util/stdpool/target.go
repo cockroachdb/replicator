@@ -18,6 +18,7 @@ package stdpool
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -36,6 +37,10 @@ func OpenTarget(
 	}
 
 	switch strings.ToLower(u.Scheme) {
+	case "mysql":
+		conn := fmt.Sprintf("%s@%s?%s", u.User.String(), u.Host,
+			strings.TrimPrefix(u.Path, "/"))
+		return OpenMySQLAsTarget(ctx, conn, options...)
 	case "pg", "pgx", "postgres", "postgresql":
 		return OpenPgxAsTarget(ctx, connectString, options...)
 	case "ora", "oracle":

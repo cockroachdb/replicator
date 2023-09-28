@@ -220,6 +220,11 @@ SELECT table_catalog, table_schema, table_name
  WHERE table_catalog = $1
    AND table_schema ILIKE $2
    AND table_type = 'BASE TABLE'`
+	tableTemplateMySQL = `
+SELECT table_schema, NULL, table_name
+FROM information_schema.tables
+WHERE table_schema = ?
+AND table_type = 'BASE TABLE'`
 	tableTemplateOracle = `
 SELECT OWNER, NULL, TABLE_NAME FROM ALL_TABLES WHERE UPPER(OWNER) = UPPER(:owner)`
 )
@@ -251,6 +256,8 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 
 			rows, err = tx.QueryContext(ctx, fmt.Sprintf(tableTemplateCrdb, dbName), dbName, parts[1].Raw())
 
+		case types.ProductMySQL:
+			rows, err = tx.QueryContext(ctx, tableTemplateMySQL, w.schema.Raw())
 		case types.ProductOracle:
 			rows, err = tx.QueryContext(ctx, tableTemplateOracle, w.schema.Raw())
 
