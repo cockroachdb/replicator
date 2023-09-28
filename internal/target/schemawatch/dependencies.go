@@ -28,6 +28,85 @@ import (
 	"github.com/pkg/errors"
 )
 
+// depOrderTemplateMySQL computes the "referential depth" of tables based on
+// foreign-key constraints.
+//
+// The query is structured as follows:
+//   - tables: Tables in the schema.
+//   - refs: Maps referring tables (child) to referenced tables
+//     (parent). Table self-references are excluded from this query.
+//   - roots: Tables with no FK references.
+//   - depths: Recursively computes the depth of each table from the root, walking
+//     the foreign keys constraints.
+//   - cycle_detect: insure that all tables have a depth, by injecting a default depth.
+//     Finally, compute the maximum depth for each table in the given schema.
+
+const depOrderTemplateMySQL = `
+WITH RECURSIVE
+  tables
+    AS (
+      SELECT
+        table_catalog, table_schema, table_name
+      FROM
+        information_schema.tables
+    ),
+  refs
+    AS (
+        SELECT
+            constraint_catalog AS child_catalog,
+            constraint_schema AS child_schema,
+            table_name AS child_table_name,
+            unique_constraint_catalog AS parent_catalog,
+            unique_constraint_schema AS parent_schema,
+            referenced_table_name AS parent_table_name
+            FROM information_schema.referential_constraints
+       WHERE
+        (constraint_catalog, constraint_schema, table_name)
+        != (unique_constraint_catalog, unique_constraint_schema,referenced_table_name)
+    ),
+  roots
+    AS (
+      SELECT
+        tables.table_catalog, tables.table_schema, tables.table_name
+      FROM
+        tables
+      WHERE
+        (tables.table_catalog, tables.table_schema, tables.table_name)
+        NOT IN (SELECT child_catalog, child_schema, child_table_name FROM refs)
+    ),
+  depths
+    AS (
+      SELECT table_catalog, table_schema, table_name, 0 AS depth FROM roots
+      UNION ALL
+        SELECT
+          refs.child_catalog,
+          refs.child_schema,
+          refs.child_table_name,
+          depths.depth + 1
+        FROM
+          depths, refs
+        WHERE
+          refs.parent_catalog = depths.table_catalog
+          AND refs.parent_schema = depths.table_schema
+          AND refs.parent_table_name = depths.table_name
+    ),
+  cycle_detect
+    AS (
+      SELECT table_catalog, table_schema, table_name, -1 AS depth FROM tables
+      UNION ALL
+        SELECT table_catalog, table_schema, table_name, depth FROM depths
+    )
+SELECT
+  table_name, max(depth) AS depth
+FROM
+  cycle_detect
+WHERE
+   table_schema = ?
+GROUP BY
+  table_name
+ORDER BY
+  depth, table_name`
+
 // depOrderTemplateOra computes the "referential depth" of tables based on
 // foreign-key constraints.
 //
@@ -244,9 +323,19 @@ func getDependencyOrder(
 			args = []any{parts[0].Raw(), parts[1].Raw()}
 		}
 
+	case types.ProductMySQL:
+		parts := db.Idents(make([]ident.Ident, 0, 1))
+		if len(parts) != 1 {
+			return nil, errors.Errorf("expecting one schema parts, had %d", len(parts))
+		}
+		stmt = depOrderTemplateMySQL
+		args = []any{parts[0].Raw()}
+
 	case types.ProductOracle:
 		stmt = depOrderTemplateOra
 		args = []any{sql.Named("owner", db.Raw())}
+	default:
+		return nil, errors.Errorf("getDependencyOrder unimplemented product: %s", tx.Product)
 	}
 
 	var cycles []ident.Table

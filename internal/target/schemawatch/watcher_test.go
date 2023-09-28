@@ -95,7 +95,9 @@ func TestWatch(t *testing.T) {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			r.NoError(retry.Execute(ctx, fixture.TargetPool,
 				fmt.Sprintf("ALTER TABLE %s ADD COLUMN v VARCHAR", tblInfo.Name())))
-
+		case types.ProductMySQL:
+			r.NoError(retry.Execute(ctx, fixture.TargetPool,
+				fmt.Sprintf("ALTER TABLE %s ADD COLUMN v VARCHAR(10)", tblInfo.Name())))
 		case types.ProductOracle:
 			r.NoError(retry.Execute(ctx, fixture.TargetPool,
 				fmt.Sprintf("ALTER TABLE %s ADD (v INT)", tblInfo.Name())))

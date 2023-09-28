@@ -80,6 +80,8 @@ func parseHelper(product types.Product, typeName string) func(string) (any, bool
 	switch product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// Just pass through, since we have similar representations.
+	case types.ProductMySQL:
+		// TODO (silvano): add ad-hoc MySQL type representation, if needed.
 	case types.ProductOracle:
 		for _, helper := range oraParseHelpers {
 			if helper.pattern.MatchString(typeName) {
