@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,58 +61,58 @@ func TestGetDependencyOrder(t *testing.T) {
 		{
 			"child",
 			1,
-			"create table %[1]s.child (pk int primary key, parent int references %[1]s.parent)",
+			"create table %[1]s.child (pk int primary key, parent int, foreign key(parent) references %[1]s.parent(pk))",
 		},
 		{
 			"child_2",
 			1,
-			"create table %[1]s.child_2 (pk int primary key, parent_2 int references %[1]s.parent_2)",
+			"create table %[1]s.child_2 (pk int primary key, parent_2 int, foreign key(parent_2) references %[1]s.parent(pk))",
 		},
 		{
 			"grandchild",
 			2,
-			"create table %[1]s.grandchild (pk int primary key, child int references %[1]s.child)",
+			"create table %[1]s.grandchild (pk int primary key, child int, foreign key(child) references %[1]s.child(pk))",
 		},
 		{
 			"grandchild_2",
 			2,
-			"create table %[1]s.grandchild_2 (pk int primary key, child_2 int references %[1]s.child_2)",
+			"create table %[1]s.grandchild_2 (pk int primary key, child_2 int, foreign key(child_2) references %[1]s.child_2(pk))",
 		},
 		{
 			"grandchild_multi",
 			2,
-			"create table %[1]s.grandchild_multi (pk int primary key, child int references %[1]s.child, child_2 int references %[1]s.child_2)",
+			"create table %[1]s.grandchild_multi (pk int primary key, child int, child_2 int, foreign key(child) references %[1]s.child(pk), foreign key(child_2) references %[1]s.child_2(pk))",
 		},
 		{
 			"three",
 			3,
-			"create table %[1]s.three (pk int primary key, parent int references %[1]s.parent, gc int references %[1]s.grandchild)",
+			"create table %[1]s.three (pk int primary key, parent int, gc int,  foreign key(parent) references %[1]s.parent(pk),foreign key(gc) references %[1]s.grandchild(pk))",
 		},
 		{
 			"four",
 			4,
-			"create table %[1]s.four (pk int primary key, parent int references %[1]s.parent, three int references %[1]s.three)",
+			"create table %[1]s.four (pk int primary key, parent int, other int,  foreign key(parent) references %[1]s.parent(pk), foreign key(other) references %[1]s.three(pk))",
 		},
 		{
 			"five",
 			5,
-			"create table %[1]s.five (pk int primary key, parent int references %[1]s.parent, three int references %[1]s.four)",
+			"create table %[1]s.five (pk int primary key, parent int, other int, foreign key(parent) references %[1]s.parent(pk), foreign key(other) references %[1]s.four(pk))",
 		},
 		{
 			"six",
 			6,
-			"create table %[1]s.six (pk int primary key, parent int references %[1]s.parent, three int references %[1]s.five)",
+			"create table %[1]s.six (pk int primary key, parent int, other int,  foreign key(parent) references %[1]s.parent(pk), foreign key(other) references %[1]s.five(pk))",
 		},
 		// Verify that a self-referential table returns reasonable values.
 		{
 			"self",
 			0,
-			"create table %[1]s.self (pk int primary key, ref int references %[1]s.self)",
+			"create table %[1]s.self (pk int primary key, this int,  foreign key(this) references %[1]s.self(pk))",
 		},
 		{
 			"self_child",
 			1,
-			"create table %[1]s.self_child (pk int primary key, self int references %[1]s.self, self_child int references %[1]s.self_child)",
+			"create table %[1]s.self_child (pk int primary key, parent int,  this int, foreign key(parent) references %[1]s.self(pk), foreign key(this) references %[1]s.self_child(pk))",
 		},
 	}
 	expected := &ident.Map[int]{}
@@ -124,6 +125,7 @@ func TestGetDependencyOrder(t *testing.T) {
 
 	for idx, tc := range tcs {
 		sql := fmt.Sprintf(tc.schema, fixture.TargetSchema.Schema())
+		log.Trace(sql)
 		_, err := pool.ExecContext(ctx, sql)
 		r.NoError(err, idx)
 	}
@@ -139,7 +141,6 @@ func TestGetDependencyOrder(t *testing.T) {
 			tableCount++
 		}
 	}
-
 	a.Equal(len(tcs), tableCount)
 	a.True(expected.Equal(found, cmap.Comparator[int]()))
 
@@ -153,6 +154,22 @@ ALTER TABLE %[1]s.cycle_a ADD COLUMN ref int references %[1]s.cycle_b;
 `, fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
+	case types.ProductMySQL:
+		_, err = pool.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %[1]s."cycle_a" (pk int primary key)`,
+			fixture.TargetSchema.Schema()))
+		r.NoError(err)
+
+		_, err = pool.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %[1]s."cycle_b" (pk int primary key, ref int, foreign key(ref) references %[1]s."cycle_a"(pk))`,
+			fixture.TargetSchema.Schema()))
+		r.NoError(err)
+
+		_, err = pool.ExecContext(ctx, fmt.Sprintf(`
+		ALTER TABLE %[1]s."cycle_a" ADD COLUMN ref int, ADD FOREIGN KEY (ref) REFERENCES %[1]s."cycle_b"(pk)`,
+			fixture.TargetSchema.Schema()))
+		r.NoError(err)
+
 	case types.ProductOracle:
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
 			`CREATE TABLE %[1]s."cycle_a" (pk int primary key)`, fixture.TargetSchema.Schema()))
@@ -164,7 +181,8 @@ ALTER TABLE %[1]s.cycle_a ADD COLUMN ref int references %[1]s.cycle_b;
 		r.NoError(err)
 
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(
-			`ALTER TABLE %[1]s."cycle_a" ADD (ref int references %[1]s."cycle_b")`, fixture.TargetSchema.Schema()))
+			`ALTER TABLE %[1]s."cycle_a" ADD (ref int references %[1]s."cycle_b")`,
+			fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
 	default:
