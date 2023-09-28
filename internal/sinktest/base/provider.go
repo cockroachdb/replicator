@@ -314,7 +314,7 @@ func provideSchema[P types.AnyPool](
 	ctx context.Context, pool P, prefix string,
 ) (ident.Schema, func(), error) {
 	switch pool.Info().Product {
-	case types.ProductCockroachDB, types.ProductPostgreSQL:
+	case types.ProductCockroachDB, types.ProductMySQL, types.ProductPostgreSQL:
 		return CreateSchema(ctx, pool, prefix)
 
 	case types.ProductOracle:
@@ -388,8 +388,13 @@ func CreateSchema[P types.AnyPool](
 			return ident.Schema{}, cancel, errors.WithStack(err)
 		}
 	}
-
-	sch, err := ident.NewSchema(name, ident.Public)
+	var sch ident.Schema
+	var err error
+	if pool.Info().Product == types.ProductMySQL {
+		sch, err = ident.NewSchema(name)
+	} else {
+		sch, err = ident.NewSchema(name, ident.Public)
+	}
 	if err != nil {
 		return ident.Schema{}, cancel, err
 	}
@@ -412,7 +417,6 @@ func CreateTable[P types.AnyPool](
 	tableNum := tempTable.Add(1)
 	tableName := ident.New(fmt.Sprintf("tbl_%d", tableNum))
 	table := ident.NewTable(enclosing, tableName)
-
 	err := retry.Execute(ctx, pool, fmt.Sprintf(schemaSpec, table))
 	return TableInfo[P]{pool, table}, errors.WithStack(err)
 }

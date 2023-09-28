@@ -10,6 +10,7 @@ require (
 	github.com/dop251/goja v0.0.0-20220915101355-d79e1b125a30
 	github.com/evanw/esbuild v0.19.3
 	github.com/go-mysql-org/go-mysql v1.6.0
+	github.com/go-sql-driver/mysql v1.7.1
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da

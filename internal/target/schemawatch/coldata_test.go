@@ -238,6 +238,7 @@ func TestGetColumns(t *testing.T) {
 		},
 		// Check default value extraction
 		{
+			products:    []types.Product{types.ProductCockroachDB, types.ProductMySQL, types.ProductPostgreSQL, types.ProductOracle},
 			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT 'Hello World!'",
 			primaryKeys: []string{"a"},
 			dataCols:    []string{"b"},
@@ -276,20 +277,25 @@ func TestGetColumns(t *testing.T) {
 		},
 	}
 
-	// Enum with a boring name.
-	if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
-		`CREATE TYPE %s.boring_enum AS ENUM ('foo', 'bar')`,
-		fixture.TargetSchema.Schema()),
-	); !a.NoError(err) {
-		return
-	}
+	switch fixture.TargetPool.Product {
+	case types.ProductMySQL:
+		// MySQL does not support TYPES
+	default:
+		// Enum with a boring name.
+		if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
+			`CREATE TYPE %s.boring_enum AS ENUM ('foo', 'bar')`,
+			fixture.TargetSchema.Schema()),
+		); !a.NoError(err) {
+			return
+		}
 
-	// Verify user-defined types with mixed-case name.
-	if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
-		`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
-		fixture.TargetSchema.Schema()),
-	); !a.NoError(err) {
-		return
+		// Verify user-defined types with mixed-case name.
+		if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(
+			`CREATE TYPE %s."MyEnum" AS ENUM ('foo', 'bar')`,
+			fixture.TargetSchema.Schema()),
+		); !a.NoError(err) {
+			return
+		}
 	}
 
 	for i, test := range testcases {
