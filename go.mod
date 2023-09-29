@@ -103,3 +103,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/klog/v2 v2.80.1 // indirect
 )
+
+replace github.com/sijms/go-ora/v2 => github.com/bobvawter/go-ora/v2 v2.0.0-20230929182658-0047a942fa68
