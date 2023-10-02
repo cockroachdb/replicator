@@ -55,81 +55,110 @@ var _ Batch = (*scriptBatch)(nil)
 func (e *scriptBatch) OnData(
 	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
 ) error {
-	cfg, ok := e.Script.Sources.Get(source)
-	if !ok {
-		return e.sendToTarget(ctx, source, target, muts)
-	}
+	// If we see any deletes, we need to know where to send them to
+	// (e.g. to use ON DELETE CASADE). Depending on the source, there
+	// may or may not be an obvious table for deletes.
+	deletesTo := target
 
-	sourceMapper := cfg.Dispatch
-	if sourceMapper == nil {
-		return e.sendToTarget(ctx, source, target, muts)
-	}
-	for _, mut := range muts {
-		// For deletes, we will allow the user to specify an alternate
-		// table to send the delete to. Depending on the setup, we may
-		// or may not have a default table that's specified by a payload
-		// or other configuration.
-		if mut.IsDelete() {
-			deletesTo := cfg.DeletesTo
-			if deletesTo.Empty() {
-				deletesTo = target
+	// If there is a configuration and a dispatch function defined, then
+	// call the user-provided logic.
+	var routing ident.TableMap[[]types.Mutation]
+
+	if cfg, ok := e.Script.Sources.Get(source); !ok {
+		// If no call to configureSource() has been made for this
+		// schema, we'll send the mutations to the existing target.
+		routing.Put(target, muts)
+	} else if dispatch := cfg.Dispatch; dispatch == nil {
+		// If no dispatch function has been defined for the schema,
+		// we'll send the mutations to the existing target.
+		routing.Put(target, muts)
+	} else {
+		// We have a dispatch function for the schema. We'll call it to
+		// provide the routing for each incoming mutation.
+
+		// The schema configuration may override the default destination
+		// for deletes.
+		if !cfg.DeletesTo.Empty() {
+			deletesTo = cfg.DeletesTo
+		}
+		// Dispatch each mutation and route the result.
+		for _, mut := range muts {
+			// Deletes are always routed to the configured (or implied)
+			// deletion table.
+			if mut.IsDelete() {
+				if deletesTo.Empty() {
+					return errors.Errorf(
+						"cannot apply delete from %s because there is no "+
+							"table configured for receiving the delete", source)
+				}
+				routing.Put(deletesTo, append(routing.GetZero(deletesTo), mut))
+				continue
 			}
-			if deletesTo.Empty() {
-				return errors.Errorf(
-					"cannot apply delete from %s because there is no "+
-						"table configured for receiving the delete", source)
-			}
-			if err := e.Batch.OnData(ctx, source, deletesTo, []types.Mutation{mut}); err != nil {
+			// Invoke the dispatch function.
+			fanOut, err := dispatch(ctx, mut)
+			if err != nil {
 				return err
 			}
-			continue
+			// Append the mutation to the routing map. Ignoring error
+			// since the callback returns nil.
+			_ = fanOut.Range(func(tbl ident.Table, tblMuts []types.Mutation) error {
+				routing.Put(tbl, append(routing.GetZero(tbl), tblMuts...))
+				return nil
+			})
+		}
+	}
+
+	// We have established which mutations are going to which table. Now
+	// we can take the second step of calling the per-table map
+	// function, if any.
+	return routing.Range(func(tbl ident.Table, tblMuts []types.Mutation) error {
+		// Find the per-target map function.
+		var mapFn script.Map
+		if cfg, ok := e.Script.Targets.Get(tbl); ok {
+			mapFn = cfg.Map
 		}
 
-		routing, err := sourceMapper(ctx, mut)
-		if err != nil {
-			return err
+		// Fast-path: No map, so we can just send the data as-is.
+		if mapFn == nil {
+			return e.Batch.OnData(ctx, source, tbl, tblMuts)
 		}
-		if routing.Len() > 0 {
-			if err := routing.Range(func(dest ident.Table, muts []types.Mutation) error {
-				return e.sendToTarget(ctx, source, dest, muts)
-			}); err != nil {
+
+		// We want to separate out the deletes, since they don't make
+		// sense to send to the mapper function. This loop uses the
+		// slice-filter trick.
+		var deletes []types.Mutation
+		var idx int
+		for _, mut := range tblMuts {
+			// Deletes are filtered out.
+			if mut.IsDelete() {
+				deletes = append(deletes, mut)
+				continue
+			}
+
+			// Call the map function. It may choose to return no data,
+			// in which case we'll filter out the mutation.
+			mut, ok, err := mapFn(ctx, mut)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+
+			tblMuts[idx] = mut
+			idx++
+		}
+		tblMuts = tblMuts[:idx]
+		if len(tblMuts) > 0 {
+			if err := e.Batch.OnData(ctx, source, tbl, tblMuts); err != nil {
 				return err
 			}
 		}
-	}
-	return nil
-}
-
-// sendToTarget applies any per-target logic in the user-script and
-// then delegates to Events.OnData.
-func (e *scriptBatch) sendToTarget(
-	ctx context.Context, source ident.Ident, target ident.Table, muts []types.Mutation,
-) error {
-	cfg, ok := e.Script.Targets.Get(target)
-	if !ok {
-		return e.Batch.OnData(ctx, source, target, muts)
-	}
-	mapperFn := cfg.Map
-	if mapperFn == nil {
-		return e.Batch.OnData(ctx, source, target, muts)
-	}
-
-	// Filter with replacement.
-	idx := 0
-	for _, mut := range muts {
-		mut, ok, err := mapperFn(ctx, mut)
-		if err != nil {
-			return err
+		if len(deletes) > 0 {
+			if err := e.Batch.OnData(ctx, source, deletesTo, deletes); err != nil {
+				return err
+			}
 		}
-		if !ok {
-			continue
-		}
-		muts[idx] = mut
-		idx++
-	}
-	if idx == 0 {
 		return nil
-	}
-	muts = muts[:idx]
-	return e.Batch.OnData(ctx, source, target, muts)
+	})
 }

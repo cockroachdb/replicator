@@ -405,3 +405,60 @@ api.configureTable("t_2", {
 	a.Equal(100, count)
 
 }
+
+// https://github.com/cockroachdb/cdc-sink/issues/507
+func TestDeletesWithNoDispatch(t *testing.T) {
+	r := require.New(t)
+
+	// Create a basic test fixture.
+	fixture, cancel, err := base.NewFixture()
+	r.NoError(err)
+	defer cancel()
+
+	ctx := fixture.Context
+	targetSchema := fixture.TargetSchema.Schema()
+	pool := fixture.TargetPool
+
+	// Create some tables.
+	tgt := ident.NewTable(targetSchema, ident.New("tgt"))
+	var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT)`, tgt)
+	_, err = pool.ExecContext(ctx, schema)
+	r.NoError(err)
+
+	cfg := &logical.BaseConfig{
+		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
+		Immediate:      false,
+		StagingConn:    fixture.StagingPool.ConnectionString,
+		StagingSchema:  fixture.StagingDB.Schema(),
+		StandbyTimeout: 5 * time.Millisecond,
+		TargetConn:     pool.ConnectionString,
+
+		ScriptConfig: script.Config{
+			MainPath: "/main.ts",
+			FS: &fstest.MapFS{
+				"main.ts": &fstest.MapFile{Data: []byte(`
+import * as api from "cdc-sink@v1";
+api.configureTable("tgt", {
+  map: (doc) => doc,
+});
+`)}}}}
+
+	factory, cancelFactory, err := logical.NewFactoryForTests(ctx, cfg)
+	r.NoError(err)
+	defer cancelFactory()
+
+	batcher, cancel, err := factory.Immediate(ctx, targetSchema)
+	r.NoError(err)
+	defer cancel()
+
+	batch, err := batcher.OnBegin(ctx)
+	r.NoError(err)
+
+	r.NoError(batch.OnData(ctx, tgt.Table(), tgt, []types.Mutation{
+		{
+			Key: []byte(`[ 1 ]`),
+		},
+	}))
+
+	r.NoError(<-batch.OnCommit(ctx))
+}
