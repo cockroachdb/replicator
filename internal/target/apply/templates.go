@@ -19,6 +19,9 @@ package apply
 import (
 	"embed"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -28,9 +31,20 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	// QueryDir is the name of the subdirectory in the template [fs.FS].
+	QueryDir = "queries"
+
+	// TemplateOverrideEnv is the name of an environment variable that
+	// overrides the [fs.FS] from which the query templates are loaded.
+	// This facilitates ad-hoc debugging of queries, without the need to
+	// recompile the cdc-sink binary.
+	TemplateOverrideEnv = "CDC_SINK_TEMPLATES"
+)
+
 var (
 	//go:embed queries/*/*.tmpl
-	queries embed.FS
+	EmbeddedTemplates embed.FS
 
 	tmplFuncs = template.FuncMap{
 		// The pgx driver has trouble converting from the []any it gets
@@ -76,10 +90,45 @@ var (
 		},
 	}
 
-	tmplCRDB = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/crdb/*.tmpl"))
-	tmplOra  = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/ora/*.tmpl"))
-	tmplPG   = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/pg/*.tmpl"))
+	tmplCRDB *template.Template
+	tmplOra  *template.Template
+	tmplPG   *template.Template
 )
+
+// The error handling in this init function is panicky, since this
+// feature is for debugging purposes only.
+func init() {
+	const msg = "the %s environment variable must contain a %s subdirectory"
+
+	from := fs.FS(EmbeddedTemplates)
+	if path := os.Getenv(TemplateOverrideEnv); path != "" {
+		path, err := filepath.Abs(path)
+		if err != nil {
+			panic(err)
+		}
+		info, err := os.Stat(filepath.Join(path, "queries"))
+		if err != nil {
+			panic(errors.Wrapf(err, msg, TemplateOverrideEnv, QueryDir))
+		}
+		if !info.IsDir() {
+			panic(errors.Errorf(msg, TemplateOverrideEnv, QueryDir))
+
+		}
+		from = os.DirFS(path)
+	}
+
+	load := func(dir string) *template.Template {
+		path := filepath.Join(QueryDir, dir, "*.tmpl")
+		ret, err := template.New("").Funcs(tmplFuncs).ParseFS(from, path)
+		if err != nil {
+			panic(errors.Wrapf(err, "loading templates for %s", dir))
+		}
+		return ret
+	}
+	tmplCRDB = load("crdb")
+	tmplOra = load("ora")
+	tmplPG = load("pg")
+}
 
 type templates struct {
 	*columnMapping
