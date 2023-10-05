@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/cmd/dumphelp"
+	"github.com/cockroachdb/cdc-sink/internal/cmd/dumptemplates"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/fslogical"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/licenses"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mkjwt"
@@ -101,6 +102,7 @@ func main() {
 
 	root.AddCommand(
 		dumphelp.Command(),
+		dumptemplates.Command(),
 		fslogical.Command(),
 		licenses.Command(),
 		mkjwt.Command(),
