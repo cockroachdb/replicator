@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
@@ -35,6 +36,34 @@ const rewriteFiles = false
 // Ensure that we can't merge this test if rewrite is true.
 func TestRewriteShouldBeFalse(t *testing.T) {
 	require.False(t, rewriteFiles)
+}
+
+// Ensure that the debugging mechanism for loading the template from the
+// filesystem exists.
+func TestExternalTemplates(t *testing.T) {
+	r := require.New(t)
+
+	// This test modifies global variables, so ensure that we're
+	// resetting everything to default values, even though we're setting
+	// them to what are, effectively, the default values below.
+	t.Cleanup(func() {
+		if err := loadTemplates(EmbeddedTemplates, os.Getenv(TemplateOverrideEnv)); err != nil {
+			panic(err)
+		}
+	})
+
+	// Load the templates from the source directory. We pass an empty
+	// test filesystem to ensure that the override is actually used.
+	// We'll also verify that one of the template variables is actually
+	// assigned to.
+	tmplCRDB = nil
+	r.NoError(loadTemplates(&fstest.MapFS{}, "."))
+	r.NotNil(tmplCRDB)
+
+	// Test with a bad input.
+	err := loadTemplates(&fstest.MapFS{}, "foo")
+	r.ErrorContains(err, TemplateOverrideEnv)
+	r.ErrorContains(err, QueryDir)
 }
 
 func TestQueryTemplatesOra(t *testing.T) {

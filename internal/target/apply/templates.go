@@ -19,6 +19,9 @@ package apply
 import (
 	"embed"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -26,11 +29,24 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+)
+
+const (
+	// QueryDir is the name of the subdirectory in the template [fs.FS].
+	QueryDir = "queries"
+
+	// TemplateOverrideEnv is the name of an environment variable that
+	// overrides the [fs.FS] from which the query templates are loaded.
+	// This facilitates ad-hoc debugging of queries, without the need to
+	// recompile the cdc-sink binary.
+	TemplateOverrideEnv = "CDC_SINK_TEMPLATES"
 )
 
 var (
+	// EmbeddedTemplates bundles the templates into the binary.
 	//go:embed queries/*/*.tmpl
-	queries embed.FS
+	EmbeddedTemplates embed.FS
 
 	tmplFuncs = template.FuncMap{
 		// The pgx driver has trouble converting from the []any it gets
@@ -76,10 +92,62 @@ var (
 		},
 	}
 
-	tmplCRDB = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/crdb/*.tmpl"))
-	tmplOra  = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/ora/*.tmpl"))
-	tmplPG   = template.Must(template.New("").Funcs(tmplFuncs).ParseFS(queries, "queries/pg/*.tmpl"))
+	tmplCRDB *template.Template
+	tmplOra  *template.Template
+	tmplPG   *template.Template
 )
+
+// The error handling in this init function is panicky, since this
+// feature is for debugging purposes only.
+func init() {
+	if err := loadTemplates(EmbeddedTemplates, os.Getenv(TemplateOverrideEnv)); err != nil {
+		log.WithError(err).Fatal()
+	}
+}
+
+// loadTemplates is called by init() and by test code.
+func loadTemplates(from fs.FS, override string) error {
+	// This error message can be specific since, in production, the only
+	// way to get here is to set the environment variable.
+	const msg = "the directory identified by the %s environment variable " +
+		"must contain a %s subdirectory"
+
+	if override != "" {
+		path, err := filepath.Abs(override)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(filepath.Join(path, "queries"))
+		if err != nil {
+			return errors.Wrapf(err, msg, TemplateOverrideEnv, QueryDir)
+		}
+		if !info.IsDir() {
+			return errors.Errorf(msg, TemplateOverrideEnv, QueryDir)
+
+		}
+		from = os.DirFS(path)
+	}
+
+	load := func(dir string) (*template.Template, error) {
+		path := filepath.Join(QueryDir, dir, "*.tmpl")
+		ret, err := template.New("").Funcs(tmplFuncs).ParseFS(from, path)
+		if err != nil {
+			return nil, errors.Wrapf(err, "loading templates for %s", dir)
+		}
+		return ret, nil
+	}
+	var err error
+	tmplCRDB, err = load("crdb")
+	if err != nil {
+		return err
+	}
+	tmplOra, err = load("ora")
+	if err != nil {
+		return err
+	}
+	tmplPG, err = load("pg")
+	return err
+}
 
 type templates struct {
 	*columnMapping
