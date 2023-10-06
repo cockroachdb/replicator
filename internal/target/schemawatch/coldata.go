@@ -51,6 +51,10 @@ func colSliceEqual(a, b []types.ColData) bool {
 // positions.
 // * cols: extracts all columns, ignoring those with generation
 // expressions by checking the "extra" column.
+// The type of the column is derived from the data_type or the column_type.
+// The column type may have additional information (e.g. precision),
+// which may be required when casting types while applying mutations to the
+// target database.
 // https://dev.mysql.com/doc/refman/8.0/en/information-schema-columns-table.html
 // * ordered: adds a synthetic seq_in_index to the non-PK columns.
 // * SELECT: aggregates the above, sorting the PK columns in-order
@@ -78,7 +82,11 @@ cols AS (
 		 table_schema,
 		 table_name,
 		 column_name,
-		 data_type,
+		 CASE
+			WHEN data_type in ('decimal','char','varchar') THEN column_type
+			ELSE data_type
+		 END as data_type,
+		 column_type,
 		 column_default,
 		 extra IN ('STORED GENERATED', 'VIRTUAL GENERATED') AS ignored
 	FROM information_schema.columns
@@ -323,7 +331,9 @@ func getColumns(
 				}
 			case types.ProductMySQL:
 				if defaultExpr.Valid {
-					switch column.Type {
+					// for some types, we might have precision information.
+					columnType := strings.SplitN(column.Type, "(", 2)[0]
+					switch columnType {
 					// MySQL stores default string values in the defaultExpr
 					// without single quotes. Adding them,
 					// to be consistent with our internal representation.

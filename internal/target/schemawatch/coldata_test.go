@@ -224,13 +224,45 @@ func TestGetColumns(t *testing.T) {
 		},
 		// Check enums for mySQL.
 		{
-			products:    []types.Product{types.ProductMySQL},
-			tableSchema: `pk INT PRIMARY KEY, val ENUM('x-small', 'small', 'medium', 'large', 'x-large')`,
+			products: []types.Product{types.ProductMySQL},
+			tableSchema: `pk INT PRIMARY KEY, a ENUM('x-small', 'small', 'medium', 'large', 'x-large'), 
+			              b SET('x-small', 'small', 'medium', 'large', 'x-large')`,
 			primaryKeys: []string{"pk"},
-			dataCols:    []string{"val"},
+			dataCols:    []string{"a", "b"},
 			types: ident.MapOf[string](
 				"pk", "int",
-				"val", "enum",
+				"a", "enum",
+				"b", "set",
+			),
+		},
+		// Check other mySQL types.
+		{
+			products: []types.Product{types.ProductMySQL},
+			tableSchema: `
+			pk INT PRIMARY KEY, 
+			a BIGINT,
+			b TIMESTAMP,
+			c DATETIME,
+			d NUMERIC,
+			e DECIMAL,
+			f DECIMAL(10,2),
+			g VARCHAR(10),
+			h FLOAT(8),
+		    i CHAR(1)
+			`,
+			primaryKeys: []string{"pk"},
+			dataCols:    []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"},
+			types: ident.MapOf[string](
+				"pk", "int",
+				"a", "bigint",
+				"b", "timestamp",
+				"c", "datetime",
+				"d", "decimal(10,0)",
+				"e", "decimal(10,0)",
+				"f", "decimal(10,2)",
+				"g", "varchar(10)",
+				"h", "float",
+				"i", "char(1)",
 			),
 		},
 		// Check type extraction.
