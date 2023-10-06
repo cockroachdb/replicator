@@ -433,7 +433,6 @@ func (a *apply) upsertLocked(
 			return err
 		}
 	}
-
 	tag, err := stmt.ExecContext(ctx, allArgs...)
 	if err != nil {
 		return errors.WithStack(err)
