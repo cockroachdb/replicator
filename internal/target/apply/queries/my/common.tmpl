@@ -1,0 +1,63 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+
+{{- /* names produces a comma-separated list of column names: foo, bar, baz*/ -}}
+{{- define "names" -}}
+    {{- range $idx, $col := . }}
+        {{- if $idx -}},{{- end -}}
+        {{$col.Name}}
+    {{- end -}}
+{{- end -}}
+
+{{- /*
+TODO (silvano)
+*/ -}}
+
+{{- define "exprs" -}}
+    {{- range $groupIdx, $pairs := $.Vars -}}
+        {{- if $groupIdx -}},{{- nl -}}{{- end -}}
+        (
+        {{- range $pairIdx, $pair := $pairs -}}
+            {{- if $pairIdx -}},{{- end -}}
+             {{- if $pair.ValidityParam -}}
+                CASE WHEN ? THEN {{- sp -}}
+              {{- end -}}
+            {{- if or 
+                (hasSuffix $pair.Column.Type "binary") 
+                (hasSuffix $pair.Column.Type "blob") -}} 
+                CAST(? AS binary)
+            {{- else if or 
+                (hasSuffix $pair.Column.Type "int") 
+                (eq $pair.Column.Type "integer") -}} 
+                CAST(? AS signed) 
+             {{- else if eq $pair.Column.Type "bit" -}} 
+                CAST(? AS signed)        
+            {{- else if eq $pair.Column.Type "numeric" -}} 
+                CAST(? AS decimal)      
+            {{- else if eq $pair.Column.Type "timestamp" -}} 
+                CAST(? AS datetime)        
+            {{- else if or
+                (or (eq $pair.Column.Type "enum")
+                    (eq $pair.Column.Type "set"))
+                (or (hasSuffix $pair.Column.Type "text")
+                    (contains $pair.Column.Type "char")) -}} 
+                CAST(? AS char) 
+            {{- else if eq $pair.Column.Type "geometry" -}}
+                st_geomfromgeojson(?)
+            {{- else -}}
+              CAST(? AS {{ $pair.Column.Type }})
+            {{- end -}}  
+            {{- if $pair.ValidityParam -}}
+                {{- sp -}} ELSE {{ $pair.Column.DefaultExpr }} END
+            {{- end -}}
+        {{- end -}}
+        )
+    {{- end -}}
+{{- end -}}
+
+{{- /* join creates a comma-separated list of its input: a, b, c, ... */ -}}
+{{- define "join" -}}
+    {{- range $idx, $val := . }}
+        {{- if $idx -}},{{- end -}}
+        {{- $val -}}
+    {{- end -}}
+{{- end -}}

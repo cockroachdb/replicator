@@ -170,7 +170,7 @@ func TestApply(t *testing.T) {
 			case types.ProductOracle:
 				a.ErrorContains(err, "ORA-01400: cannot insert NULL into")
 			default:
-				a.Fail("unimplemented")
+				a.Fail("unimplemented", err)
 			}
 		}
 	})
@@ -288,6 +288,167 @@ type dataTypeTestCase struct {
 }
 
 var (
+	myDataTypeTests = []dataTypeTestCase{
+
+		// MySQL data types: https://dev.mysql.com/doc/refman/8.0/en/data-types.html
+		// 11.1.2 Integer Types (Exact Value) - INTEGER, INT, SMALLINT, TINYINT, MEDIUMINT, BIGINT
+		// 11.1.3 Fixed-Point Types (Exact Value) - DECIMAL, NUMERIC
+		// 11.1.4 Floating-Point Types (Approximate Value) - FLOAT, DOUBLE
+		// 11.1.5 Bit-Value Type - BIT
+		// 11.2.2 The DATE, DATETIME, and TIMESTAMP Types
+		// 11.2.3 The TIME Type
+		// 11.2.4 The YEAR Type
+		// 11.3.2 The CHAR and VARCHAR Types
+		// 11.3.3 The BINARY and VARBINARY Types
+		// 11.3.4 The BLOB and TEXT Types
+		// 11.3.5 The ENUM Type
+		// 11.3.6 The SET Type
+		// 11.4 Spatial Data Types
+		// 11.5 The JSON Data Type
+
+		{name: `bigint_null`, sourceType: `bytes`, columnType: `BIGINT`},
+		{name: `bigint`, sourceType: `bytes`, columnType: `BIGINT`, sqlValue: `11`},
+		{name: `binary_null`, sourceType: `bytes`, columnType: `BINARY(255)`},
+		{name: `binary`, sourceType: `bytes`, columnType: `BINARY(255)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `bit_null`, columnType: `BIT(2)`},
+		{name: `bit`, columnType: `BIT(2)`, sqlValue: `10`, indexable: true},
+		{name: `blob_null`, sourceType: `bytes`, columnType: `BLOB(100)`},
+		{name: `blob`, sourceType: `bytes`, columnType: `BLOB(100)`, sqlValue: `a1b2c3`},
+		{name: `char_null`, columnType: `CHAR(255)`},
+		{name: `char`, columnType: `CHAR(255)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `date_null`, columnType: `DATE`},
+		{name: `date`, columnType: `DATE`, sqlValue: `2016-01-25`, indexable: true},
+		{name: `datetime_null`, sourceType: `timestamp`, columnType: `DATETIME`},
+		{name: `datetime`, sourceType: `timestamp`, columnType: `DATETIME`, sqlValue: `2016-01-25 01:01:00`, indexable: true},
+		{name: `decimal_eng_6,0`, columnType: `DECIMAL(6,0)`, sqlValue: `4e+2`, indexable: true, expectJSON: "400"},
+		{name: `decimal_eng_6,2`, columnType: `DECIMAL(6,2)`, sqlValue: `4.98765e+2`, indexable: true, expectJSON: "498.77"},
+		{name: `decimal_null`, columnType: `DECIMAL`},
+		{name: `decimal`, columnType: `DECIMAL`, sqlValue: `1.2345`, indexable: true},
+		{name: `double_null`, sourceType: `float`, columnType: `DOUBLE`},
+		{name: `double`, sourceType: `float`, columnType: `DOUBLE`, sqlValue: `1.2345`, indexable: true},
+		{name: `enum_null`, sourceType: `string`, columnType: `ENUM('a','b','c')`},
+		{name: `enum`, sourceType: `string`, columnType: `ENUM('a','b','c')`, sqlValue: `a`, indexable: true},
+		{name: `float_null`, columnType: `FLOAT`},
+		{name: `float`, columnType: `FLOAT`, sqlValue: `1.2345`, indexable: true},
+		{name: `geometry`, sourceType: `string`, columnType: `GEOMETRY`, sqlValue: `
+		{"type": "Point", "coordinates": [11.11, 12.22]}`},
+		{name: `int_null`, sourceType: `bytes`, columnType: `INT`},
+		{name: `int`, sourceType: `bytes`, columnType: `INT`, sqlValue: `11`},
+		{name: `integer_null`, sourceType: `bytes`, columnType: `INTEGER`},
+		{name: `integer`, sourceType: `bytes`, columnType: `INTEGER`, sqlValue: `11`},
+		{name: `jsonb_null`, sourceType: `string`, columnType: `JSON`},
+		{
+			name:       `json`,
+			sourceType: `string`, // the driver expects strings
+			columnType: `JSON`,
+			sqlValue: `
+			{
+				"string": "Lola",
+				"bool": true,
+				"number": 547,
+				"float": 123.456,
+				"array": [
+					"lola",
+					true,
+					547,
+					123.456,
+					[
+						"lola",
+						true,
+						547,
+						123.456
+					],
+					{
+						"string": "Lola",
+						"bool": true,
+						"number": 547,
+						"float": 123.456,
+						"array": [
+							"lola",
+							true,
+							547,
+							123.456,
+							[
+								"lola",
+								true,
+								547,
+								123.456
+							]
+						]
+					}
+				],
+				"map": {
+					"string": "Lola",
+					"bool": true,
+					"number": 547,
+					"float": 123.456,
+					"array": [
+						"lola",
+						true,
+						547,
+						123.456,
+						[
+							"lola",
+							true,
+							547,
+							123.456
+						],
+						{
+							"string": "Lola",
+							"bool": true,
+							"number": 547,
+							"float": 123.456,
+							"array": [
+								"lola",
+								true,
+								547,
+								123.456,
+								[
+									"lola",
+									true,
+									547,
+									123.456
+								]
+							]
+						}
+					]
+				}
+			}
+			`,
+		},
+		{name: `longblob_null`, sourceType: `bytes`, columnType: `LONGBLOB`},
+		{name: `longblob`, sourceType: `bytes`, columnType: `LONGBLOB`, sqlValue: `a1b2c3`},
+		{name: `longtext_null`, sourceType: `string`, columnType: `LONGTEXT`},
+		{name: `longtext`, sourceType: `string`, columnType: `LONGTEXT`, sqlValue: `a1b2c3`},
+		{name: `mediumblob_null`, sourceType: `bytes`, columnType: `MEDIUMBLOB`},
+		{name: `mediumblob`, sourceType: `bytes`, columnType: `MEDIUMBLOB`, sqlValue: `a1b2c3`},
+		{name: `mediumint_null`, sourceType: `bytes`, columnType: `MEDIUMINT`},
+		{name: `mediumint`, sourceType: `bytes`, columnType: `MEDIUMINT`, sqlValue: `11`},
+		{name: `mediumtext_null`, sourceType: `string`, columnType: `MEDIUMTEXT`},
+		{name: `mediumtext`, sourceType: `string`, columnType: `MEDIUMTEXT`, sqlValue: `a1b2c3`},
+		{name: `numeric_null`, columnType: `NUMERIC`},
+		{name: `numeric`, columnType: `NUMERIC`, sqlValue: `1.2345`, indexable: true},
+		{name: `set_null`, sourceType: `string`, columnType: `SET('a','b','c')`},
+		{name: `set`, sourceType: `string`, columnType: `SET('a','b','c')`, sqlValue: `a,b`, indexable: true},
+		{name: `text_null`, sourceType: `string`, columnType: `TEXT(100)`},
+		{name: `text`, sourceType: `string`, columnType: `TEXT(100)`, sqlValue: `a1b2c3`},
+		{name: `time_null`, columnType: `TIME`},
+		{name: `time`, columnType: `TIME`, sqlValue: `01:23:45.123456`, indexable: true},
+		{name: `timestamp_null`, columnType: `TIMESTAMP`},
+		{name: `timestamp`, columnType: `TIMESTAMP`, sqlValue: `2016-01-25 10:10:10`, indexable: true},
+		{name: `tinyblob_null`, sourceType: `bytes`, columnType: `TINYBLOB`},
+		{name: `tinyblob`, sourceType: `bytes`, columnType: `TINYBLOB`, sqlValue: `a1b2c3`},
+		{name: `tinyint_null`, sourceType: `bytes`, columnType: `TINYINT`},
+		{name: `tinyint`, sourceType: `bytes`, columnType: `TINYINT`, sqlValue: `11`},
+		{name: `tinytext_null`, sourceType: `string`, columnType: `TINYTEXT`},
+		{name: `tinytext`, sourceType: `string`, columnType: `TINYTEXT`, sqlValue: `a1b2c3`},
+		{name: `varbinary_null`, sourceType: `bytes`, columnType: `VARBINARY(255)`},
+		{name: `varbinary`, sourceType: `bytes`, columnType: `VARBINARY(255)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `varchar_null`, columnType: `VARCHAR(255)`},
+		{name: `varchar`, columnType: `VARCHAR(255)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `year_null`, sourceType: `string`, columnType: `YEAR`},
+		{name: `year`, sourceType: `string`, columnType: `YEAR`, sqlValue: `2016`, indexable: true},
+	}
 	oraDataTypeTests = []dataTypeTestCase{
 		{
 			// Dates are returned with a midnight time.
@@ -487,6 +648,9 @@ func TestAllDataTypes(t *testing.T) {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			testcases = pgDataTypeTests
 			readBackQ = "SELECT COALESCE(to_json(val)::VARCHAR(2048), 'null') FROM %s"
+		case types.ProductMySQL:
+			testcases = myDataTypeTests
+			readBackQ = "SELECT COALESCE(json_extract(json_array(val),'$[0]'), 'null') FROM %s"
 		case types.ProductOracle:
 			testcases = oraDataTypeTests
 			// JSON_QUERY in older versions refuses to return raw scalars.
@@ -629,6 +793,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP WITH TIME ZONE)")
+
 	if !a.NoError(err) {
 		return
 	}
