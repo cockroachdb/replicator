@@ -430,6 +430,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		StagingPool:   stagingPool,
 		Server:        server,
 		StagingDB:     stagingSchema,
+		Stagers:       stagers,
 		Watcher:       watchers,
 	}
 	return serverTestFixture, func() {
@@ -458,5 +459,6 @@ type testFixture struct {
 	StagingPool   *types.StagingPool
 	Server        *Server
 	StagingDB     ident.StagingSchema
+	Stagers       types.Stagers
 	Watcher       types.Watchers
 }

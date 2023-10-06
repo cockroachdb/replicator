@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	jwtAuth "github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 	joonix "github.com/joonix/log"
@@ -48,18 +49,75 @@ func TestMain(m *testing.M) {
 	log.Exit(m.Run())
 }
 
+// These constants are used to create test permutations.
+const (
+	testModeDiff = 1 << iota
+	testModeImmediate
+	testModeQueries
+	testModeWebhook
+
+	testModeMax // Sentinel value
+)
+
+type testConfig struct {
+	diff      bool
+	immediate bool
+	queries   bool
+	webhook   bool
+}
+
+func (c *testConfig) String() string {
+	var sb strings.Builder
+	if c.diff {
+		sb.WriteString(" diff")
+	} else {
+		sb.WriteString(" snapshot")
+	}
+	if c.immediate {
+		sb.WriteString(" immediate")
+	} else {
+		sb.WriteString(" transactional")
+	}
+	if c.queries {
+		sb.WriteString(" queries")
+	} else {
+		sb.WriteString(" tables")
+	}
+	if c.webhook {
+		sb.WriteString(" webhook")
+	} else {
+		sb.WriteString(" bulk")
+	}
+	return sb.String()[1:]
+}
+
 func TestIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short tests requested")
 	}
-	t.Run("deferred_http", func(t *testing.T) { testIntegration(t, false, false) })
-	t.Run("deferred_webhook", func(t *testing.T) { testIntegration(t, false, true) })
-	t.Run("immediate_http", func(t *testing.T) { testIntegration(t, true, false) })
-	t.Run("immediate_webhook", func(t *testing.T) { testIntegration(t, true, true) })
+
+	// Create all testing permutations. The test helper will skip in
+	// cases that don't apply to a particular target.
+	tcs := make([]testConfig, testModeMax)
+	for i := range tcs {
+		tcs[i] = testConfig{
+			diff:      i&testModeDiff == testModeDiff,
+			immediate: i&testModeImmediate == testModeImmediate,
+			queries:   i&testModeQueries == testModeQueries,
+			webhook:   i&testModeWebhook == testModeWebhook,
+		}
+	}
+
+	for _, tc := range tcs {
+		tc := tc // Capture for t.Parallel()
+		t.Run(tc.String(), func(t *testing.T) {
+			t.Parallel()
+			testIntegration(t, tc)
+		})
+	}
 }
 
-func testIntegration(t *testing.T, immediate bool, webhook bool) {
-	log.SetLevel(log.TraceLevel)
+func testIntegration(t *testing.T, cfg testConfig) {
 	a := assert.New(t)
 	r := require.New(t)
 
@@ -75,9 +133,13 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	r.NoError(err)
 	defer cancel()
 
-	supportsWebhook := supportsWebhook(sourceFixture.TargetPool.Version)
-	if webhook && !supportsWebhook {
-		t.Skipf("Webhook is not compatible with %s version of cockroach.", sourceFixture.TargetPool.Version)
+	version := sourceFixture.SourcePool.Version
+	supportsWebhook := supportsWebhook(version)
+	if cfg.webhook && !supportsWebhook {
+		t.Skipf("Webhook is not compatible with %s version of cockroach.", version)
+	}
+	if cfg.queries && !supportsQueries(version) {
+		t.Skipf("CDC queries are not compatible with %s version of cockroach", version)
 	}
 
 	ctx := sourceFixture.Context
@@ -94,15 +156,16 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	targetFixture, cancel, err := newTestFixture(ctx, &Config{
 		CDC: cdc.Config{
 			BaseConfig: logical.BaseConfig{
-				Immediate:     immediate,
+				Immediate:     cfg.immediate,
 				StagingConn:   destFixture.StagingPool.ConnectionString,
 				StagingSchema: destFixture.StagingDB.Schema(),
 				TargetConn:    destFixture.TargetPool.ConnectionString,
 			},
 			MetaTableName: ident.New("resolved_timestamps"),
+			RetireOffset:  time.Hour, // Allow post-hoc inspection of staged data.
 		},
 		BindAddr:           "127.0.0.1:0",
-		GenerateSelfSigned: webhook && supportsWebhook, // Webhook implies self-signed TLS is ok.
+		GenerateSelfSigned: cfg.webhook && supportsWebhook, // Webhook implies self-signed TLS is ok.
 	})
 	r.NoError(err)
 	defer cancel()
@@ -138,18 +201,24 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 	params := make(url.Values)
 	// Set up the changefeed.
 	var diagURL, feedURL url.URL
-	var createStmt string
-	if webhook {
+	var pathIdent ident.Identifier
+	createStmt := "CREATE CHANGEFEED"
+	if cfg.queries {
+		pathIdent = target
+	} else {
+		pathIdent = target.Schema()
+		createStmt += " FOR TABLE %s"
+	}
+	if cfg.webhook {
 		params.Set("insecure_tls_skip_verify", "true")
 		feedURL = url.URL{
 			Scheme:   "webhook-https",
 			Host:     targetFixture.Listener.Addr().String(),
-			Path:     ident.Join(target.Schema(), ident.Raw, '/'),
+			Path:     ident.Join(pathIdent, ident.Raw, '/'),
 			RawQuery: params.Encode(),
 		}
-		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
-			"INTO '" + feedURL.String() + "' " +
-			"WITH updated," +
+		createStmt += " INTO '" + feedURL.String() + "' " +
+			" WITH updated," +
 			"     resolved='1s'," +
 			"     webhook_auth_header='Bearer " + token + "'"
 
@@ -166,11 +235,10 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 		feedURL = url.URL{
 			Scheme:   "experimental-http",
 			Host:     targetFixture.Listener.Addr().String(),
-			Path:     ident.Join(target.Schema(), ident.Raw, '/'),
+			Path:     ident.Join(pathIdent, ident.Raw, '/'),
 			RawQuery: params.Encode(),
 		}
-		createStmt = "CREATE CHANGEFEED FOR TABLE %s " +
-			"INTO '" + feedURL.String() + "' " +
+		createStmt += " INTO '" + feedURL.String() + "' " +
 			"WITH updated,resolved='1s'"
 
 		diagURL = url.URL{
@@ -180,14 +248,24 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 			RawQuery: "access_token=" + token,
 		}
 	}
-
+	if cfg.diff {
+		createStmt += ",diff"
+	}
 	// Don't wait the entire 30s. This options was introduced in the
 	// same versions as webhooks.
 	if supportsMinCheckpoint(sourceFixture.TargetPool.Version) {
 		createStmt += ",min_checkpoint_frequency='1s'"
 	}
+	if cfg.queries {
+		createStmt += " AS SELECT event_op() __event__, pk, val"
+		if cfg.diff {
+			createStmt += ", cdc_prev"
+		}
+		createStmt += " FROM %s"
+	}
+
 	log.Debugf("changefeed URL is %s", feedURL.String())
-	r.NoError(source.Exec(ctx, createStmt))
+	r.NoError(source.Exec(ctx, createStmt), createStmt)
 
 	// Wait for the backfilled value.
 	for {
@@ -199,6 +277,9 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 		log.Debug("waiting for backfill")
 		time.Sleep(time.Second)
 	}
+
+	// Update the first value
+	r.NoError(source.Exec(ctx, "UPSERT INTO %s (pk, val) VALUES (1, 'updated')"))
 
 	// Insert an additional value
 	r.NoError(source.Exec(ctx, "INSERT INTO %s (pk, val) VALUES (2, 'two')"))
@@ -214,7 +295,59 @@ func testIntegration(t *testing.T, immediate bool, webhook bool) {
 			break
 		}
 		log.Debug("waiting for stream")
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Also wait to see that the update was applied.
+	for {
+		var val string
+		r.NoError(targetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT val FROM %s WHERE pk = 1", target),
+		).Scan(&val))
+		if val == "updated" {
+			break
+		}
+		log.Debug("waiting for update")
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !cfg.immediate {
+		t.Run("inspect_staged_data", func(t *testing.T) {
+			a := assert.New(t)
+			r := require.New(t)
+
+			stager, err := targetFixture.Stagers.Get(ctx, target)
+			r.NoError(err)
+
+			// Just load all staged data.
+			muts, err := stager.Select(ctx, targetFixture.StagingPool,
+				hlc.Zero(), hlc.New(time.Now().UnixNano(), 0))
+			r.NoError(err)
+			r.Len(muts, 3) // Two inserts and one update.
+
+			// Classify the mutation's before value as empty/null or
+			// containing an object.
+			var objectCount, nullCount int
+			for _, mut := range muts {
+				before := string(mut.Before)
+				if len(before) == 0 || before == "null" {
+					nullCount++
+				} else if len(before) > 0 && before[0] == '{' {
+					objectCount++
+				} else {
+					r.Fail("unexpected before value", before)
+				}
+			}
+
+			if cfg.diff {
+				a.Equal(1, objectCount) // One update.
+				a.Equal(2, nullCount)   // Two inserts.
+			} else {
+				// We don't expect to see any diff data.
+				a.Equal(0, objectCount)
+				a.Equal(3, nullCount)
+			}
+		})
 	}
 
 	metrics, err := prometheus.DefaultGatherer.Gather()
@@ -265,6 +398,17 @@ func supportsWebhook(version string) bool {
 	// self signed certificate is needed. This acts as a signal as to wether the
 	// webhook endpoint is available.
 	if strings.Contains(version, "v20.2.") || strings.Contains(version, "v21.1.") {
+		return false
+	}
+	return true
+}
+
+func supportsQueries(version string) bool {
+	// CDC Queries were added in v22.2, but the event_op() function was
+	// only added in v23.1.
+	if strings.Contains(version, "v20.") ||
+		strings.Contains(version, "v21.") ||
+		strings.Contains(version, "v22.") {
 		return false
 	}
 	return true
