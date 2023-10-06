@@ -75,6 +75,10 @@ func TestPutAndDrain(t *testing.T) {
 			Key:  []byte(fmt.Sprintf(`[%d]`, i)),
 			Time: hlc.New(int64(1000*i)+2, i),
 		}
+		// Don't assume that all mutations have a Before value.
+		if i%10 == 0 {
+			muts[i].Before = []byte("before")
+		}
 	}
 	maxTime := muts[len(muts)-1].Time
 
@@ -248,27 +252,31 @@ func TestSelectMany(t *testing.T) {
 		muts = append(muts,
 			// Batch at t=1
 			types.Mutation{
-				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
-				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
-				Time: hlc.New(1, 0),
+				Before: []byte("null"),
+				Data:   []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:    []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time:   hlc.New(1, 0),
 			},
 			// Individual with varying timestamps
 			types.Mutation{
-				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
-				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
-				Time: hlc.New(int64(2*entries+i), 0),
+				Before: []byte(`{"pk":%d}`),
+				Data:   []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:    []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time:   hlc.New(int64(2*entries+i), 0),
 			},
 			// Batch at t=10*entries
 			types.Mutation{
-				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
-				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
-				Time: hlc.New(10*entries, 0),
+				Before: []byte(`{"pk":%d}`),
+				Data:   []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:    []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time:   hlc.New(10*entries, 0),
 			},
 			// More individual entries with varying timestamps
 			types.Mutation{
-				Data: []byte(fmt.Sprintf(`{"pk":%d}`, i)),
-				Key:  []byte(fmt.Sprintf(`[ %d ]`, i)),
-				Time: hlc.New(int64(12*entries+i), 0),
+				Before: []byte(`{"pk":%d}`),
+				Data:   []byte(fmt.Sprintf(`{"pk":%d}`, i)),
+				Key:    []byte(fmt.Sprintf(`[ %d ]`, i)),
+				Time:   hlc.New(int64(12*entries+i), 0),
 			})
 	}
 	r.Len(muts, 4*entries)

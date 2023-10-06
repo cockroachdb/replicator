@@ -17,11 +17,8 @@
 package stage
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
@@ -163,7 +160,7 @@ data AS (`)
 				if id == offsetTableIdx {
 					// We're resuming in the middle of reading a table.
 					_, _ = fmt.Fprintf(&sb,
-						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+						"(SELECT %[1]d AS t, nanos, logical, key, mut, before "+
 							"FROM %[2]s "+
 							"WHERE (nanos, logical, key) > ($6, $7, $8) "+
 							"AND (nanos, logical) <= ($3, $4) "+
@@ -176,7 +173,7 @@ data AS (`)
 					// yet read any values from this table, so we want
 					// to start at the beginning time.
 					_, _ = fmt.Fprintf(&sb,
-						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+						"(SELECT %[1]d AS t, nanos, logical, key, mut, before "+
 							"FROM %[2]s "+
 							"WHERE (nanos, logical) >= ($1, $2) "+
 							"AND (nanos, logical) <= ($3, $4) "+
@@ -190,7 +187,7 @@ data AS (`)
 				// correct starting point for the scan.
 				if id == offsetTableIdx {
 					_, _ = fmt.Fprintf(&sb,
-						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+						"(SELECT %[1]d AS t, nanos, logical, key, mut, before "+
 							"FROM %[2]s "+
 							"WHERE ( (nanos, logical, key) > ($6, $7, $8) ) "+
 							"AND (nanos, logical) <= ($3, $4) "+
@@ -199,7 +196,7 @@ data AS (`)
 						id, destination)
 				} else if id > offsetTableIdx {
 					_, _ = fmt.Fprintf(&sb,
-						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+						"(SELECT %[1]d AS t, nanos, logical, key, mut, before "+
 							"FROM %[2]s "+
 							"WHERE (nanos, logical) >= ($6, $7) "+
 							"AND (nanos, logical) <= ($3, $4) "+
@@ -208,7 +205,7 @@ data AS (`)
 						id, destination)
 				} else {
 					_, _ = fmt.Fprintf(&sb,
-						"(SELECT %[1]d AS t, nanos, logical, key, mut "+
+						"(SELECT %[1]d AS t, nanos, logical, key, mut, before "+
 							"FROM %[2]s "+
 							"WHERE (nanos, logical) > ($6, $7) "+
 							"AND (nanos, logical) <= ($3, $4) "+
@@ -218,7 +215,7 @@ data AS (`)
 				}
 			}
 		}
-		sb.WriteString(`) SELECT t, nanos, logical, key, mut FROM data `)
+		sb.WriteString(`) SELECT t, nanos, logical, key, mut, before FROM data `)
 		if q.Backfill {
 			sb.WriteString(`ORDER BY t, nanos, logical, key LIMIT $5`)
 		} else {
@@ -242,7 +239,6 @@ data AS (`)
 		}
 
 		count := 0
-		var gzReader gzip.Reader
 		var lastMut types.Mutation
 		var lastTable ident.Table
 		for rows.Next() {
@@ -251,21 +247,18 @@ data AS (`)
 			var tableIdx int
 			var nanos int64
 			var logical int
-			if err := rows.Scan(&tableIdx, &nanos, &logical, &mut.Key, &mut.Data); err != nil {
+			if err := rows.Scan(&tableIdx, &nanos, &logical, &mut.Key, &mut.Data, &mut.Before); err != nil {
 				return errors.WithStack(err)
 			}
-			mut.Time = hlc.New(nanos, logical)
-
-			// Check for gzip magic numbers.
-			if len(mut.Data) >= 2 && mut.Data[0] == 0x1f && mut.Data[1] == 0x8b {
-				if err := gzReader.Reset(bytes.NewReader(mut.Data)); err != nil {
-					return errors.WithStack(err)
-				}
-				mut.Data, err = io.ReadAll(&gzReader)
-				if err != nil {
-					return errors.WithStack(err)
-				}
+			mut.Before, err = maybeGunzip(mut.Before)
+			if err != nil {
+				return err
 			}
+			mut.Data, err = maybeGunzip(mut.Data)
+			if err != nil {
+				return err
+			}
+			mut.Time = hlc.New(nanos, logical)
 
 			lastMut = mut
 			lastTable = idsToTables[tableIdx]
