@@ -27,8 +27,10 @@ package schemawatch
 // correct treatment of timezones.
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -37,76 +39,100 @@ import (
 	ora "github.com/sijms/go-ora/v2"
 )
 
-// These are evaluated in order.
-var oraParseHelpers = []struct {
-	pattern *regexp.Regexp
-	parser  func(any) (any, error)
-}{
-	{
-		// This is a special-case for UUIDs in the source being stored
-		// as a 16-byte raw value in the destination.
-		pattern: regexp.MustCompile(`^RAW\(16\)$`),
-		parser: func(a any) (any, error) {
-			s, ok := a.(string)
-			if !ok {
-				return nil, errors.Errorf("expecting string, got %T", a)
-			}
-			u, err := uuid.Parse(s)
-			return u[:], err
-		},
-	},
-	{
-		pattern: regexp.MustCompile(`^TIMESTAMP\(\d+\) WITH TIME ZONE$`),
-		parser: func(a any) (any, error) {
-			s, ok := a.(string)
-			if !ok {
-				return nil, errors.Errorf("expecting string, got %T", a)
-			}
-			t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC)
-			return ora.TimeStampTZ(t), err
-		},
-	},
-	{
-		// Try parsing with and without a timezone specifier.
-		pattern: regexp.MustCompile(`^TIMESTAMP\(\d+\)$`),
-		parser: func(a any) (any, error) {
-			s, ok := a.(string)
-			if !ok {
-				return nil, errors.Errorf("expecting string, got %T", a)
-			}
-			if t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC); err == nil {
-				return ora.TimeStamp(t), nil
-			}
-			t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC)
-			return ora.TimeStamp(t), err
-		},
-	},
-	{
-		pattern: regexp.MustCompile(`^DATE$`),
-		parser: func(a any) (any, error) {
-			s, ok := a.(string)
-			if !ok {
-				return nil, errors.Errorf("expecting string, got %T", a)
-			}
-			t, err := time.ParseInLocation("2006-01-02", s, time.UTC)
-			return ora.TimeStamp(t), err
-		},
-	},
-}
-var myParseHelpers = map[string]func(any) (any, error){
-	// mysql expects a serialized json
-	"json": func(a any) (any, error) {
+var (
+	// coerce a bit-string into a integer
+	coerceInt = func(a any) (any, error) {
+		s, ok := a.(string)
+		if !ok {
+			return nil, errors.Errorf("expecting a string, got %T", a)
+		}
+		return strconv.ParseInt(s, 2, 64)
+	}
+	// coerce a hex-string to its binary representation, after stripping the "\x" prefix
+	coerceHexString = func(a any) (any, error) {
+		s, ok := a.(string)
+		if !ok || len(s) < 2 {
+			return nil, errors.Errorf("expecting a hex encoded string, got %T", a)
+		}
+		return hex.DecodeString(s[2:])
+	}
+	// coerce to json
+	coerceJSON = func(a any) (any, error) {
 		return json.Marshal(a)
-	},
-}
+	}
+	// These are evaluated in order.
+	oraParseHelpers = []struct {
+		pattern *regexp.Regexp
+		parser  func(any) (any, error)
+	}{
+		{
+			// This is a special-case for UUIDs in the source being stored
+			// as a 16-byte raw value in the destination.
+			pattern: regexp.MustCompile(`^RAW\(16\)$`),
+			parser: func(a any) (any, error) {
+				s, ok := a.(string)
+				if !ok {
+					return nil, errors.Errorf("expecting string, got %T", a)
+				}
+				u, err := uuid.Parse(s)
+				return u[:], err
+			},
+		},
+		{
+			pattern: regexp.MustCompile(`^TIMESTAMP\(\d+\) WITH TIME ZONE$`),
+			parser: func(a any) (any, error) {
+				s, ok := a.(string)
+				if !ok {
+					return nil, errors.Errorf("expecting string, got %T", a)
+				}
+				t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC)
+				return ora.TimeStampTZ(t), err
+			},
+		},
+		{
+			// Try parsing with and without a timezone specifier.
+			pattern: regexp.MustCompile(`^TIMESTAMP\(\d+\)$`),
+			parser: func(a any) (any, error) {
+				s, ok := a.(string)
+				if !ok {
+					return nil, errors.Errorf("expecting string, got %T", a)
+				}
+				if t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC); err == nil {
+					return ora.TimeStamp(t), nil
+				}
+				t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC)
+				return ora.TimeStamp(t), err
+			},
+		},
+		{
+			pattern: regexp.MustCompile(`^DATE$`),
+			parser: func(a any) (any, error) {
+				s, ok := a.(string)
+				if !ok {
+					return nil, errors.Errorf("expecting string, got %T", a)
+				}
+				t, err := time.ParseInLocation("2006-01-02", s, time.UTC)
+				return ora.TimeStamp(t), err
+			},
+		},
+	}
+)
 
 func parseHelper(product types.Product, typeName string) func(any) (any, error) {
 	switch product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// Just pass through, since we have similar representations.
 	case types.ProductMySQL:
-		if parser, ok := myParseHelpers[typeName]; ok {
-			return parser
+		// Coerce types to the what the mysql driver expects.
+		switch typeName {
+		case "binary", "blob", "longblob", "mediumblob", "tinyblob", "varbinary":
+			return coerceHexString
+		case "bit":
+			return coerceInt
+		case "json", "geometry", "geography":
+			return coerceJSON
+		default:
+			return nil
 		}
 	case types.ProductOracle:
 		for _, helper := range oraParseHelpers {

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -170,7 +171,7 @@ func TestApply(t *testing.T) {
 			case types.ProductOracle:
 				a.ErrorContains(err, "ORA-01400: cannot insert NULL into")
 			default:
-				a.Fail("unimplemented")
+				a.Fail("unimplemented", err)
 			}
 		}
 	})
@@ -279,9 +280,243 @@ type dataTypeTestCase struct {
 	sqlValue   string // (Required) Expression that the source database can turn into JSON.
 	expectJSON string // (Optional) JSON expression to expect. Defaults to toJSON(sqlValue).
 	indexable  bool   // (Optional) Use the type as a primary key column.
+	readBackQ  string // (Optional) Ad-hoc query to get a string value from the target database.
 }
 
 var (
+	myDataTypeTests = []dataTypeTestCase{
+		// MySQL data types: https://dev.mysql.com/doc/refman/8.0/en/data-types.html
+		// 11.1.2 Integer Types (Exact Value) - INTEGER, INT, SMALLINT, TINYINT, MEDIUMINT, BIGINT
+		// 11.1.3 Fixed-Point Types (Exact Value) - DECIMAL, NUMERIC
+		// 11.1.4 Floating-Point Types (Approximate Value) - FLOAT, DOUBLE
+		// 11.1.5 Bit-Value Type - BIT
+		// 11.2.2 The DATE, DATETIME, and TIMESTAMP Types
+		// 11.2.3 The TIME Type
+		// 11.2.4 The YEAR Type
+		// 11.3.2 The CHAR and VARCHAR Types
+		// 11.3.3 The BINARY and VARBINARY Types
+		// 11.3.4 The BLOB and TEXT Types
+		// 11.3.5 The ENUM Type
+		// 11.3.6 The SET Type
+		// 11.4 Spatial Data Types
+		// 11.5 The JSON Data Type
+
+		{name: `bigint_null`, columnType: `BIGINT`},
+		{name: `bigint`, columnType: `BIGINT`, sqlValue: `9223372036854775807`},
+		{name: `binary_null`, sourceType: `bytes`, columnType: `BINARY(6)`},
+		{
+			name:       `binary`,
+			sourceType: `bytes`,
+			columnType: `BINARY(6)`,
+			sqlValue:   `a1b2c3`,
+			indexable:  true,
+			expectJSON: `"a1b2c3"`,
+			readBackQ:  `SELECT val FROM %s`,
+		},
+		{name: `bit_null`, columnType: `BIT(8)`},
+		{
+			name:       `bit`,
+			sourceType: `varbit`,
+			columnType: `BIT(8)`,
+			sqlValue:   `10010101`,
+			expectJSON: `"10010101"`,
+			readBackQ:  `SELECT bin(val) FROM %s`,
+		},
+		{name: `blob_null`, sourceType: `bytes`, columnType: `BLOB(100)`},
+		{
+			name:       `blob`,
+			sourceType: `bytes`,
+			columnType: `BLOB(100)`,
+			sqlValue:   `a1b2c3`,
+			expectJSON: `"a1b2c3"`,
+			readBackQ:  `SELECT val FROM %s`,
+		},
+		{name: `char_null`, columnType: `CHAR(255)`},
+		{name: `char`, columnType: `CHAR(255)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `date_null`, columnType: `DATE`},
+		{name: `date`, columnType: `DATE`, sqlValue: `2016-01-25`, indexable: true},
+		{name: `datetime_null`, sourceType: `timestamp`, columnType: `DATETIME`},
+		{
+			name:       `datetime`,
+			sourceType: `timestamp`,
+			columnType: `DATETIME`,
+			sqlValue:   `2016-01-25 01:01:00`,
+			expectJSON: `"2016-01-25 01:01:00.000000"`,
+			indexable:  true,
+		},
+		{name: `decimal_eng_6,0`, columnType: `DECIMAL(6,0)`, sqlValue: `4e+2`, indexable: true, expectJSON: "400"},
+		{name: `decimal_eng_6,2`, columnType: `DECIMAL(6,2)`, sqlValue: `4.98765e+2`, indexable: true, expectJSON: "498.77"},
+		{name: `decimal_null`, columnType: `DECIMAL`},
+		{name: `decimal`, columnType: `DECIMAL(10,4)`, sqlValue: `1.2345`, indexable: true},
+		{name: `double_null`, sourceType: `float`, columnType: `DOUBLE`},
+		{name: `double`, sourceType: `float`, columnType: `DOUBLE`, sqlValue: `1.2345`, indexable: true},
+		{name: `enum_null`, sourceType: `string`, columnType: `ENUM('a','b','c')`},
+		{name: `enum`, sourceType: `string`, columnType: `ENUM('a','b','c')`, sqlValue: `a`, indexable: true},
+		{name: `float_null`, columnType: `FLOAT`},
+		// This fails with lower precision:
+		// select json_array(cast(1.2345 as float)) => 1.2345000505447388
+		{name: `float`, sourceType: `float`, columnType: `FLOAT(25)`, sqlValue: `1.2345`},
+		{
+			name:       `geography`,
+			sourceType: `GEOGRAPHY`,
+			columnType: `GEOMETRY`,
+			sqlValue:   `0101000020E6100000000000000000F03F0000000000000040`,
+			expectJSON: `{"coordinates":[1.0,2.0],"type":"Point"}`,
+		},
+		{name: `geometry`, columnType: `GEOMETRY`, sqlValue: `010100000075029A081B9A5DC0F085C954C1F84040`},
+		{name: `int_null`, columnType: `INT`},
+		{name: `int`, columnType: `INT`, sqlValue: `2147483647`},
+		{name: `integer_null`, columnType: `INTEGER`},
+		{name: `integer`, columnType: `INTEGER`, sqlValue: `2147483647`},
+		{name: `jsonb_null`, sourceType: `jsonb`, columnType: `JSON`},
+		{
+			name:       `json`,
+			sourceType: `jsonb`,
+			columnType: `JSON`,
+			sqlValue: `
+			{
+				"string": "Lola",
+				"bool": true,
+				"number": 547,
+				"float": 123.456,
+				"array": [
+					"lola",
+					true,
+					547,
+					123.456,
+					[
+						"lola",
+						true,
+						547,
+						123.456
+					],
+					{
+						"string": "Lola",
+						"bool": true,
+						"number": 547,
+						"float": 123.456,
+						"array": [
+							"lola",
+							true,
+							547,
+							123.456,
+							[
+								"lola",
+								true,
+								547,
+								123.456
+							]
+						]
+					}
+				],
+				"map": {
+					"string": "Lola",
+					"bool": true,
+					"number": 547,
+					"float": 123.456,
+					"array": [
+						"lola",
+						true,
+						547,
+						123.456,
+						[
+							"lola",
+							true,
+							547,
+							123.456
+						],
+						{
+							"string": "Lola",
+							"bool": true,
+							"number": 547,
+							"float": 123.456,
+							"array": [
+								"lola",
+								true,
+								547,
+								123.456,
+								[
+									"lola",
+									true,
+									547,
+									123.456
+								]
+							]
+						}
+					]
+				}
+			}
+			`,
+		},
+		{name: `longblob_null`, sourceType: `bytes`, columnType: `LONGBLOB`},
+		{
+			name:       `longblob`,
+			sourceType: `bytes`,
+			columnType: `LONGBLOB`,
+			sqlValue:   `a1b2c3`,
+			expectJSON: `"a1b2c3"`,
+			readBackQ:  `SELECT val FROM %s`,
+		},
+		{name: `longtext_null`, sourceType: `string`, columnType: `LONGTEXT`},
+		{name: `longtext`, sourceType: `string`, columnType: `LONGTEXT`, sqlValue: `a1b2c3`},
+		{name: `mediumblob_null`, sourceType: `bytes`, columnType: `MEDIUMBLOB`},
+		{
+			name:       `mediumblob`,
+			sourceType: `bytes`,
+			columnType: `MEDIUMBLOB`,
+			sqlValue:   `a1b2c3`,
+			expectJSON: `"a1b2c3"`,
+			readBackQ:  `SELECT val FROM %s`,
+		},
+		{name: `mediumint_null`, sourceType: `int4`, columnType: `MEDIUMINT`},
+		{name: `mediumint`, sourceType: `int4`, columnType: `MEDIUMINT`, sqlValue: `8388607`},
+		{name: `mediumtext_null`, sourceType: `string`, columnType: `MEDIUMTEXT`},
+		{name: `mediumtext`, sourceType: `string`, columnType: `MEDIUMTEXT`, sqlValue: `a1b2c3`},
+		{name: `mumeric_null`, columnType: `DECIMAL`},
+		{name: `numeric`, columnType: `DECIMAL(10,4)`, sqlValue: `1.2345`, indexable: true},
+		{name: `smallint_null`, sourceType: `int2`, columnType: `SMALLINT`},
+		{name: `smallint`, sourceType: `int2`, columnType: `SMALLINT`, sqlValue: `32767`},
+		{name: `set_null`, sourceType: `string`, columnType: `SET('a','b','c')`},
+		{name: `set`, sourceType: `string`, columnType: `SET('a','b','c')`, sqlValue: `a,b`, indexable: true},
+		{name: `text_null`, sourceType: `string`, columnType: `TEXT(100)`},
+		{name: `text`, sourceType: `string`, columnType: `TEXT(100)`, sqlValue: `a1b2c3`},
+		{name: `time_null`, columnType: `TIME`},
+		{name: `time`, columnType: `TIME(6)`, sqlValue: `01:23:45.123456`, indexable: true},
+		{name: `timestamp_null`, columnType: `TIMESTAMP`},
+		{
+			name:       `timestamp`,
+			columnType: `TIMESTAMP`,
+			sqlValue:   `2016-01-25 10:10:10`,
+			expectJSON: `"2016-01-25 10:10:10.000000"`,
+			indexable:  true,
+		},
+		{name: `tinyblob_null`, sourceType: `bytes`, columnType: `TINYBLOB`},
+		{
+			name:       `tinyblob`,
+			sourceType: `bytes`,
+			columnType: `TINYBLOB`,
+			sqlValue:   `ab`,
+			expectJSON: `"ab"`,
+			readBackQ:  `SELECT val FROM %s`,
+		},
+		{name: `tinyint_null`, sourceType: `int2`, columnType: `TINYINT`},
+		{name: `tinyint`, sourceType: `int2`, columnType: `TINYINT`, sqlValue: `127`},
+		{name: `tinytext_null`, sourceType: `string`, columnType: `TINYTEXT`},
+		{name: `tinytext`, sourceType: `string`, columnType: `TINYTEXT`, sqlValue: `a1b2c3`},
+		{name: `varbinary_null`, sourceType: `bytes`, columnType: `VARBINARY(255)`},
+		{
+			name:       `varbinary`,
+			sourceType: `bytes`,
+			columnType: `VARBINARY(255)`,
+			sqlValue:   `a1b2c3`,
+			expectJSON: `"a1b2c3"`,
+			readBackQ:  `SELECT val FROM %s`,
+		},
+		{name: `varchar_null`, columnType: `VARCHAR(255)`},
+		{name: `varchar`, columnType: `VARCHAR(255)`, sqlValue: `a1b2c3`, indexable: true},
+		{name: `year_null`, sourceType: `string`, columnType: `YEAR`},
+		{name: `year`, sourceType: `string`, columnType: `YEAR`, sqlValue: `2016`, expectJSON: `2016`, indexable: true},
+	}
 	oraDataTypeTests = []dataTypeTestCase{
 		{
 			// Dates are returned with a midnight time.
@@ -487,6 +722,9 @@ func TestAllDataTypes(t *testing.T) {
 					sqlValue:   `2016-01-25 10:10:10-05:00`,
 					indexable:  true})
 			readBackQ = "SELECT COALESCE(to_json(val)::VARCHAR(2048), 'null') FROM %s"
+		case types.ProductMySQL:
+			testcases = myDataTypeTests
+			readBackQ = "SELECT COALESCE(json_extract(json_array(val),'$[0]'), 'null') FROM %s"
 		case types.ProductOracle:
 			testcases = oraDataTypeTests
 			// JSON_QUERY in older versions refuses to return raw scalars.
@@ -573,24 +811,28 @@ func TestAllDataTypes(t *testing.T) {
 			}
 			r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
 
-			var readBack string
-			r.NoError(fixture.TargetPool.QueryRowContext(ctx,
-				fmt.Sprintf(readBackQ, tbl),
-			).Scan(&readBack))
-
-			// See note in readBackQ
-			if expectArrayWrapper {
-				readBack = readBack[1 : len(readBack)-1]
-			}
 			expectJSON := jsonValue
 			if tc.expectJSON != "" {
 				expectJSON = tc.expectJSON
 			}
-
 			// Normalize the JSON representations before comparing them.
 			expectJSON, err = normalizeJSON(expectJSON)
 			r.NoError(err)
-
+			var readBack string
+			if tc.readBackQ != "" {
+				r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+					fmt.Sprintf(tc.readBackQ, tbl),
+				).Scan(&readBack))
+				readBack = strconv.Quote(readBack)
+			} else {
+				r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+					fmt.Sprintf(readBackQ, tbl),
+				).Scan(&readBack))
+				// See note in readBackQ
+				if expectArrayWrapper {
+					readBack = readBack[1 : len(readBack)-1]
+				}
+			}
 			readBack, err = normalizeJSON(readBack)
 			r.NoError(err)
 			r.Equal(expectJSON, readBack)
@@ -640,6 +882,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 
 	tbl, err := fixture.CreateTargetTable(ctx,
 		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP WITH TIME ZONE)")
+
 	if !a.NoError(err) {
 		return
 	}
