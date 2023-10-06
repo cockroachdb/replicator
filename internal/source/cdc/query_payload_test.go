@@ -28,9 +28,6 @@ import (
 )
 
 func TestQueryPayload(t *testing.T) {
-
-	a := assert.New(t)
-	r := require.New(t)
 	tests := []struct {
 		name    string
 		data    string
@@ -45,6 +42,17 @@ func TestQueryPayload(t *testing.T) {
 				Data: json.RawMessage(`{"pk":42,"v":9}`),
 				Time: hlc.New(1, 0),
 				Key:  json.RawMessage(`[42]`),
+			},
+			"",
+		},
+		{"insert diff",
+			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}, "cdc_prev": {"foo":"bar"}}`,
+			ident.MapOf[int](ident.New("pk"), 0),
+			types.Mutation{
+				Before: json.RawMessage(`{"foo":"bar"}`),
+				Data:   json.RawMessage(`{"pk":42,"v":9}`),
+				Time:   hlc.New(1, 0),
+				Key:    json.RawMessage(`[42]`),
 			},
 			"",
 		},
@@ -82,7 +90,7 @@ func TestQueryPayload(t *testing.T) {
 			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
 			ident.MapOf[int](ident.New("pk"), 0, ident.New("pk2"), 1),
 			types.Mutation{},
-			`expecting a value for key: "pk2"`,
+			`missing primary key: "pk2"`,
 		},
 		{"missing timestamp",
 			`{"__event__": "delete", "pk" : 42, "v" : 9, "__crdb__": {"something": "1.0"}}`,
@@ -94,17 +102,20 @@ func TestQueryPayload(t *testing.T) {
 			`{"pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
 			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{},
-			"CREATE CHANGEFEED must specify the __event__ colum set to op_event()",
+			"Add __event__ column to changefeed: CREATE CHANGEFEED ... AS SELECT event_op() AS __event__",
 		},
 		{"invalid op",
 			`{"__event__": "select","pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
 			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{},
-			`unable to decode operation type: unknown operation "select"`,
+			`unknown __event__ value: "select"`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
+			r := require.New(t)
+
 			q := &queryPayload{
 				keys: tt.keys,
 			}
@@ -113,6 +124,7 @@ func TestQueryPayload(t *testing.T) {
 				a.EqualError(err, tt.wantErr)
 				return
 			}
+			r.NoError(err)
 			mut, err := q.AsMutation()
 			r.NoError(err)
 			a.Equal(tt.want, mut)

@@ -95,6 +95,7 @@ func createFixture(
 			StagingSchema: baseFixture.StagingDB.Schema(),
 			TargetConn:    baseFixture.TargetPool.ConnectionString,
 		},
+		RetireOffset: time.Hour, // Enable post-hoc inspection.
 	}
 
 	if htc.script {
@@ -153,9 +154,34 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
 {"__event__": "insert", "pk" : 42, "v" : 99, "__crdb__": {"updated": "1.0"}}
-{"__event__": "insert", "pk" : 99, "v" : 42, "__crdb__": {"updated": "1.0"}}
+{"__event__": "insert", "pk" : 99, "v" : 42, "__crdb__": {"updated": "1.0"}, "cdc_prev": {"pk" : 99, "v" : 33 }}
 `),
 		}, h.parseNdjsonQueryMutation))
+
+		// Verify staged data, if applicable.
+		if !htc.immediate {
+			stager, err := fixture.Stagers.Get(ctx, tableInfo.Name())
+			if a.NoError(err) {
+				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(1, 0))
+				a.NoError(err)
+				a.Len(muts, 2)
+				// The order is stable since the underlying query
+				// is ordered, in part, by the key.
+				a.Equal([]types.Mutation{
+					{
+						Data: []byte(`{"pk":42,"v":99}`),
+						Key:  []byte(`[42]`),
+						Time: hlc.New(1, 0),
+					},
+					{
+						Before: []byte(`{"pk":99,"v":33}`),
+						Data:   []byte(`{"pk":99,"v":42}`),
+						Key:    []byte(`[99]`),
+						Time:   hlc.New(1, 0),
+					},
+				}, muts)
+			}
+		}
 
 		// Send the resolved timestamp request.
 		a.NoError(h.resolved(ctx, &request{
@@ -198,10 +224,59 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 			body: strings.NewReader(`
 { "payload" : [
 	{"__event__": "insert", "pk" : 42, "v" : 99, "__crdb__": {"updated": "10.0"}},
-	{"__event__": "insert", "pk" : 99, "v" : 42, "__crdb__": {"updated": "10.0"}}
+	{"__event__": "insert", "pk" : 99, "v" : 42, "cdc_prev": { "pk" : 99, "v" : 21 }, "__crdb__": {"updated": "10.0"}}
 ] }
 `),
 		}))
+
+		// Verify staged data, if applicable.
+		if !htc.immediate {
+			stager, err := fixture.Stagers.Get(ctx, tableInfo.Name())
+			if a.NoError(err) {
+				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(10, 0))
+				a.NoError(err)
+				a.Len(muts, 6)
+				// The order is stable since the underlying query
+				// orders by HLC and key.
+				a.Equal([]types.Mutation{
+					// Original entries.
+					{
+						Data: []byte(`{"pk":42,"v":99}`),
+						Key:  []byte(`[42]`),
+						Time: hlc.New(1, 0),
+					},
+					{
+						Before: []byte(`{"pk":99,"v":33}`),
+						Data:   []byte(`{"pk":99,"v":42}`),
+						Key:    []byte(`[99]`),
+						Time:   hlc.New(1, 0),
+					},
+					// These are the deletes from above.
+					{
+						Data: []byte(`null`),
+						Key:  []byte(`[42]`),
+						Time: hlc.New(3, 0),
+					},
+					{
+						Data: []byte(`null`),
+						Key:  []byte(`[99]`),
+						Time: hlc.New(3, 0),
+					},
+					// These are the entries we just created.
+					{
+						Data: []byte(`{"pk":42,"v":99}`),
+						Key:  []byte(`[42]`),
+						Time: hlc.New(10, 0),
+					},
+					{
+						Before: []byte(`{"pk":99,"v":21}`),
+						Data:   []byte(`{"pk":99,"v":42}`),
+						Key:    []byte(`[99]`),
+						Time:   hlc.New(10, 0),
+					},
+				}, muts)
+			}
+		}
 
 		a.NoError(h.webhookForQuery(ctx, &request{
 			target: tableInfo.Name(),
@@ -303,9 +378,34 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 			target: jumbleName(),
 			body: strings.NewReader(`
 { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "updated" : "1.0" }
-{ "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "updated" : "1.0" }
+{ "after" : { "pk" : 99, "v" : 42 }, "before": { "pk" : 99, "v" : 33 }, "key" : [ 99 ], "updated" : "1.0" }
 `),
 		}, parseNdjsonMutation))
+
+		// Verify staged data, if applicable.
+		if !cfg.immediate {
+			stager, err := fixture.Stagers.Get(ctx, jumbleName())
+			if a.NoError(err) {
+				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(1, 0))
+				a.NoError(err)
+				a.Len(muts, 2)
+				// The order is stable since the underlying query
+				// orders, in part, on key
+				a.Equal([]types.Mutation{
+					{
+						Data: []byte(`{ "pk" : 42, "v" : 99 }`),
+						Key:  []byte(`[ 42 ]`),
+						Time: hlc.New(1, 0),
+					},
+					{
+						Before: []byte(`{ "pk" : 99, "v" : 33 }`),
+						Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
+						Key:    []byte(`[ 99 ]`),
+						Time:   hlc.New(1, 0),
+					},
+				}, muts)
+			}
+		}
 
 		// Send the resolved timestamp request.
 		a.NoError(h.resolved(ctx, &request{
@@ -349,10 +449,59 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 			body: strings.NewReader(fmt.Sprintf(`
 { "payload" : [
   { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "topic" : %[1]s, "updated" : "10.0" },
-  { "after" : { "pk" : 99, "v" : 42 }, "key" : [ 99 ], "topic" : %[1]s, "updated" : "10.0" }
+  { "after" : { "pk" : 99, "v" : 42 }, "before": { "pk" : 99, "v" : 21 }, "key" : [ 99 ], "topic" : %[1]s, "updated" : "10.0" }
 ] }
 `, jumbleName().Table())),
 		}))
+
+		// Verify staged data, if applicable.
+		if !cfg.immediate {
+			stager, err := fixture.Stagers.Get(ctx, jumbleName())
+			if a.NoError(err) {
+				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(10, 0))
+				a.NoError(err)
+				a.Len(muts, 6)
+				// The order is stable since the underlying query
+				// orders by HLC and key.
+				a.Equal([]types.Mutation{
+					// Original entries.
+					{
+						Data: []byte(`{ "pk" : 42, "v" : 99 }`),
+						Key:  []byte(`[ 42 ]`),
+						Time: hlc.New(1, 0),
+					},
+					{
+						Before: []byte(`{ "pk" : 99, "v" : 33 }`),
+						Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
+						Key:    []byte(`[ 99 ]`),
+						Time:   hlc.New(1, 0),
+					},
+					// These are the deletes from above.
+					{
+						Data: []byte(`null`),
+						Key:  []byte(`[ 42 ]`),
+						Time: hlc.New(3, 0),
+					},
+					{
+						Data: []byte(`null`),
+						Key:  []byte(`[ 99 ]`),
+						Time: hlc.New(3, 0),
+					},
+					// These are the entries we just created.
+					{
+						Data: []byte(`{ "pk" : 42, "v" : 99 }`),
+						Key:  []byte(`[ 42 ]`),
+						Time: hlc.New(10, 0),
+					},
+					{
+						Before: []byte(`{ "pk" : 99, "v" : 21 }`),
+						Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
+						Key:    []byte(`[ 99 ]`),
+						Time:   hlc.New(10, 0),
+					},
+				}, muts)
+			}
+		}
 
 		a.NoError(h.webhook(ctx, &request{
 			target: jumbleName().Schema(),

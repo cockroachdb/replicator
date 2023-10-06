@@ -42,6 +42,7 @@ type testFixture struct {
 	StagingPool   *types.StagingPool
 	Server        *Server
 	StagingDB     ident.StagingSchema
+	Stagers       types.Stagers
 	Watcher       types.Watchers
 }
 

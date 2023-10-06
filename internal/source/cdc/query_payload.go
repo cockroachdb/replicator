@@ -17,7 +17,6 @@
 package cdc
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -27,17 +26,11 @@ import (
 	"github.com/pkg/errors"
 )
 
-const (
-	// JSON operation values
-	deleteFieldValue = `"delete"`
-	insertFieldValue = `"insert"`
-	updateFieldValue = `"update"`
-)
-
 // labels
 var (
-	crdbLabel  = ident.New("__crdb__")
-	eventLabel = ident.New("__event__")
+	beforeLabel = ident.New("cdc_prev")
+	crdbLabel   = ident.New("__crdb__")
+	eventLabel  = ident.New("__event__")
 )
 
 // Metadata contains a string representation of a timestamp,
@@ -49,6 +42,8 @@ type Metadata struct {
 
 // operationType is the type of the operation associated with the
 // mutation: delete,insert or update.
+//
+//go:generate go run golang.org/x/tools/cmd/stringer -type=operationType
 type operationType int
 
 const (
@@ -56,29 +51,21 @@ const (
 	deleteOp
 	insertOp
 	updateOp
+	upsertOp
 )
 
-//go:generate go run golang.org/x/tools/cmd/stringer -type=operationType
-
-// decodeOp reads the operation type from a serialized JSON value.
-func decodeOp(op json.RawMessage) (operationType, error) {
-	switch string(op) {
-	case deleteFieldValue:
-		return deleteOp, nil
-	case insertFieldValue:
-		return insertOp, nil
-	case updateFieldValue:
-		return updateOp, nil
-	}
-	return unknownOp, fmt.Errorf("unknown operation %s", op)
+var encodedOpLookup = map[string]operationType{
+	`"delete"`: deleteOp,
+	`"insert"`: insertOp,
+	`"update"`: updateOp,
+	`"upsert"`: upsertOp,
 }
 
 // decodeUpdatedTimestamp extracts the update hlc.Time from a serialized Metadata JSON object.
 func decodeUpdatedTimestamp(data json.RawMessage) (hlc.Time, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
 	var time Metadata
-	if err := dec.Decode(&time); err != nil {
-		return hlc.Time{}, err
+	if err := json.Unmarshal(data, &time); err != nil {
+		return hlc.Time{}, errors.Wrap(err, "could not parse MVCC timestamp")
 	}
 	return hlc.Parse(time.Updated)
 }
@@ -87,6 +74,7 @@ func decodeUpdatedTimestamp(data json.RawMessage) (hlc.Time, error) {
 // a change feed that uses a query
 type queryPayload struct {
 	after     *ident.Map[json.RawMessage]
+	before    *ident.Map[json.RawMessage]
 	keys      *ident.Map[int]
 	keyValues []json.RawMessage
 	operation operationType
@@ -95,22 +83,31 @@ type queryPayload struct {
 
 // AsMutation converts the QueryPayload into a types.Mutation
 func (q *queryPayload) AsMutation() (types.Mutation, error) {
-	var after json.RawMessage
+	// The JSON marshaling errors should fall into the never-happens
+	// category since we unmarshalled the values below.
+	var after, before json.RawMessage
 	if q.operation != deleteOp {
 		var err error
 		after, err = json.Marshal(q.after)
 		if err != nil {
-			return types.Mutation{}, err
+			return types.Mutation{}, errors.WithStack(err)
+		}
+		if q.before != nil {
+			before, err = json.Marshal(q.before)
+			if err != nil {
+				return types.Mutation{}, errors.WithStack(err)
+			}
 		}
 	}
 	key, err := json.Marshal(q.keyValues)
 	if err != nil {
-		return types.Mutation{}, err
+		return types.Mutation{}, errors.WithStack(err)
 	}
 	return types.Mutation{
-		Data: after,
-		Key:  key,
-		Time: q.updated,
+		Before: before,
+		Data:   after,
+		Key:    key,
+		Time:   q.updated,
 	}, nil
 }
 
@@ -122,39 +119,50 @@ func (q *queryPayload) AsMutation() (types.Mutation, error) {
 // Example:
 // {"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}
 func (q *queryPayload) UnmarshalJSON(data []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	q.keyValues = make([]json.RawMessage, q.keys.Len())
-	q.after = &ident.Map[json.RawMessage]{}
-	if err := dec.Decode(&q.after); err != nil {
-		return err
+	// Parse the payload into after. We'll perform some additional
+	// extraction on the data momentarily.
+	if err := json.Unmarshal(data, &q.after); err != nil {
+		return errors.Wrap(err, "could not parse query payload")
 	}
-	var v json.RawMessage
-	var ok bool
-	var err error
-	// Process eventLabel.
-	if v, ok = q.after.Get(eventLabel); !ok {
-		return errors.Errorf(
-			"CREATE CHANGEFEED must specify the %s colum set to op_event()",
-			eventLabel.Raw())
-	}
-	if q.operation, err = decodeOp(v); err != nil {
-		return fmt.Errorf("unable to decode operation type: %w", err)
-	}
-	q.after.Delete(eventLabel)
 
-	// Process crdbLabel - it must contain the updated timestamp.
-	if v, ok = q.after.Get(crdbLabel); !ok {
+	// Process __event__ marker to determine if it's a deletion.
+	if eventRaw, hasEvent := q.after.Get(eventLabel); !hasEvent {
+		return errors.Errorf(
+			"Add %[1]s column to changefeed: CREATE CHANGEFEED ... AS SELECT event_op() AS %[1]s",
+			eventLabel.Raw())
+	} else if op, validOp := encodedOpLookup[string(eventRaw)]; !validOp {
+		return fmt.Errorf("unknown %s value: %s", eventLabel.Raw(), string(eventRaw))
+	} else {
+		q.after.Delete(eventLabel)
+		q.operation = op
+	}
+
+	// Process __crdb__ to extract the MVCC timestamp.
+	crdbRaw, hasCrdb := q.after.Get(crdbLabel)
+	if !hasCrdb {
 		return errors.Errorf("missing %s field", crdbLabel)
 	}
-	if q.updated, err = decodeUpdatedTimestamp(v); err != nil {
+	var err error
+	q.updated, err = decodeUpdatedTimestamp(crdbRaw)
+	if err != nil {
 		return err
 	}
 	q.after.Delete(crdbLabel)
 
-	// Process keys.
+	// Process optional cdc_prev data for three-way merge.
+	if beforeRaw, hasBefore := q.after.Get(beforeLabel); hasBefore {
+		if err := json.Unmarshal(beforeRaw, &q.before); err != nil {
+			return errors.Wrapf(err, "could not parse embeded %s payload", beforeLabel)
+		}
+		q.after.Delete(beforeLabel)
+	}
+
+	// Extract PK values.
+	q.keyValues = make([]json.RawMessage, q.keys.Len())
 	return q.keys.Range(func(k ident.Ident, pos int) error {
-		if v, ok = q.after.Get(k); !ok {
-			return fmt.Errorf("expecting a value for key: %s", k)
+		v, ok := q.after.Get(k)
+		if !ok {
+			return fmt.Errorf("missing primary key: %s", k)
 		}
 		q.keyValues[pos] = v
 		return nil
