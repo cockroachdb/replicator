@@ -119,10 +119,11 @@ type Memo interface {
 // is, it is a collection of column values to apply to a row in some
 // table.
 type Mutation struct {
-	Data json.RawMessage // An encoded JSON object: { "key" : "hello" }
-	Key  json.RawMessage // An encoded JSON array: [ "hello" ]
-	Time hlc.Time        // The effective time of the mutation
-	Meta map[string]any  // Dialect-specific data, may be nil
+	Before json.RawMessage // Optional encoded JSON object
+	Data   json.RawMessage // An encoded JSON object: { "key" : "hello" }
+	Key    json.RawMessage // An encoded JSON array: [ "hello" ]
+	Meta   map[string]any  // Dialect-specific data, may be nil, not persisted
+	Time   hlc.Time        // The effective time of the mutation
 }
 
 var nullBytes = []byte("null")
