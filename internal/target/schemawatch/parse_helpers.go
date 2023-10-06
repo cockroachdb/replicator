@@ -27,8 +27,10 @@ package schemawatch
 // correct treatment of timezones.
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -93,20 +95,36 @@ var oraParseHelpers = []struct {
 		},
 	},
 }
-var myParseHelpers = map[string]func(any) (any, error){
-	// mysql expects a serialized json
-	"json": func(a any) (any, error) {
-		return json.Marshal(a)
-	},
-}
 
 func parseHelper(product types.Product, typeName string) func(any) (any, error) {
 	switch product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// Just pass through, since we have similar representations.
 	case types.ProductMySQL:
-		if parser, ok := myParseHelpers[typeName]; ok {
-			return parser
+		switch typeName {
+		case "binary", "blob", "longblob", "mediumblob", "tinyblob", "varbinary":
+			return func(a any) (any, error) {
+				s, ok := a.(string)
+				if !ok || len(s) < 2 {
+					return nil, errors.Errorf("expecting a hex encoded string, got %T", a)
+				}
+				return hex.DecodeString(s[2:])
+			}
+		case "bit":
+			return func(a any) (any, error) {
+				s, ok := a.(string)
+				if !ok {
+					return nil, errors.Errorf("expecting a string, got %T", a)
+				}
+				return strconv.ParseInt(s, 2, 64)
+			}
+		case "json", "geometry", "geography":
+			// mysql expects a serialized json
+			return func(a any) (any, error) {
+				return json.Marshal(a)
+			}
+		default:
+			return nil
 		}
 	case types.ProductOracle:
 		for _, helper := range oraParseHelpers {
