@@ -94,6 +94,7 @@ var (
 
 	tmplCRDB *template.Template
 	tmplOra  *template.Template
+	tmplMy   *template.Template
 	tmplPG   *template.Template
 )
 
@@ -141,6 +142,10 @@ func loadTemplates(from fs.FS, override string) error {
 	if err != nil {
 		return err
 	}
+	tmplMy, err = load("my")
+	if err != nil {
+		return err
+	}
 	tmplOra, err = load("ora")
 	if err != nil {
 		return err
@@ -179,6 +184,11 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 		ret.conditional = tmplCRDB.Lookup("conditional.tmpl")
 		ret.delete = tmplCRDB.Lookup("delete.tmpl")
 		ret.upsert = tmplCRDB.Lookup("upsert.tmpl")
+
+	case types.ProductMySQL:
+		ret.conditional = tmplMy.Lookup("conditional.tmpl")
+		ret.delete = tmplMy.Lookup("delete.tmpl")
+		ret.upsert = tmplMy.Lookup("upsert.tmpl")
 
 	case types.ProductOracle:
 		// Bulk execution of DELETE not supported. See:
@@ -257,6 +267,8 @@ func (t *templates) Vars() ([][]varPair, error) {
 				switch t.Product {
 				case types.ProductCockroachDB, types.ProductPostgreSQL:
 					reference = fmt.Sprintf("$%d", vp.Param)
+				case types.ProductMySQL:
+					reference = "?"
 				case types.ProductOracle:
 					reference = fmt.Sprintf(":ref%d", vp.Param)
 				default:
