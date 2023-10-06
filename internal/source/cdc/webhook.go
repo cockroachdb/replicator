@@ -35,6 +35,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 	var payload struct {
 		Payload []struct {
 			After   json.RawMessage `json:"after"`
+			Before  json.RawMessage `json:"before"`
 			Key     json.RawMessage `json:"key"`
 			Topic   string          `json:"topic"`
 			Updated string          `json:"updated"`
@@ -83,9 +84,10 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 		}
 
 		mut := types.Mutation{
-			Data: payload.Payload[i].After,
-			Key:  payload.Payload[i].Key,
-			Time: timestamp,
+			Before: payload.Payload[i].Before,
+			Data:   payload.Payload[i].After,
+			Key:    payload.Payload[i].Key,
+			Time:   timestamp,
 		}
 		toProcess.Put(table, append(toProcess.GetZero(table), mut))
 	}

@@ -17,7 +17,6 @@
 package cdc
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -69,8 +68,7 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		qp := queryPayload{
 			keys: keys,
 		}
-		dec := json.NewDecoder(bytes.NewReader(payload))
-		if err := dec.Decode(&qp); err != nil {
+		if err := qp.UnmarshalJSON(payload); err != nil {
 			return err
 		}
 		mut, err := qp.AsMutation()

@@ -41,6 +41,7 @@ type parseMutation func(context.Context, *request, []byte) (types.Mutation, erro
 func parseNdjsonMutation(_ context.Context, _ *request, rawBytes []byte) (types.Mutation, error) {
 	var payload struct {
 		After   json.RawMessage `json:"after"`
+		Before  json.RawMessage `json:"before"`
 		Key     json.RawMessage `json:"key"`
 		Updated string          `json:"updated"`
 	}
@@ -62,9 +63,10 @@ func parseNdjsonMutation(_ context.Context, _ *request, rawBytes []byte) (types.
 		return types.Mutation{}, err
 	}
 	return types.Mutation{
-		Time: ts,
-		Data: payload.After,
-		Key:  payload.Key,
+		Before: payload.Before,
+		Data:   payload.After,
+		Time:   ts,
+		Key:    payload.Key,
 	}, nil
 }
 

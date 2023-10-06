@@ -19,7 +19,6 @@ package cdc
 // This file contains code repackaged from url.go.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 
@@ -43,8 +42,7 @@ func (h *Handler) parseNdjsonQueryMutation(
 	qp := queryPayload{
 		keys: keys,
 	}
-	dec := json.NewDecoder(bytes.NewReader(rawBytes))
-	if err := dec.Decode(&qp); err != nil {
+	if err := json.Unmarshal(rawBytes, &qp); err != nil {
 		return types.Mutation{}, err
 	}
 	return qp.AsMutation()
