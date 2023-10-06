@@ -75,6 +75,10 @@ func TestPutAndDrain(t *testing.T) {
 			Key:  []byte(fmt.Sprintf(`[%d]`, i)),
 			Time: hlc.New(int64(1000*i)+2, i),
 		}
+		// Don't assume that all mutations have a Before value.
+		if i%10 == 0 {
+			muts[i].Before = []byte("before")
+		}
 	}
 	maxTime := muts[len(muts)-1].Time
 

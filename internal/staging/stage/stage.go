@@ -88,13 +88,22 @@ func newStore(
 
 	if err := retry.Execute(ctx, db, fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
-	nanos INT NOT NULL,
+    nanos INT NOT NULL,
   logical INT NOT NULL,
-	  key STRING NOT NULL,
-	  mut BYTES NOT NULL,
-	PRIMARY KEY (nanos, logical, key)
+      key STRING NOT NULL,
+      mut BYTES NOT NULL,
+   before BYTES NULL,
+  PRIMARY KEY (nanos, logical, key)
 )`, table)); err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
+	}
+
+	// Transparently upgrade older staging tables. This avoids needing
+	// to add a breaking change to the Versions slice.
+	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
+`, table)); err != nil {
+		return nil, errors.WithStack(err)
 	}
 
 	labels := metrics.TableValues(target)
@@ -168,7 +177,7 @@ func (s *stage) TransactionTimes(
 // This query drains all mutations between the given timestamps,
 // returning the latest timestamped value for any given key.
 const selectTemplateAll = `
-SELECT key, nanos, logical, mut
+SELECT key, nanos, logical, mut, before
   FROM %[1]s
  WHERE (nanos, logical) BETWEEN ($1, $2) AND ($3, $4)
  ORDER BY nanos, logical`
@@ -186,7 +195,7 @@ SELECT key, nanos, logical, mut
 // either for key-based pagination, since we now have to read through
 // all keys to identify those with a mutation in the desired window.
 const selectTemplatePartial = `
-SELECT key, nanos, logical, mut
+SELECT key, nanos, logical, mut, before
   FROM %[1]s
  WHERE (nanos, logical, key) > ($1, $2, $5)
    AND (nanos, logical) <= ($3, $4) 
@@ -234,19 +243,12 @@ func (s *stage) SelectPartial(
 			var mut types.Mutation
 			var nanos int64
 			var logical int
-			if err := rows.Scan(&mut.Key, &nanos, &logical, &mut.Data); err != nil {
+			if err := rows.Scan(&mut.Key, &nanos, &logical, &mut.Data, &mut.Before); err != nil {
 				return err
 			}
-			// Check for gzip magic numbers.
-			if len(mut.Data) >= 2 && mut.Data[0] == 0x1f && mut.Data[1] == 0x8b {
-				r, err := gzip.NewReader(bytes.NewReader(mut.Data))
-				if err != nil {
-					return errors.WithStack(err)
-				}
-				mut.Data, err = io.ReadAll(r)
-				if err != nil {
-					return errors.WithStack(err)
-				}
+			mut.Data, err = maybeGunzip(mut.Data)
+			if err != nil {
+				return err
 			}
 			mut.Time = hlc.New(nanos, logical)
 			ret = append(ret, mut)
@@ -285,11 +287,11 @@ func (s *stage) SelectPartial(
 	return ret, nil
 }
 
-// The extra cast on $4 is because arrays of JSONB aren't implemented:
+// The byte-array casts on $4 and $5 are because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468
 const putTemplate = `
-UPSERT INTO %s (nanos, logical, key, mut)
-SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[])`
+UPSERT INTO %s (nanos, logical, key, mut, before)
+SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[]), unnest($5::BYTES[])`
 
 // Store stores some number of Mutations into the database.
 func (s *stage) Store(
@@ -341,41 +343,36 @@ func (s *stage) putOne(
 	logical := make([]int, len(mutations))
 	keys := make([]string, len(mutations))
 	jsons := make([][]byte, len(mutations))
+	befores := make([][]byte, len(mutations))
 
 	numWorkers := runtime.GOMAXPROCS(0)
 	eg, errCtx := errgroup.WithContext(ctx)
 	for worker := 0; worker < numWorkers; worker++ {
 		worker := worker
 		eg.Go(func() error {
-			// We use w.Reset() below
-			var gzWriter gzip.Writer
 			for idx := worker; idx < len(jsons); idx += numWorkers {
 				if err := errCtx.Err(); err != nil {
 					return err
 				}
+				var err error
 				mut := mutations[idx]
 
 				nanos[idx] = mut.Time.Nanos()
 				logical[idx] = mut.Time.Logical()
 				keys[idx] = string(mut.Key)
+				befores[idx], err = maybeGZip(mut.Before)
+				if err != nil {
+					return err
+				}
 
 				if mut.IsDelete() {
 					jsons[idx] = []byte("null")
 					continue
 				}
 
-				var buf bytes.Buffer
-				gzWriter.Reset(&buf)
-				if _, err := gzWriter.Write(mut.Data); err != nil {
-					return errors.WithStack(err)
-				}
-				if err := gzWriter.Close(); err != nil {
-					return errors.WithStack(err)
-				}
-				if buf.Len() < len(mut.Data) {
-					jsons[idx] = buf.Bytes()
-				} else {
-					jsons[idx] = mut.Data
+				jsons[idx], err = maybeGZip(mut.Data)
+				if err != nil {
+					return err
 				}
 			}
 			return nil
@@ -386,7 +383,7 @@ func (s *stage) putOne(
 		return err
 	}
 
-	_, err := db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons)
+	_, err := db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons, befores)
 	return errors.Wrap(err, s.sql.store)
 }
 
@@ -436,4 +433,39 @@ func (s *stage) Retire(ctx context.Context, db types.StagingQuerier, end hlc.Tim
 		s.retireError.Inc()
 	}
 	return err
+}
+
+// maybeGZip compresses the given data if it is larger than a threshold
+// value. GZIP has about 1k of overhead for the dictionary, so zipping
+// small amounts of data isn't actually going to buy us anything.
+func maybeGZip(data []byte) ([]byte, error) {
+	if len(data) <= 1024 {
+		return data, nil
+	}
+
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+	if _, err := gzWriter.Write(data); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if buf.Len() < len(data) {
+		return buf.Bytes(), nil
+	}
+	return data, nil
+}
+
+// maybeGunzip looks for GZip magic numbers and decompresses the data if
+// they're present. The magic numbers would not be present in JSON.
+func maybeGunzip(data []byte) ([]byte, error) {
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		r, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return io.ReadAll(r)
+	}
+	return data, nil
 }
