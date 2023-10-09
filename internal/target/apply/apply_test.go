@@ -227,10 +227,7 @@ func TestApply(t *testing.T) {
 		a := assert.New(t)
 		cfg := applycfg.NewConfig()
 		cfg.Extras = ident.New("extras")
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbleName, cfg))
-		changed, err := fixture.Configs.Refresh(ctx)
-		a.True(changed)
-		a.NoError(err)
+		a.NoError(fixture.Configs.Set(jumbleName, cfg))
 
 		// The config update is async, so we may need to try again.
 		for {
@@ -271,10 +268,7 @@ func TestApply(t *testing.T) {
 		a.NoError(fixture.TargetPool.QueryRowContext(ctx, extrasQ, 2, "0").Scan(&extrasRaw))
 		a.Equal(`{"check":"multiple","mutations":"work"}`, extrasRaw)
 
-		a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbleName, nil))
-		changed, err = fixture.Configs.Refresh(ctx)
-		a.True(changed)
-		a.NoError(err)
+		a.NoError(fixture.Configs.Set(jumbleName, nil))
 	})
 }
 
@@ -638,16 +632,12 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx,
-			fixture.StagingPool,
+		a.NoError(fixture.Configs.Set(
 			jumbleName,
 			applycfg.NewConfig().Patch(&applycfg.Config{
 				CASColumns: []ident.Ident{ident.New("bad_column")},
 			}),
 		))
-		changed, err := fixture.Configs.Refresh(ctx)
-		a.True(changed)
-		a.NoError(err)
 
 		_, err = fixture.Appliers.Get(ctx, jumbleName)
 		if a.Error(err) {
@@ -658,16 +648,12 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	t.Run("check_invalid_deadline_name", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(fixture.Configs.Store(ctx,
-			fixture.StagingPool,
+		a.NoError(fixture.Configs.Set(
 			jumbleName,
 			applycfg.NewConfig().Patch(&applycfg.Config{
 				Deadlines: ident.MapOf[time.Duration](ident.New("bad_column"), time.Second),
 			}),
 		))
-		changed, err := fixture.Configs.Refresh(ctx)
-		a.True(changed)
-		a.NoError(err)
 
 		_, err = fixture.Appliers.Get(ctx, jumbleName)
 		if a.Error(err) {
@@ -703,10 +689,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	if deadline {
 		configData.Deadlines.Put(ident.New("ts"), 10*time.Minute)
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbleName, configData))
-	changed, err := fixture.Configs.Refresh(ctx)
-	a.True(changed)
-	a.NoError(err)
+	a.NoError(fixture.Configs.Set(jumbleName, configData))
 	app, err := fixture.Appliers.Get(ctx, jumbleName)
 	if !a.NoError(err) {
 		return
@@ -810,10 +793,7 @@ func TestExpressionColumns(t *testing.T) {
 		ident.New("val"), "$0 || ' world!'",
 		ident.New("fixed"), "'constant'",
 	)
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, jumbledName, configData))
-	changed, err := fixture.Configs.Refresh(ctx)
-	a.True(changed)
-	a.NoError(err)
+	a.NoError(fixture.Configs.Set(jumbledName, configData))
 	app, err := fixture.Appliers.Get(ctx, jumbledName)
 	if !a.NoError(err) {
 		return
@@ -885,10 +865,7 @@ func TestIgnoredColumns(t *testing.T) {
 		ident.New("val_ignored"), true,
 		ident.New("not_required"), true,
 	)
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tblName, configData))
-	changed, err := fixture.Configs.Refresh(ctx)
-	a.True(changed)
-	a.NoError(err)
+	a.NoError(fixture.Configs.Set(tblName, configData))
 	app, err := fixture.Appliers.Get(ctx, tblName)
 	if !a.NoError(err) {
 		return
@@ -939,10 +916,7 @@ func TestRenamedColumns(t *testing.T) {
 		ident.New("pk"), ident.New("pk_source"),
 		ident.New("val"), ident.New("val_source"),
 	)
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tblName, configData))
-	changed, err := fixture.Configs.Refresh(ctx)
-	a.True(changed)
-	a.NoError(err)
+	a.NoError(fixture.Configs.Set(tblName, configData))
 	app, err := fixture.Appliers.Get(ctx, tblName)
 	if !a.NoError(err) {
 		return
@@ -1272,10 +1246,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 	if cfg.deadline {
 		configData.Deadlines.Put(ident.New("ts"), time.Hour)
 	}
-	a.NoError(fixture.Configs.Store(ctx, fixture.StagingPool, tblName, configData))
-	changed, err := fixture.Configs.Refresh(ctx)
-	a.True(changed)
-	a.NoError(err)
+	a.NoError(fixture.Configs.Set(tblName, configData))
 	app, err := fixture.Appliers.Get(ctx, tblName)
 	if !a.NoError(err) {
 		return

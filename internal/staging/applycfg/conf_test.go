@@ -14,17 +14,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package applycfg_test
+package applycfg
 
 import (
 	"testing"
+	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestCopyEquals(t *testing.T) {
+	a := assert.New(t)
+
+	cfg := &Config{
+		CASColumns:  TargetColumns{ident.New("cas")},
+		Deadlines:   ident.MapOf[time.Duration](ident.New("dl"), time.Hour),
+		Exprs:       ident.MapOf[string]("expr", "foo"),
+		Extras:      ident.New("extras"),
+		Ignore:      ident.MapOf[bool]("ign", true),
+		SourceNames: ident.MapOf[SourceColumn](ident.New("new"), ident.New("old")),
+	}
+
+	a.True(cfg.Equal(cfg))
+
+	cpy := cfg.Copy()
+	a.NotSame(cfg, cpy)
+	a.True(cfg.Equal(cpy))
+
+	patched := NewConfig().Patch(cpy)
+	a.NotSame(cpy, patched)
+	a.True(cfg.Equal(patched))
+}
 
 func TestZero(t *testing.T) {
 	a := assert.New(t)
 
-	a.True(applycfg.NewConfig().IsZero())
+	a.True(NewConfig().IsZero())
 }

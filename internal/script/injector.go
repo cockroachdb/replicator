@@ -36,7 +36,6 @@ func Evaluate(
 	loader *Loader,
 	configs *applycfg.Configs,
 	diags *diag.Diagnostics,
-	stagingPool *types.StagingPool,
 	targetSchema TargetSchema,
 	watchers types.Watchers,
 ) (*UserScript, error) {
@@ -47,6 +46,6 @@ func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, err
 	panic(wire.Build(
 		Set,
 		wire.FieldsOf(new(*all.Fixture), "Diagnostics", "Fixture", "Configs", "Watchers"),
-		wire.FieldsOf(new(*base.Fixture), "Context", "StagingPool"),
+		wire.FieldsOf(new(*base.Fixture), "Context"),
 	))
 }

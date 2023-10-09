@@ -107,23 +107,19 @@ func newApply(
 		}
 		defer cancelSchema()
 
-		configCh, cancelConfig := cfgs.Watch(target)
-		if err != nil {
-			errs <- err
-			return
-		}
-		defer cancelConfig()
+		configHandle := cfgs.Get(target)
+		configData, configChanged := configHandle.Get()
 
-		var configData *applycfg.Config
 		var schemaData []types.ColData
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case configData = <-configCh:
+			case <-configChanged:
+				configData, configChanged = configHandle.Get()
 			case schemaData = <-schemaCh:
 			}
-			if configData != nil && len(schemaData) > 0 {
+			if len(schemaData) > 0 {
 				err := a.refreshUnlocked(configData, schemaData)
 				if err != nil {
 					log.WithError(err).WithField("table", target).Warn("could not refresh table metadata")
