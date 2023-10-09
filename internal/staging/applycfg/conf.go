@@ -41,6 +41,8 @@ type (
 
 // A Config contains per-target-table configuration.
 type Config struct {
+	// NB: Update TestCopyEquals if adding new fields.
+
 	CASColumns  TargetColumns             // The columns for compare-and-set operations.
 	Deadlines   *ident.Map[time.Duration] // Deadline-based operation.
 	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.

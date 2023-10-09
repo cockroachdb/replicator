@@ -180,7 +180,6 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 		f.scriptLoader,
 		f.applyConfigs,
 		loopDiags,
-		f.stagingPool,
 		script.TargetSchema(config.TargetSchema),
 		f.watchers,
 	)

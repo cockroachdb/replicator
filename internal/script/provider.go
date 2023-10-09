@@ -24,7 +24,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/google/wire"
@@ -118,7 +117,6 @@ func ProvideUserScript(
 	applyConfigs *applycfg.Configs,
 	boot *Loader,
 	diags *diag.Diagnostics,
-	stagingPool *types.StagingPool,
 	target TargetSchema,
 	watchers types.Watchers,
 ) (*UserScript, error) {
@@ -150,25 +148,8 @@ func ProvideUserScript(
 		return nil, err
 	}
 
-	err = retry.Retry(ctx, func(ctx context.Context) error {
-		tx, err := stagingPool.Begin(ctx)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		defer func() { _ = tx.Rollback(ctx) }()
-		if err := ret.Targets.Range(func(tbl ident.Table, tblCfg *Target) error {
-			err := applyConfigs.Store(ctx, tx, tbl, &tblCfg.Config)
-			return errors.WithStack(err)
-		}); err != nil {
-			return err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return errors.WithStack(err)
-		}
-		if _, err := applyConfigs.Refresh(ctx); err != nil {
-			return errors.WithStack(err)
-		}
-		return nil
+	err = ret.Targets.Range(func(tbl ident.Table, tblCfg *Target) error {
+		return errors.Wrap(applyConfigs.Set(tbl, &tblCfg.Config), tbl.Raw())
 	})
 
 	return ret, err

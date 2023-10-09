@@ -21,8 +21,8 @@ import (
 // Injectors from injector.go:
 
 // Evaluate the loaded script.
-func Evaluate(ctx context.Context, loader *Loader, configs *applycfg.Configs, diags *diag.Diagnostics, stagingPool *types.StagingPool, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
-	userScript, err := ProvideUserScript(ctx, configs, loader, diags, stagingPool, targetSchema, watchers)
+func Evaluate(ctx context.Context, loader *Loader, configs *applycfg.Configs, diags *diag.Diagnostics, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
+	userScript, err := ProvideUserScript(ctx, configs, loader, diags, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -38,9 +38,8 @@ func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema Tar
 		return nil, err
 	}
 	diagnostics := fixture.Diagnostics
-	stagingPool := baseFixture.StagingPool
 	watchers := fixture.Watchers
-	userScript, err := ProvideUserScript(contextContext, configs, loader, diagnostics, stagingPool, targetSchema, watchers)
+	userScript, err := ProvideUserScript(contextContext, configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}

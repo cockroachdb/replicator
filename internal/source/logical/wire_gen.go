@@ -44,14 +44,21 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup4, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingSchema, err := ProvideStagingDB(baseConfig)
+	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -59,15 +66,7 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup5, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	watchers, cleanup6, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	stagingPool, cleanup6, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -76,7 +75,7 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup7, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	stagingSchema, err := ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -88,7 +87,6 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -100,7 +98,6 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -110,7 +107,6 @@ func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), e
 		return nil, nil, err
 	}
 	return factory, func() {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()

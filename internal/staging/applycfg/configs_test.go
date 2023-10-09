@@ -14,116 +14,52 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package applycfg_test
+package applycfg
 
 import (
-	"encoding/json"
+	"context"
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Verify round-trip through persistence code.
-func TestPersistenceRoundTrip(t *testing.T) {
-	a := assert.New(t)
-
-	fixture, cancel, err := all.NewFixture()
-	if !a.NoError(err) {
-		return
-	}
+func TestConfigs(t *testing.T) {
+	r := require.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	ctx := fixture.Context
-	cfgs := fixture.Configs
-
-	tbl := ident.NewTable(ident.MustSchema(ident.New("db"), ident.Public), ident.New("target"))
-
-	watch, cancel := cfgs.Watch(tbl)
+	diags, cancel := diag.New(ctx)
 	defer cancel()
-	// Helper to perform a timed read from the watch channel.
-	readWatch := func() *applycfg.Config {
-		select {
-		case ret := <-watch:
-			return ret
-		case <-time.After(time.Second):
-			a.Fail("timed out waiting for watch")
-			return &applycfg.Config{}
-		}
-	}
 
-	// We should see data immediately.
-	a.True(readWatch().IsZero())
+	cfgs, err := ProvideConfigs(diags)
+	r.NoError(err)
 
-	cfg := &applycfg.Config{
-		CASColumns: []ident.Ident{
-			ident.New("cas1"),
-			ident.New("cas2"),
-		},
-		Deadlines: ident.MapOf[time.Duration](
-			ident.New("dl1"), time.Second,
-			ident.New("dl2"), 2*time.Second,
-		),
-		Exprs: ident.MapOf[string](
-			ident.New("expr1"), "1 + $0",
-			ident.New("expr2"), "2 + $0",
-		),
+	tbl := ident.NewTable(ident.MustSchema(ident.New("db")), ident.New("table"))
+
+	handle := cfgs.Get(tbl)
+	zero, changed := handle.Get()
+	r.NotNil(zero)
+	r.True(zero.IsZero())
+
+	r.NoError(cfgs.Set(tbl, &Config{
 		Extras: ident.New("extras"),
-		Ignore: ident.MapOf[bool](
-			ident.New("ignore1"), true,
-			ident.New("ignore2"), true,
-		),
-		SourceNames: ident.MapOf[ident.Ident](
-			ident.New("rename1"), ident.New("renamed1"),
-			ident.New("rename2"), ident.New("renamed2"),
-		),
-	}
-	a.True(cfg.Equal(cfg.Copy()))
+	}))
 
-	// Check zero value.
-	a.True(cfgs.Get(tbl).IsZero())
-
-	// Verify that we can store the data.
-	tx, err := fixture.StagingPool.Begin(ctx)
-	a.NoError(err)
-	a.NoError(cfgs.Store(ctx, tx, tbl, cfg))
-	a.NoError(tx.Commit(ctx))
-
-	// Reload with persisted data.
-	changed, err := fixture.Configs.Refresh(ctx)
-	a.True(changed)
-	a.NoError(err)
-
-	// Verify no-change behavior.
-	changed, err = fixture.Configs.Refresh(ctx)
-	a.False(changed)
-	a.NoError(err)
-
-	// Verify that the data is equal.
-	found := cfgs.Get(tbl)
-	a.True(cfg.Equal(found))
-
-	bytes, err := json.Marshal(cfgs.GetAll())
-	if a.NoError(err) {
-		t.Log(string(bytes))
+	select {
+	case <-changed:
+	default:
+		r.Fail("should have seen channel closed")
 	}
 
-	// Verify updated data from the watch.
-	a.True(cfg.Equal(readWatch()))
+	next, _ := handle.Get()
+	r.True(ident.Equal(ident.New("extras"), next.Extras))
 
-	// Ensure we can load the data using a jumbled name.
-	a.True(cfg.Equal(cfgs.Get(sinktest.JumbleTable(tbl))))
+	r.NotNil(diags.Payload(ctx)["applycfg"])
 
-	// Replace the data with an empty configuration, this will wind
-	// up deleting the config rows.
-	a.NoError(cfgs.Store(ctx, fixture.StagingPool, tbl, applycfg.NewConfig()))
-	changed, err = fixture.Configs.Refresh(ctx)
-	a.True(changed)
-	a.NoError(err)
-	a.True(cfgs.Get(tbl).IsZero())
-	a.True(readWatch().IsZero())
+	r.NoError(cfgs.Set(tbl, nil))
+	zero, _ = handle.Get()
+	r.True(zero.IsZero())
 }

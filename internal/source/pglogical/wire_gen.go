@@ -55,14 +55,21 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup4, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
+	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -70,15 +77,7 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	configs, cleanup5, err := applycfg.ProvideConfigs(ctx, diagnostics, stagingPool, stagingSchema)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	watchers, cleanup6, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	stagingPool, cleanup6, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -87,7 +86,7 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup7, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -99,7 +98,6 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -111,7 +109,6 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -120,9 +117,8 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loop, cleanup8, err := ProvideLoop(config, dialect, factory)
+	loop, cleanup7, err := ProvideLoop(config, dialect, factory)
 	if err != nil {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()
@@ -136,7 +132,6 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		Loop:        loop,
 	}
 	return pgLogical, func() {
-		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()

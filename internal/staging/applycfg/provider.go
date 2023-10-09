@@ -17,14 +17,8 @@
 package applycfg
 
 import (
-	"context"
-	"fmt"
-
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/wire"
-	"github.com/pkg/errors"
 )
 
 // Set is used by Wire.
@@ -32,40 +26,11 @@ var Set = wire.NewSet(
 	ProvideConfigs,
 )
 
-// ProvideConfigs constructs a Configs instance, starting a new
-// background goroutine to keep it refreshed.
-func ProvideConfigs(
-	ctx context.Context,
-	diags *diag.Diagnostics,
-	pool *types.StagingPool,
-	targetDB ident.StagingSchema,
-) (*Configs, func(), error) {
-	target := ident.NewTable(targetDB.Schema(), ident.New("apply_config"))
-
-	if _, err := pool.Exec(ctx, fmt.Sprintf(confSchema, target)); err != nil {
-		return nil, nil, errors.WithStack(err)
-	}
-
-	cfg := &Configs{pool: pool}
-	cfg.mu.data = &ident.TableMap[*Config]{}
-	cfg.mu.updated = make(chan struct{})
-	cfg.sql.delete = fmt.Sprintf(deleteConfTemplate, target)
-	cfg.sql.loadAll = fmt.Sprintf(loadConfTemplate, target)
-	cfg.sql.upsert = fmt.Sprintf(upsertConfTemplate, target)
-
-	// Ensure initial data load is good.
-	if _, err := cfg.Refresh(ctx); err != nil {
-		return nil, nil, err
-	}
-
-	// Start a background goroutine to refresh data.
-	refreshCtx, cancel := context.WithCancel(context.Background())
-	go cfg.refreshLoop(refreshCtx)
-	// Once the refresh context has stopped, watches won't fire.
-	cfg.watchCtx = refreshCtx
+// ProvideConfigs is called by Wire to construct a Configs instance.
+func ProvideConfigs(diags *diag.Diagnostics) (*Configs, error) {
+	cfg := &Configs{}
 	if err := diags.Register("applycfg", cfg); err != nil {
-		cancel()
-		return nil, nil, err
+		return nil, err
 	}
-	return cfg, cancel, nil
+	return cfg, nil
 }
