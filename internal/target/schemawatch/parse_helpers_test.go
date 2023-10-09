@@ -32,7 +32,7 @@ func TestOraParseHelpers(t *testing.T) {
 
 	tcs := []struct {
 		typ      string
-		input    string
+		input    any
 		expected any
 	}{
 		{
@@ -65,11 +65,42 @@ func TestOraParseHelpers(t *testing.T) {
 	for idx, tc := range tcs {
 		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
 			r := require.New(t)
-
 			helper := parseHelper(types.ProductOracle, tc.typ)
 			r.NotNil(helper)
-			ret, ok := helper(tc.input)
-			r.True(ok)
+			ret, err := helper(tc.input)
+			r.NoError(err)
+			r.Equal(tc.expected, ret)
+		})
+	}
+}
+
+func TestMyParseHelpers(t *testing.T) {
+	tcs := []struct {
+		typ      string
+		input    any
+		expected []byte
+	}{
+		{
+			typ: "json",
+			input: map[string]any{
+				"k": "a",
+				"v": 1,
+			},
+			expected: []byte(`{"k":"a","v":1}`),
+		},
+		{
+			typ:      "json",
+			input:    []int{1, 2, 3},
+			expected: []byte(`[1,2,3]`),
+		},
+	}
+	for idx, tc := range tcs {
+		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
+			r := require.New(t)
+			helper := parseHelper(types.ProductMySQL, tc.typ)
+			r.NotNil(helper)
+			ret, err := helper(tc.input)
+			r.NoError(err)
 			r.Equal(tc.expected, ret)
 		})
 	}

@@ -27,61 +27,87 @@ package schemawatch
 // correct treatment of timezones.
 
 import (
+	"encoding/json"
 	"regexp"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	ora "github.com/sijms/go-ora/v2"
 )
 
 // These are evaluated in order.
 var oraParseHelpers = []struct {
 	pattern *regexp.Regexp
-	parser  func(string) (any, bool)
+	parser  func(any) (any, error)
 }{
 	{
 		// This is a special-case for UUIDs in the source being stored
 		// as a 16-byte raw value in the destination.
 		pattern: regexp.MustCompile(`^RAW\(16\)$`),
-		parser: func(s string) (any, bool) {
+		parser: func(a any) (any, error) {
+			s, ok := a.(string)
+			if !ok {
+				return nil, errors.Errorf("expecting string, got %T", a)
+			}
 			u, err := uuid.Parse(s)
-			return u[:], err == nil
+			return u[:], err
 		},
 	},
 	{
 		pattern: regexp.MustCompile(`^TIMESTAMP\(\d+\) WITH TIME ZONE$`),
-		parser: func(s string) (any, bool) {
+		parser: func(a any) (any, error) {
+			s, ok := a.(string)
+			if !ok {
+				return nil, errors.Errorf("expecting string, got %T", a)
+			}
 			t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC)
-			return ora.TimeStampTZ(t), err == nil
+			return ora.TimeStampTZ(t), err
 		},
 	},
 	{
 		// Try parsing with and without a timezone specifier.
 		pattern: regexp.MustCompile(`^TIMESTAMP\(\d+\)$`),
-		parser: func(s string) (any, bool) {
+		parser: func(a any) (any, error) {
+			s, ok := a.(string)
+			if !ok {
+				return nil, errors.Errorf("expecting string, got %T", a)
+			}
 			if t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC); err == nil {
-				return t, true
+				return ora.TimeStamp(t), nil
 			}
 			t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC)
-			return ora.TimeStamp(t), err == nil
+			return ora.TimeStamp(t), err
 		},
 	},
 	{
 		pattern: regexp.MustCompile(`^DATE$`),
-		parser: func(s string) (any, bool) {
+		parser: func(a any) (any, error) {
+			s, ok := a.(string)
+			if !ok {
+				return nil, errors.Errorf("expecting string, got %T", a)
+			}
 			t, err := time.ParseInLocation("2006-01-02", s, time.UTC)
-			return ora.TimeStamp(t), err == nil
+			return ora.TimeStamp(t), err
 		},
 	},
 }
+var myParseHelpers = map[string]func(any) (any, error){
+	// mysql expects a serialized json
+	"json": func(a any) (any, error) {
+		return json.Marshal(a)
+	},
+}
 
-func parseHelper(product types.Product, typeName string) func(string) (any, bool) {
+func parseHelper(product types.Product, typeName string) func(any) (any, error) {
 	switch product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// Just pass through, since we have similar representations.
 	case types.ProductMySQL:
-		// TODO (silvano): add ad-hoc MySQL type representation, if needed.
+		if parser, ok := myParseHelpers[typeName]; ok {
+			return parser
+		}
 	case types.ProductOracle:
 		for _, helper := range oraParseHelpers {
 			if helper.pattern.MatchString(typeName) {
