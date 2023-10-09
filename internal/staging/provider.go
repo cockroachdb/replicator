@@ -19,11 +19,11 @@
 package staging
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
+	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/google/wire"
 )
 
