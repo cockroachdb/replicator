@@ -353,11 +353,13 @@ func (a *apply) upsertLocked(
 			// exceeds the precision or scale for the target column.
 			if num, ok := value.(json.Number); ok {
 				value = removeExponent(num).String()
-			} else if str, ok := value.(string); ok && targetColumn.Parse != nil {
-				value, ok = targetColumn.Parse(str)
-				if !ok {
-					return errors.Errorf("could not parse %q as a %s", str, targetColumn.Type)
+			} else if value != nil && targetColumn.Parse != nil {
+				v, err := targetColumn.Parse(value)
+				if err != nil {
+					return errors.Wrapf(err, "could not parse %v as a %s",
+						value, targetColumn.Type)
 				}
+				value = v
 			}
 
 			// This loop is driven by the fields in the incoming
