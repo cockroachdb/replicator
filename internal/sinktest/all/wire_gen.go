@@ -8,12 +8,12 @@ package all
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/staging/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
 
