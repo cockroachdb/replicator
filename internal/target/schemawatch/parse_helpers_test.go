@@ -32,7 +32,7 @@ func TestOraParseHelpers(t *testing.T) {
 
 	tcs := []struct {
 		typ      string
-		input    string
+		input    any
 		expected any
 	}{
 		{
@@ -45,9 +45,19 @@ func TestOraParseHelpers(t *testing.T) {
 			}(),
 		},
 		{
+			typ:      "RAW(16)",
+			input:    nil,
+			expected: nil,
+		},
+		{
 			typ:      "TIMESTAMP(9) WITH TIME ZONE",
 			input:    now.Format(time.RFC3339Nano),
 			expected: ora.TimeStampTZ(now),
+		},
+		{
+			typ:      "TIMESTAMP(9) WITH TIME ZONE",
+			input:    nil,
+			expected: nil,
 		},
 		{
 			typ:      "TIMESTAMP(9)",
@@ -55,18 +65,59 @@ func TestOraParseHelpers(t *testing.T) {
 			expected: ora.TimeStamp(now),
 		},
 		{
+			typ:      "TIMESTAMP(9)",
+			input:    nil,
+			expected: nil,
+		},
+		{
 			typ:   "DATE",
 			input: now.Format("2006-01-02"),
 			expected: ora.TimeStamp(time.Date(
 				now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)),
+		},
+		{
+			typ:      "DATE",
+			input:    nil,
+			expected: nil,
 		},
 	}
 
 	for idx, tc := range tcs {
 		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
 			r := require.New(t)
-
 			helper := parseHelper(types.ProductOracle, tc.typ)
+			r.NotNil(helper)
+			ret, ok := helper(tc.input)
+			r.True(ok)
+			r.Equal(tc.expected, ret)
+		})
+	}
+}
+
+func TestMyParseHelpers(t *testing.T) {
+	tcs := []struct {
+		typ      string
+		input    any
+		expected any
+	}{
+		{
+			typ: "json",
+			input: map[string]any{
+				"k": "a",
+				"v": 1,
+			},
+			expected: `{"k":"a","v":1}`,
+		},
+		{
+			typ:      "json",
+			input:    nil,
+			expected: nil,
+		},
+	}
+	for idx, tc := range tcs {
+		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
+			r := require.New(t)
+			helper := parseHelper(types.ProductMySQL, tc.typ)
 			r.NotNil(helper)
 			ret, ok := helper(tc.input)
 			r.True(ok)
