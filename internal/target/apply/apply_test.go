@@ -453,7 +453,7 @@ var (
 		{name: `time_null`, columnType: `TIME`},
 		{name: `timestamp`, columnType: `TIMESTAMP`, sqlValue: `2016-01-25 10:10:10`, indexable: true},
 		{name: `timestamp_null`, columnType: `TIMESTAMP`},
-		{name: `timestamptz`, columnType: `TIMESTAMPTZ`, sqlValue: `2016-01-25 10:10:10-05:00`, indexable: true},
+		// timestamptz is a bit different in PG and CRDB, adding a product specific test case below.
 		{name: `timestamptz_null`, columnType: `TIMESTAMPTZ`},
 		{name: `uuid`, columnType: `UUID`, sqlValue: `7f9c24e8-3b12-4fef-91e0-56a2d5a246ec`, indexable: true},
 		{name: `uuid_null`, columnType: `UUID`},
@@ -478,14 +478,31 @@ func TestAllDataTypes(t *testing.T) {
 		require.NoError(t, err)
 
 		switch fixture.TargetPool.Product {
-		case types.ProductCockroachDB, types.ProductPostgreSQL:
-			testcases = pgDataTypeTests
+		case types.ProductCockroachDB:
+			// timestamptz CRDB specific
+			testcases = append(pgDataTypeTests,
+				dataTypeTestCase{
+					name:       `timestamptz`,
+					columnType: `TIMESTAMPTZ`,
+					sqlValue:   `2016-01-25 10:10:10-05:00`,
+					indexable:  true})
 			readBackQ = "SELECT COALESCE(to_json(val)::VARCHAR(2048), 'null') FROM %s"
 		case types.ProductOracle:
 			testcases = oraDataTypeTests
 			// JSON_QUERY in older versions refuses to return raw scalars.
 			readBackQ = "SELECT JSON_QUERY(JSON_ARRAY(val NULL ON NULL), '$[0]' WITH ARRAY WRAPPER) FROM %s"
 			expectArrayWrapper = true
+		case types.ProductPostgreSQL:
+			// timestamptz PG specific
+			testcases = append(pgDataTypeTests,
+				dataTypeTestCase{
+					name:       `timestamptz`,
+					columnType: `TIMESTAMPTZ`,
+					sqlValue:   `2016-01-25 10:10:10-05:00`,
+					expectJSON: `"2016-01-25T15:10:10+00:00"`,
+					indexable:  true,
+				})
+			readBackQ = "SELECT COALESCE(to_json(val)::VARCHAR(2048), 'null') FROM %s"
 		default:
 			t.Fatal("unimplemented product")
 		}
@@ -565,7 +582,7 @@ func TestAllDataTypes(t *testing.T) {
 			if expectArrayWrapper {
 				readBack = readBack[1 : len(readBack)-1]
 			}
-			expectJSON := readBack
+			expectJSON := jsonValue
 			if tc.expectJSON != "" {
 				expectJSON = tc.expectJSON
 			}
