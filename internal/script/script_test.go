@@ -80,7 +80,7 @@ func TestScript(t *testing.T) {
 	}, TargetSchema(schema))
 	r.NoError(err)
 	a.Equal(3, s.Sources.Len())
-	a.Equal(2, s.Targets.Len())
+	a.Equal(4, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -153,6 +153,24 @@ func TestScript(t *testing.T) {
 			a.True(keep)
 			a.Equal(`{"hello":"world!","msg":"Hello World!","num":42}`, string(mapped.Data))
 		}
+
+		if merger := cfg.Merger; a.NotNil(merger) {
+			result, ok, err := merger.Merge(context.Background(), nil, &types.Conflict{
+				Mutation: types.Mutation{
+					Data: []byte(`{"hello":"world!"}`),
+				},
+				Before:   ident.MapOf[any]("val", 1),
+				Existing: ident.MapOf[any]("val", 40),
+				Proposed: ident.MapOf[any]("val", 3),
+			})
+			a.NoError(err)
+			a.True(ok)
+			if a.NotNil(result.Apply) {
+				if v, ok := result.Apply.Get(ident.New("val")); a.True(ok) {
+					a.Equal(int64(42), v)
+				}
+			}
+		}
 	}
 
 	tbl = ident.NewTable(schema, ident.New("drop_all"))
@@ -161,6 +179,40 @@ func TestScript(t *testing.T) {
 			_, keep, err := filter(context.Background(), types.Mutation{Data: []byte(`{"hello":"world!"}`)})
 			a.NoError(err)
 			a.False(keep)
+		}
+	}
+
+	tbl = ident.NewTable(schema, ident.New("merge_dlq_all"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		if merger := cfg.Merger; a.NotNil(merger) {
+			result, ok, err := merger.Merge(context.Background(), nil, &types.Conflict{
+				Mutation: types.Mutation{
+					Data: []byte(`{"hello":"world!"}`),
+				},
+				Before:   ident.MapOf[any]("val", 1),
+				Existing: ident.MapOf[any]("val", 0),
+				Proposed: ident.MapOf[any]("val", 2),
+			})
+			a.NoError(err)
+			a.True(ok)
+			a.Nil(result.Apply)
+			a.Equal("dead", result.DLQ)
+		}
+	}
+
+	tbl = ident.NewTable(schema, ident.New("merge_drop_all"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		if merger := cfg.Merger; a.NotNil(merger) {
+			_, ok, err := merger.Merge(context.Background(), nil, &types.Conflict{
+				Mutation: types.Mutation{
+					Data: []byte(`{"hello":"world!"}`),
+				},
+				Before:   ident.MapOf[any]("val", 1),
+				Existing: ident.MapOf[any]("val", 0),
+				Proposed: ident.MapOf[any]("val", 2),
+			})
+			a.NoError(err)
+			a.False(ok)
 		}
 	}
 }

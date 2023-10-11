@@ -49,6 +49,23 @@ type mapJS func(
 	meta map[string]any,
 ) (map[string]any, error)
 
+// A mergeOp is the input to the user-provided merge function.
+type mergeOp struct {
+	Before   goja.Value     `goja:"before"`   // Backed by identMapWrapper. Nil in 2-way case.
+	Meta     map[string]any `goja:"meta"`     // Equivalent to dispatch() or map() meta.
+	Existing goja.Value     `goja:"existing"` // Backed by identMapWrapper.
+	Proposed goja.Value     `goja:"proposed"` // Backed by identMapWrapper.
+}
+
+// A mergeResult is returned by the user-provided merge function.
+type mergeResult struct {
+	Apply goja.Value `goja:"apply"` // The data to return
+	DLQ   string     `goja:"dlq"`   // Append to a dead-letter queue.
+	Drop  bool       `goja:"drop"`  // Discard the mutation.
+}
+
+type mergeJS func(*mergeOp) (*mergeResult, error)
+
 // sourceJS is used in the API binding.
 type sourceJS struct {
 	DeletesTo string     `goja:"deletesTo"`
@@ -73,6 +90,8 @@ type targetJS struct {
 	Ignore map[string]bool `goja:"ignore"`
 	// Mutation to mutation.
 	Map mapJS `goja:"map"`
+	// Two- or three-way merge operator.
+	Merge mergeJS `goja:"merge"`
 }
 
 // Loader is responsible for the first-pass execution of the user

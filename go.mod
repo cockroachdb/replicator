@@ -7,7 +7,7 @@ require (
 	github.com/bobvawter/latch v1.0.2
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20230505164321-461e8663b4b4
-	github.com/dop251/goja v0.0.0-20220915101355-d79e1b125a30
+	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
 	github.com/evanw/esbuild v0.19.4
 	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/gofrs/uuid v4.4.0+incompatible
@@ -49,13 +49,14 @@ require (
 	github.com/cockroachdb/gostdlib v1.19.0 // indirect
 	github.com/cockroachdb/ttycolor v0.0.0-20210902133924-c7d7dcdde4e8 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/dlclark/regexp2 v1.7.0 // indirect
+	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/emirpasic/gods v1.12.0 // indirect
 	github.com/go-logr/logr v1.2.0 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148 // indirect
+	github.com/google/pprof v0.0.0-20230926050212-f7f687d19a98 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/google/subcommands v1.2.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.1 // indirect
