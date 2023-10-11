@@ -17,9 +17,11 @@
 package applycfg
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
@@ -28,11 +30,16 @@ func TestCopyEquals(t *testing.T) {
 	a := assert.New(t)
 
 	cfg := &Config{
-		CASColumns:  TargetColumns{ident.New("cas")},
-		Deadlines:   ident.MapOf[time.Duration](ident.New("dl"), time.Hour),
-		Exprs:       ident.MapOf[string]("expr", "foo"),
-		Extras:      ident.New("extras"),
-		Ignore:      ident.MapOf[bool]("ign", true),
+		CASColumns: TargetColumns{ident.New("cas")},
+		Deadlines:  ident.MapOf[time.Duration](ident.New("dl"), time.Hour),
+		Exprs:      ident.MapOf[string]("expr", "foo"),
+		Extras:     ident.New("extras"),
+		Ignore:     ident.MapOf[bool]("ign", true),
+		Merger: types.MergeFunc(func(
+			context.Context, types.TargetQuerier, *types.Conflict,
+		) (*types.Resolution, bool, error) {
+			panic("unused")
+		}),
 		SourceNames: ident.MapOf[SourceColumn](ident.New("new"), ident.New("old")),
 	}
 

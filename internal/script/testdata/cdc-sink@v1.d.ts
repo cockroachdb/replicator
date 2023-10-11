@@ -164,6 +164,12 @@ declare module "cdc-sink@v1" {
          */
         extras: Column;
         /**
+         * Columns that may be ignored in the input data. This allows,
+         * for example, columns to be dropped from the destination
+         * table.
+         */
+        ignore: { [k: Column]: boolean }
+        /**
          * A mapping function which may modify or discard a single
          * mutation to be applied to the target table.
          * @param d - The source document
@@ -172,11 +178,53 @@ declare module "cdc-sink@v1" {
          */
         map: (d: Document, meta: Document) => Document | null;
         /**
-         * Columns that may be ignored in the input data. This allows,
-         * for example, columns to be dropped from the destination
-         * table.
+         * Enables a user-defined, two- or three-way merge function.
          */
-        ignore: { [k: Column]: boolean }
+        merge: (op: MergeOperation) => MergeResult;
+    };
+
+    /**
+     * @see configureTable
+     */
+    type MergeOperation = {
+        /**
+         * This field will be present only in a three-way merge operation.
+         */
+        before?: Document;
+        /**
+         * A view of the conflicting row in the target database.
+         */
+        existing: Document;
+        /**
+         * Metadata similar to that found in the dispatch() or map() functions.
+         */
+        meta: Document;
+        /**
+         * The incoming data that could not be applied to the target row.
+         */
+        proposed: Document;
+    };
+
+    /**
+     * @see configureTable
+     */
+    type MergeResult = {
+        /**
+         * Values to write, unconditionally, into the target database.
+         */
+        apply: Document
+    } | {
+        /**
+         * The mutation should be sent to the named dead-letter queue
+         * for offline processing.
+         */
+        dlq: string
+    } | {
+        /**
+         * The mutation should be dropped. Note that choosing this
+         * option will cause data loss and a DLQ may be a better option.
+         */
+        drop: true
     };
 
     /**
