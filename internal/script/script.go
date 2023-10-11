@@ -82,6 +82,16 @@ type Target struct {
 
 // UserScript encapsulates a user-provided configuration expressed as a
 // JavaScript program.
+//
+// NB: The single-threaded nature of JavaScript means that only a single
+// goroutine may execute JS code at any given point in time. These
+// critical sections are coordinated through the execJS method. It's
+// also the case that the JS user code is tightly coupled to the
+// particular [goja.Runtime] that loaded the script (e.g. JS global
+// variables). Should contention on the runtime become problematic, the
+// correct solution would be to create multiple Loaders that each
+// evaluate a separate UserScript. The tradedoff here is that each
+// instance of the userscript would then have distinct global variables.
 type UserScript struct {
 	Sources *ident.Map[*Source]
 	Targets *ident.TableMap[*Target]
@@ -169,6 +179,9 @@ func (s *UserScript) bind(loader *Loader) error {
 			tgt.Map = identity
 		} else {
 			tgt.Map = s.bindMap(table, bag.Map)
+		}
+		if bag.Merge != nil {
+			tgt.Merger = s.bindMerge(table, bag.Merge)
 		}
 		for k, v := range bag.Ignore {
 			if v {
@@ -328,6 +341,74 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		}
 
 		return types.Mutation{Data: dataBytes, Key: keyBytes, Time: mut.Time}, true, nil
+	}
+}
+
+// bindMerge exports a user-provided function as a [types.MergeFunc].
+func (s *UserScript) bindMerge(table ident.Table, merger mergeJS) types.MergeFunc {
+	return func(ctx context.Context, tx types.TargetQuerier, con *types.Conflict) (*types.Resolution, bool, error) {
+		// con.Before will be nil in 2-way merge.
+		if con.Existing == nil {
+			return nil, false, errors.New("nil value in Conflict.Existing")
+		}
+		if con.Proposed == nil {
+			return nil, false, errors.New("nil value in Conflict.Proposed")
+		}
+		var jsResult *mergeResult
+		err := s.execJS(ctx, func() error {
+			op := &mergeOp{
+				Meta:     con.Mutation.Meta,
+				Existing: s.rt.NewDynamicObject(&identMapWrapper{con.Existing, s.rt}),
+				Proposed: s.rt.NewDynamicObject(&identMapWrapper{con.Proposed, s.rt}),
+			}
+			if con.Before != nil {
+				op.Before = s.rt.NewDynamicObject(&identMapWrapper{con.Before, s.rt})
+			}
+			var err error
+			jsResult, err = merger(op)
+			return err
+		})
+		if err != nil {
+			return nil, false, err
+		}
+
+		if jsResult == nil {
+			return nil, false, errors.Errorf(
+				"%s: merge function did not return a MergeResult object", table.Raw())
+		}
+		if jsResult.Drop {
+			return nil, false, nil
+		}
+		// Copy the proposed data out to a DLQ.
+		if jsResult.DLQ != "" {
+			return &types.Resolution{
+				DLQ: jsResult.DLQ,
+			}, true, nil
+		}
+		// By the pigeonhole principle, the user made an error.
+		if jsResult.Apply == nil {
+			return nil, false, errors.Errorf(
+				"%s: merge function did not return a well-formed MergeResult", table.Raw())
+		}
+
+		// See goja.Object.Export for discussion about the returned type.
+		switch t := jsResult.Apply.Export().(type) {
+		case *identMapWrapper:
+			// The user returned one of the input wrappers, so we can
+			// just unwrap and return it.
+			return &types.Resolution{Apply: t.data}, true, nil
+
+		case map[string]any:
+			// The user returned a new JS object.
+			out := &ident.Map[any]{}
+			for k, v := range t {
+				out.Put(ident.New(k), v)
+			}
+			return &types.Resolution{Apply: out}, true, nil
+
+		default:
+			return nil, false, errors.Errorf("%s: unexpected type of apply value: %T", table.Raw(), t)
+		}
 	}
 }
 
