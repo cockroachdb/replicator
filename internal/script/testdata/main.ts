@@ -61,6 +61,12 @@ api.configureTable("all_features", {
     },
     // Place unmapped data into JSONB column.
     extras: "overflow_column",
+    // Allow column in target database to be ignored.
+    ignore: {
+        "ign0": true,
+        "ign1": true,
+        "ign2": false
+    },
     // Final document fixups, or return null to drop it.
     map: doc => {
         doc.msg = externalData.trim();
@@ -68,16 +74,29 @@ api.configureTable("all_features", {
         console.log("Hello debug", JSON.stringify(doc));
         return doc;
     },
-    // Allow column in target database to be ignored.
-    ignore: {
-        "ign0": true,
-        "ign1": true,
-        "ign2": false
-    }
+    // This shows how a counter-like value can be merged.
+    merge: op => {
+        console.log("merge", JSON.stringify(op));
+        return {
+            apply: {
+                // Leading unary + coerces to numeric.
+                val: +op.existing.val + +op.proposed.val - +op.before.val,
+            }
+        };
+    },
 });
 
 api.configureTable("drop_all", {
     map: () => null
 });
+
+api.configureTable("merge_dlq_all", {
+    merge: op => ({dlq: "dead"})
+});
+
+api.configureTable("merge_drop_all", {
+    merge: op => ({drop: true})
+});
+
 
 api.setOptions({"hello": "world"});
