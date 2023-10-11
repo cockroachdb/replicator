@@ -37,13 +37,17 @@ func TestParseChangefeedURL(t *testing.T) {
 	dbName := nameParts[0].Raw()
 	schemaName := nameParts[1].Raw()
 	tableName := nameParts[2].Raw()
-	ndjson := strings.ReplaceAll(
-		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-REAL-1.ndjson`,
-		"TABLE", tableName)
-	ndjsonFull := strings.ReplaceAll(
-		`2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.REAL-1.ndjson`,
-		"TABLE", tableName)
-	resolved := `2020-04-04/202004042351304139680000000000000.RESOLVED`
+	ndjsonDate := `2020-04-02`
+	ndjsonTimestampWithExtras := `202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-REAL-1.ndjson`
+	ndjson := strings.Join([]string{ndjsonDate, ndjsonTimestampWithExtras}, "/")
+	ndjsonFull := `2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.REAL-1.ndjson`
+	resolvedDate := `2020-04-04`
+	resolvedTimestamp := `202004042351304139680000000000000.RESOLVED`
+	resolved := strings.Join([]string{resolvedDate, resolvedTimestamp}, "/")
+
+	dbDash := `--🔥--`
+	schemaShrug := `¯\_(ツ)_/¯`
+	tableFlip := `(╯°□°）╯︵ ┻━┻`
 
 	tests := []struct {
 		name      string
@@ -89,6 +93,12 @@ func TestParseChangefeedURL(t *testing.T) {
 			url:      strings.Join([]string{"", dbName, schemaName, tableName}, "/"),
 		},
 		{
+			name:     "webhook to table with terrible life choices",
+			decision: "webhook table",
+			target:   ident.NewTable(ident.MustSchema(ident.New(dbDash), ident.New(schemaShrug)), ident.New(tableFlip)),
+			url:      strings.Join([]string{"", url.QueryEscape(dbDash), url.QueryEscape(schemaShrug), url.QueryEscape(tableFlip)}, "/"),
+		},
+		{
 			name:      "resolved to schema",
 			decision:  "resolved",
 			target:    schemaIdent,
@@ -103,9 +113,10 @@ func TestParseChangefeedURL(t *testing.T) {
 			url:       strings.Join([]string{"", dbName, schemaName, tableName, resolved}, "/"),
 		},
 		{
-			name:    "resolved too short",
-			url:     strings.Join([]string{"", dbName, resolved}, "/"),
-			wantErr: "expecting the first 2 path segments to be schema names",
+			name:     "table that looks like a malformed resolved timestamp",
+			decision: "webhook table",
+			target:   ident.NewTable(ident.MustSchema(ident.New(dbName), ident.New(resolvedDate)), ident.New(resolvedTimestamp)),
+			url:      strings.Join([]string{"", dbName, resolved}, "/"),
 		},
 		{
 			name:    "resolved too long",
@@ -125,9 +136,10 @@ func TestParseChangefeedURL(t *testing.T) {
 			url:      strings.Join([]string{"", dbName, schemaName, ndjsonFull}, "/"),
 		},
 		{
-			name:    "ndjson too short",
-			url:     strings.Join([]string{"", dbName, ndjson}, "/"),
-			wantErr: "expecting the first 2 path segments to be schema names",
+			name:     "table that looks like a malformed ndjson",
+			decision: "webhook table",
+			target:   ident.NewTable(ident.MustSchema(ident.New(dbName), ident.New(ndjsonDate)), ident.New(ndjsonTimestampWithExtras)),
+			url:      strings.Join([]string{"", dbName, ndjson}, "/"),
 		},
 		{
 			name:    "ndjson too long",

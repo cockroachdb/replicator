@@ -25,7 +25,6 @@ import (
 	"path"
 	"regexp"
 	"strings"
-	"unicode"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -163,10 +162,10 @@ var requestPatterns = []*requestPattern{
 	},
 }
 
-func (r *request) parseURL(url *url.URL) error {
+func (r *request) parseURL(urlInput *url.URL) error {
 	// Extract path elements into a slice. We allocate the slice and
 	// fill it in from the tail, due to how path.Split() operates.
-	remaining := url.Path
+	remaining := urlInput.EscapedPath()
 	pathSegments := make([]string, maxPathSegments)
 	segmentIdx := len(pathSegments) - 1
 	for segmentIdx >= 0 && remaining != "" {
@@ -175,7 +174,11 @@ func (r *request) parseURL(url *url.URL) error {
 			break
 		}
 		remaining = dir[:len(dir)-1] // Strip trailing separator.
-		pathSegments[segmentIdx] = file
+		unescapedSegment, err := url.QueryUnescape(file)
+		if err != nil {
+			return errors.Wrap(err, "could not unescape path")
+		}
+		pathSegments[segmentIdx] = unescapedSegment
 		segmentIdx--
 	}
 	if segmentIdx < 0 {
@@ -190,17 +193,6 @@ func (r *request) parseURL(url *url.URL) error {
 	}
 	schemaIdents := make([]ident.Ident, schemaSegmentCount)
 	for idx, part := range pathSegments[:schemaSegmentCount] {
-		// Limit the first N-many path elements to valid identifier runes.
-		for _, r := range part {
-			switch {
-			case unicode.IsLetter(r):
-			case unicode.IsDigit(r):
-			case r == '_':
-			default:
-				return errors.Errorf(
-					"expecting the first %d path segments to be schema names", schemaSegmentCount)
-			}
-		}
 		schemaIdents[idx] = ident.New(part)
 	}
 	targetSchema, err := ident.NewSchema(schemaIdents...)
