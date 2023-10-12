@@ -38,9 +38,9 @@ func TestParseChangefeedURL(t *testing.T) {
 	schemaName := nameParts[1].Raw()
 	tableName := nameParts[2].Raw()
 	ndjsonDate := `2020-04-02`
-	ndjsonTimestampWithExtras := `202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-REAL-1.ndjson`
+	ndjsonTimestampWithExtras := `202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-REAL-42-1.ndjson`
 	ndjson := strings.Join([]string{ndjsonDate, ndjsonTimestampWithExtras}, "/")
-	ndjsonFull := `2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.REAL-1.ndjson`
+	ndjsonFull := `2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.REAL-42-1.ndjson`
 	resolvedDate := `2020-04-04`
 	resolvedTimestamp := `202004042351304139680000000000000.RESOLVED`
 	resolved := strings.Join([]string{resolvedDate, resolvedTimestamp}, "/")
@@ -126,13 +126,13 @@ func TestParseChangefeedURL(t *testing.T) {
 		{
 			name:     "ndjson to schema",
 			decision: "ndjson schema",
-			target:   ident.NewTable(schemaIdent, ident.New("REAL")), // Use topic name from query.
+			target:   ident.NewTable(schemaIdent, ident.New("REAL-42")), // Use topic name from query.
 			url:      strings.Join([]string{"", dbName, schemaName, ndjson}, "/"),
 		},
 		{
 			name:     "ndjson full to schema",
 			decision: "ndjson schema",
-			target:   ident.NewTable(schemaIdent, ident.New("REAL")), // Use topic name from query.
+			target:   ident.NewTable(schemaIdent, ident.New("REAL-42")), // Use topic name from query.
 			url:      strings.Join([]string{"", dbName, schemaName, ndjsonFull}, "/"),
 		},
 		{

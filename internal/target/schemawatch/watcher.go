@@ -245,16 +245,18 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 				return errors.Errorf("expecting a schema with 2 parts, got %v", parts)
 			}
 
-			// Normalize the database name.
-			var dbName string
-			if err := tx.QueryRowContext(ctx, databaseTemplateCrdb, parts[0].Raw()).Scan(&dbName); err != nil {
+			// Normalize the database name to however it's defined in
+			// the target.
+			var dbNameRaw string
+			if err := tx.QueryRowContext(ctx, databaseTemplateCrdb, parts[0].Raw()).Scan(&dbNameRaw); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.Errorf("unknown schema: %s", w.schema)
 				}
 				return errors.Wrap(err, w.schema.String())
 			}
 
-			rows, err = tx.QueryContext(ctx, fmt.Sprintf(tableTemplateCrdb, dbName), dbName, parts[1].Raw())
+			rows, err = tx.QueryContext(ctx,
+				fmt.Sprintf(tableTemplateCrdb, ident.New(dbNameRaw)), dbNameRaw, parts[1].Raw())
 
 		case types.ProductMySQL:
 			rows, err = tx.QueryContext(ctx, tableTemplateMySQL, w.schema.Raw())
