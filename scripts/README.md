@@ -1,5 +1,6 @@
-# Setup
+# Scripts
+The following directory has scripts for demonstation as well as a Grafana dashboard.
++ [shell_demo](./shell_demo/README.md)
++ [dashboard](./dashboard)
++ [docker c2c demo](./docker_c2c/README.md)
 
-Make sure the following parameters are set for your Enterprise CockroachDB license and organization.
-
-$COCKROACH_DEV_LICENSE
