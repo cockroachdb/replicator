@@ -1,0 +1,108 @@
+version: '3.8'
+
+volumes:
+  backup: {}
+  roach_source: {}
+  roach_target: {}
+  grafana_data: {}
+
+services:
+
+ roach_source:
+   hostname: roach_source
+   image: cockroachdb/cockroach:latest-v23.1
+   ports:
+     - "26257:26257" 
+     - "8080:8080"
+   command: start-single-node --insecure --external-io-dir /backup
+   volumes:
+     - 'roach_source:/cockroach/cockroach-data'
+     - 'backup:/backup'
+   restart: always
+
+ roach_target:
+   hostname: roach_target
+   image: cockroachdb/cockroach:latest-v23.1
+   ports:
+     - "26259:26257"
+     - "8082:8080"
+   command: start-single-node --insecure --external-io-dir /backup
+   volumes:
+     - 'roach_target:/cockroach/cockroach-data'
+     - 'backup:/backup'
+   restart: always
+
+ prometheus:
+   hostname: prometheus
+   image: prom/prometheus
+   ports:
+     - "9090:9090"
+   command: 
+   volumes:
+     - './prometheus:/etc/prometheus'
+   restart: always
+
+ grafana:
+   hostname: grafana
+   image: grafana/grafana-oss:latest
+   depends_on:
+     prometheus:
+       condition: service_started
+   ports:
+     - "3000:3000"
+   volumes:
+    - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+   restart: unless-stopped
+
+ roach_target_initsleep:
+   hostname: roach_target_initsleep
+   image: alpine
+   depends_on:
+     roach_target:
+       condition: service_started
+   command: bin/sleep 20
+
+ roach_scripts:
+   hostname: roach_scripts
+   build: ./scripts
+   depends_on:
+     roach_target_initsleep:
+       condition: service_completed_successfully
+
+ cdc-sink:
+   hostname: cdc-sink
+   image: cockroachdb/cdc-sink:master
+   ports:
+     - "30005:30005"
+   depends_on:
+      roach_scripts:
+        condition: service_completed_successfully
+   command: start --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@roach_target:26257/?sslmode=disable'  --selectBatchSize 100 --foreignKeys 
+   restart: always
+
+ roach_source_create_feed:
+   hostname: roach_source_create_feed
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_scripts:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "CREATE CHANGEFEED FOR TABLE movr.users,movr.vehicles,movr.rides,movr.vehicle_location_histories,movr.promo_codes,movr.user_promo_codes INTO 'webhook-https://cdc-sink:30004/movr/public?insecure_tls_skip_verify=true' WITH updated, resolved='10s';"
+   restart: on-failure
+
+ roach_final_sleep:
+   hostname: roach_final_sleep
+   image: alpine
+   depends_on:
+     roach_source_create_feed:
+       condition: service_completed_successfully
+   command: bin/sleep 5
+
+ roach_source_movr_run:
+   hostname: roach_source_movr_init
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_final_sleep:
+       condition: service_completed_successfully
+   command: workload run movr 'postgresql://root@roach_source:26257/?sslmode=disable'
+   restart: on-failure
