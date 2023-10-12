@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 30s
+
+scrape_configs:
+  # Prometheus itself
+  # This uses the static method to get metrics endpoints
+  - job_name: "prometheus"
+    honor_labels: true
+    static_configs:
+    - targets: ["prometheus:9090"]
+
+  - job_name: 'cockroachdb_source'
+    metrics_path: '/_status/vars'
+    scheme: 'http'
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+    - targets: [ 'roach_source:8080' ]
+
+  - job_name: 'cockroachdb_target'
+    metrics_path: '/_status/vars'
+    scheme: 'http'
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+    - targets: [ 'roach_target:8080' ]
+
+  - job_name: 'cdc-sink'
+    metrics_path: '/_/varz'
+    scheme: 'http'
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+    - targets: [ 'cdc-sink:30005' ]
