@@ -1,0 +1,173 @@
+version: '3.8'
+
+volumes:
+  backup: {}
+  roach_source: {}
+  roach_target: {}
+  grafana_data: {}
+
+services:
+
+ roach_source:
+   hostname: roach_source
+   image: cockroachdb/cockroach:latest-v23.1
+   ports:
+     - "26257:26257" 
+     - "8080:8080"
+   command: start-single-node --insecure --external-io-dir /backup
+   volumes:
+     - 'roach_source:/cockroach/cockroach-data'
+     - 'backup:/backup'
+   restart: always
+
+ roach_target:
+   hostname: roach_target
+   image: cockroachdb/cockroach:latest-v23.1
+   ports:
+     - "26259:26257"
+     - "8082:8080"
+   command: start-single-node --insecure --external-io-dir /backup
+   volumes:
+     - 'roach_target:/cockroach/cockroach-data'
+     - 'backup:/backup'
+   restart: always
+
+
+ roach_target_initsleep:
+   hostname: roach_target_initsleep
+   image: alpine
+   depends_on:
+     roach_target:
+       condition: service_started
+   command: bin/sleep 20
+
+ roach_target_initsink:
+   hostname: roach_target_init
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_target_initsleep:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_target:26257/?sslmode=disable' --insecure --execute 'create database if not exists _cdc_sink'
+   restart: on-failure:10
+
+ prometheus:
+   hostname: prometheus
+   image: prom/prometheus
+   ports:
+     - "9090:9090"
+   command: 
+   volumes:
+     - './prometheus:/etc/prometheus'
+   restart: always
+
+ grafana:
+   hostname: grafana
+   image: grafana/grafana-oss:latest
+   depends_on:
+     prometheus:
+       condition: service_started
+   ports:
+     - "3000:3000"
+   volumes:
+    - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+   restart: unless-stopped
+ 
+ cdc-sink:
+   hostname: cdc-sink
+   image: cockroachdb/cdc-sink:master
+   ports:
+     - "30005:30005"
+   depends_on:
+      roach_target_initsink:
+        condition: service_completed_successfully
+   command: start --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@roach_target:26257/?sslmode=disable'  --selectBatchSize 100 --foreignKeys 
+   restart: always
+
+ roach_source_initsleep:
+   hostname: roach_source_initsleep
+   image: alpine
+   depends_on:
+     roach_source:
+       condition: service_started
+   command: bin/sleep 10
+
+ roach_source_lic1:
+   hostname: roach_source_lic1
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_source_initsleep:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING enterprise.license = '${COCKROACH_DEV_LICENSE}';"
+   restart: on-failure
+
+ roach_source_lic2:
+   hostname: roach_source_lic2
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_source_lic1:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING cluster.organization = '${COCKROACH_DEV_ORGANIZATION}';"
+   restart: on-failure
+
+ roach_source_enable_sinks:
+   hostname: roach_source_enable_sinks
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_source_lic2:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute 'SET CLUSTER SETTING kv.rangefeed.enabled = true;'
+   restart: on-failure
+ 
+ roach_source_movr_init:
+   hostname: roach_source_movr_init
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_source_lic2:
+       condition: service_completed_successfully
+   command: workload init movr 'postgresql://root@roach_source:26257/?sslmode=disable'
+   restart: on-failure
+
+ roach_source_backup:
+   hostname: roach_source_backup
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_source_movr_init:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "backup database movr into 'nodelocal://1/backup/movr';"
+   restart: on-failure
+
+ roach_target_restore:
+   hostname: roach_target_restore
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_source_backup:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_target:26257/?sslmode=disable' --insecure --execute " restore database movr from latest in 'nodelocal://1/backup/movr';"
+   restart: on-failure
+
+ roach_source_create_feed:
+   hostname: roach_source_create_feed
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_target_restore:
+       condition: service_completed_successfully
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "CREATE CHANGEFEED FOR TABLE movr.users,movr.vehicles,movr.rides,movr.vehicle_location_histories,movr.promo_codes,movr.user_promo_codes INTO 'webhook-https://cdc-sink:30004/movr/public?insecure_tls_skip_verify=true' WITH updated, resolved='10s';"
+   restart: on-failure
+
+ roach_final_sleep:
+   hostname: roach_final_sleep
+   image: alpine
+   depends_on:
+     roach_source_create_feed:
+       condition: service_completed_successfully
+   command: bin/sleep 5
+
+ roach_source_movr_run:
+   hostname: roach_source_movr_init
+   image: cockroachdb/cockroach:latest-v23.1
+   depends_on:
+     roach_final_sleep:
+       condition: service_completed_successfully
+   command: workload run movr 'postgresql://root@roach_source:26257/?sslmode=disable'
+   restart: on-failure
