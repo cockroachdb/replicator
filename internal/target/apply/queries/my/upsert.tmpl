@@ -3,15 +3,14 @@
 
 INSERT INTO "schema"."table" 
   ("pk0","pk1","val0","val1","geom") 
-  VALUES (cast (? as signed), cast( ? as char), cast(? as decimal), 
-          cast(? as signed), st_geomfromgeojson(?))
+  VALUES ?, ?, ?, ?, st_geomfromgeojson(?)
   ON DUPLICATE KEY UPDATE val0=VALUES(val0),  val1=VALUES(val1),  geom=VALUES(geom);
 
 */ -}}
 
-INSERT INTO {{ .TableName.Raw }} 
-{{- if not .Data -}} IGNORE {{- end -}}
-({{ template "names" .Columns }}) 
+INSERT {{ if not .Data }} IGNORE {{ end -}}
+INTO {{ .TableName }}
+({{ template "names" .Columns }})
 VALUES
 {{ template "exprs" . }}
 {{- if .Data }}
