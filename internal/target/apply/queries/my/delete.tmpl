@@ -3,7 +3,7 @@
 DELETE FROM "database"."schema"."table"
 WHERE ("pk0","pk1") IN ((?,?), (...), ...)
 */ -}}
-DELETE FROM {{ .TableName.Raw }} WHERE (
+DELETE FROM {{ .TableName }}  WHERE (
     {{- template "names" .PKDelete -}}
 )IN(
     {{- template "exprs" . -}}

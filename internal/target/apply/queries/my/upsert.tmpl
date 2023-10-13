@@ -9,9 +9,9 @@ INSERT INTO "schema"."table"
 
 */ -}}
 
-INSERT INTO {{ .TableName.Raw }} 
-{{- if not .Data -}} IGNORE {{- end -}}
-({{ template "names" .Columns }}) 
+INSERT {{ if not .Data }} IGNORE {{ end -}}
+INTO {{ .TableName }}
+({{ template "names" .Columns }})
 VALUES
 {{ template "exprs" . }}
 {{- if .Data }}

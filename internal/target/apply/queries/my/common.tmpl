@@ -4,7 +4,14 @@
 {{- define "names" -}}
     {{- range $idx, $col := . }}
         {{- if $idx -}},{{- end -}}
-        {{$col.Name}}
+        {{ $col.Name }}
+    {{- end -}}
+{{- end -}}
+
+{{- define "pairs" -}}
+    {{- range $idx, $col := . }}
+        {{- if $idx -}},{{- end -}}
+        ? AS {{ $col.Name }}
     {{- end -}}
 {{- end -}}
 
@@ -17,7 +24,9 @@
              {{- if $pair.ValidityParam -}}
                 CASE WHEN ? THEN {{- sp -}}
               {{- end -}}
-            {{- if eq $pair.Column.Type "geometry" -}}
+            {{- if $pair.Expr -}}
+                ({{ $pair.Expr }}) 
+            {{- else if eq $pair.Column.Type "geometry" -}}
                 st_geomfromgeojson(?)
             {{- else -}}
                ?

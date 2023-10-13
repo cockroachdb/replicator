@@ -68,6 +68,10 @@ func TestApply(t *testing.T) {
 		// control the exact bytes that come back.
 		tableSchema = "CREATE TABLE %s (pk0 INT, pk1 VARCHAR(2048), extras VARCHAR(2048), " +
 			"has_default VARCHAR(2048) NOT NULL DEFAULT 'Hello', PRIMARY KEY (pk0,pk1))"
+	case types.ProductMySQL:
+		// mysql has limitation on the size of the primary key (3072 bytes)
+		tableSchema = "CREATE TABLE %s (pk0 INT, pk1 VARCHAR(512), extras VARCHAR(2048), " +
+			"has_default VARCHAR(2048) NOT NULL DEFAULT 'Hello', PRIMARY KEY (pk0,pk1))"
 	case types.ProductOracle:
 		// The lower-case names in the payload will be matched to the
 		// upper-case names that exist within the database.
@@ -87,6 +91,8 @@ func TestApply(t *testing.T) {
 		switch fixture.TargetPool.Product {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			q = "SELECT count(*) FROM %s WHERE has_default=$1"
+		case types.ProductMySQL:
+			q = "SELECT count(*) FROM %s WHERE has_default=?"
 		case types.ProductOracle:
 			q = "SELECT count(*) FROM %s WHERE has_default=:p1"
 		default:
@@ -168,6 +174,8 @@ func TestApply(t *testing.T) {
 			switch fixture.TargetPool.Product {
 			case types.ProductCockroachDB, types.ProductPostgreSQL:
 				a.ErrorContains(err, "violates not-null constraint (SQLSTATE 23502)")
+			case types.ProductMySQL:
+				a.ErrorContains(err, "ERROR 1048 (23000)")
 			case types.ProductOracle:
 				a.ErrorContains(err, "ORA-01400: cannot insert NULL into")
 			default:
@@ -257,6 +265,8 @@ func TestApply(t *testing.T) {
 		switch fixture.TargetPool.Product {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			extrasQ = fmt.Sprintf("SELECT extras FROM %s WHERE pk0=$1 AND pk1=$2", tbl.Name())
+		case types.ProductMySQL:
+			extrasQ = fmt.Sprintf("SELECT extras FROM %s WHERE pk0=? AND pk1=?", tbl.Name())
 		case types.ProductOracle:
 			extrasQ = fmt.Sprintf(`SELECT extras FROM %s WHERE pk0=:p1 AND pk1=:p2`, tbl.Name())
 		default:
@@ -882,8 +892,16 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		TS  time.Time `json:"ts"`
 	}
 
-	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP WITH TIME ZONE)")
+	var createStatement string
+	switch fixture.TargetPool.Product {
+	case types.ProductCockroachDB, types.ProductOracle, types.ProductPostgreSQL:
+		createStatement = "CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP WITH TIME ZONE)"
+	case types.ProductMySQL:
+		createStatement = "CREATE TABLE %s (pk INT PRIMARY KEY, ver INT, ts TIMESTAMP)"
+	default:
+		a.FailNow("product not supported")
+	}
+	tbl, err := fixture.CreateTargetTable(ctx, createStatement)
 
 	if !a.NoError(err) {
 		return
@@ -932,6 +950,17 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		switch fixture.TargetPool.Product {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			q = "SELECT ver, ts FROM %s WHERE pk = $1"
+		case types.ProductMySQL:
+			// The MySQL driver returns a string for timestamp,
+			// so we need to parse it.
+			var res string
+			err = fixture.TargetPool.QueryRowContext(ctx,
+				fmt.Sprintf("SELECT ver, ts FROM %s WHERE pk = ?", tbl.Name()), id,
+			).Scan(&version, &res)
+			if err == nil {
+				ts, err = time.Parse("2006-01-02 15:04:05", res)
+			}
+			return
 		case types.ProductOracle:
 			q = "SELECT ver, ts FROM %s WHERE pk = :p1"
 		default:
@@ -1229,6 +1258,10 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		tblSchema = "CREATE TABLE %s (pk0 INT PRIMARY KEY, " +
 			"ignored INT GENERATED ALWAYS AS (1) STORED, " +
 			"val VARCHAR(2048))"
+	case types.ProductMySQL:
+		tblSchema = "CREATE TABLE %s (pk0 INT PRIMARY KEY, " +
+			"ignored INT as (1), " +
+			"val VARCHAR(2048))"
 	case types.ProductOracle:
 		tblSchema = "CREATE TABLE %s (pk0 INT PRIMARY KEY, " +
 			"ignored INT GENERATED ALWAYS AS (1) VIRTUAL, " +
@@ -1282,6 +1315,8 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		switch fixture.TargetPool.Product {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:
 			q = "SELECT val FROM %s WHERE pk0 = $1"
+		case types.ProductMySQL:
+			q = "SELECT val FROM %s WHERE pk0 = ?"
 		case types.ProductOracle:
 			q = "SELECT val FROM %s WHERE pk0 = :pk"
 		default:
@@ -1373,6 +1408,11 @@ func TestVirtualColumns(t *testing.T) {
 	}
 	defer cancel()
 
+	// In MySQL, defining a virtual generated column as primary key is not supported.
+	if fixture.TargetPool.Product == types.ProductMySQL {
+		testVirtualColumnsMySQL(t)
+		return
+	}
 	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
 		t.Skip("PostgreSQL v11 doesn't support generated columns")
 	}
@@ -1445,6 +1485,87 @@ func TestVirtualColumns(t *testing.T) {
 		a.NoError(err)
 		muts := []types.Mutation{{
 			Key: []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
+		}}
+
+		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
+	})
+}
+
+// In MySQL, defining a virtual generated column as primary key is not supported
+// Ensure that if columns with generation expressions are present, we
+// don't try to write to them and that we correctly ignore those columns
+// in data payloads.
+func testVirtualColumnsMySQL(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := all.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	type Payload struct {
+		A int `json:"a"`
+		B int `json:"b"`
+		C int `json:"c"`
+		D int `json:"d"`
+		X int `json:"x,omitempty"`
+	}
+
+	tblDef := "CREATE TABLE %s (" +
+		"a INT, " +
+		"b INT, " +
+		"c INT AS (a + b + 1) VIRTUAL, " +
+		"d INT AS (a + b) VIRTUAL, " +
+		"PRIMARY KEY (a,b))"
+	tbl, err := fixture.CreateTargetTable(ctx, tblDef)
+	if !a.NoError(err) {
+		return
+	}
+	tblName := sinktest.JumbleTable(tbl.Name())
+
+	app, err := fixture.Appliers.Get(ctx, tblName)
+	if !a.NoError(err) {
+		return
+	}
+
+	t.Run("computed-is-ignored", func(t *testing.T) {
+		a := assert.New(t)
+		p := Payload{A: 1, B: 2, C: 3, D: 3}
+		bytes, err := json.Marshal(p)
+		a.NoError(err)
+		muts := []types.Mutation{{
+			Data: bytes,
+			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.D, p.B)),
+		}}
+
+		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
+	})
+
+	t.Run("unknown-still-breaks", func(t *testing.T) {
+		a := assert.New(t)
+		p := Payload{A: 1, B: 2, C: 3, X: -1}
+		bytes, err := json.Marshal(p)
+		a.NoError(err)
+		muts := []types.Mutation{{
+			Data: bytes,
+			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.D, p.B)),
+		}}
+
+		err = app.Apply(ctx, fixture.TargetPool, muts)
+		if a.Error(err) {
+			a.Contains(err.Error(), "unexpected columns")
+		}
+	})
+
+	t.Run("deletes", func(t *testing.T) {
+		a := assert.New(t)
+		p := Payload{A: 1, B: 2, C: 3, D: 3}
+		a.NoError(err)
+		muts := []types.Mutation{{
+			Key: []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
 		}}
 
 		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
