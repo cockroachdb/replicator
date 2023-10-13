@@ -4,7 +4,14 @@
 {{- define "names" -}}
     {{- range $idx, $col := . }}
         {{- if $idx -}},{{- end -}}
-        {{$col.Name}}
+        {{ mySqlId $col.Name }}
+    {{- end -}}
+{{- end -}}
+
+{{- define "pairs" -}}
+    {{- range $idx, $col := . }}
+        {{- if $idx -}},{{- end -}}
+        ? AS {{ mySqlId $col.Name }}
     {{- end -}}
 {{- end -}}
 
@@ -17,7 +24,9 @@
              {{- if $pair.ValidityParam -}}
                 CASE WHEN ? THEN {{- sp -}}
               {{- end -}}
-            {{- if eq $pair.Column.Type "geometry" -}}
+            {{- if $pair.Expr -}}
+                ({{ $pair.Expr }}) 
+            {{- else if eq $pair.Column.Type "geometry" -}}
                 st_geomfromgeojson(?)
             {{- else -}}
                ?
@@ -42,6 +51,6 @@
 {{- define "valuelist" -}}
     {{- range $idx, $val := . }}
         {{- if $idx -}},{{- end -}}
-        {{- $val.Name -}}=VALUES({{- $val.Name -}})
+        {{- mySqlId $val.Name -}}=VALUES({{- mySqlId $val.Name -}})
     {{- end -}}
 {{- end -}}

@@ -9,8 +9,8 @@ INSERT INTO "schema"."table"
 
 */ -}}
 
-INSERT INTO {{ .TableName.Raw }} 
-{{- if not .Data -}} IGNORE {{- end -}}
+INSERT {{ if not .Data }} IGNORE {{ end -}}
+INTO {{ mySqlId .TableName }}  
 ({{ template "names" .Columns }}) 
 VALUES
 {{ template "exprs" . }}

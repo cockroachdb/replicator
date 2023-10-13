@@ -57,6 +57,28 @@ var (
 		"isUDTArray": func(colData types.ColData) bool {
 			return strings.HasSuffix(colData.Type, "[]") && strings.Contains(colData.Type, ".")
 		},
+		// mySqlId escapes an Identifier in backticks for mySQL usage.
+		"mySqlId": func(id ident.Identifier) string {
+			return myIdentifier(id)
+		},
+		"myQualify": func(prefix any, cols []types.ColData) ([]string, error) {
+			var id string
+			switch t := prefix.(type) {
+			case string:
+				id = t
+			case ident.Ident:
+				id = myIdentifier(t)
+			case ident.Table:
+				id = myIdentifier(t.Table())
+			default:
+				return nil, errors.Errorf("unsupported conversion %T", t)
+			}
+			ret := make([]string, len(cols))
+			for i := range ret {
+				ret[i] = fmt.Sprintf("%s.%s", id, cols[i].Name)
+			}
+			return ret, nil
+		},
 		// nl is a hack to force the inclusion of newlines in the output
 		// since we generally use the whitespace-consuming template
 		// syntax.

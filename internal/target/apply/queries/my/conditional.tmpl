@@ -1,5 +1,107 @@
 {{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
 {{- /*
-TODO (silvano)
+This template implements the conditional update flow (compare-and-set,
+deadlines). For expanded examples, see the templates_test.go file.
+Example:
+INSERT INTO tbl_4 (pk,ts,ver)
+WITH data AS (SELECT 1 AS "pk",now() AS "ts",2 AS "ver"),
+deadlined AS (SELECT * from data WHERE ts > now() - INTERVAL 100000 second) ,
+current AS (
+     SELECT pk, tbl_4.ver
+     FROM tbl_4
+     JOIN deadlined
+     USING (pk)),
+action AS (SELECT deadlined.* FROM deadlined
+           LEFT JOIN current USING (pk)
+                WHERE current.pk IS NULL OR
+                (deadlined.ver) > (current.ver))
+SELECT * FROM action
+ON DUPLICATE KEY UPDATE ts=VALUES(ts),  ver=VALUES(ver);
+*/ -}}
+
+{{- /*
+  Starting with the insert.
+*/ -}}
+INSERT {{- if not .Data }} IGNORE {{ end -}}
+{{- nl -}}
+INTO {{- mySqlId .TableName -}}  (
+{{- template "names" .Columns -}}
+)
+
+{{- /*
+The rest of query is structured as a CTE. We'll update this $dataSource
+variable as different clauses are conditionally introduced.
 */ -}}
 {{- $dataSource := "data" -}}
+
+{{- /*
+data: the proposed values to insert. We explicitly name the columns to
+aid in joins below.
+WITH data as (select ? as "a",? as "b" ,? as "c")
+*/ -}}
+{{- nl -}}
+WITH data AS (SELECT {{ template "pairs" .Columns -}} ) 
+
+{{- /*
+deadlined: filters the incoming data by the deadline columns
+deadlined AS (SELECT * from data WHERE ts > now() - INTERVAL 1 second)
+*/ -}}
+{{- $deadlineEntries := .Deadlines.Entries -}}
+{{- if $deadlineEntries -}}
+, {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
+deadlined AS (SELECT * FROM {{ $dataSource }} WHERE
+{{- range $entryIdx, $entry := $deadlineEntries -}}
+    {{- if $entryIdx -}} AND {{- end -}}
+    ( {{- $entry.Key.Raw -}} > now()- INTERVAL '{{- $entry.Value.Seconds -}}' SECOND)
+{{- end -}})
+{{- $dataSource = "deadlined" -}}
+{{- end -}}
+
+{{- /*
+current: selects the current values of the PK and CAS columns by
+joining the target table to the proposed data by PK
+current AS (SELECT pk0, pk1, cas0, cas1 FROM target JOIN data USING (pk0, pk1))
+*/ -}}
+{{- if .Conditions -}}
+, {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
+current AS (
+SELECT {{ template "names" .PK }}, {{ template "join" (myQualify .TableName .Conditions) }}
+FROM {{ .TableName }}
+JOIN {{ $dataSource }}
+USING ({{ template "names" .PK }})),
+{{- nl -}}
+
+{{- /*
+action: left-joins data to current, by PK, where no current value
+exists or the proposed data has a CAS tuple strictly greater than the
+current data.
+action AS (
+  SELECT data.* FROM data
+  LEFT JOIN current
+  USING (pk0, pk1)
+  WHERE current.pk0 IS NULL OR
+  ( data.cas0, data.cas1) > ( current.cas0, current.cas1 )
+*/ -}}
+action AS (
+SELECT {{ $dataSource }}.* FROM {{ $dataSource }}
+LEFT JOIN current
+USING ({{ template "names" .PK }})
+WHERE current.{{ (index .PK 0).Name }} IS NULL OR
+( {{- template "join" (myQualify $dataSource .Conditions) -}} ) > ( {{- template "join" (myQualify "current" .Conditions) -}} ))
+{{- $dataSource = "action" -}}
+{{- end -}}{{- /* .Conditions */ -}}
+
+{{- /*
+The last clause is to select the actionable rows 
+to be upserted into the target table.
+SELECT * FROM dataSource
+ON DUPLICATE KEY UPDATE ts=VALUES(ts),  ver=VALUES(ver);
+*/ -}}
+{{- nl -}}
+SELECT * FROM {{ $dataSource }}
+{{- nl -}}
+{{- if .Data }}
+ON DUPLICATE KEY UPDATE 
+{{ template "valuelist" .Data }}
+{{- end -}}
+{{- /* Trim whitespace */ -}}
