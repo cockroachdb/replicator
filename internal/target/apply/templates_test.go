@@ -66,6 +66,121 @@ func TestExternalTemplates(t *testing.T) {
 	r.ErrorContains(err, QueryDir)
 }
 
+func TestQueryTemplatesMy(t *testing.T) {
+	global := &templateGlobal{
+		cols: []types.ColData{
+			{
+				Name:    ident.New("pk0"),
+				Primary: true,
+				Type:    "VARCHAR(256)",
+			},
+			{
+				Name:    ident.New("pk1"),
+				Primary: true,
+				Type:    "INT",
+			},
+			{
+				Name: ident.New("val0"),
+				Type: "VARCHAR(256)",
+			},
+			{
+				Name: ident.New("val1"),
+				Type: "VARCHAR(256)",
+			},
+			{
+				Ignored: true,
+				Name:    ident.New("ignored_val"),
+				Primary: false,
+				Type:    "INT",
+			},
+			{
+				Name:        ident.New("has_default"),
+				Type:        "INT8",
+				DefaultExpr: "expr()",
+			},
+		},
+		dir:     "my",
+		product: types.ProductMySQL,
+		tableID: ident.NewTable(
+			ident.MustSchema(ident.New("schema")),
+			ident.New("table")),
+	}
+
+	tcs := []*templateTestCase{
+		{
+			name: "base",
+		},
+		{
+			name: "cas",
+			cfg: &applycfg.Config{
+				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
+			},
+		},
+		{
+			name: "deadline",
+			cfg: &applycfg.Config{
+				Deadlines: ident.MapOf[time.Duration](
+					ident.New("val1"), time.Second,
+					ident.New("val0"), time.Hour,
+				),
+			},
+		},
+		{
+			name: "casDeadline",
+			cfg: &applycfg.Config{
+				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
+				Deadlines: ident.MapOf[time.Duration](
+					ident.New("val0"), time.Hour,
+					ident.New("val1"), time.Second,
+				),
+			},
+		},
+		{
+			// This ignore setup results in a PK-only table.
+			name: "ignore",
+			cfg: &applycfg.Config{
+				Ignore: ident.MapOf[bool](
+					"val0", true,
+					"val1", true,
+				)},
+		},
+		{
+			// Changing the source names should have no effect on the
+			// SQL that gets generated; we only care about the different
+			// value when looking up values in the incoming mutation.
+			name: "source names",
+			cfg: &applycfg.Config{
+				SourceNames: ident.MapOf[applycfg.SourceColumn](
+					ident.New("val1"), ident.New("val1Renamed"),
+					ident.New("unknown"), ident.New("is ok"),
+				),
+			},
+		},
+		{
+			// Verify user-configured expressions, with zero, one, and
+			// multiple uses of the substitution position.
+			name: "expr",
+			cfg: &applycfg.Config{
+				Exprs: ident.MapOf[string](
+					ident.New("val0"), `'fixed'`, // Doesn't consume a parameter slot.
+					ident.New("val1"), `$0||'foobar'`,
+					ident.New("pk1"), `$0+$0`,
+				),
+				Ignore: ident.MapOf[bool](
+					ident.New("geom"), true,
+					ident.New("geog"), true,
+				),
+			},
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			checkTemplate(t, global, tc)
+		})
+	}
+}
+
 func TestQueryTemplatesOra(t *testing.T) {
 	global := &templateGlobal{
 		cols: []types.ColData{
