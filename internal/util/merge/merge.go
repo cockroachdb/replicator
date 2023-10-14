@@ -14,35 +14,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package types
+// Package merge provides support for three-way merge operations.
+package merge
 
-import (
-	"context"
-
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-)
+import "context"
 
 // A Conflict contains a mutation that was attempted and the existing
 // data which blocked it. The maps in this type contain reified JSON
 // representation of the values that one would expect to see from the
 // json package.
 type Conflict struct {
-	// The mutation that cannot be applied. This reference exists to
-	// provide access to the metadata. The other fields in this type are
-	// the preferred sources of truth for values to operate on.
-	Mutation Mutation
-
-	Before   *ident.Map[any] // May be nil if only 2-way merge.
-	Existing *ident.Map[any] // The data which blocked the attempt.
-	Proposed *ident.Map[any] // The desired end state of the mutation.
+	Before   *Bag // May be nil if only 2-way merge.
+	Existing *Bag // The data which blocked the attempt.
+	Proposed *Bag // The desired end state of the mutation.
 }
 
 // A Resolution contains the contents of a mutation after the Merger has
-// resolved the data conflicts. Only one of the fields in this struct
+// resolved the data conflicts. Exactly one of the fields in this struct
 // should be non-zero.
 type Resolution struct {
-	Apply *ident.Map[any] // The contents of the mutation to apply.
-	DLQ   string          // Write the incoming mutation to the named queue.
+	Apply *Bag   // The contents of the mutation to apply.
+	DLQ   string // Write the incoming mutation to the named queue.
+	Drop  bool   // Discard the mutation.
 }
 
 // Merger resolves data conflicts.
@@ -52,17 +45,21 @@ type Merger interface {
 	// false, the conflict should be ignored. It is the responsibility
 	// of the Merger to ensure that the conflicted value arrived
 	// somewhere.
-	Merge(context.Context, TargetQuerier, *Conflict) (*Resolution, bool, error)
+	Merge(context.Context, *Conflict) (*Resolution, error)
 }
 
-// MergeFunc adapts a function type to implement Merger.
-type MergeFunc func(ctx context.Context, tx TargetQuerier, conflict *Conflict) (*Resolution, bool, error)
+// Func adapts a function type to implement Merger.
+type Func func(ctx context.Context, conflict *Conflict) (*Resolution, error)
 
-var _ Merger = MergeFunc(nil)
+var _ Merger = Func(nil)
+
+// MarshalText implements [encoding.TextMarshaler] and is provided so
+// that the Func will play nicely in the Diagnostics interface.
+func (fn Func) MarshalText() ([]byte, error) {
+	return []byte("merge.Func"), nil
+}
 
 // Merge implements Merger.
-func (fn MergeFunc) Merge(
-	ctx context.Context, tx TargetQuerier, conflict *Conflict,
-) (*Resolution, bool, error) {
-	return fn(ctx, tx, conflict)
+func (fn Func) Merge(ctx context.Context, conflict *Conflict) (*Resolution, error) {
+	return fn(ctx, conflict)
 }

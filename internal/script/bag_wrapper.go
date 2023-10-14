@@ -18,23 +18,27 @@ package script
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/dop251/goja"
 )
 
-// identMapWrapper adapts [ident.Map] to [goja.DynamicObject].
-type identMapWrapper struct {
-	data *ident.Map[any] // Generally expected to be a type returned from the json package.
+// bagWrapper adapts [merge.Bag] to [goja.DynamicObject].
+type bagWrapper struct {
+	data *merge.Bag
 	rt   *goja.Runtime
 }
 
-var _ goja.DynamicObject = (*identMapWrapper)(nil)
+var _ goja.DynamicObject = (*bagWrapper)(nil)
 
-func (m *identMapWrapper) Delete(key string) bool {
+// Delete implements goja.DynamicObject. It always returns true, since
+// we never reject any deletes.
+func (m *bagWrapper) Delete(key string) bool {
 	m.data.Delete(ident.New(key))
 	return true
 }
 
-func (m *identMapWrapper) Get(key string) goja.Value {
+// Get implements goja.DynamicObject.
+func (m *bagWrapper) Get(key string) goja.Value {
 	v, ok := m.data.Get(ident.New(key))
 	if !ok {
 		return goja.Undefined()
@@ -42,12 +46,14 @@ func (m *identMapWrapper) Get(key string) goja.Value {
 	return m.rt.ToValue(v)
 }
 
-func (m *identMapWrapper) Has(key string) bool {
+// Has implements goja.DynamicObject.
+func (m *bagWrapper) Has(key string) bool {
 	_, ok := m.data.Get(ident.New(key))
 	return ok
 }
 
-func (m *identMapWrapper) Keys() []string {
+// Keys implements goja.DynamicObject.
+func (m *bagWrapper) Keys() []string {
 	ret := make([]string, 0, m.data.Len())
 	// Ignoring error since callback returns nil.
 	_ = m.data.Range(func(k ident.Ident, v any) error {
@@ -57,7 +63,9 @@ func (m *identMapWrapper) Keys() []string {
 	return ret
 }
 
-func (m *identMapWrapper) Set(key string, val goja.Value) bool {
+// Set implements goja.DynamicObject. It always returns true since we
+// never reject any updates.
+func (m *bagWrapper) Set(key string, val goja.Value) bool {
 	m.data.Put(ident.New(key), val.Export())
 	return true
 }

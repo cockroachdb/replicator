@@ -9,16 +9,23 @@ variable as different clauses are conditionally introduced.
 {{- $dataSource := "data" -}}
 
 {{- /*
-data: the proposed values to insert. We explicitly name the columns to
-aid in joins below.
+raw_data: the proposed values to insert. We explicitly name the columns
+to aid in joins below.
 
-WITH data( pk0, pk1, val0, val1, ...) AS (VALUES ($1, $2, $3, ...))
+WITH raw_data( pk0, pk1, val0, val1, ...) AS (VALUES ($1, $2, $3, ...))
 */ -}}
-WITH data( {{- template "names" .Columns -}} ) AS (
+WITH raw_data( {{- template "names" .Columns -}} ) AS (
 VALUES{{- nl -}}
 {{- template "exprs" . -}}
-)
+),
+{{- nl -}}
 
+{{- /*
+data: Adds a zero-based index number to the raw_data rows. This index
+number will be returned by the top-level statement to indicate which
+of the input rows could not be applied.
+*/ -}}
+data AS (SELECT (row_number() OVER () - 1) __idx__, * FROM raw_data)
 
 {{- /*
 deadlined: filters the incoming data by the deadline columns
@@ -75,14 +82,36 @@ WHERE current.{{ (index .PK 0).Name }}{{/* >= v21.2 lets us say "current IS NULL
 {{- end -}}{{- /* .Conditions */ -}}
 
 {{- /*
-The main clause is to then upsert the actionable rows into the
-target table.
+Upsert the actionable rows into the target table.
 
+upserted AS(
 UPSERT INTO table (pk0, pk1, ....)
-  SELECT * FROM dataSource
+  SELECT pk0, pk1, ... FROM dataSource
+  RETURNING pk0, pk1 )
+*/ -}}
+, {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
+upserted AS (
+UPSERT INTO {{ .TableName }} ({{ template "names" .Columns }})
+SELECT {{ template "names" .Columns }} FROM {{ $dataSource }}
+RETURNING {{ template "names" .PK -}}
+)
+
+{{- /*
+The main query returns unmodified rows from the source table by joining
+aginst the proposed rows and the anti-joining against the rows that were
+upserted. We return the index of the attempted row to make it easy to
+create the conflict struct.
+
+SELECT data.__idx__, t.pk0, t.pk1, t.col0, t.col1 FROM my_table t
+JOIN data USING (pk0, pk1)
+LEFT JOIN upserted USING (pk0, pk1)
+WHERE upserted IS NULL
+
 */ -}}
 {{- nl -}}
-UPSERT INTO {{ .TableName }} ({{ template "names" .Columns }})
-SELECT * FROM {{ $dataSource }}
+SELECT data.__idx__, {{ template "join" (qualify "t" .Columns) }} FROM {{ .TableName }} t
+JOIN data USING ({{template "names" .PK }})
+LEFT JOIN upserted USING ({{template "names" .PK }})
+WHERE upserted.{{ (index .PK 0).Name }}{{/* >= v21.2 lets us say "upserted IS NULL" */}} IS NULL
 
 {{- /* Trim whitespace */ -}}
