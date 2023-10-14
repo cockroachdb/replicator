@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -35,6 +36,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -185,7 +187,7 @@ func TestApply(t *testing.T) {
 				Key:  []byte(`[1, 0]`),
 			},
 		}); a.Error(err) {
-			a.Contains(err.Error(), "unexpected columns [no_good]")
+			a.Contains(err.Error(), "unexpected columns: no_good")
 		}
 	})
 
@@ -197,7 +199,7 @@ func TestApply(t *testing.T) {
 				Key:  []byte(`[1]`),
 			},
 		}); a.Error(err) {
-			a.Contains(strings.ToLower(err.Error()), "missing pk column pk1")
+			a.Contains(strings.ToLower(err.Error()), "missing pk columns: pk1")
 		}
 	})
 
@@ -1092,6 +1094,212 @@ func TestExpressionColumns(t *testing.T) {
 	a.NoError(err)
 }
 
+// This test demonstrates how a counter table can be built that uses
+// the input delta to correctly adjust a running total.
+func TestMergeWiring(t *testing.T) {
+	r := require.New(t)
+
+	fixture, cancel, err := all.NewFixture()
+	r.NoError(err)
+	defer cancel()
+
+	ctx := fixture.Context
+
+	// KV payload, but with different column names.
+	type Payload struct {
+		PK  int       `json:"pk"`
+		Val int       `json:"val"`
+		TS  time.Time `json:"updated_at"`
+	}
+
+	tbl, err := fixture.CreateTargetTable(ctx,
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val INT, updated_at TIMESTAMP WITH TIME ZONE)")
+	r.NoError(err)
+	tblName := sinktest.JumbleTable(tbl.Name())
+
+	var shouldDiscard, shouldDLQ, shouldTwoWay, shouldErr atomic.Bool
+
+	configData := applycfg.NewConfig()
+	configData.CASColumns = ident.Idents{ident.New("updated_at")}
+	configData.Merger = merge.Func(func(ctx context.Context, con *merge.Conflict) (*merge.Resolution, error) {
+		if shouldErr.Load() {
+			return nil, errors.New("goodbye")
+		}
+		if shouldDiscard.Load() {
+			return &merge.Resolution{Drop: true}, nil
+		}
+		if shouldDLQ.Load() {
+			return &merge.Resolution{DLQ: "dlq"}, nil
+		}
+		valKey := ident.New("val")
+		existing := coerceToInt(r, con.Existing.GetZero(valKey))
+		if shouldTwoWay.Load() {
+			if con.Before != nil {
+				return nil, errors.New("expecting nil Before")
+			}
+			val := coerceToInt(r, con.Existing.GetZero(valKey))
+			val *= 10
+			con.Existing.Put(valKey, val)
+		} else {
+			start := coerceToInt(r, con.Before.GetZero(valKey))
+			end := coerceToInt(r, con.Proposed.GetZero(valKey))
+			con.Existing.Put(valKey, end-start+existing)
+		}
+		con.Existing.Put(ident.New("updated_at"), time.Now())
+
+		return &merge.Resolution{Apply: con.Existing}, nil
+	})
+	r.NoError(fixture.Configs.Set(tblName, configData))
+
+	app, err := fixture.Appliers.Get(ctx, tblName)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "merge operation not implemented") {
+			t.Skip(err.Error())
+		}
+		r.NoError(err)
+	}
+
+	now := time.Now()
+	const pk = 42
+	const initial = 5
+
+	t.Run("insert_blocking_record", func(t *testing.T) {
+		r := require.New(t)
+		blocking := &Payload{
+			PK:  pk,
+			Val: initial,
+			TS:  now,
+		}
+		data, err := json.Marshal(blocking)
+		r.NoError(err)
+		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+			{
+				Data: data,
+				Key:  []byte(fmt.Sprintf("[%d]", pk)),
+			},
+		}))
+	})
+
+	// Generate a stale record that has a delta of 1.
+	before := &Payload{
+		PK:  pk,
+		Val: 2,
+		TS:  now.Add(-10 * time.Minute),
+	}
+	beforeData, err := json.Marshal(before)
+	r.NoError(err)
+
+	after := &Payload{
+		PK:  pk,
+		Val: 3,
+		TS:  now.Add(-1 * time.Minute),
+	}
+	afterData, err := json.Marshal(after)
+	r.NoError(err)
+
+	stale := []types.Mutation{
+		{
+			Before: beforeData,
+			Data:   afterData,
+			Key:    []byte(fmt.Sprintf("[%d]", pk)),
+		},
+	}
+
+	t.Run("discard_record", func(t *testing.T) {
+		r := require.New(t)
+		shouldDiscard.Store(true)
+		defer shouldDiscard.Store(false)
+
+		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+
+		var val int
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT val FROM %s", tbl.Name())).Scan(&val))
+		r.Equal(initial, val)
+	})
+
+	t.Run("dlq_record", func(t *testing.T) {
+		r := require.New(t)
+		shouldDLQ.Store(true)
+		defer shouldDLQ.Store(false)
+
+		// Work item in https://github.com/cockroachdb/cdc-sink/issues/487
+		r.ErrorContains(app.Apply(ctx, fixture.TargetPool, stale),
+			"not implemented")
+
+		var val int
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT val FROM %s", tbl.Name())).Scan(&val))
+		r.Equal(initial, val)
+	})
+
+	// Insert a "stale" value representing a delta of 1.
+	t.Run("merge_record", func(t *testing.T) {
+		r := require.New(t)
+		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+
+		var val int
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT val FROM %s", tbl.Name())).Scan(&val))
+		r.Equal(initial+1, val)
+	})
+
+	// Check if before is unsert and if it's set to "null" token.
+	stale[0].Before = nil
+	t.Run("two_way_no_before", func(t *testing.T) {
+		r := require.New(t)
+		shouldTwoWay.Store(true)
+		defer shouldTwoWay.Store(false)
+		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+
+		var val int
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT val FROM %s", tbl.Name())).Scan(&val))
+		r.Equal((initial+1)*10, val)
+	})
+
+	stale[0].Before = []byte("null")
+	t.Run("two_way_null_before", func(t *testing.T) {
+		r := require.New(t)
+		shouldTwoWay.Store(true)
+		defer shouldTwoWay.Store(false)
+		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+
+		var val int
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT val FROM %s", tbl.Name())).Scan(&val))
+		r.Equal((initial+1)*100, val)
+	})
+
+	// Finish with an update that should always be accepted.
+	t.Run("expected_to_succeed", func(t *testing.T) {
+		r := require.New(t)
+		shouldErr.Store(true)
+		defer shouldErr.Store(false)
+
+		accepted := &Payload{
+			PK:  pk,
+			Val: -initial,
+			TS:  now.Add(time.Hour),
+		}
+		data, err := json.Marshal(accepted)
+		r.NoError(err)
+		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+			{
+				Data: data,
+				Key:  []byte(fmt.Sprintf("[%d]", pk)),
+			},
+		}))
+
+		var val int
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT val FROM %s", tbl.Name())).Scan(&val))
+		r.Equal(-initial, val)
+	})
+
+	r.NoError(fixture.Diagnostics.Write(ctx, io.Discard, false))
+}
+
 // This tests ignoring a primary key column, an extant db column,
 // and a column which only exists in the incoming payload.
 func TestIgnoredColumns(t *testing.T) {
@@ -1540,4 +1748,22 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 
 	// Use bytes as a throughput measure.
 	b.SetBytes(loopTotal.Load())
+}
+
+func coerceToInt(r *require.Assertions, x any) int {
+	switch t := x.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case json.Number:
+		i, err := t.Int64()
+		r.NoError(err)
+		return int(i)
+	default:
+		r.Failf("unsupported type", "%T", t)
+		return 0
+	}
 }

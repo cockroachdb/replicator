@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -35,9 +35,7 @@ func TestCopyEquals(t *testing.T) {
 		Exprs:      ident.MapOf[string]("expr", "foo"),
 		Extras:     ident.New("extras"),
 		Ignore:     ident.MapOf[bool]("ign", true),
-		Merger: types.MergeFunc(func(
-			context.Context, types.TargetQuerier, *types.Conflict,
-		) (*types.Resolution, bool, error) {
+		Merger: merge.Func(func(context.Context, *merge.Conflict) (*merge.Resolution, error) {
 			panic("unused")
 		}),
 		SourceNames: ident.MapOf[SourceColumn](ident.New("new"), ident.New("old")),
