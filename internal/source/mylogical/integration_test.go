@@ -551,7 +551,10 @@ func setupMYPool(config *Config) (*client.Pool, func(), error) {
 	}
 	defer baseConn.Close()
 
-	if _, err := baseConn.Execute(fmt.Sprintf("CREATE DATABASE %s", database.Raw())); err != nil {
+	// Once we create the database using the default pool, we'll
+	// reconnect, so the database name just becomes an ambient attribute
+	// of the underlying connection.
+	if _, err := baseConn.Execute(fmt.Sprintf("CREATE DATABASE `%s`", database.Raw())); err != nil {
 		return nil, func() {}, err
 	}
 

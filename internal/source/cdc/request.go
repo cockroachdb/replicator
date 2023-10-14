@@ -37,9 +37,14 @@ const maxPathSegments = 8
 
 // See https://www.cockroachlabs.com/docs/stable/create-changefeed.html#general-file-format
 // Example: /2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-test_table-1.ndjson
-// Filename format is: [endpoint]/[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
+// Filename format is: [endpoint]/[date]/[timestamp + uniquer]-[topic]-[schema-id]
+//
+// When we look at the filename, there are five hyphen-delimited groups
+// in the timestamp+uniquer segment of the filename. The topic (name of
+// the table) may itself contain dashes, so it has an open match to
+// consume anything that isn't the final, CRDB-internal schema id.
 var (
-	ndjsonRegex = regexp.MustCompile(`^(?P<date>\d{4}-\d{2}-\d{2})/(?P<uniquer>.+)-(?P<topic>[^-]+)-(?P<schema_id>[^-]+).ndjson$`)
+	ndjsonRegex = regexp.MustCompile(`^(?P<date>\d{4}-\d{2}-\d{2})/(?P<prelude>([^-]+-){5})(?P<topic>.+)-(?P<schema_id>[^-]+).ndjson$`)
 	ndjsonTopic = ndjsonRegex.SubexpIndex("topic")
 )
 

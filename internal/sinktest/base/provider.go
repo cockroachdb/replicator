@@ -362,7 +362,9 @@ func CreateSchema[P types.AnyPool](
 	// Each package tests run in a separate binary, so we need a
 	// "globally" unique ID.  While PIDs do recycle, they're highly
 	// unlikely to do so during a single run of the test suite.
-	name := ident.New(fmt.Sprintf("%s_%d_%d", prefix, os.Getpid(), dbNum))
+	// We use dashes in the name to ensure that the identifier is always
+	// correctly quoted when sent in SQL commands.
+	name := ident.New(fmt.Sprintf("%s-%d-%d", prefix, os.Getpid(), dbNum))
 
 	cancel := func() {
 		err := retry.Execute(ctx, pool, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", name))
@@ -415,7 +417,9 @@ func CreateTable[P types.AnyPool](
 	ctx context.Context, pool P, enclosing ident.Schema, schemaSpec string,
 ) (TableInfo[P], error) {
 	tableNum := tempTable.Add(1)
-	tableName := ident.New(fmt.Sprintf("tbl_%d", tableNum))
+	// We use a dash here to ensure that the table name must be
+	// correctly quoted when sent as a SQL command.
+	tableName := ident.New(fmt.Sprintf("tbl-%d", tableNum))
 	table := ident.NewTable(enclosing, tableName)
 	err := retry.Execute(ctx, pool, fmt.Sprintf(schemaSpec, table))
 	return TableInfo[P]{pool, table}, errors.WithStack(err)

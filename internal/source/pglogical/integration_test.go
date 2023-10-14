@@ -190,6 +190,7 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 		return
 	}
 
+	pubNameRaw := publicationName(dbName).Raw()
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
 		BaseConfig: logical.BaseConfig{
@@ -204,8 +205,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 			LoopName:     "pglogicaltest",
 			TargetSchema: dbSchema,
 		},
-		Publication: dbName.Raw(),
-		Slot:        dbName.Raw(),
+		Publication: pubNameRaw,
+		Slot:        pubNameRaw,
 		SourceConn:  *pgConnString + dbName.Raw(),
 	}
 	if fc.backfill {
@@ -428,6 +429,8 @@ func TestDataTypes(t *testing.T) {
 	}
 	log.Info(tgts)
 
+	pubNameRaw := publicationName(dbName).Raw()
+
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	repl, cancelLoop, err := Start(ctx, &Config{
 		BaseConfig: logical.BaseConfig{
@@ -439,8 +442,8 @@ func TestDataTypes(t *testing.T) {
 			LoopName:     "pglogicaltest",
 			TargetSchema: dbSchema,
 		},
-		Publication: dbName.Raw(),
-		Slot:        dbName.Raw(),
+		Publication: pubNameRaw,
+		Slot:        pubNameRaw,
 		SourceConn:  *pgConnString + dbName.Raw(),
 	})
 	if !a.NoError(err) {
@@ -475,6 +478,13 @@ func TestDataTypes(t *testing.T) {
 	}
 }
 
+// Allowable publication slot names are a subset of allowable
+// database names, so we need to replace the must-quote dashes in
+// the database name.
+func publicationName(database ident.Ident) ident.Ident {
+	return ident.New(strings.ReplaceAll(database.Raw(), "-", "_"))
+}
+
 func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -498,15 +508,17 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 		return nil, func() {}, err
 	}
 
+	pubName := publicationName(database)
+
 	if _, err := retConn.Exec(ctx,
-		fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES", database),
+		fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES", pubName),
 	); err != nil {
 		return nil, func() {}, err
 	}
 
 	if _, err := retConn.Exec(ctx,
 		"SELECT pg_create_logical_replication_slot($1, 'pgoutput')",
-		database.Raw(),
+		pubName.Raw(),
 	); err != nil {
 		return nil, func() {}, err
 	}
@@ -514,11 +526,11 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 	return retConn, func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := retConn.Exec(ctx, "SELECT pg_drop_replication_slot($1)", database.Raw())
+		_, err := retConn.Exec(ctx, "SELECT pg_drop_replication_slot($1)", pubName.Raw())
 		if err != nil {
 			log.WithError(err).Error("could not drop database")
 		}
-		_, err = retConn.Exec(ctx, fmt.Sprintf("DROP PUBLICATION %s", database))
+		_, err = retConn.Exec(ctx, fmt.Sprintf("DROP PUBLICATION %s", pubName))
 		if err != nil {
 			log.WithError(err).Error("could not drop publication")
 		}
