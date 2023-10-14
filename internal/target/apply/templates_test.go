@@ -366,7 +366,7 @@ func checkTemplate(t *testing.T, global *templateGlobal, tc *templateTestCase) {
 
 	t.Run("upsert", func(t *testing.T) {
 		r := require.New(t)
-		s, err := tmpls.upsertExpr(2)
+		s, err := tmpls.upsertExpr(2, applyConditional)
 		r.NoError(err)
 		checkFile(t,
 			fmt.Sprintf("testdata/%s/%s.upsert.sql", global.dir, tc.name),

@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -155,16 +156,12 @@ func TestScript(t *testing.T) {
 		}
 
 		if merger := cfg.Merger; a.NotNil(merger) {
-			result, ok, err := merger.Merge(context.Background(), nil, &types.Conflict{
-				Mutation: types.Mutation{
-					Data: []byte(`{"hello":"world!"}`),
-				},
-				Before:   ident.MapOf[any]("val", 1),
-				Existing: ident.MapOf[any]("val", 40),
-				Proposed: ident.MapOf[any]("val", 3),
+			result, err := merger.Merge(context.Background(), &merge.Conflict{
+				Before:   merge.NewBagOf(nil, nil, "val", 1),
+				Existing: merge.NewBagOf(nil, nil, "val", 40),
+				Proposed: merge.NewBagOf(nil, nil, "val", 3),
 			})
 			a.NoError(err)
-			a.True(ok)
 			if a.NotNil(result.Apply) {
 				if v, ok := result.Apply.Get(ident.New("val")); a.True(ok) {
 					a.Equal(int64(42), v)
@@ -185,34 +182,26 @@ func TestScript(t *testing.T) {
 	tbl = ident.NewTable(schema, ident.New("merge_dlq_all"))
 	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
 		if merger := cfg.Merger; a.NotNil(merger) {
-			result, ok, err := merger.Merge(context.Background(), nil, &types.Conflict{
-				Mutation: types.Mutation{
-					Data: []byte(`{"hello":"world!"}`),
-				},
-				Before:   ident.MapOf[any]("val", 1),
-				Existing: ident.MapOf[any]("val", 0),
-				Proposed: ident.MapOf[any]("val", 2),
+			result, err := merger.Merge(context.Background(), &merge.Conflict{
+				Before:   merge.NewBagOf(nil, nil, "val", 1),
+				Existing: merge.NewBagOf(nil, nil, "val", 0),
+				Proposed: merge.NewBagOf(nil, nil, "val", 2),
 			})
 			a.NoError(err)
-			a.True(ok)
-			a.Nil(result.Apply)
-			a.Equal("dead", result.DLQ)
+			a.Equal(&merge.Resolution{DLQ: "dead"}, result)
 		}
 	}
 
 	tbl = ident.NewTable(schema, ident.New("merge_drop_all"))
 	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
 		if merger := cfg.Merger; a.NotNil(merger) {
-			_, ok, err := merger.Merge(context.Background(), nil, &types.Conflict{
-				Mutation: types.Mutation{
-					Data: []byte(`{"hello":"world!"}`),
-				},
-				Before:   ident.MapOf[any]("val", 1),
-				Existing: ident.MapOf[any]("val", 0),
-				Proposed: ident.MapOf[any]("val", 2),
+			result, err := merger.Merge(context.Background(), &merge.Conflict{
+				Before:   merge.NewBagOf(nil, nil, "val", 1),
+				Existing: merge.NewBagOf(nil, nil, "val", 0),
+				Proposed: merge.NewBagOf(nil, nil, "val", 2),
 			})
 			a.NoError(err)
-			a.False(ok)
+			a.Equal(&merge.Resolution{Drop: true}, result)
 		}
 	}
 }

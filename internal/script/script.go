@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/dop251/goja"
 	"github.com/pkg/errors"
 )
@@ -344,70 +345,70 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 	}
 }
 
-// bindMerge exports a user-provided function as a [types.MergeFunc].
-func (s *UserScript) bindMerge(table ident.Table, merger mergeJS) types.MergeFunc {
-	return func(ctx context.Context, tx types.TargetQuerier, con *types.Conflict) (*types.Resolution, bool, error) {
+// bindMerge exports a user-provided function as a [merge.Func].
+func (s *UserScript) bindMerge(table ident.Table, merger mergeJS) merge.Func {
+	return func(ctx context.Context, con *merge.Conflict) (*merge.Resolution, error) {
 		// con.Before will be nil in 2-way merge.
 		if con.Existing == nil {
-			return nil, false, errors.New("nil value in Conflict.Existing")
+			return nil, errors.New("nil value in Conflict.Existing")
 		}
 		if con.Proposed == nil {
-			return nil, false, errors.New("nil value in Conflict.Proposed")
+			return nil, errors.New("nil value in Conflict.Proposed")
 		}
 		var jsResult *mergeResult
 		err := s.execJS(ctx, func() error {
 			op := &mergeOp{
-				Meta:     con.Mutation.Meta,
-				Existing: s.rt.NewDynamicObject(&identMapWrapper{con.Existing, s.rt}),
-				Proposed: s.rt.NewDynamicObject(&identMapWrapper{con.Proposed, s.rt}),
+				Meta:     con.Proposed.Meta,
+				Existing: s.rt.NewDynamicObject(&bagWrapper{con.Existing, s.rt}),
+				Proposed: s.rt.NewDynamicObject(&bagWrapper{con.Proposed, s.rt}),
 			}
 			if con.Before != nil {
-				op.Before = s.rt.NewDynamicObject(&identMapWrapper{con.Before, s.rt})
+				op.Before = s.rt.NewDynamicObject(&bagWrapper{con.Before, s.rt})
 			}
 			var err error
 			jsResult, err = merger(op)
 			return err
 		})
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 
 		if jsResult == nil {
-			return nil, false, errors.Errorf(
+			return nil, errors.Errorf(
 				"%s: merge function did not return a MergeResult object", table.Raw())
 		}
 		if jsResult.Drop {
-			return nil, false, nil
+			return &merge.Resolution{Drop: true}, nil
 		}
 		// Copy the proposed data out to a DLQ.
 		if jsResult.DLQ != "" {
-			return &types.Resolution{
+			return &merge.Resolution{
 				DLQ: jsResult.DLQ,
-			}, true, nil
+			}, nil
 		}
 		// By the pigeonhole principle, the user made an error.
 		if jsResult.Apply == nil {
-			return nil, false, errors.Errorf(
+			return nil, errors.Errorf(
 				"%s: merge function did not return a well-formed MergeResult", table.Raw())
 		}
 
 		// See goja.Object.Export for discussion about the returned type.
 		switch t := jsResult.Apply.Export().(type) {
-		case *identMapWrapper:
+		case *bagWrapper:
 			// The user returned one of the input wrappers, so we can
 			// just unwrap and return it.
-			return &types.Resolution{Apply: t.data}, true, nil
+			return &merge.Resolution{Apply: t.data}, nil
 
 		case map[string]any:
 			// The user returned a new JS object.
-			out := &ident.Map[any]{}
+			out := merge.NewBagFrom(con.Proposed)
 			for k, v := range t {
 				out.Put(ident.New(k), v)
 			}
-			return &types.Resolution{Apply: out}, true, nil
+			return &merge.Resolution{Apply: out}, nil
 
 		default:
-			return nil, false, errors.Errorf("%s: unexpected type of apply value: %T", table.Raw(), t)
+			return nil, errors.Errorf("%s: unexpected type of apply value: %T", table.Raw(), t)
 		}
 	}
 }

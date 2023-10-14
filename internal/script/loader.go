@@ -51,13 +51,14 @@ type mapJS func(
 
 // A mergeOp is the input to the user-provided merge function.
 type mergeOp struct {
-	Before   goja.Value     `goja:"before"`   // Backed by identMapWrapper. Nil in 2-way case.
+	Before   goja.Value     `goja:"before"`   // Backed by bagWrapper. Nil in 2-way case.
 	Meta     map[string]any `goja:"meta"`     // Equivalent to dispatch() or map() meta.
-	Existing goja.Value     `goja:"existing"` // Backed by identMapWrapper.
-	Proposed goja.Value     `goja:"proposed"` // Backed by identMapWrapper.
+	Existing goja.Value     `goja:"existing"` // Backed by bagWrapper.
+	Proposed goja.Value     `goja:"proposed"` // Backed by bagWrapper.
 }
 
 // A mergeResult is returned by the user-provided merge function.
+// Exactly one field may be set to a non-zero value.
 type mergeResult struct {
 	Apply goja.Value `goja:"apply"` // The data to return
 	DLQ   string     `goja:"dlq"`   // Append to a dead-letter queue.
