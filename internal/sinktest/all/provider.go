@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/wire"
 )
@@ -34,10 +35,17 @@ var TestSet = wire.NewSet(
 	staging.Set,
 	target.Set,
 
+	ProvideDLQConfig,
 	ProvideWatcher,
 
 	wire.Struct(new(Fixture), "*"),
 )
+
+// ProvideDLQConfig emits a default configuration.
+func ProvideDLQConfig() (*dlq.Config, error) {
+	cfg := &dlq.Config{}
+	return cfg, cfg.Preflight()
+}
 
 // ProvideWatcher is called by Wire to construct a Watcher
 // bound to the testing database.

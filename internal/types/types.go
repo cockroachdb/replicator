@@ -58,6 +58,17 @@ type Authenticator interface {
 // Deadlines associate a column identifier with a duration.
 type Deadlines = *ident.Map[time.Duration]
 
+// A DLQ is a dead-letter queue that allows mutations to be written
+// to the target for offline reconciliation.
+type DLQ interface {
+	Enqueue(ctx context.Context, tx TargetQuerier, mut Mutation) error
+}
+
+// DLQs provides named dead-letter queues in the target schema.
+type DLQs interface {
+	Get(ctx context.Context, target ident.Schema, name string) (DLQ, error)
+}
+
 var (
 	// ErrCancelSingleton may be returned by callbacks passed to
 	// leases.Singleton to shut down cleanly.
