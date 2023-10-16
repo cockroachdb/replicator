@@ -98,7 +98,7 @@ services:
    depends_on:
      roach_source_initsleep:
        condition: service_completed_successfully
-   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING enterprise.license = '${LICENSE}';"
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING enterprise.license = '${COCKROACH_DEV_LICENSE}';"
    restart: on-failure
 
  roach_source_lic2:
@@ -107,7 +107,7 @@ services:
    depends_on:
      roach_source_lic1:
        condition: service_completed_successfully
-   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING cluster.organization = '${ORGANIZATION}';"
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING cluster.organization = '${COCKROACH_DEV_ORGANIZATION}';"
    restart: on-failure
 
  roach_source_enable_sinks:
