@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#export LICENSE=""
-#export ORGANIZATION=""
+#export COCKROACH_DEV_LICENSE=""
+#export COCKROACH_DEV_ORGANIZATION=""
 
-if [ -z "$LICENSE" ] || [ -z "$ORGANIZATION" ]
+if [ -z "COCKROACH_DEV_LICENSE" ] || [ -z "COCKROACH_DEV_ORGANIZATION" ]
 then
-     echo "The LICENSE and ORGANIZTION env variables must be set to run CRDB Changefeeds needed for cdc-sink"
+     echo "The COCKROACH_DEV_LICENSE and COCKROACH_DEV_ORGANIZATION env variables must be set to run CRDB Changefeeds needed for cdc-sink"
      exit
 fi
 
