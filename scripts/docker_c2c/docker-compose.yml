@@ -10,7 +10,7 @@ services:
 
  roach_source:
    hostname: roach_source
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    ports:
      - "26257:26257" 
      - "8080:8080"
@@ -22,7 +22,7 @@ services:
 
  roach_target:
    hostname: roach_target
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    ports:
      - "26259:26257"
      - "8082:8080"
@@ -43,7 +43,7 @@ services:
 
  roach_target_initsink:
    hostname: roach_target_init
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_target_initsleep:
        condition: service_completed_successfully
@@ -94,7 +94,7 @@ services:
 
  roach_source_lic1:
    hostname: roach_source_lic1
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_source_initsleep:
        condition: service_completed_successfully
@@ -103,7 +103,7 @@ services:
 
  roach_source_lic2:
    hostname: roach_source_lic2
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_source_lic1:
        condition: service_completed_successfully
@@ -112,7 +112,7 @@ services:
 
  roach_source_enable_sinks:
    hostname: roach_source_enable_sinks
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_source_lic2:
        condition: service_completed_successfully
@@ -121,7 +121,7 @@ services:
  
  roach_source_movr_init:
    hostname: roach_source_movr_init
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_source_lic2:
        condition: service_completed_successfully
@@ -130,7 +130,7 @@ services:
 
  roach_source_backup:
    hostname: roach_source_backup
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_source_movr_init:
        condition: service_completed_successfully
@@ -139,7 +139,7 @@ services:
 
  roach_target_restore:
    hostname: roach_target_restore
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_source_backup:
        condition: service_completed_successfully
@@ -148,7 +148,7 @@ services:
 
  roach_source_create_feed:
    hostname: roach_source_create_feed
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_target_restore:
        condition: service_completed_successfully
@@ -165,7 +165,7 @@ services:
 
  roach_source_movr_run:
    hostname: roach_source_movr_init
-   image: cockroachdb/cockroach:v23.1.9
+   image: cockroachdb/cockroach:latest-v23.1
    depends_on:
      roach_final_sleep:
        condition: service_completed_successfully
