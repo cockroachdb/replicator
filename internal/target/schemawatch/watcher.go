@@ -223,7 +223,7 @@ SELECT table_catalog, table_schema, table_name
 	tableTemplateMySQL = `
 SELECT table_schema, NULL, table_name
 FROM information_schema.tables
-WHERE table_schema = ?
+WHERE upper(table_schema) = upper(?)
 AND table_type = 'BASE TABLE'`
 	tableTemplateOracle = `
 SELECT OWNER, NULL, TABLE_NAME FROM ALL_TABLES WHERE UPPER(OWNER) = UPPER(:owner)`

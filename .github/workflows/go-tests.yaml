@@ -139,6 +139,15 @@ jobs:
           - cockroachdb: v23.1
             target: postgresql-v15
             targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+          # Test CRDB -> MySQL for migration backfill use cases.
+          - cockroachdb: v23.1
+            target: mysql-v8
+            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
+          # TODO (silvano) Test CRDB -> MariaDB for migration backfill use cases.
+          # - cockroachdb: v23.1
+          #   target: mysql-mariadb-v10
+          #   targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
+
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out
       DOCKER_LOGS_OUT: docker-${{ strategy.job-index }}.log

@@ -492,7 +492,13 @@ func (a *apply) upsertBagsLocked(
 		// unconditionally, we expect to see all rows upserted and this
 		// value will be zero.
 		conflicts := int64(len(bags)) - upserted
-
+		// MySQL RowsAffected value per row is 1 if the row is inserted
+		// as a new row, 2 if an existing row is updated
+		// so conflicts could be < 0 - adding a test to prevent
+		// panic on the prometheus counter.
+		if conflicts < 0 {
+			conflicts = 0
+		}
 		a.conflicts.Add(float64(conflicts))
 		a.upserts.Add(float64(upserted))
 		log.WithFields(log.Fields{

@@ -703,12 +703,12 @@ func testMassBackfillWithForeignKeys(
 	r.NoError(err)
 
 	child, err := baseFixture.CreateTargetTable(ctx, fmt.Sprintf(
-		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
+		`CREATE TABLE %%s (pk INT PRIMARY KEY, FOREIGN KEY(pk) REFERENCES %s(pk), v INT NOT NULL)`,
 		parent.Name()))
 	r.NoError(err)
 
 	grand, err := baseFixture.CreateTargetTable(ctx, fmt.Sprintf(
-		`CREATE TABLE %%s (pk INT PRIMARY KEY REFERENCES %s, v INT NOT NULL)`,
+		`CREATE TABLE %%s (pk INT PRIMARY KEY, FOREIGN KEY(pk) REFERENCES %s(pk), v INT NOT NULL)`,
 		child.Name()))
 	r.NoError(err)
 
