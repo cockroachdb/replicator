@@ -61,6 +61,16 @@ func TestProductExpand(t *testing.T) {
 			product: ProductOracle,
 			err:     "expecting exactly one schema part",
 		},
+		{
+			input:    ident.MustSchema(ident.New("foo")),
+			product:  ProductMySQL,
+			expected: ident.MustSchema(ident.New("foo")),
+		},
+		{
+			input:   ident.MustSchema(ident.New("foo"), ident.New("bar")),
+			product: ProductMySQL,
+			err:     "expecting exactly one schema part",
+		},
 	}
 
 	for idx, tc := range tcs {

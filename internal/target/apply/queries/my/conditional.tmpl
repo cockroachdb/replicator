@@ -39,10 +39,10 @@ variable as different clauses are conditionally introduced.
 {{- /*
 data: the proposed values to insert. We explicitly name the columns to
 aid in joins below.
-WITH data as (select ? as "a",? as "b" ,? as "c")
+WITH data (a,b,c) as (select ?, ?, ?)
 */ -}}
 {{- nl -}}
-WITH data AS (
+WITH data  ({{ template "names" .Columns }}) AS (
   SELECT {{ template "cas-exprs" . }}
 )
 
@@ -104,7 +104,7 @@ ON DUPLICATE KEY UPDATE ts=VALUES(ts),  ver=VALUES(ver);
 {{- nl -}}
 SELECT * FROM {{ $dataSource }}
 {{- nl -}}
-{{- if .Data }}
+{{- if .Data -}}
 ON DUPLICATE KEY UPDATE 
 {{ template "valuelist" .Data }}
 {{- end -}}

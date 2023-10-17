@@ -367,7 +367,11 @@ func CreateSchema[P types.AnyPool](
 	name := ident.New(fmt.Sprintf("%s-%d-%d", prefix, os.Getpid(), dbNum))
 
 	cancel := func() {
-		err := retry.Execute(ctx, pool, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", name))
+		option := "CASCADE"
+		if pool.Info().Product == types.ProductMySQL {
+			option = ""
+		}
+		err := retry.Execute(ctx, pool, fmt.Sprintf("DROP DATABASE IF EXISTS %s %s", name, option))
 		log.WithError(err).WithField("target", name).Debug("dropped database")
 	}
 

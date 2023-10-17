@@ -146,7 +146,10 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	for idx, tgt := range tgts {
 		var schema string
 		if mode.fk && idx > 0 {
-			schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT REFERENCES %s NOT NULL)`,
+			schema = fmt.Sprintf(`
+			CREATE TABLE %s (
+				k INT PRIMARY KEY, v VARCHAR(2048), ref INT NOT NULL,
+				FOREIGN KEY(ref) REFERENCES %s(k))`,
 				tgt, tgts[idx-1])
 		} else {
 			schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT)`, tgt)
@@ -370,6 +373,8 @@ api.configureTable("t_2", {
 			switch fixture.TargetPool.Product {
 			case types.ProductCockroachDB, types.ProductPostgreSQL:
 				q = "SELECT count(*) FROM %s WHERE v = $1"
+			case types.ProductMySQL:
+				q = "SELECT count(*) FROM %s WHERE v = ?"
 			case types.ProductOracle:
 				q = "SELECT count(*) FROM %s WHERE v = :v"
 			default:

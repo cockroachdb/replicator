@@ -334,11 +334,18 @@ func getColumns(
 					// for some types, we might have precision information.
 					columnType := strings.SplitN(column.Type, "(", 2)[0]
 					switch columnType {
-					// MySQL stores default string values in the defaultExpr
-					// without single quotes. Adding them,
-					// to be consistent with our internal representation.
+					// The internal representation assumes that defaultExpr are
+					// single quoted.
+					// Depending on the flavor of MySQL single quotes
+					// may or may not be there, adding them if the are not there.
 					case "char", "varchar", "text":
-						column.DefaultExpr = fmt.Sprintf("'%s'", defaultExpr.String)
+						if strings.HasPrefix(defaultExpr.String, "'") &&
+							strings.HasSuffix(defaultExpr.String, "'") {
+							column.DefaultExpr = defaultExpr.String
+						} else {
+							column.DefaultExpr = fmt.Sprintf("'%s'", defaultExpr.String)
+						}
+
 					default:
 						column.DefaultExpr = defaultExpr.String
 					}

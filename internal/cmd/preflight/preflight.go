@@ -98,6 +98,17 @@ func testTargetConnection(ctx context.Context, connString string) error {
 		if result != 1 {
 			return errors.Errorf("SELECT 1 returned %d instead", result)
 		}
+	case types.ProductMySQL:
+		log.Info("MySQL DB detected")
+		log.Info("Testing basic query")
+		var result int
+		row := pool.DB.QueryRowContext(ctx, "SELECT 1")
+		if err := row.Scan(&result); err != nil {
+			return err
+		}
+		if result != 1 {
+			return errors.Errorf("SELECT 1 returned %d instead", result)
+		}
 	case types.ProductOracle:
 		log.Info("Oracle DB detected")
 		log.Info("Testing basic query")
