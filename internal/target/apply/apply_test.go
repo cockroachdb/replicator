@@ -177,7 +177,7 @@ func TestApply(t *testing.T) {
 			case types.ProductCockroachDB, types.ProductPostgreSQL:
 				a.ErrorContains(err, "violates not-null constraint (SQLSTATE 23502)")
 			case types.ProductMySQL:
-				a.ErrorContains(err, "ERROR 1048 (23000)")
+				a.ErrorContains(err, "1048 (23000)")
 			case types.ProductOracle:
 				a.ErrorContains(err, "ORA-01400: cannot insert NULL into")
 			default:
@@ -1141,8 +1141,17 @@ func TestMergeWiring(t *testing.T) {
 		TS  time.Time `json:"updated_at"`
 	}
 
-	tbl, err := fixture.CreateTargetTable(ctx,
-		"CREATE TABLE %s (pk INT PRIMARY KEY, val INT, updated_at TIMESTAMP WITH TIME ZONE)")
+	var createStatement string
+	switch fixture.TargetPool.Product {
+	case types.ProductCockroachDB, types.ProductOracle, types.ProductPostgreSQL:
+		createStatement = "CREATE TABLE %s (pk INT PRIMARY KEY, val INT, updated_at TIMESTAMP WITH TIME ZONE)"
+	case types.ProductMySQL:
+		createStatement = "CREATE TABLE %s (pk INT PRIMARY KEY, val INT, updated_at TIMESTAMP)"
+	default:
+		r.FailNow("product not supported")
+	}
+
+	tbl, err := fixture.CreateTargetTable(ctx, createStatement)
 	r.NoError(err)
 	tblName := sinktest.JumbleTable(tbl.Name())
 

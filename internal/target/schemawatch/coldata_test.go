@@ -297,6 +297,22 @@ func TestGetColumns(t *testing.T) {
 				assert.Fail(t, "did not find b column")
 			},
 		},
+		// Check default value extraction with embedded single quotes in MySQL
+		{
+			products:    []types.Product{types.ProductMySQL},
+			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT 'Hello''World!'",
+			primaryKeys: []string{"a"},
+			dataCols:    []string{"b"},
+			check: func(t *testing.T, data []types.ColData) {
+				for _, col := range data {
+					if ident.Equal(col.Name, ident.New("b")) {
+						assert.Contains(t, col.DefaultExpr, "'Hello''World!'")
+						return
+					}
+				}
+				assert.Fail(t, "did not find b column")
+			},
+		},
 		// Default with a function.
 		{
 			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
