@@ -59,17 +59,22 @@ func TestScript(t *testing.T) {
 	ctx := fixture.Context
 	schema := fixture.TargetSchema.Schema()
 
+	size := 2048
+	if fixture.TargetPool.Product == types.ProductMySQL {
+		// MySQL has restrictions on key length.
+		size = 512
+	}
+
 	// Create tables that will be referenced by the user-script.
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.table1(msg VARCHAR(2048) PRIMARY KEY)", schema))
+		fmt.Sprintf("CREATE TABLE %s.table1(msg VARCHAR(%d) PRIMARY KEY)", schema, size))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("CREATE TABLE %s.table2(idx INT PRIMARY KEY)", schema))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.all_features(msg VARCHAR(2048) PRIMARY KEY)", schema))
+		fmt.Sprintf("CREATE TABLE %s.all_features(msg VARCHAR(%d) PRIMARY KEY)", schema, size))
 	r.NoError(err)
-
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
 
 	var opts mapOptions

@@ -21,11 +21,13 @@ import (
 	"context"
 	"database/sql"
 	sqldriver "database/sql/driver"
+	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
-	_ "github.com/go-mysql-org/go-mysql/driver" // register driver
+	_ "github.com/go-sql-driver/mysql" // register driver
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -33,8 +35,15 @@ import (
 // OpenMySQLAsTarget opens a database connection, returning it as
 // a single connection.
 func OpenMySQLAsTarget(
-	ctx context.Context, connectString string, options ...Option,
+	ctx context.Context, connectString string, u *url.URL, options ...Option,
 ) (*types.TargetPool, func(), error) {
+	path := "/"
+	if u.Path != "" {
+		path = u.Path
+	}
+	//Setting sql_mode so we can use quotes (") for Ident.
+	mySQLString := fmt.Sprintf("%s@tcp(%s)%s?%s", u.User.String(), u.Host,
+		path, "sql_mode=ansi")
 	var tc TestControls
 	if err := attachOptions(ctx, &tc, options); err != nil {
 		return nil, nil, err
@@ -43,11 +52,10 @@ func OpenMySQLAsTarget(
 	return returnOrStop(ctx, func(ctx *stopper.Context) (*types.TargetPool, error) {
 		log.Info(connectString)
 
-		connector, err := sql.Open("mysql", connectString)
+		connector, err := sql.Open("mysql", mySQLString)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-
 		ret := &types.TargetPool{
 			DB: connector,
 			PoolInfo: types.PoolInfo{
@@ -81,11 +89,11 @@ func OpenMySQLAsTarget(
 		if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
 			return nil, errors.Wrap(err, "could not query version")
 		}
-		log.Infof("Version %s", ret.Version)
-		// Setting sql_mode so we can use quotes (") for Ident.
-		if _, err := ret.Exec("SET SESSION sql_mode = 'ansi'"); err != nil {
-			return nil, errors.Wrap(err, "could not set sql_mode to ansi")
+		var mode string
+		if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {
+			return nil, errors.Wrap(err, "could not mode version")
 		}
+		log.Infof("Version %s. Mode %s", ret.Version, mode)
 		if err := attachOptions(ctx, ret.DB, options); err != nil {
 			return nil, err
 		}
