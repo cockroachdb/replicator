@@ -182,7 +182,10 @@ func (s *UserScript) bind(loader *Loader) error {
 			tgt.Map = s.bindMap(table, bag.Map)
 		}
 		if bag.Merge != nil {
-			tgt.Merger = s.bindMerge(table, bag.Merge)
+			tgt.Merger, err = s.bindMerge(table, bag.Merge)
+			if err != nil {
+				return err
+			}
 		}
 		for k, v := range bag.Ignore {
 			if v {
@@ -345,51 +348,92 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 	}
 }
 
-// bindMerge exports a user-provided function as a [merge.Func].
-func (s *UserScript) bindMerge(table ident.Table, merger mergeJS) merge.Func {
-	return func(ctx context.Context, con *merge.Conflict) (*merge.Resolution, error) {
+// bindMerge exports a user-provided function as a [merge.Func]. The merger value could
+// be our reperesentation of [merge.Standard] or a JS function.
+func (s *UserScript) bindMerge(table ident.Table, merger goja.Value) (merge.Merger, error) {
+	var ret merge.Merger
+	wrapWithStandard := false
+
+	// If the user called api.standardMerge(), we'll see an object
+	// with a marker symbol.
+	if obj := merger.ToObject(s.rt); obj.GetSymbol(symIsStandardMerge) != nil {
+		// Unwrap the optional lambda: api.standardMerge(op => { ... } )
+		merger = obj.GetSymbol(symMergeFallback)
+		if merger == nil {
+			// This was a no-args call to api.standardMerge(), so we
+			// can just return the golang implementation.
+			return &merge.Standard{}, nil
+		}
+		wrapWithStandard = true
+	}
+
+	// We either have merge: op => { ... } or an unwrapped fallback. In
+	// either case, the wiring is the same. We'll make the js function
+	// object available as our golang func binding.
+	var jsMerger mergeJS
+	if err := s.rt.ExportTo(merger, &jsMerger); err != nil {
+		return nil, errors.Wrapf(err,
+			"table %s: merge function does not conform to MergeFunction type", table)
+	}
+
+	// Create a merge.Func that invokes the user-provided JS.
+	ret = merge.Func(func(ctx context.Context, con *merge.Conflict) (*merge.Resolution, error) {
 		// con.Before will be nil in 2-way merge.
-		if con.Existing == nil {
-			return nil, errors.New("nil value in Conflict.Existing")
+		if con.Target == nil {
+			return nil, errors.New("nil value in Conflict.Target")
 		}
 		if con.Proposed == nil {
 			return nil, errors.New("nil value in Conflict.Proposed")
 		}
+
+		// Execute the callback while holding a lock on the runtime to
+		// ensure single-threaded access.
 		var jsResult *mergeResult
-		err := s.execJS(ctx, func() error {
+		if err := s.execJS(ctx, func() error {
+			// Export the conflict as the js merge operation.
 			op := &mergeOp{
 				Meta:     con.Proposed.Meta,
-				Existing: s.rt.NewDynamicObject(&bagWrapper{con.Existing, s.rt}),
+				Target:   s.rt.NewDynamicObject(&bagWrapper{con.Target, s.rt}),
 				Proposed: s.rt.NewDynamicObject(&bagWrapper{con.Proposed, s.rt}),
 			}
 			if con.Before != nil {
 				op.Before = s.rt.NewDynamicObject(&bagWrapper{con.Before, s.rt})
 			}
+			if len(con.Unmerged) > 0 {
+				unmerged := make([]any, len(con.Unmerged))
+				for idx, ident := range con.Unmerged {
+					unmerged[idx] = ident.Raw()
+				}
+				op.Unmerged = s.rt.NewArray(unmerged...)
+			}
+
+			// Invoke the JS by way of the golang func binding.
 			var err error
-			jsResult, err = merger(op)
+			jsResult, err = jsMerger(op)
 			return err
-		})
-		if err != nil {
+		}); err != nil {
 			return nil, err
 		}
 
+		// Unpack the JS result object into a merge.Resolution. As with
+		// the Resolution type, we require exactly one of the fields to
+		// have a non-zero value.
 		if jsResult == nil {
 			return nil, errors.Errorf(
-				"%s: merge function did not return a MergeResult object", table.Raw())
+				"table %s: merge function did not return a MergeResult object", table.Raw())
 		}
 		if jsResult.Drop {
 			return &merge.Resolution{Drop: true}, nil
 		}
 		// Copy the proposed data out to a DLQ.
 		if jsResult.DLQ != "" {
-			return &merge.Resolution{
-				DLQ: jsResult.DLQ,
-			}, nil
+			return &merge.Resolution{DLQ: jsResult.DLQ}, nil
 		}
-		// By the pigeonhole principle, the user made an error.
+		// By the pigeonhole principle, the user made an error by
+		// setting no fields.
 		if jsResult.Apply == nil {
 			return nil, errors.Errorf(
-				"%s: merge function did not return a well-formed MergeResult", table.Raw())
+				"table %s: merge function did not return a well-formed MergeResult", table.Raw())
 		}
 
 		// See goja.Object.Export for discussion about the returned type.
@@ -400,7 +444,8 @@ func (s *UserScript) bindMerge(table ident.Table, merger mergeJS) merge.Func {
 			return &merge.Resolution{Apply: t.data}, nil
 
 		case map[string]any:
-			// The user returned a new JS object.
+			// The user returned a new JS object, likely by using an
+			// object literal.
 			out := merge.NewBagFrom(con.Proposed)
 			for k, v := range t {
 				out.Put(ident.New(k), v)
@@ -408,9 +453,14 @@ func (s *UserScript) bindMerge(table ident.Table, merger mergeJS) merge.Func {
 			return &merge.Resolution{Apply: out}, nil
 
 		default:
-			return nil, errors.Errorf("%s: unexpected type of apply value: %T", table.Raw(), t)
+			return nil, errors.Errorf("table %s: unexpected type of apply value: %T", table.Raw(), t)
 		}
+	})
+
+	if wrapWithStandard {
+		ret = &merge.Standard{Fallback: ret}
 	}
+	return ret, nil
 }
 
 // execJS ensures that the callback has exclusive access to the JS VM.

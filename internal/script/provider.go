@@ -100,6 +100,9 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 	if err := apiModule.Set("setOptions", l.setOptions); err != nil {
 		return nil, err
 	}
+	if err := apiModule.Set("standardMerge", l.standardMerge); err != nil {
+		return nil, err
+	}
 
 	// Load the main script into the runtime.
 	main := url.URL{Scheme: "file", Path: cfg.MainPath}

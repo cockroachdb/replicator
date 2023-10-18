@@ -50,7 +50,12 @@ func MapOf[V any](args ...any) *Map[V] {
 		default:
 			panic(fmt.Sprintf("unsupported type %T at index %d", t, i))
 		}
-		ret.Put(key, args[i+1].(V))
+		// A nil in the input should result in a zero value.
+		var v V
+		if args[i+1] != nil {
+			v = args[i+1].(V)
+		}
+		ret.Put(key, v)
 	}
 	return ret
 }
