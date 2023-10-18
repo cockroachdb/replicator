@@ -36,12 +36,14 @@ func ProvideFactory(
 	cache *types.TargetStatements,
 	configs *applycfg.Configs,
 	diags *diag.Diagnostics,
+	dlqs types.DLQs,
 	target *types.TargetPool,
 	watchers types.Watchers,
 ) (types.Appliers, func(), error) {
 	f := &factory{
 		cache:    cache,
 		configs:  configs,
+		dlqs:     dlqs,
 		product:  target.Product,
 		watchers: watchers,
 	}

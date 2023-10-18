@@ -13,6 +13,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -62,6 +63,7 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
 		cleanup3()
@@ -69,7 +71,8 @@ func Start(ctx context.Context, config *Config) (*MYLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
+	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()

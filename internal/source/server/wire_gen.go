@@ -16,6 +16,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
@@ -95,6 +96,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, cleanup7, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
 		cleanup6()
@@ -105,7 +107,8 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup8, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
+	appliers, cleanup8, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -294,6 +297,7 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
+	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, cleanup7, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
 		cleanup6()
@@ -304,7 +308,8 @@ func newTestFixture(contextContext context.Context, config *Config) (*testFixtur
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup8, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
+	appliers, cleanup8, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		cleanup7()
 		cleanup6()

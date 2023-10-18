@@ -13,6 +13,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 )
@@ -48,6 +49,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		return nil, nil, err
 	}
 	configs := fixture.Configs
+	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
 		cleanup3()
@@ -55,7 +57,8 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
+	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		cleanup4()
 		cleanup3()
