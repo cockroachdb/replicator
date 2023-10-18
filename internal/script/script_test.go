@@ -81,7 +81,7 @@ func TestScript(t *testing.T) {
 	}, TargetSchema(schema))
 	r.NoError(err)
 	a.Equal(3, s.Sources.Len())
-	a.Equal(4, s.Targets.Len())
+	a.Equal(5, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -158,8 +158,8 @@ func TestScript(t *testing.T) {
 		if merger := cfg.Merger; a.NotNil(merger) {
 			result, err := merger.Merge(context.Background(), &merge.Conflict{
 				Before:   merge.NewBagOf(nil, nil, "val", 1),
-				Existing: merge.NewBagOf(nil, nil, "val", 40),
 				Proposed: merge.NewBagOf(nil, nil, "val", 3),
+				Target:   merge.NewBagOf(nil, nil, "val", 40),
 			})
 			a.NoError(err)
 			if a.NotNil(result.Apply) {
@@ -186,8 +186,8 @@ func TestScript(t *testing.T) {
 		if merger := cfg.Merger; a.NotNil(merger) {
 			result, err := merger.Merge(context.Background(), &merge.Conflict{
 				Before:   merge.NewBagOf(nil, nil, "val", 1),
-				Existing: merge.NewBagOf(nil, nil, "val", 0),
 				Proposed: merge.NewBagOf(nil, nil, "val", 2),
+				Target:   merge.NewBagOf(nil, nil, "val", 0),
 			})
 			a.NoError(err)
 			a.Equal(&merge.Resolution{DLQ: "dead"}, result)
@@ -200,11 +200,25 @@ func TestScript(t *testing.T) {
 		if merger := cfg.Merger; a.NotNil(merger) {
 			result, err := merger.Merge(context.Background(), &merge.Conflict{
 				Before:   merge.NewBagOf(nil, nil, "val", 1),
-				Existing: merge.NewBagOf(nil, nil, "val", 0),
 				Proposed: merge.NewBagOf(nil, nil, "val", 2),
+				Target:   merge.NewBagOf(nil, nil, "val", 0),
 			})
 			a.NoError(err)
 			a.Equal(&merge.Resolution{Drop: true}, result)
+		}
+	}
+
+	// A merge function that sends to a DLQ on conflict.
+	tbl = ident.NewTable(schema, ident.New("merge_or_dlq"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		if merger := cfg.Merger; a.NotNil(merger) {
+			result, err := merger.Merge(context.Background(), &merge.Conflict{
+				Before:   merge.NewBagOf(nil, nil, "val", 1),
+				Proposed: merge.NewBagOf(nil, nil, "val", 2),
+				Target:   merge.NewBagOf(nil, nil, "val", 0),
+			})
+			a.NoError(err)
+			a.Equal(&merge.Resolution{DLQ: "dead"}, result)
 		}
 	}
 }
