@@ -104,6 +104,7 @@ jobs:
             integration: postgresql-v14
           - cockroachdb: v23.1
             integration: postgresql-v15
+
           # Run a test with a separate CockroachDB source and target
           # instance to ensure there are no accidental dependencies
           # between the source, staging, and target schemas.
@@ -148,6 +149,10 @@ jobs:
           #   target: mysql-mariadb-v10
           #   targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
 
+          # Test CRDB -> Redshift (postgres 8.0.2)
+          - cockroachdb: v23.1
+            target: redshift
+            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out
       DOCKER_LOGS_OUT: docker-${{ strategy.job-index }}.log

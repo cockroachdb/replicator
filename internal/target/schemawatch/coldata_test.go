@@ -124,7 +124,11 @@ func TestGetColumns(t *testing.T) {
 			primaryKeys: []string{"a", "b"},
 			dataCols:    []string{"ignored_c"},
 			// Generated columns first added in PG12
-			skip: strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11"),
+			skip: fixture.TargetPool.Product == types.ProductPostgreSQL &&
+				(strings.Contains(fixture.TargetPool.Version, "PostgreSQL 8") ||
+					strings.Contains(fixture.TargetPool.Version, "PostgreSQL 9") ||
+					strings.Contains(fixture.TargetPool.Version, "PostgreSQL 10") ||
+					strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11")),
 		},
 		// Ensure that computed pk columns are retained.
 		{
@@ -147,7 +151,10 @@ func TestGetColumns(t *testing.T) {
 			primaryKeys: []string{"a", "b"},
 			dataCols:    []string{"ignored_c", "ignored_d"},
 			skip: fixture.TargetPool.Product == types.ProductPostgreSQL &&
-				strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11"),
+				(strings.Contains(fixture.TargetPool.Version, "PostgreSQL 8") ||
+					strings.Contains(fixture.TargetPool.Version, "PostgreSQL 9") ||
+					strings.Contains(fixture.TargetPool.Version, "PostgreSQL 10") ||
+					strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11")),
 		},
 		// Ensure that the PK constraint may have an arbitrary name.
 		{

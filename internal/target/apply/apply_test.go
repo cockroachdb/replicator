@@ -1464,8 +1464,11 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 	defer cancel()
 
-	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
-		t.Skip("PostgreSQL v11 doesn't support generated columns")
+	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 8") ||
+		strings.Contains(fixture.TargetPool.Version, "PostgreSQL 9") ||
+		strings.Contains(fixture.TargetPool.Version, "PostgreSQL 10") ||
+		strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
+		t.Skipf("%s doesn't support generated columns", fixture.TargetPool.Version)
 	}
 
 	ctx := fixture.Context
@@ -1637,8 +1640,11 @@ func TestVirtualColumns(t *testing.T) {
 		testVirtualColumnsMySQL(t, fixture)
 		return
 	}
-	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
-		t.Skip("PostgreSQL v11 doesn't support generated columns")
+	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 8") ||
+		strings.Contains(fixture.TargetPool.Version, "PostgreSQL 9") ||
+		strings.Contains(fixture.TargetPool.Version, "PostgreSQL 10") ||
+		strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
+		t.Skipf("%s doesn't support generated columns", fixture.TargetPool.Version)
 	}
 
 	ctx := fixture.Context

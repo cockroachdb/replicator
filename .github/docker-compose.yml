@@ -172,3 +172,21 @@ services:
       - -c
       - wal_level=logical
 
+  #redshift:
+  #  image: guildeducation/docker-amazon-redshift
+  #  environment:
+  #    POSTGRES_PASSWORD: SoupOrSecret
+    # ports:
+    #   - "5432:5432"
+    # user: postgres
+    # command:
+    #   - postgres
+
+  redshift:
+    image: ghcr.io/hearthsim/docker-pgredshift
+    environment:
+      POSTGRES_PASSWORD: SoupOrSecret
+    ports:
+      - "5432:5432"
+    command:
+      - postgres
