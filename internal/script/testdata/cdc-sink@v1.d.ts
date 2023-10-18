@@ -76,7 +76,7 @@ declare module "cdc-sink@v1" {
      */
     function configureSource(
         sourceName: string,
-        props: ConfigureSourceDestination & Partial<ConfigureSourceOptions>);
+        props: ConfigureSourceDestination & Partial<ConfigureSourceOptions>): void;
 
 
     /**
@@ -137,7 +137,7 @@ declare module "cdc-sink@v1" {
      */
     function configureTable(
         tableName: Table,
-        props: Partial<ConfigureTableOptions>);
+        props: Partial<ConfigureTableOptions>): void;
 
     /**
      * @see configureTable
@@ -180,8 +180,14 @@ declare module "cdc-sink@v1" {
         /**
          * Enables a user-defined, two- or three-way merge function.
          */
-        merge: (op: MergeOperation) => MergeResult;
+        merge: MergeFunction | StandardMerge;
     };
+
+    /**
+     * A MergeFunction may be bound to a table to resolve two- or
+     * three-way merge conflicts when CAS mode is enabled.
+     */
+    type MergeFunction = (op: MergeOperation) => MergeResult;
 
     /**
      * @see configureTable
@@ -192,10 +198,6 @@ declare module "cdc-sink@v1" {
          */
         before?: Document;
         /**
-         * A view of the conflicting row in the target database.
-         */
-        existing: Document;
-        /**
          * Metadata similar to that found in the dispatch() or map() functions.
          */
         meta: Document;
@@ -203,6 +205,17 @@ declare module "cdc-sink@v1" {
          * The incoming data that could not be applied to the target row.
          */
         proposed: Document;
+        /**
+         * A view of the conflicting row in the target database.
+         */
+        target: Document;
+        /**
+         * Unmerged will be set if {@link standardMerge} calls the
+         * fallback merge function. This array will be populated with
+         * the names of the columns that standardMerge() could not
+         * automatically merge.
+         */
+        unmerged?: Column[];
     };
 
     /**
@@ -228,7 +241,12 @@ declare module "cdc-sink@v1" {
     };
 
     /**
-     * @returns a string containing a rondom UUID.
+     * This is an opaque type returned from {@link standardMerge}.
+     */
+    type StandardMerge = {};
+
+    /**
+     * @returns a string containing a random UUID.
      */
     function randomUUID(): string;
 
@@ -241,5 +259,21 @@ declare module "cdc-sink@v1" {
      *
      * @param opts - runtime options, refer to --help for details.
      */
-    function setOptions(opts: { [k: string]: string });
+    function setOptions(opts: { [k: string]: string }): void;
+
+    /**
+     * standardMerge returns a basic three-way merge operator. It will
+     * identify the properties that have changed in the input and apply
+     * them if op.before[prop] equals op.target[prop].
+     *
+     * This operator may be supplied with a fallback merge function that
+     * will be invoked if one or more properties cannot be merged. If
+     * the fallback is invoked, the {@link MergeOperation.unmerged}
+     * array will be populated with the names of the properties that
+     * could not be merged.
+     *
+     * @param fallback an optional {@link MergeFunction} that will be
+     * invoked if there are unresolved conflicts.
+     */
+    function standardMerge(fallback?: MergeFunction): StandardMerge;
 }

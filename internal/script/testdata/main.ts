@@ -74,16 +74,23 @@ api.configureTable("all_features", {
         console.log("Hello debug", JSON.stringify(doc));
         return doc;
     },
-    // This shows how a counter-like value can be merged.
-    merge: op => {
+    // This shows how a counter-like column can be merged by applying a
+    // delta computed from the incoming payload.
+    merge: api.standardMerge(op => {
         console.log("merge", JSON.stringify(op));
-        return {
-            apply: {
-                // Leading unary + coerces to numeric.
-                val: +op.existing.val + +op.proposed.val - +op.before.val,
+        op.unmerged.forEach(colName => {
+            switch (colName) {
+                case "val":
+                    // Leading unary + coerces to numeric.
+                    op.target.val = +op.target.val + +op.proposed.val - +op.before.val;
+                    break;
+                default:
+                    // This could also arrange to return a DLQ result.
+                    throw new Error("unexpected column name: " + colName)
             }
-        };
-    },
+        })
+        return {apply: op.target};
+    }),
 });
 
 api.configureTable("drop_all", {
@@ -91,12 +98,16 @@ api.configureTable("drop_all", {
 });
 
 api.configureTable("merge_dlq_all", {
-    merge: op => ({dlq: "dead"})
+    merge: () => ({dlq: "dead"})
 });
 
 api.configureTable("merge_drop_all", {
-    merge: op => ({drop: true})
+    merge: () => ({drop: true})
 });
 
+// This uses a fallback to send unmerged updates to a DLQ.
+api.configureTable("merge_or_dlq", {
+    merge: api.standardMerge(() => ({dlq: "dead"}))
+});
 
 api.setOptions({"hello": "world"});

@@ -1132,22 +1132,22 @@ func TestMergeWiring(t *testing.T) {
 			return &merge.Resolution{DLQ: "dlq"}, nil
 		}
 		valKey := ident.New("val")
-		existing := coerceToInt(r, con.Existing.GetZero(valKey))
+		existing := coerceToInt(r, con.Target.GetZero(valKey))
 		if shouldTwoWay.Load() {
 			if con.Before != nil {
 				return nil, errors.New("expecting nil Before")
 			}
-			val := coerceToInt(r, con.Existing.GetZero(valKey))
+			val := coerceToInt(r, con.Target.GetZero(valKey))
 			val *= 10
-			con.Existing.Put(valKey, val)
+			con.Target.Put(valKey, val)
 		} else {
 			start := coerceToInt(r, con.Before.GetZero(valKey))
 			end := coerceToInt(r, con.Proposed.GetZero(valKey))
-			con.Existing.Put(valKey, end-start+existing)
+			con.Target.Put(valKey, end-start+existing)
 		}
-		con.Existing.Put(ident.New("updated_at"), time.Now())
+		con.Target.Put(ident.New("updated_at"), time.Now())
 
-		return &merge.Resolution{Apply: con.Existing}, nil
+		return &merge.Resolution{Apply: con.Target}, nil
 	})
 	r.NoError(fixture.Configs.Set(tblName, configData))
 
