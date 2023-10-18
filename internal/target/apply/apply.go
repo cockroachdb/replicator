@@ -43,6 +43,7 @@ import (
 // apply will upsert mutations and deletions into a target table.
 type apply struct {
 	cache   *types.TargetStatements
+	dlqs    types.DLQs
 	product types.Product
 	target  ident.Table
 
@@ -71,17 +72,13 @@ const (
 )
 
 // newApply constructs an apply by inspecting the target table.
-func newApply(
-	cache *types.TargetStatements,
-	product types.Product,
-	inTarget ident.Table,
-	cfgs *applycfg.Configs,
-	watchers types.Watchers,
+func (f *factory) newApply(
+	product types.Product, inTarget ident.Table,
 ) (_ *apply, cancel func(), _ error) {
 	// Start a background goroutine to refresh the templates.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	w, err := watchers.Get(ctx, inTarget.Schema())
+	w, err := f.watchers.Get(ctx, inTarget.Schema())
 	if err != nil {
 		cancel()
 		return nil, nil, err
@@ -97,7 +94,8 @@ func newApply(
 
 	labelValues := metrics.TableValues(target)
 	a := &apply{
-		cache:   cache,
+		cache:   f.cache,
+		dlqs:    f.dlqs,
 		product: product,
 		target:  target,
 
@@ -120,7 +118,7 @@ func newApply(
 		}
 		defer cancelSchema()
 
-		configHandle := cfgs.Get(target)
+		configHandle := f.configs.Get(target)
 		configData, configChanged := configHandle.Get()
 
 		if configData.Merger != nil {
@@ -513,6 +511,7 @@ func (a *apply) upsertBagsLocked(
 
 	// Read the conflicting rows back to generate the conflicts to resolve.
 	var conflicts []*merge.Conflict
+	var conflictMuts []types.Mutation
 	for conflictingRows.Next() {
 		// Index into the muts slice.
 		var sourceIdx int
@@ -542,7 +541,8 @@ func (a *apply) upsertBagsLocked(
 		}
 
 		// Supply before data if we received it from upstream.
-		if conflictingMut := muts[sourceIdx]; len(conflictingMut.Before) > 0 {
+		conflictingMut := muts[sourceIdx]
+		if len(conflictingMut.Before) > 0 {
 			// Extra sanity-check for a literal null token.
 			if !bytes.Equal(conflictingMut.Before, []byte("null")) {
 				c.Before = a.newBagLocked()
@@ -553,6 +553,7 @@ func (a *apply) upsertBagsLocked(
 		}
 
 		conflicts = append(conflicts, c)
+		conflictMuts = append(conflictMuts, conflictingMut)
 	}
 	// Final or no-rows error check.
 	if err := conflictingRows.Err(); err != nil {
@@ -577,7 +578,7 @@ func (a *apply) upsertBagsLocked(
 	// Call the merge function on each conflict to generate a
 	// replacement row, add to a DLQ, or drop entirely.
 	fixups := make([]*merge.Bag, 0, len(conflicts))
-	for _, c := range conflicts {
+	for idx, c := range conflicts {
 		resolution, err := merger.Merge(ctx, c)
 		switch {
 		case err != nil:
@@ -585,10 +586,16 @@ func (a *apply) upsertBagsLocked(
 		case resolution == nil:
 			return errors.New("merge implementation returned nil *Resolution")
 		case resolution.Drop:
-			continue
+			// No action needed.
 		case resolution.DLQ != "":
-			// Work item in https://github.com/cockroachdb/cdc-sink/issues/487
-			return errors.New("unimplemented: DLQs are not implemented yet")
+			// Locate the requested DLQ and add the mutation.
+			q, err := a.dlqs.Get(ctx, a.target.Schema(), resolution.DLQ)
+			if err != nil {
+				return err
+			}
+			if err := q.Enqueue(ctx, db, conflictMuts[idx]); err != nil {
+				return err
+			}
 		case resolution.Apply != nil:
 			fixups = append(fixups, resolution.Apply)
 		default:

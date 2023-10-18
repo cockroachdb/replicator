@@ -22,6 +22,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -37,6 +38,7 @@ import (
 var Set = wire.NewSet(
 	ProvideFactory,
 	ProvideBaseConfig,
+	ProvideDLQConfig,
 	ProvideStagingDB,
 	ProvideStagingPool,
 	ProvideTargetPool,
@@ -54,6 +56,11 @@ func ProvideBaseConfig(config Config, _ *script.Loader) (*BaseConfig, error) {
 		return nil, err
 	}
 	return config.Base(), nil
+}
+
+// ProvideDLQConfig is called by Wire.
+func ProvideDLQConfig(config *BaseConfig) *dlq.Config {
+	return &config.DLQConfig
 }
 
 // ProvideFactory returns a utility which can create multiple logical

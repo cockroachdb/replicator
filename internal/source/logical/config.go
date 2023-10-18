@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
@@ -63,6 +64,8 @@ type BaseConfig struct {
 	BytesInFlight int
 	// Used in testing to inject errors during processing.
 	ChaosProb float32
+	// Dead-letter queue configuration. Mainly about table naming.
+	DLQConfig dlq.Config
 	// The number of concurrent connections to use when writing data in
 	// fan mode.
 	FanShards int
@@ -104,6 +107,7 @@ func (c *BaseConfig) Base() *BaseConfig {
 
 // Bind adds flags to the set.
 func (c *BaseConfig) Bind(f *pflag.FlagSet) {
+	c.DLQConfig.Bind(f)
 	c.ScriptConfig.Bind(f)
 
 	f.DurationVar(&c.ApplyTimeout, "applyTimeout", defaultApplyTimeout,
@@ -152,6 +156,9 @@ func (c *BaseConfig) Copy() *BaseConfig {
 // and returns an error if the Config is missing any fields for which a
 // default cannot be provided.
 func (c *BaseConfig) Preflight() error {
+	if err := c.DLQConfig.Preflight(); err != nil {
+		return err
+	}
 	if err := c.ScriptConfig.Preflight(); err != nil {
 		return err
 	}

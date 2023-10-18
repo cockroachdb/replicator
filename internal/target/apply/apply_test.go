@@ -1223,14 +1223,21 @@ func TestMergeWiring(t *testing.T) {
 		shouldDLQ.Store(true)
 		defer shouldDLQ.Store(false)
 
-		// Work item in https://github.com/cockroachdb/cdc-sink/issues/487
-		r.ErrorContains(app.Apply(ctx, fixture.TargetPool, stale),
-			"not implemented")
+		// Ensure that the DLQ table is available.
+		dlqTable, err := fixture.CreateDLQTable(ctx)
+		r.NoError(err)
+
+		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
 
 		var val int
 		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT val FROM %s", tbl.Name())).Scan(&val))
 		r.Equal(initial, val)
+
+		var ct int
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT count(*) FROM %s", dlqTable)).Scan(&ct))
+		r.Equal(1, ct)
 	})
 
 	// Insert a "stale" value representing a delta of 1.

@@ -14,6 +14,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -79,7 +80,9 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup6, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	dlqConfig := logical.ProvideDLQConfig(baseConfig)
+	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
+	appliers, cleanup6, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		cleanup5()
 		cleanup4()
@@ -225,7 +228,9 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup6, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
+	dlqConfig := logical.ProvideDLQConfig(baseConfig)
+	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
+	appliers, cleanup6, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		cleanup5()
 		cleanup4()

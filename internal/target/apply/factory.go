@@ -31,6 +31,7 @@ import (
 type factory struct {
 	cache    *types.TargetStatements
 	configs  *applycfg.Configs
+	dlqs     types.DLQs
 	product  types.Product
 	watchers types.Watchers
 	mu       struct {
@@ -84,7 +85,7 @@ func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) 
 	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
-	ret, cancel, err := newApply(f.cache, product, table, f.configs, f.watchers)
+	ret, cancel, err := f.newApply(product, table)
 	if err == nil {
 		f.mu.cleanup = append(f.mu.cleanup, cancel)
 		f.mu.instances.Put(table, ret)

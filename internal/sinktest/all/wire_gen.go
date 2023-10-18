@@ -104,6 +104,19 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	config, err := ProvideDLQConfig()
+	if err != nil {
+		cleanup9()
+		cleanup8()
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	watchers, cleanup10, err := schemawatch.ProvideFactory(targetPool, diagnostics)
 	if err != nil {
 		cleanup9()
@@ -117,36 +130,21 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	appliers, cleanup11, err := apply.ProvideFactory(targetStatements, configs, diagnostics, targetPool, watchers)
-	if err != nil {
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	config, err := ProvideDLQConfig()
-	if err != nil {
-		cleanup11()
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
 	dlQs := dlq.ProvideDLQs(config, targetPool, watchers)
+	appliers, cleanup11, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	if err != nil {
+		cleanup10()
+		cleanup9()
+		cleanup8()
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup11()
