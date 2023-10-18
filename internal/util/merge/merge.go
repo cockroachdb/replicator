@@ -17,7 +17,13 @@
 // Package merge provides support for three-way merge operations.
 package merge
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/pkg/errors"
+)
 
 // A Conflict contains a mutation that was attempted and the existing
 // data which blocked it. The maps in this type contain reified JSON
@@ -25,8 +31,28 @@ import "context"
 // json package.
 type Conflict struct {
 	Before   *Bag // May be nil if only 2-way merge.
-	Existing *Bag // The data which blocked the attempt.
-	Proposed *Bag // The desired end state of the mutation.
+	Proposed *Bag // The proposed end state of the mutation.
+
+	// Target will be populated with the values that were present in the
+	// target database. That is, the result of the merge should be to
+	// apply the difference between Before and Proposed to Target.
+	Target *Bag
+
+	// Unmerged is populated by [Standard.Merge] and can be presented
+	// to its fallback merge function. This slice will be populated with
+	// the properties that could not be automatically merged. That is:
+	//   Before[prop] != Target[prop] && Before[prop] != Proposed[prop]
+	Unmerged []ident.Ident
+}
+
+// ConflictError returns an error that provides details about a Conflict
+// which could not be merged.
+func ConflictError(con *Conflict) error {
+	data, err := json.Marshal(con)
+	if err != nil {
+		return errors.Wrap(err, "error while describing unmerged conflict")
+	}
+	return errors.Errorf("unmerged data conflict: %s", string(data))
 }
 
 // A Resolution contains the contents of a mutation after the Merger has
@@ -46,6 +72,14 @@ type Merger interface {
 	// of the Merger to ensure that the conflicted value arrived
 	// somewhere.
 	Merge(context.Context, *Conflict) (*Resolution, error)
+}
+
+// DLQ returns a Merger that sends all values to the named dead-letter
+// queue. This can be used as the final stage of a merge pipeline.
+func DLQ(name string) Merger {
+	return Func(func(context.Context, *Conflict) (*Resolution, error) {
+		return &Resolution{DLQ: name}, nil
+	})
 }
 
 // Func adapts a function type to implement Merger.

@@ -53,8 +53,9 @@ type mapJS func(
 type mergeOp struct {
 	Before   goja.Value     `goja:"before"`   // Backed by bagWrapper. Nil in 2-way case.
 	Meta     map[string]any `goja:"meta"`     // Equivalent to dispatch() or map() meta.
-	Existing goja.Value     `goja:"existing"` // Backed by bagWrapper.
 	Proposed goja.Value     `goja:"proposed"` // Backed by bagWrapper.
+	Target   goja.Value     `goja:"target"`   // Backed by bagWrapper.
+	Unmerged goja.Value     `goja:"unmerged"` // Intermediate state from standardMerge.
 }
 
 // A mergeResult is returned by the user-provided merge function.
@@ -66,6 +67,14 @@ type mergeResult struct {
 }
 
 type mergeJS func(*mergeOp) (*mergeResult, error)
+
+// These symbols allow bindMerge and standardMerge to collude. We'd
+// like to avoid an unnecessary round-trip through goja's value
+// interface if we can call [merge.Standard] directly.
+var (
+	symIsStandardMerge = goja.NewSymbol("standardMerge") // Boolean flag
+	symMergeFallback   = goja.NewSymbol("fallback")      // Reference to user-provided JS function.
+)
 
 // sourceJS is used in the API binding.
 type sourceJS struct {
@@ -91,8 +100,9 @@ type targetJS struct {
 	Ignore map[string]bool `goja:"ignore"`
 	// Mutation to mutation.
 	Map mapJS `goja:"map"`
-	// Two- or three-way merge operator.
-	Merge mergeJS `goja:"merge"`
+	// Two- or three-way merge operator. The bindMerge method will
+	// validate the type of value.
+	Merge goja.Value `goja:"merge"`
 }
 
 // Loader is responsible for the first-pass execution of the user
@@ -249,4 +259,21 @@ func (l *Loader) setOptions(data map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// standardMerge returns a JS object that [UserScript.bindMerge] will
+// detect. This collusion allows us to avoid any goja wiring to pass the
+// data into standardMerge.  Hopefully, the fallback won't need to be
+// called, so we can perform the entire merge in go code.
+func (l *Loader) standardMerge(jsFunc mergeJS) (*goja.Object, error) {
+	ret := l.rt.NewObject()
+	if err := ret.SetSymbol(symIsStandardMerge, true); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if jsFunc != nil {
+		if err := ret.SetSymbol(symMergeFallback, jsFunc); err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
+	return ret, nil
 }

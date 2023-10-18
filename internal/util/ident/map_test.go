@@ -43,6 +43,18 @@ func TestMap(t *testing.T) {
 	r.Equal("FOO", found)
 }
 
+// Ensure that a nil in the input to [MapOf] translates correctly into a
+// zero value for the type.
+func TestMapOfNil(t *testing.T) {
+	r := require.New(t)
+
+	m := MapOf[string](Ident{}, nil)
+	r.Equal(1, m.Len())
+	v, ok := m.Get(Ident{})
+	r.True(ok)
+	r.Equal("", v)
+}
+
 func TestMapJSON(t *testing.T) {
 	r := require.New(t)
 

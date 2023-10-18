@@ -537,13 +537,13 @@ func (a *apply) upsertBagsLocked(
 		// The conflict will have at least the blocking data and the
 		// conflicting properties.
 		c := &merge.Conflict{
-			Existing: a.newBagLocked(),
 			Proposed: bags[sourceIdx],
+			Target:   a.newBagLocked(),
 		}
 
 		// Copy the conflicting data from the table into the Conflict.
 		for idx, col := range a.mu.templates.Columns {
-			c.Existing.Put(col.Name, blockingData[idx])
+			c.Target.Put(col.Name, blockingData[idx])
 		}
 
 		// Supply before data if we received it from upstream.
