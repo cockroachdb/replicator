@@ -299,7 +299,9 @@ func (t *templates) deleteExpr(rowCount int) (string, error) {
 	return buf.String(), errors.WithStack(err)
 }
 
-func (t *templates) upsertExpr(rowCount int) (string, error) {
+// upsertExpr may return a conditional sql statement, unless forceUpsert
+// is set to true.
+func (t *templates) upsertExpr(rowCount int, mode applyMode) (string, error) {
 	if t.BulkUpsert {
 		rowCount = 1
 	}
@@ -310,7 +312,7 @@ func (t *templates) upsertExpr(rowCount int) (string, error) {
 
 	var buf strings.Builder
 	var err error
-	if len(cpy.Conditions) == 0 && cpy.Deadlines.Len() == 0 {
+	if mode == applyUnconditional || len(cpy.Conditions) == 0 && cpy.Deadlines.Len() == 0 {
 		err = t.upsert.Execute(&buf, &cpy)
 	} else {
 		err = t.conditional.Execute(&buf, &cpy)

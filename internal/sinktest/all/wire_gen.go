@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -130,6 +131,22 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
+	config, err := ProvideDLQConfig()
+	if err != nil {
+		cleanup11()
+		cleanup10()
+		cleanup9()
+		cleanup8()
+		cleanup7()
+		cleanup6()
+		cleanup5()
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	dlQs := dlq.ProvideDLQs(config, targetPool, watchers)
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup11()
@@ -167,6 +184,8 @@ func NewFixture() (*Fixture, func(), error) {
 		Appliers:       appliers,
 		Configs:        configs,
 		Diagnostics:    diagnostics,
+		DLQConfig:      config,
+		DLQs:           dlQs,
 		Memo:           memoMemo,
 		Stagers:        stagers,
 		VersionChecker: checker,

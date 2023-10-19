@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,7 +81,7 @@ func TestScript(t *testing.T) {
 	}, TargetSchema(schema))
 	r.NoError(err)
 	a.Equal(3, s.Sources.Len())
-	a.Equal(2, s.Targets.Len())
+	a.Equal(4, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -153,14 +154,57 @@ func TestScript(t *testing.T) {
 			a.True(keep)
 			a.Equal(`{"hello":"world!","msg":"Hello World!","num":42}`, string(mapped.Data))
 		}
+
+		if merger := cfg.Merger; a.NotNil(merger) {
+			result, err := merger.Merge(context.Background(), &merge.Conflict{
+				Before:   merge.NewBagOf(nil, nil, "val", 1),
+				Existing: merge.NewBagOf(nil, nil, "val", 40),
+				Proposed: merge.NewBagOf(nil, nil, "val", 3),
+			})
+			a.NoError(err)
+			if a.NotNil(result.Apply) {
+				if v, ok := result.Apply.Get(ident.New("val")); a.True(ok) {
+					a.Equal(int64(42), v)
+				}
+			}
+		}
 	}
 
+	// A map function that unconditionally filters all mutations.
 	tbl = ident.NewTable(schema, ident.New("drop_all"))
 	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
 		if filter := cfg.Map; a.NotNil(filter) {
 			_, keep, err := filter(context.Background(), types.Mutation{Data: []byte(`{"hello":"world!"}`)})
 			a.NoError(err)
 			a.False(keep)
+		}
+	}
+
+	// A merge function that sends all conflicts to a DLQ.
+	tbl = ident.NewTable(schema, ident.New("merge_dlq_all"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		if merger := cfg.Merger; a.NotNil(merger) {
+			result, err := merger.Merge(context.Background(), &merge.Conflict{
+				Before:   merge.NewBagOf(nil, nil, "val", 1),
+				Existing: merge.NewBagOf(nil, nil, "val", 0),
+				Proposed: merge.NewBagOf(nil, nil, "val", 2),
+			})
+			a.NoError(err)
+			a.Equal(&merge.Resolution{DLQ: "dead"}, result)
+		}
+	}
+
+	// A merge function that drops all conflicts.
+	tbl = ident.NewTable(schema, ident.New("merge_drop_all"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		if merger := cfg.Merger; a.NotNil(merger) {
+			result, err := merger.Merge(context.Background(), &merge.Conflict{
+				Before:   merge.NewBagOf(nil, nil, "val", 1),
+				Existing: merge.NewBagOf(nil, nil, "val", 0),
+				Proposed: merge.NewBagOf(nil, nil, "val", 2),
+			})
+			a.NoError(err)
+			a.Equal(&merge.Resolution{Drop: true}, result)
 		}
 	}
 }

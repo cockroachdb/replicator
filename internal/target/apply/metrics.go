@@ -23,6 +23,10 @@ import (
 )
 
 var (
+	applyConflicts = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "apply_conflicts_total",
+		Help: "the number of rows that experienced a CAS conflict",
+	}, metrics.TableLabels)
 	applyDeletes = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "apply_deletes_total",
 		Help: "the number of rows deleted",
@@ -35,6 +39,10 @@ var (
 	applyErrors = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "apply_errors_total",
 		Help: "the number of times an error was encountered while applying mutations",
+	}, metrics.TableLabels)
+	applyResolves = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "apply_resolves_total",
+		Help: "the number of rows that experienced a CAS conflict and which were resolved",
 	}, metrics.TableLabels)
 	applyUpserts = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "apply_upserts_total",

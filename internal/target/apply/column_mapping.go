@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/pkg/errors"
 )
 
@@ -41,10 +42,13 @@ type columnMapping struct {
 	DeleteParameterCount int                          // The number of SQL arguments.
 	Exprs                *ident.Map[string]           // Value-replacement expressions.
 	ExtrasColIdx         int                          // Position of the extras column, or -1 if unconfigured.
+	Ignore               ident.Idents                 // Named columns to ignore in the input.
+	Merger               merge.Merger                 // Conflict-resolution callback.
 	Positions            *ident.Map[positionalColumn] // Map of idents to column info and position.
 	Product              types.Product                // Target database product.
 	PK                   []types.ColData              // The names of the PK columns.
 	PKDelete             []types.ColData              // The names of the PK columns to delete.
+	Renames              *ident.Map[ident.Ident]      // External (source) names to target names.
 	TableName            ident.Table                  // The target table.
 	UpsertParameterCount int                          // The number of SQL arguments.
 }
@@ -68,7 +72,14 @@ func newColumnMapping(
 		ExtrasColIdx: -1,
 		Positions:    &ident.Map[positionalColumn]{},
 		Product:      product,
+		Renames:      &ident.Map[ident.Ident]{},
 		TableName:    table,
+	}
+
+	// Ensure that merge behavior is enabled only if there's something
+	// that could actually trigger it.
+	if len(cfg.CASColumns) > 0 || cfg.Deadlines.Len() > 0 {
+		ret.Merger = cfg.Merger
 	}
 
 	// Map cas column names to their order in the comparison tuple.
@@ -105,6 +116,7 @@ func newColumnMapping(
 		if col.Ignored {
 			// col.Ignored is true for generated columns. That field is
 			// driven by inspecting the target schema.
+			ret.Ignore = append(ret.Ignore, col.Name)
 		} else if cfg.Ignore.GetZero(col.Name) {
 			// The user can elect to ignore certain incoming data to
 			// facilitate schema changes.
@@ -170,6 +182,7 @@ func newColumnMapping(
 	// ignored (e.g. to drop a column).
 	_ = cfg.Ignore.Range(func(tgt ident.Ident, _ bool) error {
 		if _, alreadyIgnored := ret.Positions.Get(tgt); !alreadyIgnored {
+			ret.Ignore = append(ret.Ignore, tgt)
 			ret.Positions.Put(tgt, positionalColumn{
 				ColData: types.ColData{
 					Ignored: true,
@@ -186,6 +199,7 @@ func newColumnMapping(
 
 	// Add redundant mappings for renamed columns.
 	if err := cfg.SourceNames.Range(func(tgt ident.Ident, src applycfg.SourceColumn) error {
+		ret.Renames.Put(src, tgt)
 		if found, ok := ret.Positions.Get(tgt); ok {
 			ret.Positions.Put(src, found)
 		}

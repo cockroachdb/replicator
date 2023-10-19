@@ -14,21 +14,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package target contains various services for performing operations on
-// the target database cluster.
-package target
+package dlq
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/wire"
 )
 
-// Set is used by Wire and contains providers for all target
-// sub-packages.
-var Set = wire.NewSet(
-	apply.Set,
-	dlq.Set,
-	schemawatch.Set,
-)
+// Set is used by Wire.
+var Set = wire.NewSet(ProvideDLQs)
+
+// ProvideDLQs is called by Wire to construct the DLQs instance.
+func ProvideDLQs(cfg *Config, pool *types.TargetPool, watchers types.Watchers) types.DLQs {
+	return &dlqs{
+		cfg:        cfg,
+		targetPool: pool,
+		watchers:   watchers,
+	}
+}

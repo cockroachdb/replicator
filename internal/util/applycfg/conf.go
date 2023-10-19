@@ -21,6 +21,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 )
 
 // SubstitutionToken contains the string that we'll use to substitute in
@@ -48,6 +49,7 @@ type Config struct {
 	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.
 	Extras      TargetColumn              // JSONB column to store unmapped values in.
 	Ignore      *ident.Map[bool]          // Source column names to ignore.
+	Merger      merge.Merger              // Conflict resolution.
 	SourceNames *ident.Map[SourceColumn]  // Look for alternate name in the incoming data.
 }
 
@@ -70,12 +72,17 @@ func (t *Config) Copy() *Config {
 	t.Exprs.CopyInto(ret.Exprs)
 	ret.Extras = t.Extras
 	t.Ignore.CopyInto(ret.Ignore)
+	ret.Merger = t.Merger
 	t.SourceNames.CopyInto(ret.SourceNames)
 
 	return ret
 }
 
 // Equal returns true if the other Config is equivalent to the receiver.
+//
+// This method is intended for testing only. It does not compare the
+// Merger field, since not all implementations of that interface are
+// guaranteed to have a defined comparison operation (e.g. merge.Func).
 func (t *Config) Equal(o *Config) bool {
 	return t == o || // Identity or nil-nil.
 		(t != nil) && (o != nil) &&
@@ -84,6 +91,7 @@ func (t *Config) Equal(o *Config) bool {
 			t.Exprs.Equal(o.Exprs, cmap.Comparator[string]()) &&
 			ident.Equal(t.Extras, o.Extras) &&
 			t.Ignore.Equal(o.Ignore, cmap.Comparator[bool]()) &&
+			// Not all implementations of Merger are comparable: merge.Func or similar.
 			t.SourceNames.Equal(o.SourceNames, ident.Comparator[ident.Ident]())
 }
 
@@ -95,6 +103,7 @@ func (t *Config) IsZero() bool {
 		t.Exprs.Len() == 0 &&
 		t.Extras.Empty() &&
 		t.Ignore.Len() == 0 &&
+		t.Merger == nil &&
 		t.SourceNames.Len() == 0
 }
 
@@ -113,6 +122,9 @@ func (t *Config) Patch(other *Config) *Config {
 	}
 	if other.Ignore != nil {
 		other.Ignore.CopyInto(t.Ignore)
+	}
+	if other.Merger != nil {
+		t.Merger = other.Merger
 	}
 	if other.SourceNames != nil {
 		other.SourceNames.CopyInto(t.SourceNames)
