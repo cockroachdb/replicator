@@ -143,10 +143,10 @@ jobs:
           - cockroachdb: v23.1
             target: mysql-v8
             targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
-          # TODO (silvano) Test CRDB -> MariaDB for migration backfill use cases.
-          # - cockroachdb: v23.1
-          #   target: mysql-mariadb-v10
-          #   targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
+          # Test CRDB -> MariaDB for migration backfill use cases.
+          - cockroachdb: v23.1
+            target: mysql-mariadb-v10
+            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
 
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out

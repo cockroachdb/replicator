@@ -258,7 +258,7 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 			rows, err = tx.QueryContext(ctx,
 				fmt.Sprintf(tableTemplateCrdb, ident.New(dbNameRaw)), dbNameRaw, parts[1].Raw())
 
-		case types.ProductMySQL:
+		case types.ProductMariaDB, types.ProductMySQL:
 			rows, err = tx.QueryContext(ctx, tableTemplateMySQL, w.schema.Raw())
 		case types.ProductOracle:
 			rows, err = tx.QueryContext(ctx, tableTemplateOracle, w.schema.Raw())

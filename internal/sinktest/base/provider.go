@@ -314,7 +314,7 @@ func provideSchema[P types.AnyPool](
 	ctx context.Context, pool P, prefix string,
 ) (ident.Schema, func(), error) {
 	switch pool.Info().Product {
-	case types.ProductCockroachDB, types.ProductMySQL, types.ProductPostgreSQL:
+	case types.ProductCockroachDB, types.ProductMariaDB, types.ProductMySQL, types.ProductPostgreSQL:
 		return CreateSchema(ctx, pool, prefix)
 
 	case types.ProductOracle:
@@ -368,8 +368,11 @@ func CreateSchema[P types.AnyPool](
 
 	cancel := func() {
 		option := "CASCADE"
-		if pool.Info().Product == types.ProductMySQL {
+		switch pool.Info().Product {
+		case types.ProductMariaDB, types.ProductMySQL:
 			option = ""
+		default:
+			// nothing to do.
 		}
 		err := retry.Execute(ctx, pool, fmt.Sprintf("DROP DATABASE IF EXISTS %s %s", name, option))
 		log.WithError(err).WithField("target", name).Debug("dropped database")
@@ -396,9 +399,10 @@ func CreateSchema[P types.AnyPool](
 	}
 	var sch ident.Schema
 	var err error
-	if pool.Info().Product == types.ProductMySQL {
+	switch pool.Info().Product {
+	case types.ProductMariaDB, types.ProductMySQL:
 		sch, err = ident.NewSchema(name)
-	} else {
+	default:
 		sch, err = ident.NewSchema(name, ident.Public)
 	}
 	if err != nil {
