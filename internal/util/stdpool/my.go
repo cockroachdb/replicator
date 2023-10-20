@@ -19,6 +19,7 @@ package stdpool
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	sqldriver "database/sql/driver"
 	"fmt"
@@ -26,84 +27,118 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/secure"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
-	_ "github.com/go-sql-driver/mysql" // register driver
+	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
+// tlsConfigName is the name of the tls configuration used
+// by the underlying driver.
+const tlsConfigName = "mysql_custom"
+
 // OpenMySQLAsTarget opens a database connection, returning it as
 // a single connection.
 func OpenMySQLAsTarget(
-	ctx context.Context, connectString string, u *url.URL, options ...Option,
+	ctx context.Context, connectString string, url *url.URL, options ...Option,
 ) (*types.TargetPool, func(), error) {
-	path := "/"
-	if u.Path != "" {
-		path = u.Path
-	}
-	// Setting sql_mode so we can use quotes (") for Ident.
-	mySQLString := fmt.Sprintf("%s@tcp(%s)%s?%s", u.User.String(), u.Host,
-		path, "sql_mode=ansi")
+
 	var tc TestControls
 	if err := attachOptions(ctx, &tc, options); err != nil {
 		return nil, nil, err
 	}
 
-	return returnOrStop(ctx, func(ctx *stopper.Context) (*types.TargetPool, error) {
-		log.Info(connectString)
-
-		connector, err := sql.Open("mysql", mySQLString)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		ret := &types.TargetPool{
-			DB: connector,
-			PoolInfo: types.PoolInfo{
-				ConnectionString: connectString,
-				Product:          types.ProductMySQL,
-			},
-		}
-
-		ctx.Go(func() error {
-			<-ctx.Stopping()
-			if err := ret.Close(); err != nil {
-				log.WithError(errors.WithStack(err)).Warn("could not close database connection")
+	return returnOrStop(ctx,
+		func(ctx *stopper.Context) (*types.TargetPool, error) {
+			tlsConfigs, err := secure.ConfigureTransport(url)
+			if err != nil {
+				return nil, err
 			}
-			return nil
-		})
+			var ret *types.TargetPool
+			var transportError error
+			// try all possible transport options.
+			// the first one that works is the one we will use.
+			for _, tlsConfig := range tlsConfigs {
+				mysql.DeregisterTLSConfig(tlsConfigName)
+				mySQLString, err := getConnString(url, tlsConfig)
+				if err != nil {
+					return nil, errors.WithStack(err)
+				}
+				err = mysql.RegisterTLSConfig(tlsConfigName, tlsConfig)
+				if err != nil {
+					return nil, errors.WithStack(err)
+				}
+				connector, err := sql.Open("mysql", mySQLString)
+				if err != nil {
+					transportError = err
+					// try a different option.
+					continue
+				}
+				ret = &types.TargetPool{
+					DB: connector,
+					PoolInfo: types.PoolInfo{
+						ConnectionString: connectString,
+						Product:          types.ProductMySQL,
+					},
+				}
+				ctx.Go(func() error {
+					<-ctx.Stopping()
+					if err := ret.Close(); err != nil {
+						log.WithError(errors.WithStack(err)).Warn("could not close database connection")
+					}
+					return nil
+				})
 
-	ping:
-		if err := ret.Ping(); err != nil {
-			if tc.WaitForStartup && isMySQLStartupError(err) {
-				log.WithError(err).Info("waiting for database to become ready")
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(10 * time.Second):
-					goto ping
+			ping:
+				if err := ret.Ping(); err != nil {
+					// for some errors, we retry
+					if tc.WaitForStartup && isMySQLStartupError(err) {
+						log.WithError(err).Info("waiting for database to become ready")
+						select {
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						case <-time.After(10 * time.Second):
+							goto ping
+						}
+					}
+					transportError = err
+					// try a different option.
+					continue
+				}
+				// we got a connection, making sure that we can actually use it.
+				if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
+					return nil, errors.Wrap(err, "could not query version")
+				}
+				log.Infof("Version %s.", ret.Version)
+				// if debug is enabled we print sql mode and ssl info
+				if log.IsLevelEnabled(log.DebugLevel) {
+					var mode string
+					if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {
+						log.Errorf("could not query sql mode %s", err.Error())
+					}
+					var varName, cipher string
+					if err := ret.QueryRow("SHOW STATUS LIKE 'Ssl_cipher';").Scan(&varName, &cipher); err != nil {
+						log.Errorf("could not query ssl info %s", err.Error())
+					}
+					log.Debugf("Mode %s. %s %s", mode, varName, cipher)
+					ret.Version = fmt.Sprintf("%s cipher[%s]", ret.Version, cipher)
+				}
+				if err = attachOptions(ctx, ret.DB, options); err != nil {
+					return nil, err
+				}
+				if err = attachOptions(ctx, &ret.PoolInfo, options); err != nil {
+					return nil, err
+				}
+				if err == nil {
+					//Looks like we found a connection,
+					//no need to try other transport options.
+					return ret, nil
 				}
 			}
-			return nil, errors.Wrap(err, "could not ping the database")
-		}
-
-		if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
-			return nil, errors.Wrap(err, "could not query version")
-		}
-		var mode string
-		if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {
-			return nil, errors.Wrap(err, "could not query sql mode")
-		}
-		log.Infof("Version %s. Mode %s", ret.Version, mode)
-		if err := attachOptions(ctx, ret.DB, options); err != nil {
-			return nil, err
-		}
-
-		if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
-			return nil, err
-		}
-
-		return ret, nil
-	})
+			// we exhausted all options, returning the last error.
+			return nil, transportError
+		})
 }
 
 // TODO (silvano): verify error codes
@@ -114,4 +149,21 @@ func isMySQLStartupError(err error) bool {
 	default:
 		return false
 	}
+}
+
+// getConnString returns a driver specific connection strings
+// The TLS configuration must be already extracted from the URL parameters
+// to determine the list of possible transport connections that the client wants to try.
+// This function is only concerned about user, host and path section of the URL.
+func getConnString(url *url.URL, config *tls.Config) (string, error) {
+	path := "/"
+	if url.Path != "" {
+		path = url.Path
+	}
+	baseSQLString := fmt.Sprintf("%s@tcp(%s)%s?%s", url.User.String(), url.Host,
+		path, "sql_mode=ansi")
+	if config == nil {
+		return baseSQLString, nil
+	}
+	return fmt.Sprintf("%s&tls=%s", baseSQLString, tlsConfigName), nil
 }
