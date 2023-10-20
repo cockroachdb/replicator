@@ -373,7 +373,7 @@ api.configureTable("t_2", {
 			switch fixture.TargetPool.Product {
 			case types.ProductCockroachDB, types.ProductPostgreSQL:
 				q = "SELECT count(*) FROM %s WHERE v = $1"
-			case types.ProductMySQL:
+			case types.ProductMariaDB, types.ProductMySQL:
 				q = "SELECT count(*) FROM %s WHERE v = ?"
 			case types.ProductOracle:
 				q = "SELECT count(*) FROM %s WHERE v = :v"

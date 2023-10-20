@@ -222,9 +222,9 @@ func TestGetColumns(t *testing.T) {
 				"val", fixture.TargetSchema.Schema().String()+`."MyEnum"[]`,
 			),
 		},
-		// Check enums for mySQL.
+		// Check enums for MySQL.
 		{
-			products: []types.Product{types.ProductMySQL},
+			products: []types.Product{types.ProductMariaDB, types.ProductMySQL},
 			tableSchema: `pk INT PRIMARY KEY, a ENUM('x-small', 'small', 'medium', 'large', 'x-large'), 
 			              b SET('x-small', 'small', 'medium', 'large', 'x-large')`,
 			primaryKeys: []string{"pk"},
@@ -235,9 +235,9 @@ func TestGetColumns(t *testing.T) {
 				"b", "set",
 			),
 		},
-		// Check other mySQL types.
+		// Check other MySQL types.
 		{
-			products: []types.Product{types.ProductMySQL},
+			products: []types.Product{types.ProductMariaDB, types.ProductMySQL},
 			tableSchema: `
 			pk INT PRIMARY KEY, 
 			a BIGINT,
@@ -248,10 +248,11 @@ func TestGetColumns(t *testing.T) {
 			f DECIMAL(10,2),
 			g VARCHAR(10),
 			h FLOAT(8),
-		    i CHAR(1)
+		    i CHAR(1),
+			j JSON
 			`,
 			primaryKeys: []string{"pk"},
-			dataCols:    []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"},
+			dataCols:    []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
 			types: ident.MapOf[string](
 				"pk", "int",
 				"a", "bigint",
@@ -263,6 +264,7 @@ func TestGetColumns(t *testing.T) {
 				"g", "varchar(10)",
 				"h", "float",
 				"i", "char(1)",
+				"j", "json",
 			),
 		},
 		// Check type extraction.
@@ -281,7 +283,8 @@ func TestGetColumns(t *testing.T) {
 		},
 		// Check default value extraction
 		{
-			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL, types.ProductOracle},
+			products: []types.Product{types.ProductCockroachDB, types.ProductMariaDB,
+				types.ProductMySQL, types.ProductPostgreSQL, types.ProductOracle},
 			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT 'Hello World!'",
 			primaryKeys: []string{"a"},
 			dataCols:    []string{"b"},
@@ -300,8 +303,8 @@ func TestGetColumns(t *testing.T) {
 		// Checking MySQL default expressions.
 		{
 			products: []types.Product{types.ProductMySQL},
-			tableSchema: `a INT PRIMARY KEY, 
-			b VARCHAR(2048) DEFAULT 'Hello''World!', 
+			tableSchema: `a INT PRIMARY KEY,
+			b VARCHAR(2048) DEFAULT 'Hello''World!',
 			c VARCHAR(2048) DEFAULT (upper('A')),
 			d VARCHAR(2048) DEFAULT (upper('''A')),
 			e VARCHAR(2048) DEFAULT (upper(b)),
@@ -331,12 +334,50 @@ func TestGetColumns(t *testing.T) {
 						return
 					}
 				}
-				assert.Fail(t, "did not find b column")
+				assert.Fail(t, "did not find the required columns")
+			},
+		},
+		// Checking MariaDB default expressions.
+		// Single quote escape different from MySQL.
+		{
+			products: []types.Product{types.ProductMariaDB},
+			tableSchema: `a INT PRIMARY KEY,
+			b VARCHAR(2048) DEFAULT 'Hello''World!',
+			c VARCHAR(2048) DEFAULT (upper('A')),
+			d VARCHAR(2048) DEFAULT (upper('''A')),
+			e VARCHAR(2048) DEFAULT (upper(b)),
+			f VARCHAR(2048) DEFAULT (replace('Hello World!', ' ', '+'))`,
+			primaryKeys: []string{"a"},
+			dataCols:    []string{"b", "c", "d", "e", "f"},
+			check: func(t *testing.T, data []types.ColData) {
+				for _, col := range data {
+					if ident.Equal(col.Name, ident.New("b")) {
+						assert.Contains(t, col.DefaultExpr, `'Hello''World!'`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("c")) {
+						assert.Contains(t, col.DefaultExpr, `upper('A')`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("d")) {
+						assert.Contains(t, col.DefaultExpr, `upper('\'A')`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("e")) {
+						assert.Contains(t, col.DefaultExpr, `upper(b)`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("f")) {
+						assert.Contains(t, col.DefaultExpr, `replace('Hello World!', ' ', '+')`)
+						return
+					}
+				}
+				assert.Fail(t, "did not find the required columns")
 			},
 		},
 		// Default with a function.
 		{
-			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL},
+			products:    []types.Product{types.ProductCockroachDB, types.ProductMariaDB, types.ProductPostgreSQL},
 			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT replace('Hello World!', ' ', '+')",
 			primaryKeys: []string{"a"},
 			dataCols:    []string{"b"},
@@ -358,8 +399,8 @@ func TestGetColumns(t *testing.T) {
 	}
 
 	switch fixture.TargetPool.Product {
-	case types.ProductMySQL:
-		// MySQL does not support TYPES
+	case types.ProductMariaDB, types.ProductMySQL:
+		// MariaDB, MySQL do not support TYPES.
 	default:
 		// Enum with a boring name.
 		if _, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf(

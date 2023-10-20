@@ -133,7 +133,7 @@ func (d *dlqs) Get(ctx context.Context, target ident.Schema, name string) (types
 		q = qBase + argsPG
 	case types.ProductOracle:
 		q = qBase + argsOra
-	case types.ProductMySQL:
+	case types.ProductMariaDB, types.ProductMySQL:
 		q = qBase + argsMySQL
 	default:
 		return nil, errors.Errorf("dlq unimplemented for product %s", d.targetPool.Product)
