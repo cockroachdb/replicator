@@ -10,14 +10,15 @@ func _() {
 	var x [1]struct{}
 	_ = x[ProductUnknown-0]
 	_ = x[ProductCockroachDB-1]
-	_ = x[ProductMySQL-2]
-	_ = x[ProductOracle-3]
-	_ = x[ProductPostgreSQL-4]
+	_ = x[ProductMariaDB-2]
+	_ = x[ProductMySQL-3]
+	_ = x[ProductOracle-4]
+	_ = x[ProductPostgreSQL-5]
 }
 
-const _Product_name = "UnknownCockroachDBMySQLOraclePostgreSQL"
+const _Product_name = "UnknownCockroachDBMariaDBMySQLOraclePostgreSQL"
 
-var _Product_index = [...]uint8{0, 7, 18, 23, 29, 39}
+var _Product_index = [...]uint8{0, 7, 18, 25, 30, 36, 46}
 
 func (i Product) String() string {
 	if i < 0 || i >= Product(len(_Product_index)-1) {

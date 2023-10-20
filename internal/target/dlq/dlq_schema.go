@@ -84,7 +84,8 @@ data_before JSONB NOT NULL
 // suggested schemas. See [all.Fixture.CreateDLQTable].
 var BasicSchemas = map[types.Product]string{
 	types.ProductCockroachDB: basicCRDBSchema,
-	types.ProductPostgreSQL:  basicPGSchema,
+	types.ProductMariaDB:     basicMySQLSchema,
 	types.ProductMySQL:       basicMySQLSchema,
 	types.ProductOracle:      basicOraSchema,
+	types.ProductPostgreSQL:  basicPGSchema,
 }

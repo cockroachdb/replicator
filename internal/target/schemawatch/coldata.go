@@ -43,6 +43,95 @@ func colSliceEqual(a, b []types.ColData) bool {
 }
 
 // Retrieve the primary key columns in their index-order.
+// Note: Differs from MySQL in how we detect JSON columns.
+//
+// Parts of the CTE:
+// * pk_constraints: finds the primary key constraint for the table
+// https://dev.mysql.com/doc/refman/8.0/en/information-schema-table-constraints-table.html
+// * json: in MariaDB json type is a longtext with a CHECK(json_valid) constraint
+// * pks: extracts the names of the PK columns and their relative
+// positions.
+// * cols: extracts all columns, ignoring those with generation
+// expressions by checking the "extra" column.
+// The type of the column is derived from the data_type or the column_type.
+// The column type may have additional information (e.g. precision),
+// which may be required when casting types while applying mutations to the
+// target database.
+// https://dev.mysql.com/doc/refman/8.0/en/information-schema-columns-table.html
+// * ordered: adds a synthetic seq_in_index to the non-PK columns.
+// * SELECT: aggregates the above, sorting the PK columns in-order
+// before the non-PK columns.
+const sqlColumnsQueryMariaDB = `
+WITH pk_constraints AS (
+	SELECT
+		   table_schema,
+		   table_name,
+		   constraint_name
+	  FROM information_schema.table_constraints
+	 WHERE constraint_type = 'PRIMARY KEY'
+),
+json as (
+	SELECT
+		   constraint_schema as  table_schema,
+		   table_name,
+		   constraint_name as column_name
+	  FROM information_schema.check_constraints
+	 WHERE check_clause LIKE 'json_valid(%'
+),
+pks AS (
+	SELECT
+		   table_schema,
+		   table_name,
+		   column_name,
+		   ordinal_position
+	  FROM information_schema.key_column_usage
+      JOIN pk_constraints USING (table_schema, table_name, constraint_name)
+),
+cols AS (
+	SELECT
+		   table_schema,
+		   table_name,
+		   column_name,
+		   CASE
+			 WHEN data_type in ('decimal','char','varchar') THEN column_type
+			 ELSE data_type
+		   END as data_type,
+		   column_type,
+		   column_default,
+		   extra IN ('STORED GENERATED', 'VIRTUAL GENERATED') AS ignored
+	FROM information_schema.columns
+),
+ordered AS (
+	SELECT
+		   table_schema,
+		   table_name,
+		   column_name,
+		   MIN(
+		     COALESCE(pks.ordinal_position, 2048)
+		   ) AS ordinal_position
+	  FROM cols
+		   LEFT JOIN pks USING (table_schema, table_name, column_name)
+  GROUP BY table_schema, table_name, column_name
+)
+   SELECT
+		  column_name,
+		  pks.ordinal_position IS NOT NULL,
+		  CASE
+		    WHEN json.column_name = cols.column_name THEN 'json'
+		    ELSE data_type
+		  END as data_type,
+		  column_default,
+		  ignored
+      FROM cols
+	       JOIN ordered USING (table_schema, table_name, column_name)
+		   LEFT JOIN pks USING (table_schema, table_name, column_name)
+		   LEFT JOIN json USING (table_schema, table_name, column_name)
+   WHERE table_schema = ?
+     AND table_name = ?
+ORDER BY ordered.ordinal_position, column_name
+`
+
+// Retrieve the primary key columns in their index-order.
 //
 // Parts of the CTE:
 // * pk_constraints: finds the primary key constraint for the table
@@ -247,6 +336,16 @@ func getColumns(
 			parts[1].Raw(),
 			parts[2].Raw(),
 		}
+	case types.ProductMariaDB:
+		parts := table.Idents(make([]ident.Ident, 0, 2))
+		if len(parts) != 2 {
+			return nil, errors.Errorf("expecting two table name parts, had %d", len(parts))
+		}
+		stmt = sqlColumnsQueryMariaDB
+		args = []any{
+			parts[0].Raw(),
+			parts[1].Raw(),
+		}
 	case types.ProductMySQL:
 		parts := table.Idents(make([]ident.Ident, 0, 2))
 		if len(parts) != 2 {
@@ -336,6 +435,12 @@ func getColumns(
 				column.Type = ident.NewTable(parsed.Schema(), parts[2]).String()
 				if isArray {
 					column.Type += "[]"
+				}
+			case types.ProductMariaDB:
+				// In MariaDB we get either a null result or the "NULL" string
+				// if there are no default expressions.
+				if defaultExpr.String != "NULL" && defaultExpr.Valid {
+					column.DefaultExpr = defaultExpr.String
 				}
 			case types.ProductMySQL:
 				if defaultExpr.Valid {

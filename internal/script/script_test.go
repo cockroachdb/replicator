@@ -60,9 +60,11 @@ func TestScript(t *testing.T) {
 	schema := fixture.TargetSchema.Schema()
 
 	size := 2048
-	if fixture.TargetPool.Product == types.ProductMySQL {
-		// MySQL has restrictions on key length.
+	switch fixture.TargetPool.Product {
+	case types.ProductMariaDB, types.ProductMySQL:
 		size = 512
+	default:
+		// nothing to do.
 	}
 
 	// Create tables that will be referenced by the user-script.

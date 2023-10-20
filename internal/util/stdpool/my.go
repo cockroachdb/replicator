@@ -23,6 +23,7 @@ import (
 	sqldriver "database/sql/driver"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -88,6 +89,9 @@ func OpenMySQLAsTarget(
 
 		if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
 			return nil, errors.Wrap(err, "could not query version")
+		}
+		if strings.Contains(ret.Version, "MariaDB") {
+			ret.PoolInfo.Product = types.ProductMariaDB
 		}
 		var mode string
 		if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {

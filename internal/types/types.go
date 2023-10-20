@@ -263,6 +263,7 @@ type Product int
 const (
 	ProductUnknown Product = iota
 	ProductCockroachDB
+	ProductMariaDB
 	ProductMySQL
 	ProductOracle
 	ProductPostgreSQL
@@ -292,7 +293,7 @@ func (p Product) ExpandSchema(s ident.Schema) (ident.Schema, error) {
 			return ident.Schema{}, errors.Errorf("unexpected number of schema parts: %d", numParts)
 		}
 
-	case ProductMySQL, ProductOracle:
+	case ProductMySQL, ProductMariaDB, ProductOracle:
 		if numParts != 1 {
 			return ident.Schema{}, errors.Errorf("expecting exactly one schema part, had %d", numParts)
 		}

@@ -245,7 +245,7 @@ func (r *request) schemaSegmentCount() int {
 	switch r.handler.TargetPool.Product {
 	case types.ProductUnknown:
 		return 0
-	case types.ProductOracle, types.ProductMySQL:
+	case types.ProductOracle, types.ProductMariaDB, types.ProductMySQL:
 		return 1 // e.g. MY_SCHEMA
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		return 2 // e.g. MY_DB.MY_SCHEMA

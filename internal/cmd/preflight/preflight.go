@@ -98,8 +98,8 @@ func testTargetConnection(ctx context.Context, connString string) error {
 		if result != 1 {
 			return errors.Errorf("SELECT 1 returned %d instead", result)
 		}
-	case types.ProductMySQL:
-		log.Info("MySQL DB detected")
+	case types.ProductMariaDB, types.ProductMySQL:
+		log.Info("MySQL/MariaDB detected")
 		log.Info("Testing basic query")
 		var result int
 		row := pool.DB.QueryRowContext(ctx, "SELECT 1")

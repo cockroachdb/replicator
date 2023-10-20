@@ -125,7 +125,7 @@ func parseHelper(product types.Product, typeName string) func(any) (any, error) 
 	switch product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
 		// Just pass through, since we have similar representations.
-	case types.ProductMySQL:
+	case types.ProductMariaDB, types.ProductMySQL:
 		// Coerce types to the what the mysql driver expects.
 		switch typeName {
 		case "binary", "blob", "longblob", "mediumblob", "tinyblob", "varbinary":
