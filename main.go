@@ -37,6 +37,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/cmd/preflight"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/start"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/version"
+	"github.com/cockroachdb/cdc-sink/internal/cmd/votr"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/util/logfmt"
 	joonix "github.com/joonix/log"
@@ -112,6 +113,7 @@ func main() {
 		script.HelpCommand(),
 		start.Command(),
 		version.Command(),
+		votr.Command(),
 	)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
