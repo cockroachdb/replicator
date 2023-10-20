@@ -142,7 +142,7 @@ jobs:
           # Test CRDB -> MySQL for migration backfill use cases.
           - cockroachdb: v23.1
             target: mysql-v8
-            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
+            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql?sslmode=require"
           # Test CRDB -> MariaDB for migration backfill use cases.
           - cockroachdb: v23.1
             target: mysql-mariadb-v10
