@@ -330,7 +330,7 @@ func getDependencyOrder(
 			args = []any{parts[0].Raw(), parts[1].Raw()}
 		}
 
-	case types.ProductMySQL:
+	case types.ProductMariaDB, types.ProductMySQL:
 		parts := db.Idents(make([]ident.Ident, 0, 1))
 		if len(parts) != 1 {
 			return nil, errors.Errorf("expecting one schema parts, had %d", len(parts))

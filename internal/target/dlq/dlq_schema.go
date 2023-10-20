@@ -85,6 +85,7 @@ data_before JSONB NOT NULL
 var BasicSchemas = map[types.Product]string{
 	types.ProductCockroachDB: basicCRDBSchema,
 	types.ProductPostgreSQL:  basicPGSchema,
+	types.ProductMariaDB:     basicMySQLSchema,
 	types.ProductMySQL:       basicMySQLSchema,
 	types.ProductOracle:      basicOraSchema,
 }

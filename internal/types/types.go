@@ -263,6 +263,7 @@ type Product int
 const (
 	ProductUnknown Product = iota
 	ProductCockroachDB
+	ProductMariaDB
 	ProductMySQL
 	ProductOracle
 	ProductPostgreSQL

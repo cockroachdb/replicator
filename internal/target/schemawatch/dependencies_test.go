@@ -154,7 +154,7 @@ ALTER TABLE %[1]s.cycle_a ADD COLUMN ref int references %[1]s.cycle_b;
 `, fixture.TargetSchema.Schema()))
 		r.NoError(err)
 
-	case types.ProductMySQL:
+	case types.ProductMariaDB, types.ProductMySQL:
 		_, err = pool.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TABLE %[1]s."cycle_a" (pk int primary key)`,
 			fixture.TargetSchema.Schema()))

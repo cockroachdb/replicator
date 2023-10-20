@@ -185,7 +185,7 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 		ret.delete = tmplCRDB.Lookup("delete.tmpl")
 		ret.upsert = tmplCRDB.Lookup("upsert.tmpl")
 
-	case types.ProductMySQL:
+	case types.ProductMariaDB, types.ProductMySQL:
 		ret.conditional = tmplMy.Lookup("conditional.tmpl")
 		ret.delete = tmplMy.Lookup("delete.tmpl")
 		ret.upsert = tmplMy.Lookup("upsert.tmpl")
@@ -267,7 +267,7 @@ func (t *templates) Vars() ([][]varPair, error) {
 				switch t.Product {
 				case types.ProductCockroachDB, types.ProductPostgreSQL:
 					reference = fmt.Sprintf("$%d", vp.Param)
-				case types.ProductMySQL:
+				case types.ProductMariaDB, types.ProductMySQL:
 					reference = "?"
 				case types.ProductOracle:
 					reference = fmt.Sprintf(":ref%d", vp.Param)
