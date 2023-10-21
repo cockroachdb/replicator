@@ -19,6 +19,7 @@ package votr
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"sync/atomic"
@@ -33,11 +34,30 @@ import (
 	"github.com/spf13/pflag"
 )
 
+type region int
+
+const (
+	east region = iota
+	west
+)
+
+func (r region) String() string {
+	switch r {
+	case east:
+		return "east"
+	case west:
+		return "west"
+	default:
+		return fmt.Sprintf("region(%d)", r)
+	}
+}
+
 type config struct {
 	BallotBatch     int
 	Candidates      int
-	Connect         string
-	Enclosing       ident.Schema
+	ConnectEast     string
+	ConnectWest     string
+	Enclosing       ident.Ident
 	ReportInterval  time.Duration
 	StopAfter       time.Duration
 	ValidationDelay time.Duration
@@ -50,11 +70,13 @@ func (c *config) Bind(f *pflag.FlagSet) {
 		"the number of ballots to record in a single batch")
 	f.IntVar(&c.Candidates, "candidates", 16,
 		"the number of candidate rows")
-	f.StringVar(&c.Connect, "connect",
+	f.StringVar(&c.ConnectEast, "connectEast",
 		"postgresql://root@localhost:26257/?sslmode=disable",
-		"the CockroachDB connection string")
-	c.Enclosing = ident.MustSchema(ident.New("votr"), ident.Public)
-	f.Var(ident.NewSchemaFlag(&c.Enclosing), "schema",
+		"a CockroachDB connection string")
+	f.StringVar(&c.ConnectWest, "connectWest",
+		"postgresql://root@localhost:26258/?sslmode=disable",
+		"a CockroachDB connection string")
+	f.Var(ident.NewValue("votr", &c.Enclosing), "schema",
 		"the enclosing database schema")
 	f.DurationVar(&c.ReportInterval, "reportiAfter", 5*time.Second,
 		"report number of ballots inserted")
@@ -74,7 +96,7 @@ func Command() *cobra.Command {
 		Use:   "votr",
 		Short: "a workload to demonstrate async, two-way replication",
 	}
-	cmd.AddCommand(commandInit(), commandWorker())
+	cmd.AddCommand(commandInit(), commandRun())
 	return cmd
 }
 
@@ -86,16 +108,25 @@ func commandInit() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			pool, cancel, err := stdpool.OpenPgxAsTarget(ctx, cfg.Connect)
+
+			east, cancel, err := openSchema(ctx, cfg, east)
 			if err != nil {
-				return errors.Wrap(err, "could not connect to target database")
+				return errors.Wrap(err, "could not connect to east target database")
 			}
 			defer cancel()
-
-			sch := newSchema(pool.DB, cfg.Enclosing)
-			if err := sch.create(ctx); err != nil {
-				return errors.Wrap(err, "could not create VOTR schema")
+			if err := east.create(ctx); err != nil {
+				return errors.Wrap(err, "could not create east VOTR schema")
 			}
+
+			west, cancel, err := openSchema(ctx, cfg, west)
+			if err != nil {
+				return errors.Wrap(err, "could not connect to west target database")
+			}
+			defer cancel()
+			if err := west.create(ctx); err != nil {
+				return errors.Wrap(err, "could not create west VOTR schema")
+			}
+
 			return nil
 		},
 	}
@@ -103,23 +134,13 @@ func commandInit() *cobra.Command {
 	return cmd
 }
 
-func commandWorker() *cobra.Command {
+func commandRun() *cobra.Command {
 	cfg := &config{}
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "run the VOTR workload",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pool, cancel, err := stdpool.OpenPgxAsTarget(cmd.Context(), cfg.Connect,
-				stdpool.WithConnectionLifetime(5*time.Minute),
-				stdpool.WithPoolSize(cfg.Workers+1),
-				stdpool.WithTransactionTimeout(time.Minute),
-			)
-			if err != nil {
-				return errors.Wrap(err, "could not connect to target database")
-			}
-			defer cancel()
-
 			// Create a detached stopper so we can control shutdown.
 			ctx := stopper.WithContext(context.Background())
 
@@ -141,50 +162,26 @@ func commandWorker() *cobra.Command {
 				return nil
 			})
 
-			// Ensure tables and the (deterministic) candidate rows.
-			sch := newSchema(pool.DB, cfg.Enclosing)
-			if err := sch.ensureCandidates(ctx, cfg.Candidates); err != nil {
-				return errors.Wrap(err, "could not create candidate entries")
-			}
-
-			warnings, err := sch.validate(ctx, false)
-			if err != nil {
-				return errors.Wrap(err, "could not perform initial validation")
-			}
-			if len(warnings) > 0 {
-				log.WithField("inconsistent", warnings).Warn("workload starting from inconsistent state")
-			}
-
 			// Run the requested number of workers.
-			count := &atomic.Int64{}
-			for i := 0; i < cfg.Workers; i++ {
-				ctx.Go(func() error { return worker(ctx, cfg, sch, count) })
-			}
-			log.Infof("inserting with %d workers across %d candidates",
-				cfg.Workers, len(sch.candidateIds))
+			log.Infof("inserting with %d workers across %d candidates", cfg.Workers, cfg.Candidates)
 			if cfg.WorkerDelay > 0 {
-				log.Infof("theoretical max ballots per reporting interval: %d",
+				log.Infof("theoretical max regional ballots per reporting interval: %d",
 					int64(cfg.Workers)*int64(cfg.BallotBatch)*
 						cfg.ReportInterval.Nanoseconds()/cfg.WorkerDelay.Nanoseconds())
 				log.Info("low performance may indicate contention due to too few candidates")
 			}
 
-			// Print status.
-			ctx.Go(func() error {
-				for {
-					select {
-					case <-time.After(cfg.ReportInterval):
-						log.Infof("inserted %d ballots", count.Swap(0))
-					case <-ctx.Stopping():
-						return nil
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-				}
-			})
+			cancel, err := worker(ctx, cfg, east)
+			if err != nil {
+				return err
+			}
+			defer cancel()
 
-			// Start a background validation loop.
-			ctx.Go(func() error { return validator(ctx, cfg, sch) })
+			cancel, err = worker(ctx, cfg, west)
+			if err != nil {
+				return err
+			}
+			defer cancel()
 
 			return ctx.Wait()
 		},
@@ -193,45 +190,114 @@ func commandWorker() *cobra.Command {
 	return cmd
 }
 
-func validator(ctx *stopper.Context, cfg *config, sch *schema) error {
-	for {
-		select {
-		case <-time.After(cfg.ValidationDelay):
-		case <-ctx.Stopping():
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		warnings, err := sch.validate(ctx, true)
-		if err != nil {
-			return errors.Wrap(err, "could not validate results")
-		}
-		if len(warnings) == 0 {
-			log.Info("workload is consistent")
-			continue
-		}
-		log.WithField("inconsistent", warnings).Warn("workload in inconsistent state")
+func openSchema(ctx context.Context, cfg *config, r region) (*schema, func(), error) {
+	var conn string
+	switch r {
+	case east:
+		conn = cfg.ConnectEast
+	case west:
+		conn = cfg.ConnectWest
+	default:
+		return nil, nil, errors.Errorf("%s: unimplemented", r)
 	}
+
+	pool, cancel, err := stdpool.OpenPgxAsTarget(ctx, conn,
+		stdpool.WithConnectionLifetime(5*time.Minute),
+		stdpool.WithPoolSize(cfg.Workers+1),
+		stdpool.WithTransactionTimeout(time.Minute),
+	)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "could not connect to %s database", r)
+	}
+
+	return newSchema(pool.DB, cfg.Enclosing, r), cancel, nil
 }
 
-func worker(ctx *stopper.Context, cfg *config, sch *schema, count *atomic.Int64) error {
-	// Stagger start by a random amount.
-	sleep := time.Duration(rand.Int63n(cfg.WorkerDelay.Nanoseconds()))
-
-	for {
-		select {
-		case <-time.After(sleep):
-			sleep = cfg.WorkerDelay
-		case <-ctx.Stopping():
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		if err := sch.doStuff(ctx, cfg.BallotBatch); err != nil {
-			return errors.Wrap(err, "could not stuff ballots")
-		}
-		count.Add(int64(cfg.BallotBatch))
+// worker will launch a number of goroutines into the context.
+func worker(ctx *stopper.Context, cfg *config, r region) (func(), error) {
+	sch, cancel, err := openSchema(ctx, cfg, r)
+	if err != nil {
+		return nil, err
 	}
+
+	if err := sch.ensureCandidates(ctx, cfg.Candidates); err != nil {
+		cancel()
+		return nil, errors.Wrapf(err, "%s: could not create candidate entries", r)
+	}
+
+	warnings, err := sch.validate(ctx, false)
+	if err != nil {
+		cancel()
+		return nil, errors.Wrapf(err, "%s: could not perform initial validation", r)
+	}
+	if len(warnings) > 0 {
+		log.WithField(
+			"inconsistent", warnings,
+		).Warnf("%s: workload starting from inconsistent state", r)
+	}
+
+	ballotsInserted := &atomic.Int64{}
+	for i := 0; i < cfg.Workers; i++ {
+		ctx.Go(func() error {
+			// Stagger start by a random amount.
+			sleep := time.Duration(rand.Int63n(cfg.WorkerDelay.Nanoseconds()))
+
+			for {
+				select {
+				case <-time.After(sleep):
+					sleep = cfg.WorkerDelay
+				case <-ctx.Stopping():
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
+				if err := sch.doStuff(ctx, cfg.BallotBatch); err != nil {
+					return errors.Wrap(err, "could not stuff ballots")
+				}
+				ballotsInserted.Add(int64(cfg.BallotBatch))
+			}
+		})
+	}
+
+	// Print status.
+	ctx.Go(func() error {
+		for {
+			select {
+			case <-time.After(cfg.ReportInterval):
+				log.Infof("%s: inserted %d ballots", r, ballotsInserted.Swap(0))
+			case <-ctx.Stopping():
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	})
+
+	// Start a background validation loop.
+	ctx.Go(func() error {
+		for {
+			select {
+			case <-time.After(cfg.ValidationDelay):
+			case <-ctx.Stopping():
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			warnings, err := sch.validate(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "could not validate results")
+			}
+			if len(warnings) == 0 {
+				log.Infof("%s: workload is consistent", r)
+				continue
+			}
+			log.WithField(
+				"inconsistent", warnings,
+			).Warnf("%s: workload in inconsistent state", r)
+		}
+	})
+
+	return cancel, nil
 }

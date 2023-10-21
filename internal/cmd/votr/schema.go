@@ -75,25 +75,34 @@ total INT NOT NULL DEFAULT 0
 type schema struct {
 	ballots    ident.Table
 	candidates ident.Table
+	enclosing  ident.Ident
 	totals     ident.Table
 
 	candidateIds map[uuid.UUID]struct{}
 	db           *sql.DB
+	region       region
 }
 
-func newSchema(db *sql.DB, enclosing ident.Schema) *schema {
+func newSchema(db *sql.DB, enclosing ident.Ident, r region) *schema {
+	s := ident.MustSchema(enclosing, ident.Public)
 	return &schema{
-		ballots:    ident.NewTable(enclosing, ballots),
-		candidates: ident.NewTable(enclosing, candidates),
-		totals:     ident.NewTable(enclosing, totals),
-
+		ballots:      ident.NewTable(s, ballots),
 		candidateIds: make(map[uuid.UUID]struct{}),
+		candidates:   ident.NewTable(s, candidates),
 		db:           db,
+		enclosing:    enclosing,
+		region:       r,
+		totals:       ident.NewTable(s, totals),
 	}
 }
 
 func (s *schema) create(ctx context.Context) error {
 	return retry.Retry(ctx, func(ctx context.Context) error {
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(
+			`CREATE DATABASE IF NOT EXISTS %s `, s.enclosing)); err != nil {
+			return errors.WithStack(err)
+		}
+
 		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(
 			candidatesSchema, s.candidates,
 		)); err != nil {
