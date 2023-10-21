@@ -19,15 +19,26 @@ package votr
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
+	"net/url"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/source/server"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/cdc-sink/internal/util/subfs"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -59,6 +70,7 @@ type config struct {
 	ConnectWest     string
 	Enclosing       ident.Ident
 	ReportInterval  time.Duration
+	SinkHost        string
 	StopAfter       time.Duration
 	ValidationDelay time.Duration
 	WorkerDelay     time.Duration
@@ -80,6 +92,8 @@ func (c *config) Bind(f *pflag.FlagSet) {
 		"the enclosing database schema")
 	f.DurationVar(&c.ReportInterval, "reportiAfter", 5*time.Second,
 		"report number of ballots inserted")
+	f.StringVar(&c.SinkHost, "sinkHost", "127.0.0.1",
+		"the hostname to use when creating changefeeds")
 	f.DurationVar(&c.StopAfter, "stopAfter", 0,
 		"if non-zero, exit after running for this long")
 	f.DurationVar(&c.ValidationDelay, "validationDelay", 15*time.Second,
@@ -171,23 +185,86 @@ func commandRun() *cobra.Command {
 				log.Info("low performance may indicate contention due to too few candidates")
 			}
 
-			cancel, err := worker(ctx, cfg, east)
+			eastDB, eastSink, cancel, err := worker(ctx, cfg, east)
 			if err != nil {
 				return err
 			}
 			defer cancel()
+			log.Infof("east sink is %s", eastSink)
 
-			cancel, err = worker(ctx, cfg, west)
+			westDB, westSink, cancel, err := worker(ctx, cfg, west)
 			if err != nil {
 				return err
 			}
 			defer cancel()
+			log.Infof("west sink is %s", westSink)
+
+			if err := createFeed(ctx, eastDB, westSink); err != nil {
+				return err
+			}
+
+			if err := createFeed(ctx, westDB, eastSink); err != nil {
+				return err
+			}
 
 			return ctx.Wait()
 		},
 	}
 	cfg.Bind(cmd.Flags())
 	return cmd
+}
+
+// createFeed creates a changefeed from the given source to the given
+// server.
+func createFeed(ctx *stopper.Context, from *schema, to *url.URL) error {
+	// Set the cluster settings once, if we need to.
+	var enabled bool
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		return from.db.QueryRowContext(ctx, "SHOW CLUSTER SETTING kv.rangefeed.enabled").Scan(&enabled)
+	}); err != nil {
+		return errors.Wrap(err, "could not check cluster setting")
+	}
+	if !enabled {
+		if err := retry.Retry(ctx, func(ctx context.Context) error {
+			_, err := from.db.ExecContext(ctx, "SET CLUSTER SETTING kv.rangefeed.enabled = true")
+			return errors.Wrapf(err, "%s: could not enable rangefeeds", from.region)
+		}); err != nil {
+			return err
+		}
+	}
+
+	lic, hasLic := os.LookupEnv("COCKROACH_DEV_LICENSE")
+	org, hasOrg := os.LookupEnv("COCKROACH_DEV_ORGANIZATION")
+	if hasLic && hasOrg {
+		if err := retry.Retry(ctx, func(ctx context.Context) error {
+			_, err := from.db.ExecContext(ctx, "SET CLUSTER SETTING enterprise.license = $1", lic)
+			return errors.Wrapf(err, "%s: could not set cluster license", from.region)
+		}); err != nil {
+			return err
+		}
+
+		if err := retry.Retry(ctx, func(ctx context.Context) error {
+			_, err := from.db.ExecContext(ctx, "SET CLUSTER SETTING cluster.organization = $1", org)
+			return errors.Wrapf(err, "%s: could not set cluster organization", from.region)
+		}); err != nil {
+			return err
+		}
+	}
+
+	q := fmt.Sprintf(`CREATE CHANGEFEED FOR TABLE %s, %s, %s INTO '%s'
+WITH diff, updated, resolved='1s', min_checkpoint_frequency='1s'`,
+		from.ballots, from.candidates, from.totals, to.String(),
+	)
+
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		_, err := from.db.ExecContext(ctx, q)
+		return errors.Wrapf(err, "%s: could not create changefeed", from.region)
+	}); err != nil {
+		return err
+	}
+
+	log.Infof("created feed from %s into %s", from.region, to)
+	return nil
 }
 
 func openSchema(ctx context.Context, cfg *config, r region) (*schema, func(), error) {
@@ -213,22 +290,92 @@ func openSchema(ctx context.Context, cfg *config, r region) (*schema, func(), er
 	return newSchema(pool.DB, cfg.Enclosing, r), cancel, nil
 }
 
+//go:embed script/*
+var scriptFS embed.FS
+
+// startServer runs an instance of cdc-sink which will feed into
+// the given destination. It returns the base URL for delivering
+// messages to the sink.
+func startServer(ctx *stopper.Context, cfg *config, dest *schema) (*url.URL, func(), error) {
+	var targetConn string
+	switch dest.region {
+	case east:
+		targetConn = cfg.ConnectEast
+	case west:
+		targetConn = cfg.ConnectWest
+	default:
+		return nil, nil, errors.Errorf("unimplemented: %s", dest.region)
+	}
+
+	stagingName := ident.New(fmt.Sprintf("cdc_sink_%d_%s", os.Getpid(), dest.region))
+	stagingSchema := ident.MustSchema(dest.enclosing, stagingName)
+
+	if _, err := dest.db.ExecContext(ctx, fmt.Sprintf(
+		`CREATE SCHEMA IF NOT EXISTS %s`, stagingSchema)); err != nil {
+		return nil, nil, errors.Wrap(err, dest.region.String())
+	}
+
+	srvConfig := &server.Config{
+		CDC: cdc.Config{
+			BaseConfig: logical.BaseConfig{
+				ForeignKeysEnabled: true,
+				ScriptConfig: script.Config{
+					FS: &subfs.SubstitutingFS{
+						FS: scriptFS,
+						Replacer: strings.NewReplacer(
+							"{{DEST}}", dest.region.String(),
+						),
+					},
+					MainPath: "/script/votr.ts",
+				},
+				StagingConn:   targetConn,
+				StagingSchema: stagingSchema,
+				TargetConn:    targetConn,
+			},
+			MetaTableName: ident.New("resolved_timestamps"),
+		},
+		BindAddr:    ":0",
+		DisableAuth: true,
+	}
+	if err := srvConfig.Preflight(); err != nil {
+		return nil, nil, errors.Wrap(err, dest.region.String())
+	}
+	srv, cancel, err := server.NewServer(ctx, srvConfig)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, dest.region.String())
+	}
+	_, port, err := net.SplitHostPort(srv.GetAddr().String())
+	if err != nil {
+		cancel()
+		return nil, nil, errors.Wrap(err, dest.region.String())
+	}
+
+	sink := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", cfg.SinkHost, port),
+		Path:   ident.Join(dest.candidates.Schema(), ident.Raw, '/'),
+	}
+	return sink, cancel, nil
+}
+
 // worker will launch a number of goroutines into the context.
-func worker(ctx *stopper.Context, cfg *config, r region) (func(), error) {
+// It returns the address of a cdc-sink server that accepts writes
+// to the given region.
+func worker(ctx *stopper.Context, cfg *config, r region) (*schema, *url.URL, func(), error) {
 	sch, cancel, err := openSchema(ctx, cfg, r)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	if err := sch.ensureCandidates(ctx, cfg.Candidates); err != nil {
 		cancel()
-		return nil, errors.Wrapf(err, "%s: could not create candidate entries", r)
+		return nil, nil, nil, errors.Wrapf(err, "%s: could not create candidate entries", r)
 	}
 
 	warnings, err := sch.validate(ctx, false)
 	if err != nil {
 		cancel()
-		return nil, errors.Wrapf(err, "%s: could not perform initial validation", r)
+		return nil, nil, nil, errors.Wrapf(err, "%s: could not perform initial validation", r)
 	}
 	if len(warnings) > 0 {
 		log.WithField(
@@ -299,5 +446,14 @@ func worker(ctx *stopper.Context, cfg *config, r region) (func(), error) {
 		}
 	})
 
-	return cancel, nil
+	svr, svrCancel, err := startServer(ctx, cfg, sch)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, err
+	}
+
+	return sch, svr, func() {
+		svrCancel()
+		cancel()
+	}, nil
 }

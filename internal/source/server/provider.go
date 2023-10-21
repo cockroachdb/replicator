@@ -153,7 +153,7 @@ func ProvideServer(
 		log.WithError(err).Error("unable to serve requests")
 	}()
 
-	return &Server{auth, diags, mux, ch}, func() {
+	return &Server{listener.Addr(), auth, diags, mux, ch}, func() {
 		log.Info("Server shutting down")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

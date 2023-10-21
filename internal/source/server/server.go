@@ -21,6 +21,7 @@ package server
 // This file contains code repackaged from main.go
 
 import (
+	"net"
 	"net/http"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -31,6 +32,7 @@ import (
 // A Server receives incoming CockroachDB changefeed messages and
 // applies them to a target cluster.
 type Server struct {
+	addr    net.Addr
 	auth    types.Authenticator
 	diags   *diag.Diagnostics
 	mux     *http.ServeMux
@@ -43,6 +45,11 @@ var (
 	_ stdlogical.HasServeMux      = (*Server)(nil)
 	_ stdlogical.HasStoppable     = (*Server)(nil)
 )
+
+// GetAddr returns the address that the server is attached to.
+func (s *Server) GetAddr() net.Addr {
+	return s.addr
+}
 
 // GetAuthenticator implements [stdlogical.HasAuthenticator].
 func (s *Server) GetAuthenticator() types.Authenticator {

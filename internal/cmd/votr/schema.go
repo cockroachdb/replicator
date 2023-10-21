@@ -84,6 +84,7 @@ type schema struct {
 }
 
 func newSchema(db *sql.DB, enclosing ident.Ident, r region) *schema {
+	enclosing = ident.New(enclosing.Raw() + "_" + r.String())
 	s := ident.MustSchema(enclosing, ident.Public)
 	return &schema{
 		ballots:      ident.NewTable(s, ballots),
