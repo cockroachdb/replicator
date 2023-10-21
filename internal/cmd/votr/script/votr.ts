@@ -23,22 +23,33 @@ api.configureTable("votr_{{DEST}}.public.candidates", {
 });
 
 api.configureTable("votr_{{DEST}}.public.totals", {
-    cas: ["candidate"], // Generate a conflict if a target row exists
+    cas: ["xyzzy"], // Generate a conflict if a target row exists
     map: (doc: api.Document): api.Document => {
-
+        let home = doc["home"];
+        if (home === undefined) {
+            throw new Error("document missing home field")
+        }
+        return (home === "{{DEST}}") ? null : doc;
     },
     merge: api.standardMerge((op: api.MergeOperation): api.MergeResult => {
         console.log(JSON.stringify(op));
         op.unmerged.forEach((col: api.Column) => {
             switch (col) {
+                case "home":
+                    op.target["home"] = op.proposed["home"];
+                    break;
                 case "total":
-                    let delta = (+op.proposed["total"]) - (+op.before["total"]);
+                    let a = op.proposed["total"] ?? 0;
+                    let b = op.before["total"] ?? 0;
+                    let delta = +a - +b;
+                    console.log("a", a, "b", b, "delta", delta);
                     op.target["total"] = (+op.target["total"]) + delta;
                     break;
                 default:
                     throw new Error("unexpected column name: " + col);
             }
         })
+        console.log("applying", JSON.stringify(op.target));
         return {apply: op.target};
     }),
 })

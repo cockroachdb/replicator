@@ -272,9 +272,10 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 				}
 
 				tblMuts[idx] = types.Mutation{
-					Data: dataBytes,
-					Key:  keyBytes,
-					Time: mut.Time,
+					Before: mut.Before,
+					Data:   dataBytes,
+					Key:    keyBytes,
+					Time:   mut.Time,
 				}
 			}
 		}
@@ -344,7 +345,12 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 			return mut, false, errors.WithStack(err)
 		}
 
-		return types.Mutation{Data: dataBytes, Key: keyBytes, Time: mut.Time}, true, nil
+		return types.Mutation{
+			Before: mut.Before,
+			Data:   dataBytes,
+			Key:    keyBytes,
+			Time:   mut.Time,
+		}, true, nil
 	}
 }
 

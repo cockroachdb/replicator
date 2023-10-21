@@ -252,7 +252,7 @@ func createFeed(ctx *stopper.Context, from *schema, to *url.URL) error {
 	}
 
 	q := fmt.Sprintf(`CREATE CHANGEFEED FOR TABLE %s, %s, %s INTO '%s'
-WITH diff, updated, resolved='1s', min_checkpoint_frequency='1s'`,
+WITH diff, updated, resolved='1s', min_checkpoint_frequency='1s', initial_scan='no'`,
 		from.ballots, from.candidates, from.totals, to.String(),
 	)
 
@@ -318,6 +318,7 @@ func startServer(ctx *stopper.Context, cfg *config, dest *schema) (*url.URL, fun
 	srvConfig := &server.Config{
 		CDC: cdc.Config{
 			BaseConfig: logical.BaseConfig{
+				BackfillWindow:     24 * time.Hour,
 				ForeignKeysEnabled: true,
 				ScriptConfig: script.Config{
 					FS: &subfs.SubstitutingFS{
@@ -332,7 +333,9 @@ func startServer(ctx *stopper.Context, cfg *config, dest *schema) (*url.URL, fun
 				StagingSchema: stagingSchema,
 				TargetConn:    targetConn,
 			},
-			MetaTableName: ident.New("resolved_timestamps"),
+			MetaTableName:       ident.New("resolved_timestamps"),
+			FlushEveryTimestamp: true, // Needed for delta behavior.
+			IdealFlushBatchSize: 1,    // Need fine-grained transactions to avoid contention.
 		},
 		BindAddr:    ":0",
 		DisableAuth: true,

@@ -243,6 +243,10 @@ func (s *stage) SelectPartial(
 			if err := rows.Scan(&mut.Key, &nanos, &logical, &mut.Data, &mut.Before); err != nil {
 				return err
 			}
+			mut.Before, err = maybeGunzip(mut.Before)
+			if err != nil {
+				return err
+			}
 			mut.Data, err = maybeGunzip(mut.Data)
 			if err != nil {
 				return err

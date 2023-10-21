@@ -68,7 +68,8 @@ version INT NOT NULL
 	totalsSchema = `CREATE TABLE IF NOT EXISTS %s (
 candidate UUID PRIMARY KEY REFERENCES %s ON DELETE CASCADE,
 home TEXT NOT NULL DEFAULT crdb_internal.cluster_name() ON UPDATE crdb_internal.cluster_name(),
-total INT NOT NULL DEFAULT 0
+total INT NOT NULL DEFAULT 0,
+xyzzy INT NOT NULL DEFAULT 0
 )`
 )
 
