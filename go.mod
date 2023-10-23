@@ -20,7 +20,7 @@ require (
 	github.com/jackc/pglogrepl v0.0.0-20230428004623-0c5b98f52784
 	github.com/jackc/pgx/v5 v5.4.3
 	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
-	github.com/jstemmer/go-junit-report/v2 v2.0.0
+	github.com/jstemmer/go-junit-report/v2 v2.1.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.17.0
 	github.com/sijms/go-ora/v2 v2.7.19
