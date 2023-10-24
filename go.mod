@@ -33,7 +33,7 @@ require (
 	golang.org/x/sync v0.4.0
 	golang.org/x/tools v0.14.0
 	google.golang.org/api v0.148.0
-	google.golang.org/grpc v1.58.3
+	google.golang.org/grpc v1.59.0
 	honnef.co/go/tools v0.4.6
 )
 
@@ -55,7 +55,6 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-sql-driver/mysql v1.7.1
 	github.com/golang/protobuf v1.5.3 // indirect
-	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148 // indirect
 	github.com/google/pprof v0.0.0-20230926050212-f7f687d19a98 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
