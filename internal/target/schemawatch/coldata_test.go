@@ -281,7 +281,7 @@ func TestGetColumns(t *testing.T) {
 		},
 		// Check default value extraction
 		{
-			products:    []types.Product{types.ProductCockroachDB, types.ProductMySQL, types.ProductPostgreSQL, types.ProductOracle},
+			products:    []types.Product{types.ProductCockroachDB, types.ProductPostgreSQL, types.ProductOracle},
 			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT 'Hello World!'",
 			primaryKeys: []string{"a"},
 			dataCols:    []string{"b"},
@@ -297,16 +297,37 @@ func TestGetColumns(t *testing.T) {
 				assert.Fail(t, "did not find b column")
 			},
 		},
-		// Check default value extraction with embedded single quotes in MySQL
+		// Checking MySQL default expressions.
 		{
-			products:    []types.Product{types.ProductMySQL},
-			tableSchema: "a INT PRIMARY KEY, b VARCHAR(2048) DEFAULT 'Hello''World!'",
+			products: []types.Product{types.ProductMySQL},
+			tableSchema: `a INT PRIMARY KEY, 
+			b VARCHAR(2048) DEFAULT 'Hello''World!', 
+			c VARCHAR(2048) DEFAULT (upper('A')),
+			d VARCHAR(2048) DEFAULT (upper('''A')),
+			e VARCHAR(2048) DEFAULT (upper(b)),
+			f VARCHAR(2048) DEFAULT (replace('Hello World!', ' ', '+'))`,
 			primaryKeys: []string{"a"},
-			dataCols:    []string{"b"},
+			dataCols:    []string{"b", "c", "d", "e", "f"},
 			check: func(t *testing.T, data []types.ColData) {
 				for _, col := range data {
 					if ident.Equal(col.Name, ident.New("b")) {
-						assert.Contains(t, col.DefaultExpr, "'Hello''World!'")
+						assert.Contains(t, col.DefaultExpr, `'Hello\'World!'`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("c")) {
+						assert.Contains(t, col.DefaultExpr, `upper('A')`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("d")) {
+						assert.Contains(t, col.DefaultExpr, `upper('\'A')`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("e")) {
+						assert.Contains(t, col.DefaultExpr, `upper(b)`)
+						return
+					}
+					if ident.Equal(col.Name, ident.New("f")) {
+						assert.Contains(t, col.DefaultExpr, `replace('Hello World!', ' ', '+')`)
 						return
 					}
 				}
