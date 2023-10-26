@@ -423,10 +423,10 @@ func (c *conn) onRelation(msg *replication.TableMapEvent) error {
 }
 
 var (
-	// Required settings. { {"system variable", "expected value"}}
+	// Required settings. { {"system variable", "expected values" ...}}
 	mySQLSystemSettings = [][]string{
-		{"gtid_mode", "ON"},
-		{"enforce_gtid_consistency", "ON"},
+		{"gtid_mode", "ON", "1"},
+		{"enforce_gtid_consistency", "ON", "1"},
 		{"binlog_row_metadata", "FULL"},
 	}
 	mariaDBSystemSettings = [][]string{
@@ -462,7 +462,7 @@ func getFlavor(config *Config) (string, error) {
 	log.Infof("Version info: %s", version)
 	if strings.Contains(version, "mariadb") {
 		for _, v := range mariaDBSystemSettings {
-			err = checkSystemSetting(c, v[0], v[1])
+			err = checkSystemSetting(c, v[0], v[1:])
 			if err != nil {
 				return "", err
 			}
@@ -470,7 +470,7 @@ func getFlavor(config *Config) (string, error) {
 		return mysql.MariaDBFlavor, nil
 	}
 	for _, v := range mySQLSystemSettings {
-		err = checkSystemSetting(c, v[0], v[1])
+		err = checkSystemSetting(c, v[0], v[1:])
 		if err != nil {
 			return "", err
 		}
@@ -478,7 +478,9 @@ func getFlavor(config *Config) (string, error) {
 	return mysql.MySQLFlavor, nil
 }
 
-func checkSystemSetting(c *client.Conn, variable string, expected string) error {
+// checkSystemSetting verifies that the given system variable is set to one of
+// the expected values.
+func checkSystemSetting(c *client.Conn, variable string, expected []string) error {
 	res, err := c.Execute(fmt.Sprintf("select @@%s;", variable))
 	if err != nil {
 		return err
@@ -496,8 +498,11 @@ func checkSystemSetting(c *client.Conn, variable string, expected string) error 
 	default:
 		value = string(res.Values[0][0].AsString())
 	}
-	if value != expected {
-		return errors.Errorf("invalid server setting for %s. Expected %s, found %s", variable, expected, value)
+	for _, e := range expected {
+		if value == e {
+			return nil
+		}
 	}
-	return nil
+	return errors.Errorf("invalid server setting for %s. Expected one of: %s. Found %s",
+		variable, strings.Join(expected, ","), value)
 }
