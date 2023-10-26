@@ -51,6 +51,8 @@ func colSliceEqual(a, b []types.ColData) bool {
 // positions.
 // * cols: extracts all columns, ignoring those with generation
 // expressions by checking the "extra" column.
+// The default expression is quoted if it is a string,
+// unless it's an expression (extras=DEFAULT_GENERATED).
 // The type of the column is derived from the data_type or the column_type.
 // The column type may have additional information (e.g. precision),
 // which may be required when casting types while applying mutations to the
@@ -87,7 +89,13 @@ cols AS (
 			ELSE data_type
 		 END as data_type,
 		 column_type,
-		 column_default,
+		 CASE
+			WHEN extra = 'DEFAULT_GENERATED' OR 
+		         data_type NOT in ('char','varchar', 'text') 
+			     OR column_default IS NULL 
+			THEN column_default
+			ELSE quote (column_default)
+	     END as column_default,
 		 extra IN ('STORED GENERATED', 'VIRTUAL GENERATED') AS ignored
 	FROM information_schema.columns
 ),
@@ -331,18 +339,7 @@ func getColumns(
 				}
 			case types.ProductMySQL:
 				if defaultExpr.Valid {
-					// for some types, we might have precision information.
-					columnType := strings.SplitN(column.Type, "(", 2)[0]
-					switch columnType {
-					// The internal representation assumes that defaultExpr are
-					// single quoted.
-					// Depending on the flavor of MySQL single quotes
-					// may or may not be there, adding them if the are not there.
-					case "char", "varchar", "text":
-						column.DefaultExpr = maybeSingleQuote(defaultExpr.String)
-					default:
-						column.DefaultExpr = defaultExpr.String
-					}
+					column.DefaultExpr = defaultExpr.String
 				}
 			case types.ProductOracle:
 				if defaultExpr.Valid {
@@ -395,14 +392,4 @@ func getColumns(
 		return nil
 	})
 	return columns, err
-}
-
-// quotes a string with single quotes, if it is not already quoted.
-func maybeSingleQuote(s string) string {
-	if strings.HasPrefix(s, "'") &&
-		strings.HasSuffix(s, "'") {
-		return s
-	}
-	// SQL uses two single quotes to escape single quotes.
-	return fmt.Sprintf("'%s'", strings.ReplaceAll(s, `'`, `''`))
 }
