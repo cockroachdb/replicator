@@ -98,7 +98,7 @@ type UserScript struct {
 	Targets *ident.TableMap[*Target]
 
 	rt      *goja.Runtime // The JavaScript VM. See execJS.
-	rtMu    sync.Mutex    // Serialize access to the VM.
+	rtMu    *sync.Mutex   // Serialize access to the VM.
 	target  ident.Schema  // The schema being populated.
 	watcher types.Watcher // Access to target schema.
 }
@@ -208,7 +208,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 
 		// Execute the user function to route the mutation.
 		var dispatches map[string][]map[string]any
-		if err := s.execJS(ctx, func() (err error) {
+		if err := s.execJS(func() (err error) {
 			meta := mut.Meta
 			if meta == nil {
 				meta = make(map[string]any)
@@ -272,9 +272,10 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 				}
 
 				tblMuts[idx] = types.Mutation{
-					Data: dataBytes,
-					Key:  keyBytes,
-					Time: mut.Time,
+					Before: mut.Before,
+					Data:   dataBytes,
+					Key:    keyBytes,
+					Time:   mut.Time,
 				}
 			}
 		}
@@ -294,7 +295,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 
 		// Execute the user code to return the replacement values.
 		var rawMapped map[string]any
-		if err := s.execJS(ctx, func() (err error) {
+		if err := s.execJS(func() (err error) {
 			meta := mut.Meta
 			if meta == nil {
 				meta = make(map[string]any)
@@ -344,13 +345,21 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 			return mut, false, errors.WithStack(err)
 		}
 
-		return types.Mutation{Data: dataBytes, Key: keyBytes, Time: mut.Time}, true, nil
+		return types.Mutation{
+			Before: mut.Before,
+			Data:   dataBytes,
+			Key:    keyBytes,
+			Time:   mut.Time,
+		}, true, nil
 	}
 }
 
 // bindMerge exports a user-provided function as a [merge.Func]. The merger value could
 // be our reperesentation of [merge.Standard] or a JS function.
 func (s *UserScript) bindMerge(table ident.Table, merger goja.Value) (merge.Merger, error) {
+	s.rtMu.Lock()
+	defer s.rtMu.Unlock()
+
 	var ret merge.Merger
 	wrapWithStandard := false
 
@@ -389,7 +398,7 @@ func (s *UserScript) bindMerge(table ident.Table, merger goja.Value) (merge.Merg
 		// Execute the callback while holding a lock on the runtime to
 		// ensure single-threaded access.
 		var jsResult *mergeResult
-		if err := s.execJS(ctx, func() error {
+		if err := s.execJS(func() error {
 			// Export the conflict as the js merge operation.
 			op := &mergeOp{
 				Meta:     con.Proposed.Meta,
@@ -464,16 +473,11 @@ func (s *UserScript) bindMerge(table ident.Table, merger goja.Value) (merge.Merg
 }
 
 // execJS ensures that the callback has exclusive access to the JS VM.
-// The JS execution will be interrupted when the context is canceled.
-func (s *UserScript) execJS(ctx context.Context, fn func() error) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
+func (s *UserScript) execJS(fn func() error) error {
 	s.rtMu.Lock()
 	s.rt.ClearInterrupt()
-	go func() {
-		<-ctx.Done()
-		s.rt.Interrupt(ctx.Err())
+	defer func() {
+		s.rt.Interrupt(context.Canceled)
 		s.rtMu.Unlock()
 	}()
 	return fn()

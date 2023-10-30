@@ -97,18 +97,21 @@ func TestScript(t *testing.T) {
 
 	if cfg := s.Sources.GetZero(ident.New("expander")); a.NotNil(cfg) {
 		a.Equal(tbl1, cfg.DeletesTo)
-		mut := types.Mutation{Data: []byte(`{"msg":true}`)}
+		mut := types.Mutation{Before: []byte(`{"before":true}`), Data: []byte(`{"msg":true}`)}
 		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
 			if docs := mapped.GetZero(tbl1); a.Len(docs, 1) {
+				a.Equal(`{"before":true}`, string(docs[0].Before))
 				a.Equal(`{"dest":"table1","msg":true}`, string(docs[0].Data))
 				a.Equal(`[true]`, string(docs[0].Key))
 			}
 
 			if docs := mapped.GetZero(tbl2); a.Len(docs, 2) {
+				a.Equal(`{"before":true}`, string(docs[0].Before))
 				a.Equal(`{"dest":"table2","idx":0,"msg":true}`, string(docs[0].Data))
 				a.Equal(`[0]`, string(docs[0].Key))
 
+				a.Equal(`{"before":true}`, string(docs[1].Before))
 				a.Equal(`{"dest":"table2","idx":1,"msg":true}`, string(docs[1].Data))
 				a.Equal(`[1]`, string(docs[1].Key))
 			}
