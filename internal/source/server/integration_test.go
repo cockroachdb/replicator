@@ -32,7 +32,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	jwtAuth "github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
@@ -306,45 +305,6 @@ func testIntegration(t *testing.T, cfg testConfig) {
 		}
 		log.Debug("waiting for update")
 		time.Sleep(100 * time.Millisecond)
-	}
-
-	if !cfg.immediate {
-		t.Run("inspect_staged_data", func(t *testing.T) {
-			a := assert.New(t)
-			r := require.New(t)
-
-			stager, err := targetFixture.Stagers.Get(ctx, target)
-			r.NoError(err)
-
-			// Just load all staged data.
-			muts, err := stager.Select(ctx, targetFixture.StagingPool,
-				hlc.Zero(), hlc.New(time.Now().UnixNano(), 0))
-			r.NoError(err)
-			r.Len(muts, 3) // Two inserts and one update.
-
-			// Classify the mutation's before value as empty/null or
-			// containing an object.
-			var objectCount, nullCount int
-			for _, mut := range muts {
-				before := string(mut.Before)
-				if len(before) == 0 || before == "null" {
-					nullCount++
-				} else if len(before) > 0 && before[0] == '{' {
-					objectCount++
-				} else {
-					r.Fail("unexpected before value", before)
-				}
-			}
-
-			if cfg.diff {
-				a.Equal(1, objectCount) // One update.
-				a.Equal(2, nullCount)   // Two inserts.
-			} else {
-				// We don't expect to see any diff data.
-				a.Equal(0, objectCount)
-				a.Equal(3, nullCount)
-			}
-		})
 	}
 
 	metrics, err := prometheus.DefaultGatherer.Gather()

@@ -41,6 +41,7 @@ import (
 var Versions = []Version{
 	{"Add versions table", 400},
 	{"Support single-level schema namespaces", 389},
+	{"Track applied in staging table", 572},
 }
 
 // A Version describes a breaking change in the cdc-sink metadata

@@ -28,47 +28,26 @@ import (
 )
 
 // resolvedStamp tracks the progress of applying staged mutations for
-// a given resolved timestamp.  This type has some extra complexity to
-// support backfilling of initial changefeed scans.
-//
-// Here's a state diagram to help:
-//
-//	committed
-//	    |                *---*
-//	    V                V   |
-//	 proposed ---> backfill -*
-//	    |                |
-//	    V                |
-//	committed <----------*
-//
-// Tracking of FK levels and table offsets is only used in backfill mode
-// and is especially relevant to an initial_scan from a changefeed. In
-// this state, we have an arbitrarily large number of mutations to
-// apply, all of which will have the same timestamp.
-//
-// Each resolvedStamp is associated with a separate database transaction
-// that holds a SELECT FOR UPDATE lock on the row that holds the
-// timestamp being resolved. The ownership of this transaction is
-// transferred to any derived resolvedStamp that represents partial
-// progress within a resolved timestamp. The resolved-timestamp
-// transaction is wrapped in a txguard.Guard to ensure that it is kept
-// alive.  If the resolved-timestamp transaction fails for any reason,
-// we can roll back to the previously committed stamp through the usual
-// logical-loop error-handling code.
+// a given resolved timestamp.
+// Partial progress of very large batches is maintained in the staging
+// database by tracking a per-mutation applied flag.
 type resolvedStamp struct {
-	Backfill bool `json:"b,omitempty"`
 	// A resolved timestamp that represents a transactionally-consistent
 	// point in the history of the workload.
 	CommittedTime hlc.Time `json:"c,omitempty"`
 	// Iteration is used to provide well-ordered behavior within a
-	// single backfill window.
+	// single backfill window. Partial progress is maintained in the
+	// staging tables in case cdc-sink is interrupted in the middle
+	// of processing a large window.
 	Iteration int `json:"i,omitempty"`
+	// LargeBatchOffset allows us to jump over already-applied keys when
+	// processing a large batch of data (e.g. an initial backfill). This
+	// is merely a performance optimization, since the staging tables
+	// are used to track whether or not any particular mutation has been
+	// applied.
+	LargeBatchOffset *ident.TableMap[json.RawMessage] `json:"off,omitempty"`
 	// The next resolved timestamp that we want to advance to.
 	ProposedTime hlc.Time `json:"p,omitempty"`
-
-	OffsetKey   json.RawMessage `json:"ok,omitempty"`
-	OffsetTable ident.Table     `json:"otbl,omitempty"`
-	OffsetTime  hlc.Time        `json:"ots,omitempty"`
 }
 
 // AsTime implements logical.TimeStamp to improve reporting.
@@ -106,47 +85,30 @@ func (s *resolvedStamp) NewProposed(proposed hlc.Time) (*resolvedStamp, error) {
 		return nil, errors.Errorf("proposed cannot roll back committed time: %s vs %s",
 			proposed, s.CommittedTime)
 	}
-	if hlc.Compare(proposed, s.OffsetTime) < 0 {
-		return nil, errors.Errorf("proposed time undoing work: %s vs %s", proposed, s.OffsetTime)
-	}
 	if hlc.Compare(proposed, s.ProposedTime) < 0 {
 		return nil, errors.Errorf("proposed time cannot go backward: %s vs %s", proposed, s.ProposedTime)
 	}
 
 	return &resolvedStamp{
-		Backfill:      s.Backfill,
 		CommittedTime: s.CommittedTime,
 		Iteration:     s.Iteration + 1,
-		OffsetKey:     s.OffsetKey,
-		OffsetTable:   s.OffsetTable,
-		OffsetTime:    s.OffsetTime,
 		ProposedTime:  proposed,
 	}, nil
 }
 
 // NewProgress returns a resolvedStamp that represents partial progress
 // within the same [committed, proposed] window.
-func (s *resolvedStamp) NewProgress(cursor *types.SelectManyCursor) *resolvedStamp {
+func (s *resolvedStamp) NewProgress(cursor *types.UnstageCursor) *resolvedStamp {
 	ret := &resolvedStamp{
-		Backfill:      s.Backfill,
 		CommittedTime: s.CommittedTime,
 		Iteration:     s.Iteration + 1,
-		OffsetKey:     s.OffsetKey,
-		OffsetTable:   s.OffsetTable,
-		OffsetTime:    s.OffsetTime,
 		ProposedTime:  s.ProposedTime,
 	}
 
-	if cursor != nil {
-		ret.OffsetTime = cursor.OffsetTime
-
-		// Only Key and Table make sense to retain in a backfill. For
-		// transactional mode, we always want to restart at a specific
-		// timestamp.
-		if s.Backfill {
-			ret.OffsetKey = cursor.OffsetKey
-			ret.OffsetTable = cursor.OffsetTable
-		}
+	// Record offsets to allow us to skip rows within the next query.
+	if cursor != nil && cursor.StartAfterKey.Len() > 0 {
+		ret.LargeBatchOffset = &ident.TableMap[json.RawMessage]{}
+		cursor.StartAfterKey.CopyInto(ret.LargeBatchOffset)
 	}
 
 	return ret

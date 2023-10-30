@@ -157,10 +157,8 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 
 		// Verify staged data, if applicable.
 		if !htc.immediate {
-			stager, err := fixture.Stagers.Get(ctx, tableInfo.Name())
+			muts, err := fixture.PeekStaged(ctx, tableInfo.Name(), hlc.Zero(), hlc.New(1, 1))
 			if a.NoError(err) {
-				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(1, 0))
-				a.NoError(err)
 				a.Len(muts, 2)
 				// The order is stable since the underlying query
 				// is ordered, in part, by the key.
@@ -226,40 +224,14 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 `),
 		}))
 
-		// Verify staged data, if applicable.
+		// Verify staged and un-applied data, if applicable.
 		if !htc.immediate {
-			stager, err := fixture.Stagers.Get(ctx, tableInfo.Name())
+			muts, err := fixture.PeekStaged(ctx, tableInfo.Name(), hlc.Zero(), hlc.New(10, 1))
 			if a.NoError(err) {
-				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(10, 0))
-				a.NoError(err)
-				a.Len(muts, 6)
+				a.Len(muts, 2)
 				// The order is stable since the underlying query
 				// orders by HLC and key.
 				a.Equal([]types.Mutation{
-					// Original entries.
-					{
-						Data: []byte(`{"pk":42,"v":99}`),
-						Key:  []byte(`[42]`),
-						Time: hlc.New(1, 0),
-					},
-					{
-						Before: []byte(`{"pk":99,"v":33}`),
-						Data:   []byte(`{"pk":99,"v":42}`),
-						Key:    []byte(`[99]`),
-						Time:   hlc.New(1, 0),
-					},
-					// These are the deletes from above.
-					{
-						Data: []byte(`null`),
-						Key:  []byte(`[42]`),
-						Time: hlc.New(3, 0),
-					},
-					{
-						Data: []byte(`null`),
-						Key:  []byte(`[99]`),
-						Time: hlc.New(3, 0),
-					},
-					// These are the entries we just created.
 					{
 						Data: []byte(`{"pk":42,"v":99}`),
 						Key:  []byte(`[42]`),
@@ -381,10 +353,8 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 
 		// Verify staged data, if applicable.
 		if !cfg.immediate {
-			stager, err := fixture.Stagers.Get(ctx, jumbleName())
+			muts, err := fixture.PeekStaged(ctx, tableInfo.Name(), hlc.Zero(), hlc.New(1, 1))
 			if a.NoError(err) {
-				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(1, 0))
-				a.NoError(err)
 				a.Len(muts, 2)
 				// The order is stable since the underlying query
 				// orders, in part, on key
@@ -451,40 +421,14 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 `, jumbleName().Table())),
 		}))
 
-		// Verify staged data, if applicable.
+		// Verify staged and as-yet-unapplied data.
 		if !cfg.immediate {
-			stager, err := fixture.Stagers.Get(ctx, jumbleName())
+			muts, err := fixture.PeekStaged(ctx, tableInfo.Name(), hlc.Zero(), hlc.New(10, 1))
 			if a.NoError(err) {
-				muts, err := stager.Select(ctx, fixture.StagingPool.Pool, hlc.Zero(), hlc.New(10, 0))
-				a.NoError(err)
-				a.Len(muts, 6)
+				a.Len(muts, 2)
 				// The order is stable since the underlying query
 				// orders by HLC and key.
 				a.Equal([]types.Mutation{
-					// Original entries.
-					{
-						Data: []byte(`{ "pk" : 42, "v" : 99 }`),
-						Key:  []byte(`[ 42 ]`),
-						Time: hlc.New(1, 0),
-					},
-					{
-						Before: []byte(`{ "pk" : 99, "v" : 33 }`),
-						Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
-						Key:    []byte(`[ 99 ]`),
-						Time:   hlc.New(1, 0),
-					},
-					// These are the deletes from above.
-					{
-						Data: []byte(`null`),
-						Key:  []byte(`[ 42 ]`),
-						Time: hlc.New(3, 0),
-					},
-					{
-						Data: []byte(`null`),
-						Key:  []byte(`[ 99 ]`),
-						Time: hlc.New(3, 0),
-					},
-					// These are the entries we just created.
 					{
 						Data: []byte(`{ "pk" : 42, "v" : 99 }`),
 						Key:  []byte(`[ 42 ]`),
@@ -652,6 +596,7 @@ func TestConcurrentHandlers(t *testing.T) {
 func testMassBackfillWithForeignKeys(
 	t *testing.T, rowCount, fixtureCount int, fns ...func(*Config),
 ) {
+	t.Parallel() // We spend most of our time waiting for a resolved timestamp.
 	r := require.New(t)
 
 	baseFixture, err := all.NewFixture(t)
@@ -662,9 +607,9 @@ func testMassBackfillWithForeignKeys(
 
 	for idx := range fixtures {
 		cfg := &Config{
-			IdealFlushBatchSize: 123, // Pick weird batch sizes.
-			SelectBatchSize:     587,
-			MetaTableName:       ident.New("resolved_timestamps"),
+			LargeTransactionLimit: rowCount / 3, // Read the same timestamp more than once.
+			MetaTableName:         ident.New("resolved_timestamps"),
+			TimestampWindowSize:   100,
 			BaseConfig: logical.BaseConfig{
 				ApplyTimeout:       time.Second,
 				FanShards:          16,
