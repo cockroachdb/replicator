@@ -19,6 +19,7 @@ package script
 import (
 	"context"
 	"net/url"
+	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
@@ -65,6 +66,7 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 		options:      options,
 		requireCache: make(map[string]goja.Value),
 		rt:           goja.New(),
+		rtMu:         &sync.Mutex{},
 		sources:      make(map[string]*sourceJS),
 		targets:      make(map[string]*targetJS),
 	}
@@ -140,6 +142,7 @@ func ProvideUserScript(
 		Sources: &ident.Map[*Source]{},
 		Targets: &ident.TableMap[*Target]{},
 		rt:      boot.rt,
+		rtMu:    boot.rtMu,
 		target:  target.AsSchema(),
 		watcher: watcher,
 	}

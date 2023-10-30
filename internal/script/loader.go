@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/dop251/goja"
 	esbuild "github.com/evanw/esbuild/pkg/api"
@@ -114,6 +115,7 @@ type Loader struct {
 	requireStack []*url.URL            // Allows relative import paths.
 	requireCache map[string]goja.Value // Keys are URLs.
 	rt           *goja.Runtime         // JS Runtime.
+	rtMu         *sync.Mutex           // Serialize access to the VM.
 	sources      map[string]*sourceJS  // User configuration.
 	targets      map[string]*targetJS  // User configuration.
 }
