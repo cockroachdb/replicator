@@ -19,6 +19,8 @@
 package msort
 
 import (
+	"fmt"
+
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 )
@@ -34,29 +36,69 @@ import (
 // This function will panic if any of the mutation Key fields are
 // entirely empty. An empty json array (i.e. `[]`) is acceptable.
 func UniqueByKey(x []types.Mutation) []types.Mutation {
+	return uniqueBy(x,
+		func(e types.Mutation) string {
+			key := string(e.Key)
+			// This is a sanity-check to ensure that we don't silently
+			// discard mutations due to some upstream coding error where a
+			// mutation does not have its Key field set.
+			if len(key) == 0 {
+				panic("empty key")
+			}
+			return key
+		},
+		func(existing, matching types.Mutation) types.Mutation {
+			if hlc.Compare(existing.Time, matching.Time) >= 0 {
+				return existing
+			}
+			return matching
+		},
+	)
+}
+
+// UniqueByTimeKey implements a "last one wins" approach to removing
+// mutations with duplicate (time, key) tuples from the input slice. If
+// two mutations share the same (time, key) pair, then the one later in
+// the input slice is returned.
+//
+// The modified slice is returned.
+//
+// This function will panic if any of the mutation Key fields are
+// entirely empty. An empty json array (i.e. `[]`) is acceptable.
+func UniqueByTimeKey(x []types.Mutation) []types.Mutation {
+	return uniqueBy(x,
+		func(e types.Mutation) string {
+			key := string(e.Key)
+			if len(key) == 0 {
+				panic("empty key")
+			}
+			return fmt.Sprintf("%s:%s", e.Time, key)
+		},
+		func(existing, _ types.Mutation) types.Mutation {
+			// Return existing since we iterate backwards.
+			return existing
+		},
+	)
+}
+
+func uniqueBy[T ~[]E, E any, C comparable](
+	x T, keyFn func(e E) C, pickFn func(existing, proposed E) E,
+) T {
 	// For any given Key, we're going to track the index in the slice
 	// that holds data for the key.
-	seenIdx := make(map[string]int, len(x))
+	seenIdx := make(map[C]int, len(x))
 
 	// We want to iterate backwards over the input slice, moving
 	// elements to the rear when their HLC time is greater than the
 	// value currently tracked for that key.
 	dest := len(x)
 	for src := len(x) - 1; src >= 0; src-- {
-		// This is a sanity-check to ensure that we don't silently
-		// discard mutations due to some upstream coding error where a
-		// mutation does not have its Key field set.
-		if len(x[src].Key) == 0 {
-			panic("empty mutation key")
-		}
-		key := string(x[src].Key)
+		key := keyFn(x[src])
 
 		// Is there already an index in the slice for that key?
 		if curIdx, found := seenIdx[key]; found {
 			// If so, replace the value if the HLC time is greater.
-			if hlc.Compare(x[src].Time, x[curIdx].Time) > 0 {
-				x[curIdx] = x[src]
-			}
+			x[curIdx] = pickFn(x[curIdx], x[src])
 		} else {
 			// Otherwise, allocate a new index for that key, and copy
 			// the value out.
