@@ -107,6 +107,77 @@ func TestUniqueByKey(t *testing.T) {
 	}
 }
 
+func TestUniqueByTimeKey(t *testing.T) {
+	tcs := []struct {
+		data, expected []types.Mutation
+	}{
+		{data: nil, expected: nil},
+		{data: []types.Mutation{}, expected: []types.Mutation{}},
+		{data: []types.Mutation{mut(1, "1")}, expected: []types.Mutation{mut(1, "1")}},
+		{
+			data: []types.Mutation{
+				mut(1, "deleted"),
+				mut(1, "expected"),
+			},
+			expected: []types.Mutation{
+				mut(1, "expected"),
+			},
+		},
+		{
+			data: []types.Mutation{
+				mut(2, "expected"),
+				mut(1, "deleted"),
+				mut(1, "deleted"),
+				mut(4, "expected"),
+				mut(1, "deleted"),
+				mut(1, "deleted"),
+				mut(1, "deleted"),
+				mut(1, "expected"),
+				mut(3, "expected"),
+			},
+			expected: []types.Mutation{
+				mut(2, "expected"),
+				mut(4, "expected"),
+				mut(1, "expected"),
+				mut(3, "expected"),
+			},
+		},
+		{
+			data: []types.Mutation{
+				mut(1, "deleted"),
+				mut(2, "expected"),
+				mut(1, "expected"),
+			},
+			expected: []types.Mutation{
+				mut(2, "expected"),
+				mut(1, "expected"),
+			},
+		},
+		// Test the case where timestamps are out of order for a key.
+		{
+			data: []types.Mutation{
+				mut(1, "expected", hlc.New(100, 100)),
+				mut(2, "expected"),
+				mut(1, "expected"),
+			},
+			expected: []types.Mutation{
+				mut(1, "expected", hlc.New(100, 100)),
+				mut(2, "expected"),
+				mut(1, "expected"),
+			},
+		},
+	}
+
+	for idx, tc := range tcs {
+		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
+			a := assert.New(t)
+
+			data := UniqueByTimeKey(tc.data)
+			a.Equal(tc.expected, data)
+		})
+	}
+}
+
 // Document the panic behavior.
 func TestUniqueByKeyPanic(t *testing.T) {
 	a := assert.New(t)
