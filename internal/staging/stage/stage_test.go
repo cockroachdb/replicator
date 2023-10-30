@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,11 +40,10 @@ import (
 // TestPutAndDrain will insert and dequeue a batch of Mutations.
 func TestPutAndDrain(t *testing.T) {
 	a := assert.New(t)
+	r := require.New(t)
 
 	fixture, err := all.NewFixture(t)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	ctx := fixture.Context
 	a.NotEmpty(fixture.StagingPool.Version)
@@ -53,13 +53,16 @@ func TestPutAndDrain(t *testing.T) {
 	dummyTarget := ident.NewTable(targetDB, ident.New("target"))
 
 	s, err := fixture.Stagers.Get(ctx, dummyTarget)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	a.NotNil(s)
 
+	// Not part of public API, but we want to test the metrics function.
+	ctr := s.(interface {
+		CountUnapplied(ctx context.Context, db types.StagingQuerier, before hlc.Time) (int, error)
+	})
+
 	jumbledStager, err := fixture.Stagers.Get(ctx, sinktest.JumbleTable(dummyTarget))
-	a.NoError(err)
+	r.NoError(err)
 	a.Same(s, jumbledStager)
 
 	// Steal implementation details to cross-check DB state.
@@ -79,134 +82,65 @@ func TestPutAndDrain(t *testing.T) {
 			muts[i].Before = []byte("before")
 		}
 	}
-	maxTime := muts[len(muts)-1].Time
-
-	// Check TransactionTimes in empty state.
-	found, err := s.TransactionTimes(ctx, pool, hlc.Zero(), maxTime)
-	a.Empty(found)
-	a.NoError(err)
 
 	// Insert.
-	a.NoError(s.Store(ctx, pool, muts))
-
-	// We should find all timestamps now.
-	found, err = s.TransactionTimes(ctx, pool, hlc.Zero(), maxTime)
-	if a.Len(found, len(muts)) {
-		a.Equal(muts[0].Time, found[0])
-		a.Equal(maxTime, found[len(found)-1])
-	}
-	a.NoError(err)
-
-	// Advance once.
-	found, err = s.TransactionTimes(ctx, pool, muts[0].Time, maxTime)
-	if a.Len(found, len(muts)-1) {
-		a.Equal(muts[1].Time, found[0])
-		a.Equal(maxTime, found[len(found)-1])
-	}
-	a.NoError(err)
-
-	// Make sure we don't find the last value.
-	found, err = s.TransactionTimes(ctx, pool, maxTime, maxTime)
-	a.Empty(found)
-	a.NoError(err)
+	r.NoError(s.Store(ctx, pool, muts))
 
 	// Sanity-check table.
 	count, err := base.GetRowCount(ctx, pool, stagingTable)
-	a.NoError(err)
+	r.NoError(err)
 	a.Equal(total, count)
 
 	// Ensure that data insertion is idempotent.
-	a.NoError(s.Store(ctx, pool, muts))
+	r.NoError(s.Store(ctx, pool, muts))
 
 	// Sanity-check table.
 	count, err = base.GetRowCount(ctx, pool, stagingTable)
-	a.NoError(err)
+	r.NoError(err)
 	a.Equal(total, count)
 
-	// Insert an older value for each key, we'll check that only the
-	// latest values are returned below.
-	older := make([]types.Mutation, total)
-	copy(older, muts)
-	for i := range older {
-		older[i].Data = []byte(`"should not see this"`)
-		older[i].Time = hlc.New(older[i].Time.Nanos()-1, i)
+	// Verify metrics query.
+	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0))
+	r.NoError(err)
+	a.Equal(total, count)
+
+	// Select all mutations to set the applied flag. This allows the
+	// mutations to be deleted.
+	cursor := &types.UnstageCursor{
+		EndBefore: hlc.New(math.MaxInt64, 0),
+		Targets:   []ident.Table{dummyTarget},
 	}
-	a.NoError(s.Store(ctx, pool, older))
-
-	// Sanity-check table.
-	count, err = base.GetRowCount(ctx, pool, stagingTable)
-	a.NoError(err)
-	a.Equal(2*total, count)
-
-	// The two queries that we're going to run will see slightly
-	// different views of the data. The all-data query will provide
-	// deduplicated data, ordered by the target key. The incremental
-	// query will see all values interleaved, which allows us to
-	// page within a (potentially large) backfill window.
-	dedupOrder := make([]types.Mutation, total)
-	copy(dedupOrder, muts)
-	sort.Slice(dedupOrder, func(i, j int) bool {
-		return bytes.Compare(dedupOrder[i].Key, dedupOrder[j].Key) < 0
-	})
-	mergedOrder := make([]types.Mutation, 2*total)
-	for i := range muts {
-		mergedOrder[2*i] = older[i]
-		mergedOrder[2*i+1] = muts[i]
+	unstagedCount := 0
+	for unstaging := true; unstaging; {
+		cursor, unstaging, err = fixture.Stagers.Unstage(ctx, pool, cursor,
+			func(context.Context, ident.Table, types.Mutation) error {
+				unstagedCount++
+				return nil
+			})
+		r.NoError(err)
 	}
+	a.Equal(total, unstagedCount)
 
-	// Test retrieving all data.
-	ret, err := s.Select(ctx, pool, hlc.Zero(), hlc.New(int64(1000*total+1), 0))
-	a.NoError(err)
-	a.Equal(mergedOrder, ret)
+	// Verify metrics query.
+	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0))
+	r.NoError(err)
+	a.Zero(count)
 
-	// Retrieve a few pages of partial values, validate expected boundaries.
-	const limit = 10
-	var tail types.Mutation
-	for i := 0; i < 10; i++ {
-		ret, err = s.SelectPartial(ctx,
-			pool,
-			tail.Time,
-			muts[len(muts)-1].Time,
-			tail.Key,
-			limit,
-		)
-		a.NoError(err)
-		a.Equalf(mergedOrder[i*limit:(i+1)*limit], ret, "at idx %d", i)
-		tail = ret[len(ret)-1]
-	}
-	a.NoError(s.Retire(ctx, pool, muts[limit-1].Time))
-
-	// Verify that reading from the end returns no results.
-	ret, err = s.SelectPartial(ctx,
-		pool,
-		muts[len(muts)-1].Time,
-		hlc.New(math.MaxInt64, 0),
-		muts[len(muts)-1].Key,
-		limit,
-	)
-	a.NoError(err)
-	a.Empty(ret)
-
-	// Check deletion. We have two timestamps for each
-	count, err = base.GetRowCount(ctx, pool, stagingTable)
-	a.NoError(err)
-	a.Equal(2*total-2*limit, count)
-
-	// Dequeue remainder.
-	a.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
+	// Retire mutations.
+	r.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
 
 	// Should be empty now.
 	count, err = base.GetRowCount(ctx, pool, stagingTable)
-	a.NoError(err)
+	r.NoError(err)
 	a.Equal(0, count)
 
 	// Verify various no-op calls are OK.
-	a.NoError(s.Retire(ctx, pool, hlc.Zero()))
-	a.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
-	a.NoError(s.Retire(ctx, pool, hlc.New(muts[len(muts)-1].Time.Nanos()+1, 0)))
+	r.NoError(s.Retire(ctx, pool, hlc.Zero()))
+	r.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
+	r.NoError(s.Retire(ctx, pool, hlc.New(muts[len(muts)-1].Time.Nanos()+1, 0)))
 }
 
-func TestSelectMany(t *testing.T) {
+func TestUnstage(t *testing.T) {
 	const entries = 100
 	const tableCount = 10
 	a := assert.New(t)
@@ -301,24 +235,34 @@ func TestSelectMany(t *testing.T) {
 		a := assert.New(t)
 		r := require.New(t)
 
-		q := &types.SelectManyCursor{
-			End:   hlc.New(100*entries, 0), // Past any existing time.
-			Limit: entries/2 - 1,           // Validate paging
-			Targets: [][]ident.Table{
-				{tables[0]},
-				// {tables[1], tables[2]},
-				// {tables[3], tables[4], tables[5]},
-				// {tables[6], tables[7], tables[8], tables[9]},
-			},
+		q := &types.UnstageCursor{
+			EndBefore: hlc.New(100*entries, 0), // Past any existing time.
+			Targets:   tables,
 		}
 
-		entriesByTable := &ident.TableMap[[]types.Mutation]{}
-		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
-			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
-				return nil
-			})
+		// Run the select in a discarded transaction to avoid
+		// contaminating future tests with side effects.
+		tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
 		r.NoError(err)
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		entriesByTable := &ident.TableMap[[]types.Mutation]{}
+		numSelections := 0
+		for selecting := true; selecting; {
+			q, selecting, err = fixture.Stagers.Unstage(ctx, tx, q,
+				func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+					entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
+					return nil
+				})
+			r.NoError(err)
+			numSelections++
+		}
+		// Refer to comment about the distribution of timestamps.
+		// There are two large batches, then each mutation has two
+		// unique timestamps, and then there's a final call that returns
+		// false.
+		a.Equal(2+2*entries+1, numSelections)
+
 		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 			if a.Len(seen, len(expectedMutOrder)) {
 				a.Equal(expectedMutOrder, seen)
@@ -332,25 +276,32 @@ func TestSelectMany(t *testing.T) {
 		a := assert.New(t)
 		r := require.New(t)
 
-		q := &types.SelectManyCursor{
-			Start: hlc.New(2, 0),          // Skip the initial transaction
-			End:   hlc.New(10*entries, 0), // Read the second large batch
-			Limit: entries/2 - 1,          // Validate paging
-			Targets: [][]ident.Table{
-				{tables[0]},
-				{tables[1], tables[2]},
-				{tables[3], tables[4], tables[5]},
-				{tables[6], tables[7], tables[8], tables[9]},
-			},
+		q := &types.UnstageCursor{
+			StartAt:   hlc.New(2, 0),          // Skip the initial transaction
+			EndBefore: hlc.New(10*entries, 1), // Read the second large batch
+			Targets:   tables,
 		}
 
-		entriesByTable := &ident.TableMap[[]types.Mutation]{}
-		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
-			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
-				return nil
-			})
+		// Run the select in a discarded transaction to avoid
+		// contaminating future tests with side effects.
+		tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
 		r.NoError(err)
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		entriesByTable := &ident.TableMap[[]types.Mutation]{}
+		numSelections := 0
+		for selecting := true; selecting; {
+			q, selecting, err = fixture.Stagers.Unstage(ctx, tx, q,
+				func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+					entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
+					return nil
+				})
+			r.NoError(err)
+			numSelections++
+		}
+		// We expect to see one large batch, a timestamp for each entry,
+		// and the final zero-results call.
+		a.Equal(1+entries+1, numSelections)
 		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 			if a.Len(seen, 2*entries) {
 				a.Equal(expectedMutOrder[entries:3*entries], seen)
@@ -359,84 +310,39 @@ func TestSelectMany(t *testing.T) {
 		}))
 	})
 
-	// What's different about the backfill case is that we want to
-	// verify that if we see an update for a table in group G, then we
-	// already have all data for group G-1.
-	t.Run("backfill", func(t *testing.T) {
+	// Read from the staging tables using the limit, to simulate
+	// very large batches.
+	t.Run("transactional-incremental", func(t *testing.T) {
 		a := assert.New(t)
 		r := require.New(t)
 
-		q := &types.SelectManyCursor{
-			Backfill: true,
-			End:      hlc.New(100*entries, 0), // Read the second large batch
-			Limit:    entries/2 - 1,           // Validate paging
-			Targets: [][]ident.Table{
-				{tables[0]},
-				{tables[1], tables[2]},
-				{tables[3], tables[4], tables[5]},
-				{tables[6], tables[7], tables[8], tables[9]},
-			},
+		q := &types.UnstageCursor{
+			EndBefore:   hlc.New(100*entries, 0), // Past any existing time.
+			Targets:     tables,
+			UpdateLimit: 20,
 		}
 
-		entriesByTable := &ident.TableMap[[]types.Mutation]{}
-		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
-			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
-
-				// Check that all data for parent groups have been received.
-				if group := tableToGroup.GetZero(tbl); group > 1 {
-					for _, tableToCheck := range tableGroups[group-1] {
-						r.Len(entriesByTable.GetZero(tableToCheck), len(muts))
-					}
-				}
-				return nil
-			})
+		// Run the select in a discarded transaction to avoid
+		// contaminating future tests with side effects.
+		tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
 		r.NoError(err)
+		defer func() { _ = tx.Rollback(ctx) }()
 
+		entriesByTable := &ident.TableMap[[]types.Mutation]{}
+		numSelections := 0
+		for selecting := true; selecting; {
+			q, selecting, err = fixture.Stagers.Unstage(ctx, tx, q,
+				func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+					entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
+					return nil
+				})
+			r.NoError(err)
+			numSelections++
+		}
+		a.Equal(211, numSelections)
 		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 			if a.Len(seen, len(expectedMutOrder)) {
 				a.Equal(expectedMutOrder, seen)
-			}
-			return nil
-		}))
-	})
-
-	// Similar to the backfill test, but we read a subset of the data.
-	t.Run("backfill-bounded", func(t *testing.T) {
-		a := assert.New(t)
-		r := require.New(t)
-
-		q := &types.SelectManyCursor{
-			Start:    hlc.New(2, 0),          // Skip the initial transaction
-			End:      hlc.New(10*entries, 0), // Read the second large batch
-			Backfill: true,
-			Limit:    entries/2 - 1, // Validate paging
-			Targets: [][]ident.Table{
-				{tables[0]},
-				{tables[1], tables[2]},
-				{tables[3], tables[4], tables[5]},
-				{tables[6], tables[7], tables[8], tables[9]},
-			},
-		}
-
-		entriesByTable := &ident.TableMap[[]types.Mutation]{}
-		err := fixture.Stagers.SelectMany(ctx, fixture.StagingPool, q,
-			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				entriesByTable.Put(tbl, append(entriesByTable.GetZero(tbl), mut))
-
-				// Check that all data for parent groups have been received.
-				if group := tableToGroup.GetZero(tbl); group > 1 {
-					for _, tableToCheck := range tableGroups[group-1] {
-						r.Len(entriesByTable.GetZero(tableToCheck), 2*entries)
-					}
-				}
-				return nil
-			})
-		r.NoError(err)
-
-		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-			if a.Len(seen, 2*entries) {
-				a.Equal(expectedMutOrder[entries:3*entries], seen)
 			}
 			return nil
 		}))
