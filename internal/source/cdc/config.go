@@ -27,10 +27,12 @@ import (
 )
 
 const (
-	defaultBackupPolling   = 100 * time.Millisecond
-	defaultFlushBatchSize  = 1_000
-	defaultSelectBatchSize = 10_000
-	defaultNDJsonBuffer    = bufio.MaxScanTokenSize // 64k
+	defaultBackupPolling         = 100 * time.Millisecond
+	defaultIdealBatchSize        = 1000
+	defaultMetaTable             = "resolved_timestamps"
+	defaultLargeTransactionLimit = 250_000                // Chosen arbitrarily.
+	defaultNDJsonBuffer          = bufio.MaxScanTokenSize // 64k
+	defaultTimestampWindowSize   = 1000
 )
 
 // Config adds CDC-specific configuration to the core logical loop.
@@ -43,27 +45,31 @@ type Config struct {
 	// timestamps will receive the incoming resolved-timestamp message.
 	BackupPolling time.Duration
 
-	// Don't coalesce updates from different source MVCC timestamps into
-	// a single destination transaction. Setting this will preserve the
-	// original structure of updates from the source, but may decrease
-	// overall throughput by increasing the total number of target
-	// database transactions.
+	// If true, the resolver loop will behave as though
+	// TimestampWindowSize has been set to 1.  That is, each unique
+	// timestamp within a resolved-timestamp window will be processed,
+	// instead of fast-forwarding to the latest values within a batch.
+	// This flag is relevant for use-cases that employ a merge function
+	// which must see every incremental update in order to produce a
+	// meaningful result.
 	FlushEveryTimestamp bool
 
-	// Coalesce timestamps within a resolved-timestamp window until
-	// at least this many mutations have been collected.
+	// This setting controls a soft maximum on the number of rows that
+	// will be flushed in one target transaction.
 	IdealFlushBatchSize int
+
+	// If non-zero and the number of rows in a single timestamp exceeds
+	// this value, allow that source transaction to be applied over
+	// multiple target transactions.
+	LargeTransactionLimit int
+
+	// The name of the resolved_timestamps table.
+	MetaTableName ident.Ident
 
 	// The maximum amount of data to buffer when reading a single line
 	// of ndjson input. This can be increased if the source cluster
 	// has large blob values.
 	NDJsonBuffer int
-
-	// The name of the resolved_timestamps table.
-	MetaTableName ident.Ident
-
-	// The number of rows to retrieve when loading staged data.
-	SelectBatchSize int
 
 	// Retain staged, applied data for an extra amount of time. This
 	// allows, for example, additional time to validate what was staged
@@ -71,6 +77,13 @@ type Config struct {
 	// be retired as soon as there is a resolved timestamp greater than
 	// the timestamp of the mutation.
 	RetireOffset time.Duration
+
+	// The maximum number of source transactions to unstage at once.
+	// This does not place a hard limit on the number of mutations that
+	// may be dequeued at once, but it does reduce the total number of
+	// round-trips to the staging database when the average transaction
+	// size is small.
+	TimestampWindowSize int
 }
 
 // Bind adds configuration flags to the set.
@@ -80,19 +93,27 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.DurationVar(&c.BackupPolling, "backupPolling", defaultBackupPolling,
 		"poll for resolved timestamps from other instances of cdc-sink")
 	f.BoolVar(&c.FlushEveryTimestamp, "flushEveryTimestamp", false,
-		"preserve intermediate updates from the source in transactional mode; "+
+		"don't fast-forward to the latest row values within a resolved timestamp; "+
 			"may negatively impact throughput")
-	f.IntVar(&c.IdealFlushBatchSize, "idealFlushBatchSize", defaultFlushBatchSize,
-		"try to apply at least this many mutations per resolved-timestamp window")
+	f.IntVar(&c.IdealFlushBatchSize, "idealFlushBatchSize", defaultIdealBatchSize,
+		"a soft limit on the number of rows to send to the target at once")
+	f.IntVar(&c.LargeTransactionLimit, "largeTransactionLimit", defaultLargeTransactionLimit,
+		"if non-zero, all source transactions with more than this "+
+			"number of rows may be applied in multiple target transactions")
 	f.IntVar(&c.NDJsonBuffer, "ndjsonBufferSize", defaultNDJsonBuffer,
 		"the maximum amount of data to buffer while reading a single line of ndjson input; "+
 			"increase when source cluster has large blob values")
-	f.Var(ident.NewValue("resolved_timestamps", &c.MetaTableName), "metaTable",
+	f.Var(ident.NewValue(defaultMetaTable, &c.MetaTableName), "metaTable",
 		"the name of the table in which to store resolved timestamps")
-	f.IntVar(&c.SelectBatchSize, "selectBatchSize", defaultSelectBatchSize,
-		"the number of rows to select at once when reading staged data")
 	f.DurationVar(&c.RetireOffset, "retireOffset", 0,
-		"retain staged, applied data for an extra duration")
+		"if non-zero, retain staged, applied data for an extra duration")
+	f.IntVar(&c.TimestampWindowSize, "timestampWindowSize", defaultTimestampWindowSize,
+		"the maximum number of source transaction timestamps to unstage at once")
+
+	var deprecated int
+	const msg = "replaced by --largeTransactionLimit and --timestampWindowSize"
+	f.IntVar(&deprecated, "selectBatchSize", 0, "")
+	_ = f.MarkDeprecated("selectBatchSize", msg)
 }
 
 // Preflight implements logical.Config.
@@ -105,19 +126,25 @@ func (c *Config) Preflight() error {
 		c.BackupPolling = defaultBackupPolling
 	}
 	if c.IdealFlushBatchSize == 0 {
-		c.IdealFlushBatchSize = defaultFlushBatchSize
+		c.IdealFlushBatchSize = defaultIdealBatchSize
+	}
+	// Zero is legal; implies no limit.
+	if c.LargeTransactionLimit < 0 {
+		return errors.New("largeTransactionLimit must be >= 0")
 	}
 	if c.NDJsonBuffer == 0 {
 		c.NDJsonBuffer = defaultNDJsonBuffer
 	}
 	if c.MetaTableName.Empty() {
-		return errors.New("no metadata table specified")
-	}
-	if c.SelectBatchSize == 0 {
-		c.SelectBatchSize = defaultSelectBatchSize
+		c.MetaTableName = ident.New(defaultMetaTable)
 	}
 	if c.RetireOffset < 0 {
 		return errors.New("retireOffset must be >= 0")
+	}
+	if c.TimestampWindowSize < 0 {
+		return errors.New("timestampWindowSize must be >= 0")
+	} else if c.TimestampWindowSize == 0 {
+		c.TimestampWindowSize = defaultTimestampWindowSize
 	}
 
 	return nil

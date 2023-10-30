@@ -153,56 +153,71 @@ type Stager interface {
 	// not occur within a single database transaction.
 	Retire(ctx context.Context, db StagingQuerier, end hlc.Time) error
 
-	// Select will return all queued mutations between the timestamps.
-	Select(ctx context.Context, tx StagingQuerier, prev, next hlc.Time) ([]Mutation, error)
-
-	// SelectPartial will return queued mutations between the
-	// timestamps. The after and limit arguments are used together when
-	// backfilling large amounts of data.
-	SelectPartial(ctx context.Context, tx StagingQuerier, prev, next hlc.Time, afterKey []byte, limit int) ([]Mutation, error)
-
 	// Store implementations should be idempotent.
 	Store(ctx context.Context, db StagingQuerier, muts []Mutation) error
-
-	// TransactionTimes returns  distinct timestamps in the range
-	// (after, before] for which there is data in the associated table.
-	TransactionTimes(ctx context.Context, tx StagingQuerier, before, after hlc.Time) ([]hlc.Time, error)
 }
 
-// SelectManyCallback is provided to Stagers.SelectMany to receive the
+// UnstageCallback is provided to Stagers.SelectMany to receive the
 // incoming data.
-type SelectManyCallback func(ctx context.Context, tbl ident.Table, mut Mutation) error
+type UnstageCallback func(ctx context.Context, tbl ident.Table, mut Mutation) error
 
-// SelectManyCursor is used with Stagers.SelectMany. The After values
-// will be updated by the method, allowing callers to call SelectMany
-// in a loop until fewer than Limit values are returned.
-type SelectManyCursor struct {
-	Start, End hlc.Time
-	Targets    [][]ident.Table // The outer slice defines FK groupings.
-	Limit      int
+// UnstageCursor is used with Stagers.SelectMany. The After values
+// will be updated by the method, allowing callers to call Unstage
+// in a loop until it returns false.
+type UnstageCursor struct {
+	// A half-open interval: [ StartAt, EndBefore )
+	StartAt, EndBefore hlc.Time
 
-	// If true, we read all updates for parent tables before children,
-	// but make no guarantees around transactional boundaries. If false,
-	// we read some number of individual MVCC timestamps in their
-	// entirety.
-	Backfill bool
+	// StartAfterKey is used when processing very large batches that
+	// occur within a single timestamp, to provide an additional offset
+	// for skipping already-processed rows. The implementation of
+	// [Stagers.SelectMany] will automatically populate this field.
+	StartAfterKey ident.TableMap[json.RawMessage]
 
-	OffsetKey   json.RawMessage
-	OffsetTable ident.Table
-	OffsetTime  hlc.Time
+	// Targets defines the order in which data for the selected tables
+	// will be passed to the results callback.
+	Targets []ident.Table
+
+	// Limit the number of distinct MVCC timestamps that are returned.
+	// This will default to a single timestamp if unset.
+	TimestampLimit int
+
+	// Limit the number of rows that are selected from any given staging
+	// table. The total number of rows that can be emitted is the limit
+	// multiplied by the number of tables listed in Targets. This will
+	// return all rows within the selected timestamp(s) if unset.
+	UpdateLimit int
+}
+
+// Copy returns a copy of the cursor so that it may be updated.
+func (c *UnstageCursor) Copy() *UnstageCursor {
+	cpy := &UnstageCursor{
+		StartAt:        c.StartAt,
+		EndBefore:      c.EndBefore,
+		Targets:        make([]ident.Table, len(c.Targets)),
+		TimestampLimit: c.TimestampLimit,
+		UpdateLimit:    c.UpdateLimit,
+	}
+	c.StartAfterKey.CopyInto(&cpy.StartAfterKey)
+	copy(cpy.Targets, c.Targets)
+	return cpy
 }
 
 // Stagers is a factory for Stager instances.
 type Stagers interface {
 	Get(ctx context.Context, target ident.Table) (Stager, error)
 
-	// SelectMany performs queries across multiple staging tables, to
-	// more readily support backfilling large amounts of data that may
-	// result from a changefeed's initial_scan.
+	// Unstage implements an exactly-once behavior of reading staged
+	// mutations.
 	//
-	// This method will update the fields within the cursor so that it
-	// can be used to restart in case of interruption.
-	SelectMany(ctx context.Context, tx StagingQuerier, q *SelectManyCursor, fn SelectManyCallback) error
+	// This method returns true if at least one row was returned. It
+	// will also return an updated cursor that allows a caller to resume
+	// reading.
+	//
+	// Rows will be emitted in (time, table, key) order. As such,
+	// transaction boundaries can be detected by looking for a change in
+	// the timestamp values.
+	Unstage(ctx context.Context, tx StagingQuerier, q *UnstageCursor, fn UnstageCallback) (*UnstageCursor, bool, error)
 }
 
 // ColData hold SQL column metadata.

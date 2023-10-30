@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
@@ -164,18 +165,18 @@ func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
 func (r *resolver) BackfillInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
-	return r.readInto(ctx, ch, state, true)
+	return r.readInto(ctx, ch, state)
 }
 
 // ReadInto implements logical.Dialect.
 func (r *resolver) ReadInto(
 	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
-	return r.readInto(ctx, ch, state, false)
+	return r.readInto(ctx, ch, state)
 }
 
 func (r *resolver) readInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State, backfill bool,
+	ctx context.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	// This will either be from a previous iteration or ZeroStamp.
 	cp, cpUpdated := state.GetConsistentPoint()
@@ -211,7 +212,7 @@ func (r *resolver) readInto(
 			} else {
 				// We're looping around with a committed timestamp, so
 				// look for work to do and send it.
-				proposed, err := r.nextProposedStamp(ctx, resumeFrom, backfill)
+				proposed, err := r.nextProposedStamp(ctx, resumeFrom)
 				switch {
 				case err == nil:
 					log.WithFields(log.Fields{
@@ -286,7 +287,7 @@ func (r *resolver) readInto(
 // may be one of the sentinel values errNoWork or errBlocked that are
 // returned by selectTimestamp.
 func (r *resolver) nextProposedStamp(
-	ctx context.Context, prev *resolvedStamp, backfill bool,
+	ctx context.Context, prev *resolvedStamp,
 ) (*resolvedStamp, error) {
 	// Find the next resolved timestamp to apply, starting from
 	// a timestamp known to be committed.
@@ -299,11 +300,6 @@ func (r *resolver) nextProposedStamp(
 	ret, err := prev.NewProposed(nextResolved)
 	if err != nil {
 		return nil, err
-	}
-
-	// Propagate the backfilling flag.
-	if backfill {
-		ret.Backfill = true
 	}
 
 	return ret, nil
@@ -353,8 +349,7 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 }
 
 // process makes incremental progress in fulfilling the given
-// resolvedStamp. It returns the state to which the resolved timestamp
-// has been advanced.
+// resolvedStamp.
 func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logical.Events) error {
 	start := time.Now()
 	targets := r.watcher.Get().Order
@@ -363,135 +358,193 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		return errors.Errorf("no tables known in schema %s; have they been created?", r.target)
 	}
 
-	cursor := &types.SelectManyCursor{
-		Backfill:    rs.Backfill,
-		End:         rs.ProposedTime,
-		Limit:       r.cfg.SelectBatchSize,
-		OffsetKey:   rs.OffsetKey,
-		OffsetTable: rs.OffsetTable,
-		OffsetTime:  rs.OffsetTime,
-		Start:       rs.CommittedTime,
-		Targets:     targets,
+	flattened := make([]ident.Table, 0, len(targets))
+	for _, tgts := range targets {
+		flattened = append(flattened, tgts...)
 	}
 
-	source := script.SourceName(r.target)
-	flush := func(toApply *ident.TableMap[[]types.Mutation], final bool) error {
+	cursor := &types.UnstageCursor{
+		StartAt:        rs.CommittedTime,
+		EndBefore:      rs.ProposedTime,
+		Targets:        flattened,
+		TimestampLimit: r.cfg.TimestampWindowSize,
+		UpdateLimit:    r.cfg.LargeTransactionLimit,
+	}
+	if rs.LargeBatchOffset != nil && rs.LargeBatchOffset.Len() > 0 {
+		rs.LargeBatchOffset.CopyInto(&cursor.StartAfterKey)
+	}
+
+	flush := func(toApply *ident.TableMap[[]types.Mutation]) error {
 		flushStart := time.Now()
 
 		ctx, cancel := context.WithTimeout(ctx, r.cfg.ApplyTimeout)
 		defer cancel()
 
-		// Apply the retrieved data.
-		batch, err := events.OnBegin(ctx)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = batch.OnRollback(ctx) }()
+		retries := -1
+		if err := retry.Retry(ctx, func(ctx context.Context) error {
+			retries++
 
-		for _, tables := range targets {
-			for _, table := range tables {
-				muts := toApply.GetZero(table)
-				if len(muts) == 0 {
-					continue
-				}
-				if err := batch.OnData(ctx, source, table, muts); err != nil {
-					return err
-				}
-			}
-		}
-
-		// OnCommit is asynchronous to support (a future)
-		// unified-immediate mode. We'll wait for the data to be
-		// committed.
-		select {
-		case err := <-batch.OnCommit(ctx):
+			// Apply the retrieved data.
+			batch, err := events.OnBegin(ctx)
 			if err != nil {
 				return err
 			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+			defer func() { _ = batch.OnRollback(ctx) }()
 
-		// Advance and save the stamp once the flush has completed.
-		if final {
-			rs, err = rs.NewCommitted()
-			if err != nil {
-				return err
+			for _, tables := range targets {
+				for _, table := range tables {
+					muts := toApply.GetZero(table)
+					if len(muts) == 0 {
+						continue
+					}
+					source := script.SourceName(r.target)
+					muts = append([]types.Mutation(nil), muts...)
+					if err := batch.OnData(ctx, source, table, muts); err != nil {
+						return err
+					}
+				}
 			}
-			// Mark the timestamp has being processed.
-			if err := r.Record(ctx, rs.CommittedTime); err != nil {
+
+			// OnCommit is asynchronous to support (a future)
+			// unified-immediate mode. We'll wait for the data to be
+			// committed.
+			select {
+			case err := <-batch.OnCommit(ctx):
 				return err
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-		} else {
-			rs = rs.NewProgress(cursor)
-		}
-		if err := events.SetConsistentPoint(ctx, rs); err != nil {
+		}); err != nil {
 			return err
 		}
 
 		log.WithFields(log.Fields{
 			"duration": time.Since(flushStart),
 			"schema":   r.target,
+			"retries":  retries,
 		}).Debugf("flushed mutations")
 
 		return nil
 	}
 
-	var epoch hlc.Time
-	flushCounter := 0
-	toApply := &ident.TableMap[[]types.Mutation]{}
-	total := 0
-	if err := r.stagers.SelectMany(ctx, r.pool, cursor,
-		func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-			// Check for flush before accumulating.
-			var needsFlush bool
-			if rs.Backfill {
-				// We're receiving data in table-order. Just read data
-				// and flush it once we hit our soft limit, since we
-				// can resume at any point.
-				needsFlush = flushCounter >= r.cfg.IdealFlushBatchSize
-			} else if r.cfg.FlushEveryTimestamp {
-				// The user wants to preserve all intermediate updates
-				// to a row, rather than fast-forwarding the values of a
-				// row to the latest transactionally-consistent state.
-				// We'll flush on every MVCC boundary change.
-				needsFlush = epoch != hlc.Zero() && hlc.Compare(mut.Time, epoch) > 0
-			} else {
-				// We're receiving data ordered by MVCC timestamp. Flush
-				// data when we see a new epoch after accumulating a
-				// minimum number of mutations. This increases
-				// throughput when there are many single-row
-				// transactions in the source database.
-				needsFlush = flushCounter >= r.cfg.IdealFlushBatchSize &&
-					hlc.Compare(mut.Time, epoch) > 0
+	total := 0 // Metrics.
+
+	// We run in a loop until the attempt to unstage returns no more
+	// data (i.e. we've consumed all mutations within the resolving
+	// window). If a LargeBatchLimit is configured, we may wind up
+	// calling flush() several times within a particularly large MVCC
+	// timestamp.
+	for hadData := true; hadData; {
+		if err := retry.Retry(ctx, func(ctx context.Context) error {
+			unstageTX, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return errors.Wrap(err, "could not open staging transaction")
 			}
-			if needsFlush {
-				if err := flush(toApply, false /* interim */); err != nil {
-					return err
-				}
-				total += flushCounter
-				flushCounter = 0
-				// Reset the slices in toApply; flush() ignores zero-length entries.
-				_ = toApply.Range(func(tbl ident.Table, muts []types.Mutation) error {
-					toApply.Put(tbl, muts[:0])
+			defer func() { _ = unstageTX.Rollback(ctx) }()
+
+			var epoch hlc.Time
+			var nextCursor *types.UnstageCursor
+			pendingMutations := 0
+			toApply := &ident.TableMap[[]types.Mutation]{}
+
+			nextCursor, hadData, err = r.stagers.Unstage(ctx, unstageTX, cursor,
+				func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+					total++
+
+					// Decorate the mutation.
+					script.AddMeta("cdc", tbl, &mut)
+
+					if epoch == hlc.Zero() {
+						epoch = mut.Time
+					} else if r.cfg.FlushEveryTimestamp ||
+						pendingMutations >= r.cfg.IdealFlushBatchSize {
+						// If the user wants to see all intermediate
+						// values for a row, we'll flush whenever
+						// there's a change in the timestamp value. We
+						// may also preemptively flush to prevent
+						// unbounded memory use.
+						if hlc.Compare(mut.Time, epoch) > 0 {
+							if err := flush(toApply); err != nil {
+								return err
+							}
+							epoch = mut.Time
+							pendingMutations = 0
+							toApply = &ident.TableMap[[]types.Mutation]{}
+						}
+					} else if hlc.Compare(mut.Time, epoch) < 0 {
+						// This would imply a coding error in Unstage.
+						return errors.New("epoch going backwards")
+					}
+
+					// Accumulate the mutation.
+					toApply.Put(tbl, append(toApply.GetZero(tbl), mut))
+					pendingMutations++
 					return nil
 				})
+			if err != nil {
+				return errors.Wrap(err, "could not unstage mutations")
 			}
 
-			flushCounter++
-			script.AddMeta("cdc", tbl, &mut)
-			toApply.Put(tbl, append(toApply.GetZero(tbl), mut))
-			epoch = mut.Time
+			if hadData {
+				// Final flush of the data that was unstaged. It's
+				// possible, although unlikely, that the final callback
+				// from Unstage performed a flush. If this were to
+				// happen, we don't want to perform a no-work flush.
+				if pendingMutations > 0 {
+					if err := flush(toApply); err != nil {
+						return err
+					}
+				}
+
+				// Commit the transaction that unstaged the data. Note that
+				// without an X/A transaction model, there's always a
+				// possibility where we've committed the target transaction
+				// and then the unstaging transaction fails to commit. In
+				// general, we expect that re-applying a mutation within a
+				// short timeframe should be idempotent, although this might
+				// not necessarily be the case for data-aware merge
+				// functions in the absence of conflict-free datatypes. We
+				// could choose to keep a manifest of (table, key,
+				// timestamp) entries in the target database to filter
+				// repeated updates.
+				// https://github.com/cockroachdb/cdc-sink/issues/565
+				if err := unstageTX.Commit(ctx); err != nil {
+					return errors.Wrap(err, "could not commit unstaging transaction; "+
+						"mutations may be reapplied")
+				}
+
+				// If we're going to continue around, update the
+				// consistent point with partial progress. This ensures
+				// that cdc-sink can make progress on large batches,
+				// even if it's restarted.
+				cursor = nextCursor
+				rs = rs.NewProgress(cursor)
+			} else {
+				// We read no data, which means that we're done. We'll
+				// let the unstaging transaction be rolled back by the
+				// defer above since it performed no actual work in the
+				// database.
+				rs, err = rs.NewCommitted()
+				if err != nil {
+					return err
+				}
+				// Mark the timestamp has being processed.
+				if err := r.Record(ctx, rs.CommittedTime); err != nil {
+					return err
+				}
+			}
+
+			// Save the consistent point to be able to resume if the
+			// cdc-sink process is stopped.
+			if err := events.SetConsistentPoint(ctx, rs); err != nil {
+				return err
+			}
 			return nil
 		}); err != nil {
-		return err
+			return err
+		}
 	}
 
-	// Final flush cycle to commit the final stamp.
-	if err := flush(toApply, true /* final */); err != nil {
-		return err
-	}
-	total += flushCounter
 	log.WithFields(log.Fields{
 		"committed": rs.CommittedTime,
 		"count":     total,

@@ -26,7 +26,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 )
 
@@ -75,4 +77,34 @@ func (f *Fixture) CreateTargetTable(
 		err = f.Watcher.Refresh(ctx, f.TargetPool)
 	}
 	return ti, err
+}
+
+// PeekStaged peeks at the data which has been staged for the target
+// table between the given timestamps.
+func (f *Fixture) PeekStaged(
+	ctx context.Context, tbl ident.Table, startAt, endBefore hlc.Time,
+) ([]types.Mutation, error) {
+	tx, err := f.StagingPool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := &types.UnstageCursor{
+		StartAt:   startAt,
+		EndBefore: endBefore,
+		Targets:   []ident.Table{tbl},
+	}
+	var ret []types.Mutation
+	for selecting := true; selecting; {
+		q, selecting, err = f.Stagers.Unstage(ctx, tx, q,
+			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+				ret = append(ret, mut)
+				return nil
+			})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return ret, nil
 }
