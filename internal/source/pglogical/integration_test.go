@@ -50,6 +50,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	log.SetLevel(log.TraceLevel)
 	all.IntegrationMain(m, all.PostgreSQLName)
 }
 
@@ -224,6 +225,7 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	if !a.NoError(err) {
 		return
 	}
+	defer cancelLoop()
 
 	// Wait for backfill.
 	for _, tgt := range tgts {
@@ -303,13 +305,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 
 	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
 
-	cancelLoop()
-	select {
-	case <-ctx.Done():
-		a.Fail("cancelConn timed out")
-	case <-repl.Loop.Stopped():
-		// OK
-	}
+	ctx.Stop(time.Second)
+	a.NoError(ctx.Wait())
 }
 
 // https://www.postgresql.org/docs/current/datatype.html
@@ -449,6 +446,7 @@ func TestDataTypes(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
+	defer cancelLoop()
 
 	// Wait for rows to show up.
 	for idx, tc := range tcs {
@@ -471,11 +469,8 @@ func TestDataTypes(t *testing.T) {
 
 	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
 
-	cancelLoop()
-	select {
-	case <-repl.Loop.Stopped():
-	case <-ctx.Done():
-	}
+	ctx.Stop(time.Second)
+	a.NoError(ctx.Wait())
 }
 
 // Allowable publication slot names are a subset of allowable

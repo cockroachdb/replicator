@@ -60,13 +60,18 @@ func (f *Factory) Immediate(ctx context.Context, target ident.Schema) (Batcher, 
 	// no-ops and wait to exit. The implementation of Process would make
 	// the Events / Batcher available externally. This has the downside
 	// of actually needing to start the loop goroutines.
-	fake, cancel, err := f.newLoop(stopper.From(ctx), &LoopConfig{
+	stop := stopper.WithContext(ctx)
+	fake, err := f.newLoop(stop, &LoopConfig{
 		Dialect:      &fakeDialect{},
 		LoopName:     fmt.Sprintf("immediate-%s", target.Raw()),
 		TargetSchema: target,
 	})
 	if err != nil {
 		return nil, nil, err
+	}
+	cancel := func() {
+		stop.Stop(f.baseConfig.ApplyTimeout)
+		<-stop.Done()
 	}
 
 	if f.baseConfig.Immediate {
@@ -76,32 +81,27 @@ func (f *Factory) Immediate(ctx context.Context, target ident.Schema) (Batcher, 
 }
 
 // Start constructs a new replication Loop.
-func (f *Factory) Start(config *LoopConfig) (*Loop, func(), error) {
+func (f *Factory) Start(ctx *stopper.Context, config *LoopConfig) (*Loop, error) {
 	var err error
 
 	// Ensure the configuration is set up and validated.
 	config, err = f.expandConfig(config)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Construct the new loop and start it.
-	stop := stopper.WithContext(context.Background())
-	loop, cleanup, err := f.newLoop(stop, config)
+	ctx = stopper.WithContext(ctx)
+	loop, err := f.newLoop(ctx, config)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	go loop.loop.run()
+	ctx.Go(func() error {
+		loop.loop.run()
+		return nil
+	})
 
-	// Perform a graceful shutdown and wait for the loop to exit.
-	grace := f.baseConfig.ApplyTimeout
-	cancel := func() {
-		stop.Stop(grace)
-		<-loop.Stopped()
-		cleanup()
-	}
-
-	return loop, cancel, nil
+	return loop, nil
 }
 
 // expandConfig returns a preflighted copy of the configuration.
@@ -121,10 +121,10 @@ func (f *Factory) expandConfig(config *LoopConfig) (*LoopConfig, error) {
 }
 
 // newLoop constructs a loop, but does not start it.
-func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func(), error) {
+func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, error) {
 	watcher, err := f.watchers.Get(ctx, config.TargetSchema)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	config = config.Copy()
 	config.Dialect = WithChaos(config.Dialect, f.baseConfig.ChaosProb)
@@ -135,7 +135,7 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 	}
 	initialPoint, err := loop.loadConsistentPoint(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	loop.consistentPoint.Set(initialPoint)
 
@@ -161,7 +161,7 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 	} else {
 		// Sanity-check that there are no FKs defined.
 		if len(watcher.Get().Order) > 1 {
-			return nil, nil, errors.New("the destination database has tables with foreign keys, " +
+			return nil, errors.New("the destination database has tables with foreign keys, " +
 				"but support for FKs is not enabled")
 		}
 	}
@@ -169,11 +169,14 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 	// Create a branch in the diagnostics reporting for the loop.
 	loopDiags, err := f.diags.Wrap(config.LoopName)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	cancel := func() {
+	// Unregister the loop on shutdown.
+	ctx.Go(func() error {
+		<-ctx.Stopping()
 		f.diags.Unregister(config.LoopName)
-	}
+		return nil
+	})
 
 	userscript, err := script.Evaluate(
 		ctx,
@@ -184,8 +187,7 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 		f.watchers,
 	)
 	if err != nil {
-		cancel()
-		return nil, nil, errors.Wrapf(err, "could not initialize userscript for %s", config.LoopName)
+		return nil, errors.Wrapf(err, "could not initialize userscript for %s", config.LoopName)
 	}
 
 	// Apply logic and configurations defined by the user-script.
@@ -206,11 +208,10 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, func
 	loop.metrics.backfillStatus = backfillStatus.WithLabelValues(config.LoopName)
 
 	if err := loopDiags.Register("loop", loop); err != nil {
-		cancel()
-		return nil, nil, err
+		return nil, err
 	}
 
-	return &Loop{loop, initialPoint}, cancel, nil
+	return &Loop{loop, initialPoint}, nil
 }
 
 // singletonChannel returns a channel that emits a single value and is

@@ -7,11 +7,11 @@
 package script
 
 import (
-	"context"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 import (
@@ -21,7 +21,7 @@ import (
 // Injectors from injector.go:
 
 // Evaluate the loaded script.
-func Evaluate(ctx context.Context, loader *Loader, configs *applycfg.Configs, diags *diag.Diagnostics, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
+func Evaluate(ctx *stopper.Context, loader *Loader, configs *applycfg.Configs, diags *diag.Diagnostics, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
 	userScript, err := ProvideUserScript(ctx, configs, loader, diags, targetSchema, watchers)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func Evaluate(ctx context.Context, loader *Loader, configs *applycfg.Configs, di
 
 func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema TargetSchema) (*UserScript, error) {
 	baseFixture := fixture.Fixture
-	contextContext := baseFixture.Context
+	context := baseFixture.Context
 	configs := fixture.Configs
 	loader, err := ProvideLoader(config)
 	if err != nil {
@@ -39,7 +39,7 @@ func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema Tar
 	}
 	diagnostics := fixture.Diagnostics
 	watchers := fixture.Watchers
-	userScript, err := ProvideUserScript(contextContext, configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}

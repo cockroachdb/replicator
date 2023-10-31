@@ -7,7 +7,6 @@
 package pglogical
 
 import (
-	"context"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
@@ -17,13 +16,14 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 // Injectors from injector.go:
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
+func Start(ctx *stopper.Context, config *Config) (*PGLogical, func(), error) {
 	diagnostics, cleanup := diag.New(ctx)
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
@@ -120,7 +120,7 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	loop, cleanup7, err := ProvideLoop(config, dialect, factory)
+	loop, err := ProvideLoop(ctx, config, dialect, factory)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -135,7 +135,6 @@ func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
 		Loop:        loop,
 	}
 	return pgLogical, func() {
-		cleanup7()
 		cleanup6()
 		cleanup5()
 		cleanup4()

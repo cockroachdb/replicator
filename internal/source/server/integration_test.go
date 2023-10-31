@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	joonix "github.com/joonix/log"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -153,7 +154,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	targetPool := destFixture.TargetPool
 
 	// The target fixture contains the cdc-sink server.
-	targetFixture, cancel, err := newTestFixture(ctx, &Config{
+	targetFixture, cancel, err := newTestFixture(stopper.WithContext(ctx), &Config{
 		CDC: cdc.Config{
 			BaseConfig: logical.BaseConfig{
 				Immediate:     cfg.immediate,

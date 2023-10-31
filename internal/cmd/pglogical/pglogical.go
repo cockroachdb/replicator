@@ -21,6 +21,7 @@ package pglogical
 import (
 	"github.com/cockroachdb/cdc-sink/internal/source/pglogical"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +32,8 @@ func Command() *cobra.Command {
 		Bind:  cfg.Bind,
 		Short: "start a pg logical replication feed",
 		Start: func(cmd *cobra.Command) (any, func(), error) {
-			return pglogical.Start(cmd.Context(), cfg)
+			// main.go provides a stopper.
+			return pglogical.Start(stopper.From(cmd.Context()), cfg)
 		},
 		Use: "pglogical",
 	})

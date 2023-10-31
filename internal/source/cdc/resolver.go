@@ -595,31 +595,13 @@ type Resolvers struct {
 	metaTable ident.Table
 	pool      *types.StagingPool
 	stagers   types.Stagers
+	stop      *stopper.Context // Manage lifecycle of background processes.
 	watchers  types.Watchers
 
 	mu struct {
 		sync.Mutex
-		cleanups  []func()
 		instances *ident.SchemaMap[*logical.Loop]
 	}
-}
-
-// close will drain any running resolver loops.
-func (r *Resolvers) close() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Cancel each loop.
-	for _, cancel := range r.mu.cleanups {
-		cancel()
-	}
-	// Wait for shutdown.
-	_ = r.mu.instances.Range(func(_ ident.Schema, l *logical.Loop) error {
-		<-l.Stopped()
-		return nil
-	})
-	r.mu.cleanups = nil
-	r.mu.instances = nil
 }
 
 // get creates or returns the [logical.Loop] and the enclosed resolver.
@@ -643,7 +625,7 @@ func (r *Resolvers) get(
 		return nil, ret, nil
 	}
 
-	loop, cleanup, err := r.loops.Start(&logical.LoopConfig{
+	loop, err := r.loops.Start(r.stop, &logical.LoopConfig{
 		Dialect:      ret,
 		LoopName:     "changefeed-" + target.Raw(),
 		TargetSchema: target,
@@ -655,13 +637,8 @@ func (r *Resolvers) get(
 	r.mu.instances.Put(target, loop)
 
 	// Start a goroutine to retire old data.
-	stop := stopper.WithContext(context.Background())
-	ret.retireLoop(stop)
+	ret.retireLoop(r.stop)
 
-	r.mu.cleanups = append(r.mu.cleanups,
-		cleanup,
-		func() { stop.Stop(time.Second) },
-	)
 	return loop, ret, nil
 }
 

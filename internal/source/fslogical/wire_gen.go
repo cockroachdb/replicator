@@ -7,7 +7,6 @@
 package fslogical
 
 import (
-	"context"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
@@ -18,14 +17,15 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 // Injectors from injector.go:
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(contextContext context.Context, config *Config) (*FSLogical, func(), error) {
-	diagnostics, cleanup := diag.New(contextContext)
+func Start(context *stopper.Context, config *Config) (*FSLogical, func(), error) {
+	diagnostics, cleanup := diag.New(context)
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
 		cleanup()
@@ -47,7 +47,7 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup2, err := logical.ProvideTargetPool(contextContext, baseConfig, diagnostics)
+	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -58,14 +58,14 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	userScript, err := script.ProvideUserScript(contextContext, configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	client, cleanup4, err := ProvideFirestoreClient(contextContext, config, userScript)
+	client, cleanup4, err := ProvideFirestoreClient(context, config, userScript)
 	if err != nil {
 		cleanup3()
 		cleanup2()
@@ -91,7 +91,7 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup7, err := logical.ProvideStagingPool(contextContext, baseConfig, diagnostics)
+	stagingPool, cleanup7, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -112,7 +112,7 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	memoMemo, err := memo.ProvideMemo(contextContext, stagingPool, stagingSchema)
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -124,7 +124,7 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		return nil, nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
+	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -135,7 +135,7 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	tombstones, cleanup8, err := ProvideTombstones(config, client, factory, userScript)
+	tombstones, err := ProvideTombstones(context, config, client, factory, userScript)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -146,9 +146,8 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		cleanup()
 		return nil, nil, err
 	}
-	v, cleanup9, err := ProvideLoops(contextContext, config, client, factory, memoMemo, stagingPool, tombstones, userScript)
+	v, err := ProvideLoops(context, config, client, factory, memoMemo, stagingPool, tombstones, userScript)
 	if err != nil {
-		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -163,8 +162,6 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 		Loops:       v,
 	}
 	return fsLogical, func() {
-		cleanup9()
-		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -178,7 +175,7 @@ func Start(contextContext context.Context, config *Config) (*FSLogical, func(), 
 // Build remaining testable components from a common fixture.
 func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loop, func(), error) {
 	baseFixture := fixture.Fixture
-	contextContext := baseFixture.Context
+	context := baseFixture.Context
 	configs := fixture.Configs
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
@@ -188,14 +185,14 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	if err != nil {
 		return nil, nil, err
 	}
-	diagnostics, cleanup := diag.New(contextContext)
+	diagnostics, cleanup := diag.New(context)
 	targetSchema := ProvideScriptTarget(config)
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	targetPool, cleanup2, err := logical.ProvideTargetPool(contextContext, baseConfig, diagnostics)
+	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -206,14 +203,14 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		cleanup()
 		return nil, nil, err
 	}
-	userScript, err := script.ProvideUserScript(contextContext, configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
 		cleanup3()
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	client, cleanup4, err := ProvideFirestoreClient(contextContext, config, userScript)
+	client, cleanup4, err := ProvideFirestoreClient(context, config, userScript)
 	if err != nil {
 		cleanup3()
 		cleanup2()
@@ -240,7 +237,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		return nil, nil, err
 	}
 	typesMemo := fixture.Memo
-	stagingPool, cleanup7, err := logical.ProvideStagingPool(contextContext, baseConfig, diagnostics)
+	stagingPool, cleanup7, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
 		cleanup6()
 		cleanup5()
@@ -251,7 +248,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		return nil, nil, err
 	}
 	checker := fixture.VersionChecker
-	factory, err := logical.ProvideFactory(contextContext, appliers, configs, baseConfig, diagnostics, typesMemo, loader, stagingPool, targetPool, watchers, checker)
+	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, typesMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -262,7 +259,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		cleanup()
 		return nil, nil, err
 	}
-	tombstones, cleanup8, err := ProvideTombstones(config, client, factory, userScript)
+	tombstones, err := ProvideTombstones(context, config, client, factory, userScript)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -273,9 +270,8 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		cleanup()
 		return nil, nil, err
 	}
-	v, cleanup9, err := ProvideLoops(contextContext, config, client, factory, typesMemo, stagingPool, tombstones, userScript)
+	v, err := ProvideLoops(context, config, client, factory, typesMemo, stagingPool, tombstones, userScript)
 	if err != nil {
-		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()
@@ -286,8 +282,6 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 		return nil, nil, err
 	}
 	return v, func() {
-		cleanup9()
-		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()

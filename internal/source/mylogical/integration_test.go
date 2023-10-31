@@ -276,13 +276,8 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 
 	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
 
-	cancelLoop()
-	select {
-	case <-ctx.Done():
-		a.Fail("cancelConn timed out")
-	case <-repl.Loop.Stopped():
-		// OK
-	}
+	ctx.Stop(time.Second)
+	a.NoError(ctx.Wait())
 }
 
 func TestDataTypes(t *testing.T) {
@@ -502,11 +497,8 @@ func TestDataTypes(t *testing.T) {
 
 	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
 
-	cancelLoop()
-	select {
-	case <-repl.Loop.Stopped():
-	case <-ctx.Done():
-	}
+	ctx.Stop(time.Second)
+	a.NoError(ctx.Wait())
 }
 
 func myDo(

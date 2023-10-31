@@ -121,7 +121,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	}
 	metaTable := ProvideMetaTable(config)
 	stagers := fixture.Stagers
-	resolvers, cleanup8, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	resolvers, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
 		cleanup7()
 		cleanup6()
@@ -147,7 +147,6 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
-		cleanup8()
 		cleanup7()
 		cleanup6()
 		cleanup5()

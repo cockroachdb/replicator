@@ -23,10 +23,7 @@ import (
 // NewFixture constructs a self-contained test fixture for all services
 // in the target sub-packages.
 func NewFixture() (*Fixture, func(), error) {
-	context, cleanup, err := base.ProvideContext()
-	if err != nil {
-		return nil, nil, err
-	}
+	context, cleanup := base.ProvideContext()
 	diagnostics, cleanup2 := diag.New(context)
 	sourcePool, cleanup3, err := base.ProvideSourcePool(context, diagnostics)
 	if err != nil {
@@ -160,7 +157,7 @@ func NewFixture() (*Fixture, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema)
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	watcher, err := ProvideWatcher(context, targetSchema, watchers)
 	if err != nil {

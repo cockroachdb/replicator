@@ -21,6 +21,7 @@ package fslogical
 import (
 	"github.com/cockroachdb/cdc-sink/internal/source/fslogical"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +32,8 @@ func Command() *cobra.Command {
 		Bind:  cfg.Bind,
 		Short: "start a Google Cloud Firestore logical replication feed",
 		Start: func(cmd *cobra.Command) (any, func(), error) {
-			return fslogical.Start(cmd.Context(), cfg)
+			// main.go provides this stopper.
+			return fslogical.Start(stopper.From(cmd.Context()), cfg)
 		},
 		Use: "fslogical",
 	})

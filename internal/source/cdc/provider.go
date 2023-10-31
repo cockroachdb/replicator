@@ -17,12 +17,12 @@
 package cdc
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 )
@@ -55,7 +55,7 @@ func ProvideMetaTable(cfg *Config) MetaTable {
 
 // ProvideResolvers is called by Wire.
 func ProvideResolvers(
-	ctx context.Context,
+	ctx *stopper.Context,
 	cfg *Config,
 	leases types.Leases,
 	loops *logical.Factory,
@@ -63,9 +63,9 @@ func ProvideResolvers(
 	pool *types.StagingPool,
 	stagers types.Stagers,
 	watchers types.Watchers,
-) (*Resolvers, func(), error) {
+) (*Resolvers, error) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(schema, metaTable.Table())); err != nil {
-		return nil, nil, errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 
 	ret := &Resolvers{
@@ -75,6 +75,7 @@ func ProvideResolvers(
 		metaTable: metaTable.Table(),
 		pool:      pool,
 		stagers:   stagers,
+		stop:      ctx,
 		watchers:  watchers,
 	}
 	ret.mu.instances = &ident.SchemaMap[*logical.Loop]{}
@@ -82,13 +83,13 @@ func ProvideResolvers(
 	// Resume from previous state.
 	schemas, err := ScanForTargetSchemas(ctx, pool, ret.metaTable)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	for _, schema := range schemas {
 		if _, _, err := ret.get(ctx, schema); err != nil {
-			return nil, nil, errors.Wrapf(err, "could not bootstrap resolver for schema %s", schema)
+			return nil, errors.Wrapf(err, "could not bootstrap resolver for schema %s", schema)
 		}
 	}
 
-	return ret, ret.close, nil
+	return ret, nil
 }

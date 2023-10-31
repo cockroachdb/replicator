@@ -31,6 +31,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
@@ -48,7 +49,7 @@ type testFixture struct {
 
 // We want this to be as close as possible to Start, it just exposes
 // additional plumbing details via the returned testFixture pointer.
-func newTestFixture(context.Context, *Config) (*testFixture, func(), error) {
+func newTestFixture(*stopper.Context, *Config) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,
@@ -57,6 +58,7 @@ func newTestFixture(context.Context, *Config) (*testFixture, func(), error) {
 		script.Set,
 		staging.Set,
 		target.Set,
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*Config), "CDC"),
 		wire.Struct(new(testFixture), "*"),

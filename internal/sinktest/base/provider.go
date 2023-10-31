@@ -34,6 +34,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -95,6 +96,7 @@ var TestSet = wire.NewSet(
 	ProvideTargetStatements,
 	diag.New,
 
+	wire.Bind(new(context.Context), new(*stopper.Context)),
 	wire.Struct(new(Fixture), "*"),
 )
 
@@ -102,7 +104,7 @@ var TestSet = wire.NewSet(
 // without the other services provided by the target package. One can be
 // constructed by calling NewFixture.
 type Fixture struct {
-	Context      context.Context         // The context for the test.
+	Context      *stopper.Context        // The context for the test.
 	SourcePool   *types.SourcePool       // Access to user-data tables and changefeed creation.
 	SourceSchema sinktest.SourceSchema   // A container for tables within SourcePool.
 	StagingPool  *types.StagingPool      // Access to __cdc_sink database.
@@ -138,9 +140,19 @@ var caseTimout = flag.Duration(
 
 // ProvideContext returns an execution context that is associated with a
 // singleton connection to a CockroachDB cluster.
-func ProvideContext() (context.Context, func(), error) {
-	ctx, cancel := context.WithTimeout(context.Background(), *caseTimout)
-	return ctx, cancel, nil
+func ProvideContext() (*stopper.Context, func()) {
+	ctx := stopper.WithContext(context.Background())
+	ctx.Go(func() error {
+		select {
+		case <-ctx.Stopping():
+		// Clean shutdown, do nothing.
+		case <-time.After(*caseTimout):
+			// Just cancel immediately.
+			ctx.Stop(0)
+		}
+		return nil
+	})
+	return ctx, func() { ctx.Stop(100 * time.Millisecond) }
 }
 
 // ProvideSourcePool connects to the source database. If the source is a

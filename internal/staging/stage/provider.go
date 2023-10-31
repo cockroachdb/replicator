@@ -19,6 +19,7 @@ package stage
 import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
@@ -28,10 +29,13 @@ var Set = wire.NewSet(
 )
 
 // ProvideFactory is called by Wire to construct the Stagers factory.
-func ProvideFactory(db *types.StagingPool, stagingDB ident.StagingSchema) types.Stagers {
+func ProvideFactory(
+	db *types.StagingPool, stagingDB ident.StagingSchema, stop *stopper.Context,
+) types.Stagers {
 	f := &factory{
 		db:        db,
 		stagingDB: stagingDB.Schema(),
+		stop:      stop,
 	}
 	f.mu.instances = &ident.TableMap[*stage]{}
 	return f

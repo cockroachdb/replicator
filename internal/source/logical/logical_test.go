@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,7 +197,8 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	}
 	defer cancelFactory()
 
-	loop, cancelLoop, err := factory.Start(&logical.LoopConfig{
+	loopStopper := stopper.WithContext(fixture.Context)
+	loop, err := factory.Start(loopStopper, &logical.LoopConfig{
 		Dialect:      gen,
 		LoopName:     "generator",
 		TargetSchema: dbName,
@@ -242,7 +244,7 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	}
 
 	// Wait for the loop to shut down, or a timeout.
-	cancelLoop()
+	loopStopper.Stop(100 * time.Millisecond)
 	gen.emit(0) // Kick the simplistic ReadInto loop so that it exits.
 	select {
 	case <-loop.Stopped():
@@ -351,13 +353,12 @@ api.configureTable("t_2", {
 	r.NoError(err)
 	defer cancelFactory()
 
-	_, cancelLoop, err := factory.Start(&logical.LoopConfig{
+	_, err = factory.Start(fixture.Context, &logical.LoopConfig{
 		Dialect:      gen,
 		LoopName:     "generator",
 		TargetSchema: dbName,
 	})
 	r.NoError(err)
-	defer cancelLoop()
 
 	// Wait for replication.
 	for idx, tgt := range tgts {

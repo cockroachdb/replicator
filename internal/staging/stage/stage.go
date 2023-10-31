@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
@@ -79,7 +80,7 @@ var _ types.Stager = (*stage)(nil)
 // newStore constructs a new mutation stage that will track pending
 // mutations to be applied to the given target table.
 func newStore(
-	ctx context.Context, db *types.StagingPool, stagingDB ident.Schema, target ident.Table,
+	ctx *stopper.Context, db *types.StagingPool, stagingDB ident.Schema, target ident.Table,
 ) (*stage, error) {
 	table := stagingTable(stagingDB, target)
 

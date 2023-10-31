@@ -29,13 +29,15 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(context.Context, *Config) (*FSLogical, func(), error) {
+func Start(*stopper.Context, *Config) (*FSLogical, func(), error) {
 	panic(wire.Build(
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.Struct(new(FSLogical), "*"),
 		ProvideFirestoreClient,
@@ -53,6 +55,7 @@ func Start(context.Context, *Config) (*FSLogical, func(), error) {
 // Build remaining testable components from a common fixture.
 func startLoopsFromFixture(*all.Fixture, *Config) ([]*logical.Loop, func(), error) {
 	panic(wire.Build(
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*base.Fixture), "Context"),
 		wire.FieldsOf(new(*all.Fixture),

@@ -39,6 +39,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/cmd/version"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/util/logfmt"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	joonix "github.com/joonix/log"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -46,6 +47,7 @@ import (
 )
 
 func main() {
+	var gracePeriod time.Duration
 	var logFormat, logDestination string
 	var verbosity int
 	root := &cobra.Command{
@@ -96,6 +98,7 @@ func main() {
 		},
 	}
 	f := root.PersistentFlags()
+	f.DurationVar(&gracePeriod, "gracePeriod", 30*time.Second, "allow background processes to exit")
 	f.StringVar(&logFormat, "logFormat", "text", "choose log output format [ fluent, text ]")
 	f.StringVar(&logDestination, "logDestination", "", "write logs to a file, instead of stdout")
 	f.CountVarP(&verbosity, "verbose", "v", "increase logging verbosity to debug; repeat for trace")
@@ -114,10 +117,28 @@ func main() {
 		version.Command(),
 	)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	log.DeferExitHandler(cancel)
+	stop := stopper.WithContext(context.Background())
+	// Stop cleanly on interrupt.
+	stop.Go(func() error {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer cancel()
+		select {
+		case <-ctx.Done():
+			log.Info("Interrupted")
+			stop.Stop(gracePeriod)
+		case <-stop.Stopping():
+			// Nothing to do.
+		}
+		return nil
+	})
+	// Allow log.Exit() or log.Fatal() to trigger shutdown.
+	log.DeferExitHandler(func() {
+		stop.Stop(gracePeriod)
+		<-stop.Done()
+	})
 
-	if err := root.ExecuteContext(ctx); err != nil {
+	// Commands can unwrap the stopper as needed.
+	if err := root.ExecuteContext(stop); err != nil {
 		log.WithError(err).Error("exited")
 		log.Exit(1)
 	}

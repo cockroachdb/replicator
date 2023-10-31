@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -103,8 +104,8 @@ func ProvideDialect(
 // ProvideLoop is called by Wire to construct the sole logical loop used
 // in the pglogical mode.
 func ProvideLoop(
-	cfg *Config, dialect logical.Dialect, loops *logical.Factory,
-) (*logical.Loop, func(), error) {
+	ctx *stopper.Context, cfg *Config, dialect logical.Dialect, loops *logical.Factory,
+) (*logical.Loop, error) {
 	cfg.Dialect = dialect
-	return loops.Start(&cfg.LoopConfig)
+	return loops.Start(ctx, &cfg.LoopConfig)
 }

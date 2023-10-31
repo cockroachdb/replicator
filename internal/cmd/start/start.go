@@ -20,6 +20,7 @@ package start
 import (
 	"github.com/cockroachdb/cdc-sink/internal/source/server"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/spf13/cobra"
 )
 
@@ -30,7 +31,8 @@ func Command() *cobra.Command {
 		Bind:  cfg.Bind,
 		Short: "start the server",
 		Start: func(cmd *cobra.Command) (any, func(), error) {
-			return server.NewServer(cmd.Context(), &cfg)
+			// main.go gives us a stopper, just unwrap it.
+			return server.NewServer(stopper.From(cmd.Context()), &cfg)
 		},
 		Use: "start",
 	})
