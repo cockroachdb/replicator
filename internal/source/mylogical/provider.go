@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/google/wire"
 )
@@ -64,8 +65,8 @@ func ProvideDialect(config *Config, _ *script.Loader) (logical.Dialect, error) {
 // ProvideLoop is called by Wire to construct the sole logical loop used
 // in the mylogical mode.
 func ProvideLoop(
-	cfg *Config, dialect logical.Dialect, loops *logical.Factory,
-) (*logical.Loop, func(), error) {
+	ctx *stopper.Context, cfg *Config, dialect logical.Dialect, loops *logical.Factory,
+) (*logical.Loop, error) {
 	cfg.Dialect = dialect
-	return loops.Start(&cfg.LoopConfig)
+	return loops.Start(ctx, &cfg.LoopConfig)
 }

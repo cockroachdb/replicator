@@ -14,10 +14,7 @@ import (
 
 // NewFixture constructs a self-contained test fixture.
 func NewFixture() (*Fixture, func(), error) {
-	context, cleanup, err := ProvideContext()
-	if err != nil {
-		return nil, nil, err
-	}
+	context, cleanup := ProvideContext()
 	diagnostics, cleanup2 := diag.New(context)
 	sourcePool, cleanup3, err := ProvideSourcePool(context, diagnostics)
 	if err != nil {

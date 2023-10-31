@@ -176,7 +176,7 @@ func (l *loop) run() {
 	defer log.Debugf("replication loop %q shut down", l.loopConfig.LoopName)
 
 	for {
-		err := l.runOnce(l.running)
+		err := l.runOnce()
 
 		// Otherwise, log any error, and sleep for a bit.
 		if err != nil {
@@ -199,13 +199,14 @@ func (l *loop) run() {
 // runOnce is called by run. If the Dialect implements a leasing
 // behavior, a lease will be obtained before any further action is
 // taken.
-func (l *loop) runOnce(ctx context.Context) error {
+func (l *loop) runOnce() error {
+	var stop *stopper.Context
 	if lessor, ok := l.loopConfig.Dialect.(Lessor); ok {
 		// Loop until we can acquire a lease.
 		var lease types.Lease
 		for {
 			var err error
-			lease, err = lessor.Acquire(ctx)
+			lease, err = lessor.Acquire(l.running)
 			// Lease acquired.
 			if err == nil {
 				log.Tracef("lease %s acquired", l.loopConfig.LoopName)
@@ -223,8 +224,8 @@ func (l *loop) runOnce(ctx context.Context) error {
 				select {
 				case <-time.After(duration):
 					continue
-				case <-ctx.Done():
-					return ctx.Err()
+				case <-l.running.Stopping():
+					return nil
 				}
 			}
 			// General err, defer to the loop's retry delay.
@@ -232,11 +233,13 @@ func (l *loop) runOnce(ctx context.Context) error {
 		}
 		defer lease.Release()
 		// Ensure that all work is bound to the lifetime of the lease.
-		ctx = lease.Context()
+		stop = stopper.WithContext(lease.Context())
+	} else {
+		stop = l.running
 	}
 
 	// Ensure our in-memory consistent point matches the database.
-	point, err := l.loadConsistentPoint(ctx)
+	point, err := l.loadConsistentPoint(stop)
 	if err != nil {
 		return err
 	}
@@ -245,7 +248,7 @@ func (l *loop) runOnce(ctx context.Context) error {
 	// Determine how to perform the filling.
 	source, events, isBackfilling := l.chooseFillStrategy()
 
-	return l.runOnceUsing(stopper.From(ctx), source, events, isBackfilling)
+	return l.runOnceUsing(stop, source, events, isBackfilling)
 }
 
 // runOnceUsing is called from runOnce or doBackfill.
@@ -429,13 +432,14 @@ func (l *loop) doBackfill(ctx context.Context, loopName string, backfiller Backf
 	cfg.Dialect = backfiller
 	cfg.LoopName = loopName
 
-	// The incoming context should already be a stopper.
+	// Create a (most likely nested) stopper.
 	stop := stopper.WithContext(ctx)
-	filler, cleanup, err := l.factory.newLoop(stop, cfg)
+	filler, err := l.factory.newLoop(stop, cfg)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	// We don't need any grace time since the sub-loop has exited.
+	defer func() { stop.Stop(0) }()
 
 	return filler.loop.runOnceUsing(
 		stop,

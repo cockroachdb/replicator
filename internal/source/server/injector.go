@@ -28,10 +28,11 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
-func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
+func NewServer(ctx *stopper.Context, config *Config) (*Server, func(), error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,
@@ -40,6 +41,7 @@ func NewServer(ctx context.Context, config *Config) (*Server, func(), error) {
 		script.Set,
 		staging.Set,
 		target.Set,
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*Config), "CDC"),
 	))

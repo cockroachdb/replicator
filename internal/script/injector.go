@@ -27,24 +27,29 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
 // Evaluate the loaded script.
 func Evaluate(
-	ctx context.Context,
+	ctx *stopper.Context,
 	loader *Loader,
 	configs *applycfg.Configs,
 	diags *diag.Diagnostics,
 	targetSchema TargetSchema,
 	watchers types.Watchers,
 ) (*UserScript, error) {
-	panic(wire.Build(ProvideUserScript))
+	panic(wire.Build(
+		ProvideUserScript,
+		wire.Bind(new(context.Context), new(*stopper.Context)),
+	))
 }
 
 func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, error) {
 	panic(wire.Build(
 		Set,
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.FieldsOf(new(*all.Fixture), "Diagnostics", "Fixture", "Configs", "Watchers"),
 		wire.FieldsOf(new(*base.Fixture), "Context"),
 	))

@@ -27,13 +27,15 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(ctx context.Context, config *Config) (*PGLogical, func(), error) {
+func Start(ctx *stopper.Context, config *Config) (*PGLogical, func(), error) {
 	panic(wire.Build(
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.Struct(new(PGLogical), "*"),
 		Set,

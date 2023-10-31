@@ -20,6 +20,8 @@
 package cdc
 
 import (
+	"context"
+
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
@@ -28,6 +30,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
@@ -50,6 +53,7 @@ func newTestFixture(*all.Fixture, *Config) (*testFixture, func(), error) {
 		target.Set,
 		trust.New, // Is valid to use as a provider.
 		wire.Struct(new(testFixture), "*"),
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 	))
 }

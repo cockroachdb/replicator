@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -34,6 +35,7 @@ import (
 type factory struct {
 	db        *types.StagingPool
 	stagingDB ident.Schema
+	stop      *stopper.Context
 
 	mu struct {
 		sync.RWMutex
@@ -44,14 +46,14 @@ type factory struct {
 var _ types.Stagers = (*factory)(nil)
 
 // Get returns a memoized instance of a stage for the given table.
-func (f *factory) Get(ctx context.Context, target ident.Table) (types.Stager, error) {
+func (f *factory) Get(_ context.Context, target ident.Table) (types.Stager, error) {
 	if ret := f.getUnlocked(target); ret != nil {
 		return ret, nil
 	}
-	return f.createUnlocked(ctx, target)
+	return f.createUnlocked(target)
 }
 
-func (f *factory) createUnlocked(ctx context.Context, table ident.Table) (*stage, error) {
+func (f *factory) createUnlocked(table ident.Table) (*stage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -59,7 +61,7 @@ func (f *factory) createUnlocked(ctx context.Context, table ident.Table) (*stage
 		return ret, nil
 	}
 
-	ret, err := newStore(ctx, f.db, f.stagingDB, table)
+	ret, err := newStore(f.stop, f.db, f.stagingDB, table)
 	if err == nil {
 		f.mu.instances.Put(table, ret)
 	}

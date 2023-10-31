@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/golang/groupcache/lru"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
@@ -51,7 +52,7 @@ var enableWipe bool
 // ProvideLoops is called by wire to construct a logical-replication
 // loop for each configured collection/table pair.
 func ProvideLoops(
-	ctx context.Context,
+	ctx *stopper.Context,
 	cfg *Config,
 	fs *firestore.Client,
 	loops *logical.Factory,
@@ -59,21 +60,14 @@ func ProvideLoops(
 	pool *types.StagingPool,
 	st *Tombstones,
 	userscript *script.UserScript,
-) ([]*logical.Loop, func(), error) {
+) ([]*logical.Loop, error) {
 	if err := cfg.Preflight(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	idx := 0
 	ret := make([]*logical.Loop, userscript.Sources.Len())
 	recurseFilter := &ident.Map[struct{}]{}
-
-	cancels := make([]func(), userscript.Sources.Len())
-	cancel := func() {
-		for _, fn := range cancels {
-			fn()
-		}
-	}
 
 	err := userscript.Sources.Range(func(sourceName ident.Ident, source *script.Source) error {
 		var isGroup bool
@@ -112,7 +106,7 @@ func ProvideLoops(
 		loopCfg.LoopName = sourceName.Raw()
 
 		var err error
-		ret[idx], cancels[idx], err = loops.Start(loopCfg)
+		ret[idx], err = loops.Start(ctx, loopCfg)
 		if err != nil {
 			return err
 		}
@@ -121,11 +115,10 @@ func ProvideLoops(
 		return nil
 	})
 	if err != nil {
-		cancel()
-		return nil, nil, err
+		return nil, err
 	}
 
-	return ret, cancel, nil
+	return ret, nil
 }
 
 // ProvideFirestoreClient is called by wire. If a local emulator is in
@@ -174,12 +167,16 @@ func ProvideScriptTarget(cfg *Config) script.TargetSchema {
 // ProvideTombstones is called by wire to construct a helper that
 // manages document tombstones.
 func ProvideTombstones(
-	cfg *Config, fs *firestore.Client, loops *logical.Factory, userscript *script.UserScript,
-) (*Tombstones, func(), error) {
+	ctx *stopper.Context,
+	cfg *Config,
+	fs *firestore.Client,
+	loops *logical.Factory,
+	userscript *script.UserScript,
+) (*Tombstones, error) {
 	ret := &Tombstones{cfg: cfg}
 	if cfg.TombstoneCollection == "" {
 		log.Trace("no tombstone collection was configured")
-		return ret, nil, nil
+		return ret, nil
 	}
 
 	ret.coll = fs.Collection(cfg.TombstoneCollection)
@@ -188,7 +185,7 @@ func ProvideTombstones(
 		ret.deletesTo.Put(source, dest.DeletesTo)
 		return nil
 	}); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	ret.source = ident.New(cfg.TombstoneCollection)
 	ret.mu.cache = &lru.Cache{MaxEntries: 1_000_000}
@@ -196,11 +193,11 @@ func ProvideTombstones(
 	loopConfig := cfg.LoopConfig.Copy()
 	loopConfig.Dialect = ret
 	loopConfig.LoopName = cfg.TombstoneCollection
-	_, cancel, err := loops.Start(loopConfig)
+	_, err := loops.Start(ctx, loopConfig)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return ret, cancel, nil
+	return ret, nil
 }
 
 // Wipe any leftover documents from testing.
