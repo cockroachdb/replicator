@@ -19,10 +19,14 @@
 
 package all
 
-import "github.com/google/wire"
+import (
+	"testing"
+
+	"github.com/google/wire"
+)
 
 // NewFixture constructs a self-contained test fixture for all services
 // in the target sub-packages.
-func NewFixture() (*Fixture, func(), error) {
+func NewFixture(t testing.TB) (*Fixture, error) {
 	panic(wire.Build(TestSet))
 }

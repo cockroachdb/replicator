@@ -32,8 +32,8 @@ type fanEvents struct {
 var _ Events = (*fanEvents)(nil)
 
 // Backfill implements Events. It delegates to the enclosing loop.
-func (f *fanEvents) Backfill(ctx context.Context, source string, backfiller Backfiller) error {
-	return f.loop.doBackfill(ctx, source, backfiller)
+func (f *fanEvents) Backfill(_ context.Context, source string, backfiller Backfiller) error {
+	return f.loop.doBackfill(source, backfiller)
 }
 
 // GetConsistentPoint implements State. It delegates to the loop.

@@ -40,7 +40,7 @@ type testFixture struct {
 	Resolvers *Resolvers
 }
 
-func newTestFixture(*all.Fixture, *Config) (*testFixture, func(), error) {
+func newTestFixture(*all.Fixture, *Config) (*testFixture, error) {
 	panic(wire.Build(
 		Set,
 		wire.FieldsOf(new(*base.Fixture), "Context"),

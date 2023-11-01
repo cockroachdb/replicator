@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/reject"
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,8 +38,7 @@ func TestAuth(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	d, cancel := New(ctx)
-	defer cancel()
+	d := New(stopper.WithContext(ctx))
 
 	tcs := []struct {
 		auth   types.Authenticator
@@ -77,8 +77,7 @@ func TestDiagnostics(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	d, cancel := New(ctx)
-	defer cancel()
+	d := New(stopper.WithContext(ctx))
 
 	var didCall atomic.Bool
 	r.NoError(d.Register("foo", DiagnosticFn(func(context.Context) any {

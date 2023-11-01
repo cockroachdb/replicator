@@ -646,19 +646,9 @@ type FSLogical struct {
 
 var (
 	_ stdlogical.HasDiagnostics = (*FSLogical)(nil)
-	_ stdlogical.HasStoppable   = (*FSLogical)(nil)
 )
 
 // GetDiagnostics implements stdlogical.HasDiagnostics.
 func (l *FSLogical) GetDiagnostics() *diag.Diagnostics {
 	return l.Diagnostics
-}
-
-// GetStoppable implements stdlogical.HasStoppable.
-func (l *FSLogical) GetStoppable() types.Stoppable {
-	ret := make(types.Stoppables, len(l.Loops))
-	for idx, loop := range l.Loops {
-		ret[idx] = loop
-	}
-	return ret
 }

@@ -19,11 +19,11 @@
 package preflight
 
 import (
-	"context"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -42,7 +42,8 @@ func Command() *cobra.Command {
 			UnknownFlags: true,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
+			// main.go provides a stopper.
+			ctx := stopper.From(cmd.Context())
 			if len(target) == 0 && len(staging) == 0 {
 				return errors.New("no targetConn or stagingConn specified, no connections to test")
 			}
@@ -70,10 +71,10 @@ func Command() *cobra.Command {
 	return cmd
 }
 
-func testTargetConnection(ctx context.Context, connString string) error {
+func testTargetConnection(ctx *stopper.Context, connString string) error {
 	log.Infof("testing connecting to the target database: %s", connString)
 
-	pool, cancel, err := stdpool.OpenTarget(
+	pool, err := stdpool.OpenTarget(
 		ctx,
 		connString,
 		stdpool.WithConnectionLifetime(5*time.Minute),
@@ -82,7 +83,6 @@ func testTargetConnection(ctx context.Context, connString string) error {
 	if err != nil {
 		return err
 	}
-	defer cancel()
 
 	log.Info("connected to the database")
 
@@ -127,10 +127,10 @@ func testTargetConnection(ctx context.Context, connString string) error {
 	return nil
 }
 
-func testStagingConnection(ctx context.Context, connString string) error {
+func testStagingConnection(ctx *stopper.Context, connString string) error {
 	log.Infof("connecting to the staging database: %s", connString)
 
-	pool, cancel, err := stdpool.OpenPgxAsStaging(
+	pool, err := stdpool.OpenPgxAsStaging(
 		ctx,
 		connString,
 		stdpool.WithConnectionLifetime(5*time.Minute),
@@ -139,7 +139,6 @@ func testStagingConnection(ctx context.Context, connString string) error {
 	if err != nil {
 		return err
 	}
-	defer cancel()
 
 	log.Info("connected to the database")
 

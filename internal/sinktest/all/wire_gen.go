@@ -16,67 +16,40 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"testing"
 )
 
 // Injectors from injector.go:
 
 // NewFixture constructs a self-contained test fixture for all services
 // in the target sub-packages.
-func NewFixture() (*Fixture, func(), error) {
-	context, cleanup := base.ProvideContext()
-	diagnostics, cleanup2 := diag.New(context)
-	sourcePool, cleanup3, err := base.ProvideSourcePool(context, diagnostics)
+func NewFixture(t testing.TB) (*Fixture, error) {
+	context := base.ProvideContext(t)
+	diagnostics := diag.New(context)
+	sourcePool, err := base.ProvideSourcePool(context, diagnostics)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	sourceSchema, cleanup4, err := base.ProvideSourceSchema(context, sourcePool)
+	sourceSchema, err := base.ProvideSourceSchema(context, sourcePool)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingPool, cleanup5, err := base.ProvideStagingPool(context)
+	stagingPool, err := base.ProvideStagingPool(context)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingSchema, cleanup6, err := base.ProvideStagingSchema(context, stagingPool)
+	stagingSchema, err := base.ProvideStagingSchema(context, stagingPool)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetPool, cleanup7, err := base.ProvideTargetPool(context, sourcePool, diagnostics)
+	targetPool, err := base.ProvideTargetPool(context, sourcePool, diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetStatements, cleanup8 := base.ProvideTargetStatements(targetPool)
-	targetSchema, cleanup9, err := base.ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
+	targetStatements := base.ProvideTargetStatements(context, targetPool)
+	targetSchema, err := base.ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	fixture := &base.Fixture{
 		Context:      context,
@@ -90,89 +63,30 @@ func NewFixture() (*Fixture, func(), error) {
 	}
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	config, err := ProvideDLQConfig()
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	watchers, cleanup10, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(config, targetPool, watchers)
-	appliers, cleanup11, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup11()
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	watcher, err := ProvideWatcher(context, targetSchema, watchers)
+	watcher, err := ProvideWatcher(targetSchema, watchers)
 	if err != nil {
-		cleanup11()
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	allFixture := &Fixture{
 		Fixture:        fixture,
@@ -187,17 +101,5 @@ func NewFixture() (*Fixture, func(), error) {
 		Watchers:       watchers,
 		Watcher:        watcher,
 	}
-	return allFixture, func() {
-		cleanup11()
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
+	return allFixture, nil
 }

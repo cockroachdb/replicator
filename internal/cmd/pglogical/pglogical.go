@@ -31,9 +31,8 @@ func Command() *cobra.Command {
 	return stdlogical.New(&stdlogical.Template{
 		Bind:  cfg.Bind,
 		Short: "start a pg logical replication feed",
-		Start: func(cmd *cobra.Command) (any, func(), error) {
-			// main.go provides a stopper.
-			return pglogical.Start(stopper.From(cmd.Context()), cfg)
+		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
+			return pglogical.Start(ctx, cfg)
 		},
 		Use: "pglogical",
 	})

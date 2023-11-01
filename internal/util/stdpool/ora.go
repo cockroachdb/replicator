@@ -17,7 +17,6 @@
 package stdpool
 
 import (
-	"context"
 	"database/sql"
 	"time"
 
@@ -32,64 +31,54 @@ import (
 // OpenOracleAsTarget opens a connection to an Oracle database endpoint and
 // return it as a [types.TargetPool].
 func OpenOracleAsTarget(
-	ctx context.Context, connectString string, options ...Option,
-) (*types.TargetPool, func(), error) {
+	ctx *stopper.Context, connectString string, options ...Option,
+) (*types.TargetPool, error) {
 	var tc TestControls
 	if err := attachOptions(ctx, &tc, options); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return returnOrStop(ctx, func(ctx *stopper.Context) (*types.TargetPool, error) {
-		connector := ora.NewConnector(connectString)
+	connector := ora.NewConnector(connectString)
 
-		if err := attachOptions(ctx, connector.(*ora.OracleConnector), options); err != nil {
-			return nil, err
-		}
+	if err := attachOptions(ctx, connector.(*ora.OracleConnector), options); err != nil {
+		return nil, err
+	}
 
-		ret := &types.TargetPool{
-			DB: sql.OpenDB(connector),
-			PoolInfo: types.PoolInfo{
-				ConnectionString: connectString,
-				Product:          types.ProductOracle,
-			},
-		}
+	ret := &types.TargetPool{
+		DB: sql.OpenDB(connector),
+		PoolInfo: types.PoolInfo{
+			ConnectionString: connectString,
+			Product:          types.ProductOracle,
+		},
+	}
+	ctx.Defer(func() { _ = ret.Close() })
 
-		ctx.Go(func() error {
-			<-ctx.Stopping()
-			if err := ret.Close(); err != nil {
-				log.WithError(errors.WithStack(err)).Warn("could not close database connection")
+ping:
+	if err := ret.Ping(); err != nil {
+		if tc.WaitForStartup && isOracleStartupError(err) {
+			log.WithError(err).Info("waiting for database to become ready")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Second):
+				goto ping
 			}
-			return nil
-		})
-
-	ping:
-		if err := ret.Ping(); err != nil {
-			if tc.WaitForStartup && isOracleStartupError(err) {
-				log.WithError(err).Info("waiting for database to become ready")
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(10 * time.Second):
-					goto ping
-				}
-			}
-			return nil, errors.Wrap(err, "could not ping the database")
 		}
+		return nil, errors.Wrap(err, "could not ping the database")
+	}
 
-		if err := ret.QueryRow("SELECT banner FROM V$VERSION").Scan(&ret.Version); err != nil {
-			return nil, errors.Wrap(err, "could not query version")
-		}
+	if err := ret.QueryRow("SELECT banner FROM V$VERSION").Scan(&ret.Version); err != nil {
+		return nil, errors.Wrap(err, "could not query version")
+	}
 
-		if err := attachOptions(ctx, ret.DB, options); err != nil {
-			return nil, err
-		}
+	if err := attachOptions(ctx, ret.DB, options); err != nil {
+		return nil, err
+	}
 
-		if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
-			return nil, err
-		}
-
-		return ret, nil
-	})
+	if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
 // These have been enumerated through trial and error.

@@ -30,9 +30,8 @@ func Command() *cobra.Command {
 	return stdlogical.New(&stdlogical.Template{
 		Bind:  cfg.Bind,
 		Short: "start the server",
-		Start: func(cmd *cobra.Command) (any, func(), error) {
-			// main.go gives us a stopper, just unwrap it.
-			return server.NewServer(stopper.From(cmd.Context()), &cfg)
+		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
+			return server.NewServer(ctx, &cfg)
 		},
 		Use: "start",
 	})

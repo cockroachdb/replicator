@@ -25,9 +25,8 @@ import (
 func TestAllSmoke(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cleanup, err := NewFixture()
+	fixture, err := NewFixture(t)
 	r.NoError(err)
-	defer cleanup()
 
 	r.NotEmpty(fixture.StagingPool.Version)
 	r.NotEmpty(fixture.TargetPool.Version)

@@ -97,7 +97,7 @@ func (d *dlqs) Get(ctx context.Context, target ident.Schema, name string) (types
 		return found, nil
 	}
 
-	watcher, err := d.watchers.Get(ctx, target)
+	watcher, err := d.watchers.Get(target)
 	if err != nil {
 		return nil, err
 	}
