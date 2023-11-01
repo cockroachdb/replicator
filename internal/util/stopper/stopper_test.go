@@ -19,6 +19,7 @@ package stopper
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -131,6 +132,38 @@ func TestChainStopper(t *testing.T) {
 	a.ErrorIs(parent.Err(), context.Canceled)
 	a.ErrorIs(context.Cause(parent), ErrStopped)
 	a.Nil(child.Wait())
+}
+
+func TestDefer(t *testing.T) {
+	a := assert.New(t)
+
+	var mu sync.Mutex
+	var calls []string
+	recordCall := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, s)
+	}
+
+	s := WithContext(context.Background())
+	s.Defer(func() { recordCall("fifo_a") })
+	s.Defer(func() { recordCall("fifo_b") })
+	s.Go(func() error {
+		recordCall("fifo_c")
+		s.Stop(time.Second)
+		return nil
+	})
+	a.Nil(s.Wait())
+	s.Defer(func() { recordCall("immediate_a") })
+	s.Defer(func() { recordCall("immediate_b") })
+
+	mu.Lock()
+	defer mu.Unlock()
+	a.Equal([]string{"fifo_c", "fifo_b", "fifo_a", "immediate_a", "immediate_b"}, calls)
+
+	a.PanicsWithError("cannot call Context.Defer() on a background context", func() {
+		Background().Defer(func() {})
+	})
 }
 
 func TestGracePeriod(t *testing.T) {

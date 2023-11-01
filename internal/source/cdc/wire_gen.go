@@ -36,100 +36,52 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	diagnostics, cleanup := diag.New(context)
-	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	diagnostics := diag.New(context)
+	targetPool, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
-	targetStatements, cleanup3, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
+	targetStatements, err := logical.ProvideTargetStatements(context, baseConfig, targetPool, diagnostics)
 	if err != nil {
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	configs := fixture.Configs
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
-	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	memo := fixture.Memo
-	stagingPool, cleanup6, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	checker := fixture.VersionChecker
 	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
-	immediate, cleanup7, err := ProvideImmediate(factory)
+	immediate, err := ProvideImmediate(context, factory)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	metaTable := ProvideMetaTable(config)
 	stagers := fixture.Stagers
 	resolvers, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	handler := &Handler{
@@ -147,13 +99,6 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, func(),
 		Resolvers: resolvers,
 	}
 	return cdcTestFixture, func() {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 	}, nil
 }
 

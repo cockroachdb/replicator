@@ -23,15 +23,16 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 // factory is a memoizing factory for watcher instances.
 type factory struct {
 	pool *types.TargetPool
+	stop *stopper.Context
 	mu   struct {
 		sync.RWMutex
-		cancels []func()
-		data    *ident.SchemaMap[*watcher]
+		data *ident.SchemaMap[*watcher]
 	}
 }
 
@@ -40,7 +41,7 @@ var (
 	_ types.Watchers  = (*factory)(nil)
 )
 
-// Diagnostics returns all known schema data.
+// Diagnostic returns all known schema data.
 func (f *factory) Diagnostic(_ context.Context) any {
 	ret := make(map[string]any)
 
@@ -56,25 +57,14 @@ func (f *factory) Diagnostic(_ context.Context) any {
 }
 
 // Get creates or returns a memoized watcher for the given database.
-func (f *factory) Get(ctx context.Context, db ident.Schema) (types.Watcher, error) {
+func (f *factory) Get(db ident.Schema) (types.Watcher, error) {
 	if ret := f.getUnlocked(db); ret != nil {
 		return ret, nil
 	}
-	return f.createUnlocked(ctx, db)
+	return f.createUnlocked(db)
 }
 
-// close destroys all watcher instances associated with the factory.
-func (f *factory) close() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, cancel := range f.mu.cancels {
-		cancel()
-	}
-	f.mu.cancels = nil
-	f.mu.data = &ident.SchemaMap[*watcher]{}
-}
-
-func (f *factory) createUnlocked(ctx context.Context, db ident.Schema) (*watcher, error) {
+func (f *factory) createUnlocked(db ident.Schema) (*watcher, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -82,12 +72,11 @@ func (f *factory) createUnlocked(ctx context.Context, db ident.Schema) (*watcher
 		return ret, nil
 	}
 
-	ret, cancel, err := newWatcher(ctx, f.pool, db)
+	ret, err := newWatcher(f.stop, f.pool, db)
 	if err != nil {
 		return nil, err
 	}
 
-	f.mu.cancels = append(f.mu.cancels, cancel)
 	f.mu.data.Put(db, ret)
 	return ret, nil
 }

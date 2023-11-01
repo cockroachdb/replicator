@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -42,7 +43,7 @@ var RefreshDelay = flag.Duration("schemaRefresh", time.Minute,
 // allowing callers to receive notifications of schema changes.
 type watcher struct {
 	// All goroutines used by Watch use this as a parent context.
-	background context.Context
+	background *stopper.Context
 	delay      time.Duration
 	schema     ident.Schema
 
@@ -58,13 +59,9 @@ var _ types.Watcher = (*watcher)(nil)
 // newWatcher constructs a new watcher to monitor the table schema in the
 // named database. The returned watcher will internally refresh
 // until the cancel callback is executed.
-func newWatcher(
-	ctx context.Context, tx *types.TargetPool, schema ident.Schema,
-) (_ *watcher, cancel func(), _ error) {
-	background, cancel := context.WithCancel(context.Background())
-
+func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema) (*watcher, error) {
 	w := &watcher{
-		background: background,
+		background: ctx,
 		delay:      *RefreshDelay,
 		schema:     schema,
 	}
@@ -73,27 +70,26 @@ func newWatcher(
 	// Initial data load to sanity-check and make ready.
 	data, err := w.getTables(ctx, tx)
 	if err != nil {
-		cancel()
-		return nil, nil, err
+		return nil, err
 	}
 	w.mu.data = data
 
 	if w.delay > 0 {
-		go func() {
+		ctx.Go(func() error {
 			for {
 				select {
-				case <-background.Done():
-					return
+				case <-ctx.Stopping():
+					return nil
 				case <-time.After(w.delay):
-				}
-				if err := w.Refresh(background, tx); err != nil {
-					log.WithError(err).WithField("target", schema).Warn("schema refresh failed")
+					if err := w.Refresh(ctx, tx); err != nil {
+						log.WithError(err).WithField("target", schema).Warn("schema refresh failed")
+					}
 				}
 			}
-		}()
+		})
 	}
 
-	return w, cancel, nil
+	return w, nil
 }
 
 // Get implements types.Watcher.
@@ -164,17 +160,17 @@ func (w *watcher) String() string {
 // Watch will send updated column data for the given table until the
 // watch is canceled. The requested table must already be known to the
 // watcher.
-func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel func(), _ error) {
+func (w *watcher) Watch(table ident.Table) (<-chan []types.ColData, func(), error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if _, ok := w.mu.data.Columns.Get(table); !ok {
 		return nil, nil, errors.Errorf("unknown table %s", table)
 	}
 
-	ctx, cancel := context.WithCancel(w.background)
+	ctx := stopper.WithContext(w.background)
 	ch := make(chan []types.ColData, 1)
 
-	go func() {
+	ctx.Go(func() error {
 		defer close(ch)
 
 		var last []types.ColData
@@ -186,14 +182,14 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 
 			// Respond to context cancellation or dropping the table.
 			if !ok || ctx.Err() != nil {
-				return
+				return nil
 			}
 
 			// We're read-locked, so this isn't hugely critical.
 			if !colSliceEqual(last, next) {
 				select {
-				case <-ctx.Done():
-					return
+				case <-ctx.Stopping():
+					return nil
 				case ch <- next:
 					last = next
 				default:
@@ -202,14 +198,14 @@ func (w *watcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel fun
 			}
 
 			select {
-			case <-ctx.Done():
-				return
+			case <-ctx.Stopping():
+				return nil
 			case <-updated:
 				continue
 			}
 		}
-	}()
-	return ch, cancel, nil
+	})
+	return ch, func() { ctx.Stop(100 * time.Millisecond) }, nil
 }
 
 const (

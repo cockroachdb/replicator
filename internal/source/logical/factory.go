@@ -17,7 +17,6 @@
 package logical
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -39,13 +38,14 @@ type Factory struct {
 	memo         types.Memo
 	scriptLoader *script.Loader
 	stagingPool  *types.StagingPool
+	stop         *stopper.Context
 	targetPool   *types.TargetPool
 	watchers     types.Watchers
 }
 
 // Immediate supports use cases where it is desirable to write directly
 // into the target schema.
-func (f *Factory) Immediate(ctx context.Context, target ident.Schema) (Batcher, func(), error) {
+func (f *Factory) Immediate(target ident.Schema) (Batcher, error) {
 	// Construct a fake loop and then steal the parts of the
 	// implementation that are useful. We want to build the Batcher that
 	// is returned by this method using the same code-path that we would
@@ -60,28 +60,23 @@ func (f *Factory) Immediate(ctx context.Context, target ident.Schema) (Batcher, 
 	// no-ops and wait to exit. The implementation of Process would make
 	// the Events / Batcher available externally. This has the downside
 	// of actually needing to start the loop goroutines.
-	stop := stopper.WithContext(ctx)
-	fake, err := f.newLoop(stop, &LoopConfig{
+	fake, err := f.newLoop(&LoopConfig{
 		Dialect:      &fakeDialect{},
 		LoopName:     fmt.Sprintf("immediate-%s", target.Raw()),
 		TargetSchema: target,
 	})
 	if err != nil {
-		return nil, nil, err
-	}
-	cancel := func() {
-		stop.Stop(f.baseConfig.ApplyTimeout)
-		<-stop.Done()
+		return nil, err
 	}
 
 	if f.baseConfig.Immediate {
-		return fake.loop.events.fan, cancel, nil
+		return fake.loop.events.fan, nil
 	}
-	return fake.loop.events.serial, cancel, nil
+	return fake.loop.events.serial, nil
 }
 
 // Start constructs a new replication Loop.
-func (f *Factory) Start(ctx *stopper.Context, config *LoopConfig) (*Loop, error) {
+func (f *Factory) Start(config *LoopConfig) (*Loop, error) {
 	var err error
 
 	// Ensure the configuration is set up and validated.
@@ -91,12 +86,11 @@ func (f *Factory) Start(ctx *stopper.Context, config *LoopConfig) (*Loop, error)
 	}
 
 	// Construct the new loop and start it.
-	ctx = stopper.WithContext(ctx)
-	loop, err := f.newLoop(ctx, config)
+	loop, err := f.newLoop(config)
 	if err != nil {
 		return nil, err
 	}
-	ctx.Go(func() error {
+	f.stop.Go(func() error {
 		loop.loop.run()
 		return nil
 	})
@@ -121,8 +115,8 @@ func (f *Factory) expandConfig(config *LoopConfig) (*LoopConfig, error) {
 }
 
 // newLoop constructs a loop, but does not start it.
-func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, error) {
-	watcher, err := f.watchers.Get(ctx, config.TargetSchema)
+func (f *Factory) newLoop(config *LoopConfig) (*Loop, error) {
+	watcher, err := f.watchers.Get(config.TargetSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -131,9 +125,9 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, erro
 	loop := &loop{
 		factory:    f,
 		loopConfig: config,
-		running:    ctx,
+		running:    f.stop,
 	}
-	initialPoint, err := loop.loadConsistentPoint(ctx)
+	initialPoint, err := loop.loadConsistentPoint(f.stop)
 	if err != nil {
 		return nil, err
 	}
@@ -172,14 +166,14 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, erro
 		return nil, err
 	}
 	// Unregister the loop on shutdown.
-	ctx.Go(func() error {
-		<-ctx.Stopping()
+	f.stop.Go(func() error {
+		<-f.stop.Stopping()
 		f.diags.Unregister(config.LoopName)
 		return nil
 	})
 
 	userscript, err := script.Evaluate(
-		ctx,
+		f.stop,
 		f.scriptLoader,
 		f.applyConfigs,
 		loopDiags,

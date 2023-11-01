@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/httpauth"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -64,7 +65,7 @@ type Diagnostics struct {
 
 // New constructs a Diagnostics. The instance will write itself to the
 // log stream if the process receives a SIGUSR1.
-func New(ctx context.Context) (*Diagnostics, func()) {
+func New(ctx *stopper.Context) *Diagnostics {
 	ret := &Diagnostics{}
 	ret.mu.impls = map[string]Diagnostic{
 		"build": DiagnosticFn(func(context.Context) any {
@@ -83,10 +84,9 @@ func New(ctx context.Context) (*Diagnostics, func()) {
 		}),
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
 	logOnSignal(ctx, ret)
 
-	return ret, cancel
+	return ret
 }
 
 // Handler returns an [http.Handler] to provide a summary report.

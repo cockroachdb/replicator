@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/msort"
 	"github.com/cockroachdb/cdc-sink/internal/util/pjson"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -73,23 +74,18 @@ const (
 
 // newApply constructs an apply by inspecting the target table.
 func (f *factory) newApply(
-	product types.Product, inTarget ident.Table,
-) (_ *apply, cancel func(), _ error) {
-	// Start a background goroutine to refresh the templates.
-	ctx, cancel := context.WithCancel(context.Background())
-
-	w, err := f.watchers.Get(ctx, inTarget.Schema())
+	ctx *stopper.Context, product types.Product, inTarget ident.Table,
+) (*apply, error) {
+	w, err := f.watchers.Get(inTarget.Schema())
 	if err != nil {
-		cancel()
-		return nil, nil, err
+		return nil, err
 	}
 	// Use the target database's name for the table. We perform a lookup
 	// against the column data map to retrieve the original table name
 	// key under which the data was inserted.
 	target, ok := w.Get().OriginalName(inTarget)
 	if !ok {
-		cancel()
-		return nil, nil, errors.Errorf("unknown table %s", inTarget)
+		return nil, errors.Errorf("unknown table %s", inTarget)
 	}
 
 	labelValues := metrics.TableValues(target)
@@ -107,14 +103,11 @@ func (f *factory) newApply(
 		upserts:   applyUpserts.WithLabelValues(labelValues...),
 	}
 
-	errs := make(chan error, 1)
-	go func(ctx context.Context, errs chan<- error) {
-		defer cancel()
-
+	errs := make(chan error)
+	ctx.Go(func() error {
 		schemaCh, cancelSchema, err := w.Watch(target)
 		if err != nil {
-			errs <- err
-			return
+			return err
 		}
 		defer cancelSchema()
 
@@ -127,16 +120,15 @@ func (f *factory) newApply(
 			case types.ProductPostgreSQL:
 			default:
 				// Work items in https://github.com/cockroachdb/cdc-sink/issues/487
-				errs <- errors.Errorf("merge operation not implemented for %s", a.product)
-				return
+				return errors.Errorf("merge operation not implemented for %s", a.product)
 			}
 		}
 
 		var schemaData []types.ColData
 		for {
 			select {
-			case <-ctx.Done():
-				return
+			case <-ctx.Stopping():
+				return nil
 			case <-configChanged:
 				configData, configChanged = configHandle.Get()
 			case schemaData = <-schemaCh:
@@ -152,20 +144,17 @@ func (f *factory) newApply(
 					errs <- err
 					close(errs)
 					errs = nil
-					if err != nil {
-						return
-					}
 				}
 			}
 		}
-	}(ctx, errs)
+	})
 
 	// Wait for the first loop of the refresh goroutine above.
 	if err := <-errs; err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return a, cancel, nil
+	return a, nil
 }
 
 // Apply applies the mutations to the target table.

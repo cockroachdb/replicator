@@ -38,15 +38,14 @@ func TestWatch(t *testing.T) {
 	*schemawatch.RefreshDelay = delay
 	defer func() { *schemawatch.RefreshDelay = time.Minute }()
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 	dbName := fixture.TargetSchema.Schema()
 	w := fixture.Watcher
 
-	w2, err := fixture.Watchers.Get(ctx, sinktest.JumbleSchema(fixture.TargetSchema.Schema()))
+	w2, err := fixture.Watchers.Get(sinktest.JumbleSchema(fixture.TargetSchema.Schema()))
 	r.NoError(err)
 	r.Same(w, w2)
 

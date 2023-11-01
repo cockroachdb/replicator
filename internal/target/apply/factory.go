@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 
@@ -33,10 +34,10 @@ type factory struct {
 	configs  *applycfg.Configs
 	dlqs     types.DLQs
 	product  types.Product
+	stop     *stopper.Context
 	watchers types.Watchers
 	mu       struct {
 		sync.RWMutex
-		cleanup   []func()
 		instances *ident.TableMap[*apply]
 	}
 }
@@ -85,9 +86,8 @@ func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) 
 	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
-	ret, cancel, err := f.newApply(product, table)
+	ret, err := f.newApply(f.stop, product, table)
 	if err == nil {
-		f.mu.cleanup = append(f.mu.cleanup, cancel)
 		f.mu.instances.Put(table, ret)
 	}
 	return ret, err

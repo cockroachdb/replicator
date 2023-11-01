@@ -35,9 +35,8 @@ import (
 func TestLeases(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 

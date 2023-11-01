@@ -30,7 +30,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -126,11 +125,10 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	dbName := fixture.TargetSchema.Schema()
@@ -191,14 +189,12 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 		cfg.BackfillWindow = 0
 	}
 
-	factory, cancelFactory, err := logical.NewFactoryForTests(ctx, cfg)
+	factory, err := logical.NewFactoryForTests(ctx, cfg)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancelFactory()
 
-	loopStopper := stopper.WithContext(fixture.Context)
-	loop, err := factory.Start(loopStopper, &logical.LoopConfig{
+	loop, err := factory.Start(&logical.LoopConfig{
 		Dialect:      gen,
 		LoopName:     "generator",
 		TargetSchema: dbName,
@@ -244,7 +240,7 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 	}
 
 	// Wait for the loop to shut down, or a timeout.
-	loopStopper.Stop(100 * time.Millisecond)
+	ctx.Stop(100 * time.Millisecond)
 	gen.emit(0) // Kick the simplistic ReadInto loop so that it exits.
 	select {
 	case <-loop.Stopped():
@@ -288,9 +284,8 @@ func TestUserScript(t *testing.T) {
 	r := require.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 	dbName := fixture.TargetSchema.Schema()
@@ -349,11 +344,10 @@ api.configureTable("t_2", {
 	const numEmits = 100
 	gen.emit(numEmits)
 
-	factory, cancelFactory, err := logical.NewFactoryForTests(ctx, cfg)
+	factory, err := logical.NewFactoryForTests(ctx, cfg)
 	r.NoError(err)
-	defer cancelFactory()
 
-	_, err = factory.Start(fixture.Context, &logical.LoopConfig{
+	_, err = factory.Start(&logical.LoopConfig{
 		Dialect:      gen,
 		LoopName:     "generator",
 		TargetSchema: dbName,
@@ -417,9 +411,8 @@ func TestDeletesWithNoDispatch(t *testing.T) {
 	r := require.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 	targetSchema := fixture.TargetSchema.Schema()
@@ -449,13 +442,11 @@ api.configureTable("tgt", {
 });
 `)}}}}
 
-	factory, cancelFactory, err := logical.NewFactoryForTests(ctx, cfg)
+	factory, err := logical.NewFactoryForTests(ctx, cfg)
 	r.NoError(err)
-	defer cancelFactory()
 
-	batcher, cancel, err := factory.Immediate(ctx, targetSchema)
+	batcher, err := factory.Immediate(targetSchema)
 	r.NoError(err)
-	defer cancel()
 
 	batch, err := batcher.OnBegin(ctx)
 	r.NoError(err)

@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
@@ -140,8 +141,9 @@ var caseTimout = flag.Duration(
 
 // ProvideContext returns an execution context that is associated with a
 // singleton connection to a CockroachDB cluster.
-func ProvideContext() (*stopper.Context, func()) {
+func ProvideContext(t testing.TB) *stopper.Context {
 	ctx := stopper.WithContext(context.Background())
+	t.Cleanup(func() { ctx.Stop(10 * time.Millisecond) })
 	ctx.Go(func() error {
 		select {
 		case <-ctx.Stopping():
@@ -152,45 +154,36 @@ func ProvideContext() (*stopper.Context, func()) {
 		}
 		return nil
 	})
-	return ctx, func() { ctx.Stop(100 * time.Millisecond) }
+	return ctx
 }
 
 // ProvideSourcePool connects to the source database. If the source is a
 // CockroachDB cluster, this function will also configure the rangefeed
 // and license cluster settings if they have not been previously
 // configured.
-func ProvideSourcePool(
-	ctx context.Context, diags *diag.Diagnostics,
-) (*types.SourcePool, func(), error) {
+func ProvideSourcePool(ctx *stopper.Context, diags *diag.Diagnostics) (*types.SourcePool, error) {
 	tgt := *sourceConn
 	log.Infof("source connect string: %s", tgt)
-	ret, cancel, err := stdpool.OpenTarget(ctx, tgt,
+	ret, err := stdpool.OpenTarget(ctx, tgt,
 		stdpool.WithDiagnostics(diags, "source"),
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if ret.Product != types.ProductCockroachDB {
-		return (*types.SourcePool)(ret), cancel, err
+		return (*types.SourcePool)(ret), err
 	}
-
-	success := false
-	defer func() {
-		if !success {
-			cancel()
-		}
-	}()
 
 	// Set the cluster settings once, if we need to.
 	var enabled bool
 	if err := retry.Retry(ctx, func(ctx context.Context) error {
 		return ret.QueryRowContext(ctx, "SHOW CLUSTER SETTING kv.rangefeed.enabled").Scan(&enabled)
 	}); err != nil {
-		return nil, nil, errors.Wrap(err, "could not check cluster setting")
+		return nil, errors.Wrap(err, "could not check cluster setting")
 	}
 	if !enabled {
 		if lic, ok := os.LookupEnv("COCKROACH_DEV_LICENSE"); ok {
@@ -198,90 +191,99 @@ func ProvideSourcePool(
 				"SET CLUSTER SETTING cluster.organization = $1",
 				"Cockroach Labs - Production Testing",
 			); err != nil {
-				return nil, nil, errors.Wrap(err, "could not set cluster.organization")
+				return nil, errors.Wrap(err, "could not set cluster.organization")
 			}
 			if err := retry.Execute(ctx, ret,
 				"SET CLUSTER SETTING enterprise.license = $1", lic,
 			); err != nil {
-				return nil, nil, errors.Wrap(err, "could not set enterprise.license")
+				return nil, errors.Wrap(err, "could not set enterprise.license")
 			}
 		}
 
 		if err := retry.Execute(ctx, ret,
 			"SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
-			return nil, nil, errors.Wrap(err, "could not enable rangefeeds")
+			return nil, errors.Wrap(err, "could not enable rangefeeds")
 		}
 	}
 
-	success = true
-	return (*types.SourcePool)(ret), cancel, nil
+	return (*types.SourcePool)(ret), nil
 }
 
 // ProvideStagingSchema create a globally-unique container for tables in the
 // staging database.
 func ProvideStagingSchema(
-	ctx context.Context, pool *types.StagingPool,
-) (ident.StagingSchema, func(), error) {
+	ctx *stopper.Context, pool *types.StagingPool,
+) (ident.StagingSchema, error) {
 	ret, cancel, err := provideSchema(ctx, pool, "cdc")
-	return ident.StagingSchema(ret), cancel, err
+	ctx.Defer(cancel)
+	return ident.StagingSchema(ret), err
 }
 
 // ProvideStagingPool opens a connection to the CockroachDB staging
 // cluster under test.
-func ProvideStagingPool(ctx context.Context) (*types.StagingPool, func(), error) {
+func ProvideStagingPool(ctx *stopper.Context) (*types.StagingPool, error) {
 	tgt := *stagingConn
 	log.Infof("staging connect string: %s", tgt)
-	return stdpool.OpenPgxAsStaging(ctx, tgt,
+	pool, err := stdpool.OpenPgxAsStaging(ctx, tgt,
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
 	)
+	if err != nil {
+		return nil, err
+	}
+	return pool, nil
 }
 
 // ProvideTargetPool connects to the target database (which is most
 // often the same as the source database).
 func ProvideTargetPool(
-	ctx context.Context, source *types.SourcePool, diags *diag.Diagnostics,
-) (*types.TargetPool, func(), error) {
+	ctx *stopper.Context, source *types.SourcePool, diags *diag.Diagnostics,
+) (*types.TargetPool, error) {
 	tgt := *targetString
 	if tgt == source.ConnectionString {
 		log.Info("reusing SourcePool as TargetPool")
-		return (*types.TargetPool)(source), func() {}, nil
+		return (*types.TargetPool)(source), nil
 	}
 	log.Infof("target connect string: %s", tgt)
-	return stdpool.OpenTarget(ctx, *targetString,
+	pool, err := stdpool.OpenTarget(ctx, *targetString,
 		stdpool.WithDiagnostics(diags, "target"),
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
 	)
+	if err != nil {
+		return nil, err
+	}
+	return pool, nil
 }
 
 // ProvideSourceSchema create a globally-unique container for tables in
 // the source database.
 func ProvideSourceSchema(
-	ctx context.Context, pool *types.SourcePool,
-) (sinktest.SourceSchema, func(), error) {
+	ctx *stopper.Context, pool *types.SourcePool,
+) (sinktest.SourceSchema, error) {
 	sch, cancel, err := provideSchema(ctx, pool, "src")
 	log.Infof("source schema: %s", sch)
-	return sinktest.SourceSchema(sch), cancel, err
+	ctx.Defer(cancel)
+	return sinktest.SourceSchema(sch), err
 }
 
 // ProvideTargetSchema create a globally-unique container for tables in
 // the target database.
 func ProvideTargetSchema(
-	ctx context.Context,
+	ctx *stopper.Context,
 	diags *diag.Diagnostics,
 	pool *types.TargetPool,
 	stmts *types.TargetStatements,
-) (sinktest.TargetSchema, func(), error) {
+) (sinktest.TargetSchema, error) {
 	sch, dropSchema, err := provideSchema(ctx, pool, "tgt")
 	ret := sinktest.TargetSchema(sch)
 	if err != nil {
-		return ret, nil, err
+		return ret, err
 	}
 	log.Infof("target schema: %s", sch)
-	cancel := dropSchema
+	ctx.Defer(dropSchema)
 
 	// In PostgresSQL, connections are tightly coupled to the target
 	// database.  Cross-database queries are generally unsupported, as
@@ -296,30 +298,26 @@ func ProvideTargetSchema(
 	if pool.Info().Product == types.ProductPostgreSQL {
 		db, _ := sch.Split()
 		conn := fmt.Sprintf("%s/%s", pool.ConnectionString, db.Raw())
-		next, cancelNext, err := stdpool.OpenPgxAsTarget(ctx, conn, stdpool.WithDiagnostics(diags, "target_reopened"))
+		next, err := stdpool.OpenPgxAsTarget(ctx, conn, stdpool.WithDiagnostics(diags, "target_reopened"))
 		if err != nil {
-			cancel()
-			return sinktest.TargetSchema{}, nil, err
+			return sinktest.TargetSchema{}, err
 		}
-		nextCache, clearCache := ProvideTargetStatements(next)
+
+		nextCache := ProvideTargetStatements(ctx, next)
 		pool.ConnectionString = conn
 		pool.DB = next.DB
 		stmts.Cache = nextCache.Cache
-		cancel = func() {
-			dropSchema()
-			clearCache()
-			cancelNext()
-		}
 	}
-	return ret, cancel, nil
+	return ret, nil
 }
 
 // ProvideTargetStatements is called by Wire to construct a
 // prepared-statement cache. Anywhere the associated TargetPool is
 // reused should also reuse the cache.
-func ProvideTargetStatements(pool *types.TargetPool) (*types.TargetStatements, func()) {
+func ProvideTargetStatements(ctx *stopper.Context, pool *types.TargetPool) *types.TargetStatements {
 	ret := stmtcache.New[string](pool.DB, statementCacheSize)
-	return &types.TargetStatements{Cache: ret}, ret.Close
+	ctx.Defer(ret.Close)
+	return &types.TargetStatements{Cache: ret}
 }
 
 func provideSchema[P types.AnyPool](

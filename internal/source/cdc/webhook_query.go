@@ -33,7 +33,7 @@ import (
 // SELECT *, event_op() as __event_op__
 func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	table := req.target.(ident.Table)
-	keys, err := h.getPrimaryKey(ctx, req)
+	keys, err := h.getPrimaryKey(req)
 	if err != nil {
 		return err
 	}
