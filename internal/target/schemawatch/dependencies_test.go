@@ -34,9 +34,8 @@ func TestGetDependencyOrder(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	tcs := []struct {
 		name   string
@@ -201,9 +200,8 @@ func TestNoDeferrableConstraints(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	if fixture.TargetPool.Product != types.ProductCockroachDB {
 		t.Skip("only for CRDB")
@@ -223,9 +221,8 @@ func TestCrossSchemaTableReferencesPG(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 	pool := fixture.TargetPool

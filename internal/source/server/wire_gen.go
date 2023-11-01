@@ -27,162 +27,81 @@ import (
 
 // Injectors from injector.go:
 
-func NewServer(ctx *stopper.Context, config *Config) (*Server, func(), error) {
-	diagnostics, cleanup := diag.New(ctx)
+func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
+	diagnostics := diag.New(ctx)
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingPool, cleanup2, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
+	stagingPool, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	authenticator, cleanup3, err := ProvideAuthenticator(ctx, diagnostics, config, stagingPool, stagingSchema)
+	authenticator, err := ProvideAuthenticator(ctx, diagnostics, config, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	listener, cleanup4, err := ProvideListener(config, diagnostics)
+	listener, err := ProvideListener(ctx, config, diagnostics)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	cdcConfig := &config.CDC
-	targetPool, cleanup5, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
+	targetPool, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetStatements, cleanup6, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
+	targetStatements, err := logical.ProvideTargetStatements(ctx, baseConfig, targetPool, diagnostics)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
-	watchers, cleanup7, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, cleanup8, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	immediate, cleanup9, err := cdc.ProvideImmediate(factory)
+	immediate, err := cdc.ProvideImmediate(ctx, factory)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	typesLeases, err := leases.ProvideLeases(ctx, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
 	resolvers, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	handler := &cdc.Handler{
 		Authenticator: authenticator,
@@ -196,30 +115,10 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, func(), error) {
 	serveMux := ProvideMux(handler, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	server, cleanup10 := ProvideServer(authenticator, diagnostics, listener, serveMux, tlsConfig)
-	return server, func() {
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
+	server := ProvideServer(ctx, authenticator, diagnostics, listener, serveMux, tlsConfig)
+	return server, nil
 }
 
 // Injectors from test_fixture.go:
@@ -227,160 +126,79 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, func(), error) {
 // We want this to be as close as possible to Start, it just exposes
 // additional plumbing details via the returned testFixture pointer.
 func newTestFixture(context *stopper.Context, config *Config) (*testFixture, func(), error) {
-	diagnostics, cleanup := diag.New(context)
+	diagnostics := diag.New(context)
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
-	stagingPool, cleanup2, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
-	authenticator, cleanup3, err := ProvideAuthenticator(context, diagnostics, config, stagingPool, stagingSchema)
+	authenticator, err := ProvideAuthenticator(context, diagnostics, config, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
-	listener, cleanup4, err := ProvideListener(config, diagnostics)
+	listener, err := ProvideListener(context, config, diagnostics)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	cdcConfig := &config.CDC
-	targetPool, cleanup5, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	targetPool, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
-	targetStatements, cleanup6, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
+	targetStatements, err := logical.ProvideTargetStatements(context, baseConfig, targetPool, diagnostics)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
-	watchers, cleanup7, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, cleanup8, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
-	immediate, cleanup9, err := cdc.ProvideImmediate(factory)
+	immediate, err := cdc.ProvideImmediate(context, factory)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	metaTable := cdc.ProvideMetaTable(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
 	resolvers, err := cdc.ProvideResolvers(context, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
 	handler := &cdc.Handler{
@@ -395,18 +213,9 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	serveMux := ProvideMux(handler, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 		return nil, nil, err
 	}
-	server, cleanup10 := ProvideServer(authenticator, diagnostics, listener, serveMux, tlsConfig)
+	server := ProvideServer(context, authenticator, diagnostics, listener, serveMux, tlsConfig)
 	serverTestFixture := &testFixture{
 		Authenticator: authenticator,
 		Config:        config,
@@ -419,16 +228,6 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		Watcher:       watchers,
 	}
 	return serverTestFixture, func() {
-		cleanup10()
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
 	}, nil
 }
 

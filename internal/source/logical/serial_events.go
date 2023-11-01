@@ -35,8 +35,8 @@ type serialEvents struct {
 var _ Events = (*serialEvents)(nil)
 
 // Backfill implements Events. It delegates to the enclosing loop.
-func (e *serialEvents) Backfill(ctx context.Context, source string, backfiller Backfiller) error {
-	return e.loop.doBackfill(ctx, source, backfiller)
+func (e *serialEvents) Backfill(_ context.Context, source string, backfiller Backfiller) error {
+	return e.loop.doBackfill(source, backfiller)
 }
 
 // GetConsistentPoint implements State. It delegates to the loop.

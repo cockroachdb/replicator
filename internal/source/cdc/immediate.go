@@ -17,38 +17,26 @@
 package cdc
 
 import (
-	"context"
 	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 // Immediate memoizes instances of [logical.Batcher].
 type Immediate struct {
 	loops *logical.Factory
+	stop  *stopper.Context
 
 	mu struct {
 		sync.RWMutex
-		cleanup []func()
 		targets ident.SchemaMap[logical.Batcher]
 	}
 }
 
-// cleanup is called by ProvideImmediate.
-func (f *Immediate) cleanup() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	for _, cleanup := range f.mu.cleanup {
-		cleanup()
-	}
-	f.mu.cleanup = nil
-	f.mu.targets = ident.SchemaMap[logical.Batcher]{}
-}
-
 // Get returns a facade to apply mutations to the target schema.
-func (f *Immediate) Get(ctx context.Context, target ident.Schema) (logical.Batcher, error) {
+func (f *Immediate) Get(target ident.Schema) (logical.Batcher, error) {
 	f.mu.RLock()
 	found, ok := f.mu.targets.Get(target)
 	f.mu.RUnlock()
@@ -64,11 +52,10 @@ func (f *Immediate) Get(ctx context.Context, target ident.Schema) (logical.Batch
 		return found, nil
 	}
 
-	ret, cancel, err := f.loops.Immediate(ctx, target)
+	ret, err := f.loops.Immediate(target)
 	if err != nil {
 		return nil, err
 	}
-	f.mu.cleanup = append(f.mu.cleanup, cancel)
 	f.mu.targets.Put(target, ret)
 	return ret, nil
 }

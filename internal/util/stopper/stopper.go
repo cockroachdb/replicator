@@ -53,7 +53,7 @@ var ErrGracePeriodExpired = errors.New("grace period expired")
 // function can be used to retrieve a Context from any
 // [context.Context].
 type Context struct {
-	cancel   func(error)
+	cancel   func(error) // Invoked via cancelLocked.
 	delegate context.Context
 	stopping chan struct{}
 	parent   *Context
@@ -61,6 +61,7 @@ type Context struct {
 	mu struct {
 		sync.RWMutex
 		count    int
+		deferred []func()
 		err      error
 		stopping bool
 	}
@@ -126,6 +127,30 @@ func WithContext(ctx context.Context) *Context {
 // Deadline implements [context.Context].
 func (s *Context) Deadline() (deadline time.Time, ok bool) { return s.delegate.Deadline() }
 
+// Defer registers a callback that will be executed after the
+// [Context.Done] channel is closed. This method can be used to clean up
+// resources that are used by goroutines associated with the Context
+// (e.g. closing database connections). The Context will already have
+// been canceled by the time the callback is run, so its behaviors
+// should be associated with a background context. Callbacks will be
+// executed in a LIFO manner. If the context has already stopped, the
+// callback will be executed immediately.
+//
+// Calling this method on the Background context will panic, since that
+// context can never be cancelled.
+func (s *Context) Defer(fn func()) {
+	if s == background {
+		panic(errors.New("cannot call Context.Defer() on a background context"))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Err() != nil {
+		fn()
+		return
+	}
+	s.mu.deferred = append(s.mu.deferred, fn)
+}
+
 // Done implements [context.Context]. The channel that is returned will
 // be closed when Stop has been called and all associated goroutines
 // have exited. The returned channel will be closed immediately if the
@@ -190,7 +215,7 @@ func (s *Context) Stop(gracePeriod time.Duration) {
 
 	// Cancel the context if nothing's currently running.
 	if s.mu.count == 0 {
-		s.cancel(ErrStopped)
+		s.cancelLocked(ErrStopped)
 	} else if gracePeriod > 0 {
 		go func() {
 			select {
@@ -198,7 +223,9 @@ func (s *Context) Stop(gracePeriod time.Duration) {
 				// Cancel after the grace period has expired. This
 				// should immediately terminate any well-behaved
 				// goroutines driven by Go().
-				s.cancel(ErrGracePeriodExpired)
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				s.cancelLocked(ErrGracePeriodExpired)
 			case <-s.Done():
 				// We'll hit this path in a clean-exit, where apply()
 				// cancels the context after the last goroutine has
@@ -267,7 +294,17 @@ func (s *Context) apply(delta int) bool {
 		panic("over-released")
 	}
 	if s.mu.count == 0 && s.mu.stopping {
-		s.cancel(ErrStopped)
+		s.cancelLocked(ErrStopped)
 	}
 	return true
+}
+
+// cancelLocked invokes the context-cancellation function and then
+// executes any deferred callbacks.
+func (s *Context) cancelLocked(err error) {
+	s.cancel(err)
+	for i := len(s.mu.deferred) - 1; i >= 0; i-- {
+		s.mu.deferred[i]()
+	}
+	s.mu.deferred = nil
 }

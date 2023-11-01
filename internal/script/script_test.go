@@ -52,9 +52,8 @@ func TestScript(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 	schema := fixture.TargetSchema.Schema()

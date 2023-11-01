@@ -24,11 +24,10 @@ import (
 )
 
 func TestRoundtrip(t *testing.T) {
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !assert.NoError(t, err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	memo := fixture.Memo

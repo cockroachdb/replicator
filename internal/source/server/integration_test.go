@@ -130,9 +130,8 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	}()
 
 	// Create a basic fixture to represent a source database.
-	sourceFixture, cancel, err := base.NewFixture()
+	sourceFixture, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	version := sourceFixture.SourcePool.Version
 	supportsWebhook := supportsWebhook(version)
@@ -146,9 +145,8 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	ctx := sourceFixture.Context
 
 	// Create a basic destination database connection.
-	destFixture, cancel, err := base.NewFixture()
+	destFixture, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	targetDB := destFixture.TargetSchema.Schema()
 	targetPool := destFixture.TargetPool
@@ -182,7 +180,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	target := ident.NewTable(targetDB, source.Name().Table())
 	_, err = targetPool.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, val VARCHAR(2048))", target))
 	r.NoError(err)
-	watcher, err := targetFixture.Watcher.Get(ctx, targetDB)
+	watcher, err := targetFixture.Watcher.Get(targetDB)
 	r.NoError(err)
 	r.NoError(watcher.Refresh(ctx, targetPool))
 

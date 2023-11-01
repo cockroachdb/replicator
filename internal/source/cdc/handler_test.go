@@ -69,9 +69,8 @@ func createFixture(
 ) (*testFixture, base.TableInfo[*types.TargetPool]) {
 	t.Helper()
 	r := require.New(t)
-	baseFixture, cancel, err := all.NewFixture()
+	baseFixture, err := all.NewFixture(t)
 	r.NoError(err)
-	t.Cleanup(cancel)
 
 	// Ensure that the dispatch and mapper functions must have been
 	// called by using a column name that's only known to the mapper
@@ -122,7 +121,7 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		if htc.immediate {
 			return nil
 		}
-		loop, resolver, err := h.Resolvers.get(ctx, target.Schema())
+		loop, resolver, err := h.Resolvers.get(target.Schema())
 		if err != nil {
 			return err
 		}
@@ -347,7 +346,7 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 		if cfg.immediate {
 			return nil
 		}
-		loop, resolver, err := h.Resolvers.get(ctx, target.Schema())
+		loop, resolver, err := h.Resolvers.get(target.Schema())
 		if err != nil {
 			return err
 		}
@@ -655,12 +654,12 @@ func TestConcurrentHandlers(t *testing.T) {
 func testMassBackfillWithForeignKeys(
 	t *testing.T, rowCount, fixtureCount int, fns ...func(*Config),
 ) {
+	t.Parallel()
 	r := require.New(t)
 
-	baseFixture, cancel, err := all.NewFixture()
-	ctx := baseFixture.Context
+	baseFixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
+	ctx := baseFixture.Context
 
 	fixtures := make([]*testFixture, fixtureCount)
 

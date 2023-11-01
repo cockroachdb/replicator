@@ -18,7 +18,6 @@ package pglogical
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 )
@@ -31,15 +30,9 @@ type PGLogical struct {
 
 var (
 	_ stdlogical.HasDiagnostics = (*PGLogical)(nil)
-	_ stdlogical.HasStoppable   = (*PGLogical)(nil)
 )
 
 // GetDiagnostics implements [stdlogical.HasDiagnostics].
 func (l *PGLogical) GetDiagnostics() *diag.Diagnostics {
 	return l.Diagnostics
-}
-
-// GetStoppable implements [stdlogical.HasStoppable].
-func (l *PGLogical) GetStoppable() types.Stoppable {
-	return l.Loop
 }

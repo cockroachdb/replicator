@@ -40,11 +40,10 @@ import (
 func TestPutAndDrain(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	a.NotEmpty(fixture.StagingPool.Version)
@@ -213,11 +212,10 @@ func TestSelectMany(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	a.NotEmpty(fixture.StagingPool.Version)
@@ -461,11 +459,10 @@ func BenchmarkStage(b *testing.B) {
 }
 
 func benchmarkStage(b *testing.B, batchSize int) {
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(b)
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	targetDB := fixture.TargetSchema.Schema()

@@ -34,7 +34,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/msort"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/pjson"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -73,23 +75,18 @@ const (
 
 // newApply constructs an apply by inspecting the target table.
 func (f *factory) newApply(
-	product types.Product, inTarget ident.Table,
-) (_ *apply, cancel func(), _ error) {
-	// Start a background goroutine to refresh the templates.
-	ctx, cancel := context.WithCancel(context.Background())
-
-	w, err := f.watchers.Get(ctx, inTarget.Schema())
+	ctx *stopper.Context, product types.Product, inTarget ident.Table,
+) (*apply, error) {
+	w, err := f.watchers.Get(inTarget.Schema())
 	if err != nil {
-		cancel()
-		return nil, nil, err
+		return nil, err
 	}
 	// Use the target database's name for the table. We perform a lookup
 	// against the column data map to retrieve the original table name
 	// key under which the data was inserted.
 	target, ok := w.Get().OriginalName(inTarget)
 	if !ok {
-		cancel()
-		return nil, nil, errors.Errorf("unknown table %s", inTarget)
+		return nil, errors.Errorf("unknown table %s", inTarget)
 	}
 
 	labelValues := metrics.TableValues(target)
@@ -107,14 +104,12 @@ func (f *factory) newApply(
 		upserts:   applyUpserts.WithLabelValues(labelValues...),
 	}
 
-	errs := make(chan error, 1)
-	go func(ctx context.Context, errs chan<- error) {
-		defer cancel()
-
+	var initialErr notify.Var[error]
+	_, ready := initialErr.Get()
+	ctx.Go(func() error {
 		schemaCh, cancelSchema, err := w.Watch(target)
 		if err != nil {
-			errs <- err
-			return
+			return err
 		}
 		defer cancelSchema()
 
@@ -127,45 +122,45 @@ func (f *factory) newApply(
 			case types.ProductPostgreSQL:
 			default:
 				// Work items in https://github.com/cockroachdb/cdc-sink/issues/487
-				errs <- errors.Errorf("merge operation not implemented for %s", a.product)
-				return
+				return errors.Errorf("merge operation not implemented for %s", a.product)
 			}
 		}
 
+		initial := true
 		var schemaData []types.ColData
 		for {
 			select {
-			case <-ctx.Done():
-				return
+			case <-ctx.Stopping():
+				return nil
 			case <-configChanged:
 				configData, configChanged = configHandle.Get()
 			case schemaData = <-schemaCh:
 			}
 			if len(schemaData) > 0 {
 				err := a.refreshUnlocked(configData, schemaData)
-				if err != nil {
-					log.WithError(err).WithField("table", target).Warn("could not refresh table metadata")
-				}
-				// Send the first error (or nil) to the channel, then
-				// close it. Shut down if we get an error at the outset.
-				if errs != nil {
-					errs <- err
-					close(errs)
-					errs = nil
+				if initial {
+					// If we're just starting up, return errors.
+					initialErr.Set(errors.Wrap(err, "could not read table metadata"))
+					initial = false
+				} else {
+					// In the steady state, just log refresh errors.
 					if err != nil {
-						return
+						log.WithError(err).WithField("table", target).Warn("could not refresh table metadata")
 					}
 				}
 			}
 		}
-	}(ctx, errs)
+	})
 
-	// Wait for the first loop of the refresh goroutine above.
-	if err := <-errs; err != nil {
-		return nil, nil, err
+	select {
+	case <-ready:
+		// Wait for the first loop of the refresh goroutine above.
+		err, _ := initialErr.Get()
+		return a, err
+	case <-ctx.Stopping():
+		// An error occurred above or elsewhere in the stack, just exit.
+		return nil, nil
 	}
-
-	return a, cancel, nil
 }
 
 // Apply applies the mutations to the target table.
