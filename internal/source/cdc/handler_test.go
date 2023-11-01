@@ -17,7 +17,6 @@
 package cdc
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -69,9 +68,8 @@ func createFixture(
 ) (*testFixture, base.TableInfo[*types.TargetPool]) {
 	t.Helper()
 	r := require.New(t)
-	baseFixture, cancel, err := all.NewFixture()
+	baseFixture, err := all.NewFixture(t)
 	r.NoError(err)
-	t.Cleanup(cancel)
 
 	// Ensure that the dispatch and mapper functions must have been
 	// called by using a column name that's only known to the mapper
@@ -122,7 +120,7 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		if htc.immediate {
 			return nil
 		}
-		loop, resolver, err := h.Resolvers.get(ctx, target.Schema())
+		loop, resolver, err := h.Resolvers.get(target.Schema())
 		if err != nil {
 			return err
 		}
@@ -347,7 +345,7 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 		if cfg.immediate {
 			return nil
 		}
-		loop, resolver, err := h.Resolvers.get(ctx, target.Schema())
+		loop, resolver, err := h.Resolvers.get(target.Schema())
 		if err != nil {
 			return err
 		}
@@ -657,21 +655,11 @@ func testMassBackfillWithForeignKeys(
 ) {
 	r := require.New(t)
 
-	baseFixture, cancel, err := all.NewFixture()
-	ctx := baseFixture.Context
+	baseFixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
+	ctx := baseFixture.Context
 
 	fixtures := make([]*testFixture, fixtureCount)
-
-	cancels := make([]context.CancelFunc, fixtureCount)
-	defer func() {
-		for _, fn := range cancels {
-			if fn != nil {
-				fn()
-			}
-		}
-	}()
 
 	for idx := range fixtures {
 		cfg := &Config{
@@ -691,7 +679,7 @@ func testMassBackfillWithForeignKeys(
 		for _, fn := range fns {
 			fn(cfg)
 		}
-		fixtures[idx], cancels[idx], err = newTestFixture(baseFixture, cfg)
+		fixtures[idx], err = newTestFixture(baseFixture, cfg)
 		r.NoError(err)
 	}
 

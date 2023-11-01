@@ -17,8 +17,6 @@
 package pglogical
 
 import (
-	"context"
-
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -42,7 +40,7 @@ var Set = wire.NewSet(
 // has been configured. There's a fake dependency on the script loader
 // so that flags can be evaluated first.
 func ProvideDialect(
-	ctx context.Context, config *Config, _ *script.Loader,
+	ctx *stopper.Context, config *Config, _ *script.Loader,
 ) (logical.Dialect, error) {
 	if err := config.Preflight(); err != nil {
 		return nil, err
@@ -51,12 +49,10 @@ func ProvideDialect(
 	// by the user. We could create the replication slot ourselves, but
 	// we want to coordinate the timing of the backup, restore, and
 	// streaming operations.
-	source, cleanup, err := stdpool.OpenPgxAsConn(ctx, config.SourceConn)
+	source, err := stdpool.OpenPgxAsConn(ctx, config.SourceConn)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not connect to source database")
 	}
-	// We dial again when the logical loop asks us to run.
-	defer cleanup()
 
 	// Ensure that the requested publication exists.
 	var count int
@@ -104,8 +100,8 @@ func ProvideDialect(
 // ProvideLoop is called by Wire to construct the sole logical loop used
 // in the pglogical mode.
 func ProvideLoop(
-	ctx *stopper.Context, cfg *Config, dialect logical.Dialect, loops *logical.Factory,
+	cfg *Config, dialect logical.Dialect, loops *logical.Factory,
 ) (*logical.Loop, error) {
 	cfg.Dialect = dialect
-	return loops.Start(ctx, &cfg.LoopConfig)
+	return loops.Start(&cfg.LoopConfig)
 }

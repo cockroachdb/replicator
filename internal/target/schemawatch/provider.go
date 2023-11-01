@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
@@ -29,11 +30,13 @@ var Set = wire.NewSet(
 )
 
 // ProvideFactory is called by Wire to construct the Watchers factory.
-func ProvideFactory(pool *types.TargetPool, d *diag.Diagnostics) (types.Watchers, func(), error) {
-	w := &factory{pool: pool}
+func ProvideFactory(
+	ctx *stopper.Context, pool *types.TargetPool, d *diag.Diagnostics,
+) (types.Watchers, error) {
+	w := &factory{pool: pool, stop: ctx}
 	w.mu.data = &ident.SchemaMap[*watcher]{}
 	if err := d.Register("schema", w); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return w, w.close, nil
+	return w, nil
 }

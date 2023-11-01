@@ -32,7 +32,7 @@ import (
 	"github.com/google/wire"
 )
 
-func NewServer(ctx *stopper.Context, config *Config) (*Server, func(), error) {
+func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,

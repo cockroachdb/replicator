@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -52,13 +53,6 @@ type HasDiagnostics interface {
 	GetDiagnostics() *diag.Diagnostics
 }
 
-// HasStoppable allows the object to supply a [types.Stoppable] that
-// will defer exiting until its [types.Stoppable.Stopped] channel is
-// closed.
-type HasStoppable interface {
-	GetStoppable() types.Stoppable
-}
-
 // HasServeMux allows the object to provide a [http.ServeMux] to bind
 // the endpoints to, if the [MetricsAddrFlag] is not set.
 type HasServeMux interface {
@@ -75,7 +69,7 @@ type Template struct {
 	Short string
 	// Start should return an object that implements zero or more of the
 	// capability interfaces in this package.
-	Start func(cmd *cobra.Command) (started any, cancel func(), err error)
+	Start func(ctx *stopper.Context, cmd *cobra.Command) (started any, err error)
 	// Passed to [cobra.Command.Use].
 	Use string
 	// Called once all setup has been completed.
@@ -100,8 +94,8 @@ func New(t *Template) *cobra.Command {
 				log.WithFields(info).Info("cdc-sink starting")
 			}
 
-			// Delegate startup.
-			started, cancel, err := t.Start(cmd)
+			// Delegate startup. main.go provides a stopper.
+			started, err := t.Start(stopper.From(cmd.Context()), cmd)
 			if err != nil {
 				return err
 			}
@@ -118,9 +112,8 @@ func New(t *Template) *cobra.Command {
 			if x, ok := started.(HasDiagnostics); ok {
 				diags = x.GetDiagnostics()
 			} else {
-				var cancelDiags func()
-				diags, cancelDiags = diag.New(cmd.Context())
-				defer cancelDiags()
+				// main.go provides a stopper.
+				diags = diag.New(stopper.From(cmd.Context()))
 			}
 
 			// Start metrics on a separate port or bind to an existing mux.
@@ -134,13 +127,6 @@ func New(t *Template) *cobra.Command {
 				AddHandlers(auth, x.GetServeMux(), diags)
 			}
 
-			// Pause any log.Exit() or log.Fatal() until the server exits.
-			log.DeferExitHandler(func() {
-				cancel()
-				if x, ok := started.(HasStoppable); ok {
-					<-x.GetStoppable().Stopped()
-				}
-			})
 			if t.testCallback != nil {
 				t.testCallback()
 			}

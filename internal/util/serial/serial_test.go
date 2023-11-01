@@ -71,11 +71,10 @@ func (u *fakeUnlockable) Unlocked() bool { return bool(*u) }
 func TestPool(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	p := &Pool{Pool: fixture.StagingPool.Pool}

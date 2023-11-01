@@ -29,18 +29,16 @@ import (
 func TestJWT(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	pool := fixture.StagingPool
 	stagingDB := fixture.StagingDB
 
-	auth, cancel, err := ProvideAuth(ctx, pool, stagingDB)
-	defer cancel()
+	auth, err := ProvideAuth(ctx, pool, stagingDB)
 	if !a.NoError(err) {
 		return
 	}
@@ -53,7 +51,6 @@ func TestJWT(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	a.Len(impl.mu.publicKeys, 1)
 

@@ -56,9 +56,8 @@ func testSmoke(t *testing.T, chaosProb float32) {
 	const docCount = 200
 
 	// Create a target database.
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 	// Mangle our DB ident into something the emulator will accept.
@@ -179,9 +178,8 @@ api.configureSource("group:subcollection", { recurse:true, target: %[2]s } );
 		UpdatedAtProperty:           ident.New("updated_at"),
 	}
 
-	loops, cancel, err := startLoopsFromFixture(fixture, cfg)
+	loops, err := startLoopsFromFixture(fixture, cfg)
 	r.NoError(err)
-	defer cancel()
 	a.Len(loops, 2)
 
 	log.Info("waiting for top-level backfill")

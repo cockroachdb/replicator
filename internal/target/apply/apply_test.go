@@ -48,11 +48,10 @@ import (
 func TestApply(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -947,7 +946,7 @@ func TestAllDataTypes(t *testing.T) {
 	var readBackQ string
 	var testcases []dataTypeTestCase
 	{
-		fixture, cancel, err := all.NewFixture()
+		fixture, err := all.NewFixture(t)
 		require.NoError(t, err)
 
 		switch fixture.TargetPool.Product {
@@ -985,7 +984,6 @@ func TestAllDataTypes(t *testing.T) {
 		default:
 			t.Fatal("unimplemented product")
 		}
-		cancel()
 	}
 
 	for _, tc := range testcases {
@@ -999,9 +997,8 @@ func TestAllDataTypes(t *testing.T) {
 			// changes in v23.1.
 			//
 			// https://github.com/cockroachdb/cockroach/issues/102259
-			fixture, cancel, err := all.NewFixture()
+			fixture, err := all.NewFixture(t)
 			require.NoError(t, err)
-			defer cancel()
 
 			ctx := fixture.Context
 
@@ -1108,11 +1105,10 @@ func TestConditionals(t *testing.T) {
 func testConditions(t *testing.T, cas, deadline bool) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -1286,11 +1282,10 @@ func testConditions(t *testing.T, cas, deadline bool) {
 func TestExpressionColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -1357,9 +1352,8 @@ func TestExpressionColumns(t *testing.T) {
 func TestMergeWiring(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -1579,11 +1573,10 @@ func TestMergeWiring(t *testing.T) {
 func TestIgnoredColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -1634,11 +1627,10 @@ func TestIgnoredColumns(t *testing.T) {
 func TestRenamedColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -1687,11 +1679,10 @@ func TestRenamedColumns(t *testing.T) {
 func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	if strings.Contains(fixture.TargetPool.Version, "PostgreSQL 11") {
 		t.Skip("PostgreSQL v11 doesn't support generated columns")
@@ -1786,9 +1777,8 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 // Verify that user-defined enums with mixed-case identifiers work.
 func TestUDTEnum(t *testing.T) {
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	require.NoError(t, err)
-	defer cancel()
 
 	if fixture.TargetPool.Product != types.ProductCockroachDB {
 		t.Skip("test not relevant to product")
@@ -1855,11 +1845,10 @@ func TestUDTEnum(t *testing.T) {
 func TestVirtualColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	switch fixture.TargetPool.Product {
 	case types.ProductMariaDB, types.ProductMySQL:
@@ -2057,11 +2046,10 @@ func BenchmarkApply(b *testing.B) {
 func benchConditions(b *testing.B, cfg benchConfig) {
 	a := assert.New(b)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(b)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 

@@ -18,7 +18,6 @@
 package stdpool
 
 import (
-	"context"
 	"crypto/tls"
 	"database/sql"
 	sqldriver "database/sql/driver"
@@ -52,107 +51,99 @@ func (o *onomastic) newName(prefix string) string {
 // OpenMySQLAsTarget opens a database connection, returning it as
 // a single connection.
 func OpenMySQLAsTarget(
-	ctx context.Context, connectString string, url *url.URL, options ...Option,
-) (*types.TargetPool, func(), error) {
+	ctx *stopper.Context, connectString string, url *url.URL, options ...Option,
+) (*types.TargetPool, error) {
 	var tc TestControls
 	if err := attachOptions(ctx, &tc, options); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// Use a unique name for each call of OpenMySQLAsTarget.
 	tlsConfigName := tlsConfigNames.newName("mysql_driver")
-	return returnOrStop(ctx,
-		func(ctx *stopper.Context) (*types.TargetPool, error) {
-			tlsConfigs, err := secure.ParseTLSOptions(url)
-			if err != nil {
-				return nil, err
-			}
-			var ret *types.TargetPool
-			var transportError error
-			// Try all possible transport options.
-			// The first one that works is the one we will use.
-			for _, tlsConfig := range tlsConfigs {
-				mysql.DeregisterTLSConfig(tlsConfigName)
-				mySQLString, err := getConnString(url, tlsConfigName, tlsConfig)
-				if err != nil {
-					return nil, errors.WithStack(err)
-				}
-				err = mysql.RegisterTLSConfig(tlsConfigName, tlsConfig)
-				if err != nil {
-					return nil, errors.WithStack(err)
-				}
-				driver := mysql.MySQLDriver{}
-				connector, err := driver.OpenConnector(mySQLString)
-				if err != nil {
-					log.WithError(err).Trace("failed to connect to database server")
-					transportError = err
-					// Try a different option.
-					continue
-				}
-				ret = &types.TargetPool{
-					DB: sql.OpenDB(connector),
-					PoolInfo: types.PoolInfo{
-						ConnectionString: connectString,
-						Product:          types.ProductMySQL,
-					},
-				}
-				ctx.Go(func() error {
-					<-ctx.Stopping()
-					if err := ret.Close(); err != nil {
-						log.WithError(errors.WithStack(err)).Warn("could not close database connection")
-					}
-					return nil
-				})
+	tlsConfigs, err := secure.ParseTLSOptions(url)
+	if err != nil {
+		return nil, err
+	}
+	var ret *types.TargetPool
+	var transportError error
+	// Try all possible transport options.
+	// The first one that works is the one we will use.
+	for _, tlsConfig := range tlsConfigs {
+		mysql.DeregisterTLSConfig(tlsConfigName)
+		mySQLString, err := getConnString(url, tlsConfigName, tlsConfig)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = mysql.RegisterTLSConfig(tlsConfigName, tlsConfig)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		driver := mysql.MySQLDriver{}
+		connector, err := driver.OpenConnector(mySQLString)
+		if err != nil {
+			log.WithError(err).Trace("failed to connect to database server")
+			transportError = err
+			// Try a different option.
+			continue
+		}
+		ret = &types.TargetPool{
+			DB: sql.OpenDB(connector),
+			PoolInfo: types.PoolInfo{
+				ConnectionString: connectString,
+				Product:          types.ProductMySQL,
+			},
+		}
+		ctx.Defer(func() { _ = ret.Close() })
 
-			ping:
-				if err := ret.Ping(); err != nil {
-					// For some errors, we retry.
-					if tc.WaitForStartup && isMySQLStartupError(err) {
-						log.WithError(err).Info("waiting for database to become ready")
-						select {
-						case <-ctx.Done():
-							return nil, ctx.Err()
-						case <-time.After(10 * time.Second):
-							goto ping
-						}
-					}
-					transportError = err
-					// Try a different option.
-					continue
+	ping:
+		if err := ret.Ping(); err != nil {
+			// For some errors, we retry.
+			if tc.WaitForStartup && isMySQLStartupError(err) {
+				log.WithError(err).Info("waiting for database to become ready")
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(10 * time.Second):
+					goto ping
 				}
-				// Testing that connection is usable.
-				if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
-					return nil, errors.Wrap(err, "could not query version")
-				}
-				log.Infof("Version %s.", ret.Version)
-				if strings.Contains(ret.Version, "MariaDB") {
-					ret.PoolInfo.Product = types.ProductMariaDB
-				}
-				// If debug is enabled we print sql mode and ssl info.
-				if log.IsLevelEnabled(log.DebugLevel) {
-					var mode string
-					if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {
-						log.Errorf("could not query sql mode %s", err.Error())
-					}
-					var varName, cipher string
-					if err := ret.QueryRow("SHOW STATUS LIKE 'Ssl_cipher';").Scan(&varName, &cipher); err != nil {
-						log.Errorf("could not query ssl info %s", err.Error())
-					}
-					log.Debugf("Mode %s. %s %s", mode, varName, cipher)
-					ret.Version = fmt.Sprintf("%s cipher[%s]", ret.Version, cipher)
-				}
-				if err := attachOptions(ctx, ret.DB, options); err != nil {
-					return nil, err
-				}
-				if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
-					return nil, err
-				}
-				// The connection meets the client/server requirements,
-				// no need to try other transport options.
-				return ret, nil
 			}
-			// All the options have been exhausted, returning the last error.
-			return nil, transportError
-		})
+			transportError = err
+			_ = ret.Close()
+			// Try a different option.
+			continue
+		}
+		// Testing that connection is usable.
+		if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
+			return nil, errors.Wrap(err, "could not query version")
+		}
+		log.Infof("Version %s.", ret.Version)
+		if strings.Contains(ret.Version, "MariaDB") {
+			ret.PoolInfo.Product = types.ProductMariaDB
+		}
+		// If debug is enabled we print sql mode and ssl info.
+		if log.IsLevelEnabled(log.DebugLevel) {
+			var mode string
+			if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {
+				log.Errorf("could not query sql mode %s", err.Error())
+			}
+			var varName, cipher string
+			if err := ret.QueryRow("SHOW STATUS LIKE 'Ssl_cipher';").Scan(&varName, &cipher); err != nil {
+				log.Errorf("could not query ssl info %s", err.Error())
+			}
+			log.Debugf("Mode %s. %s %s", mode, varName, cipher)
+			ret.Version = fmt.Sprintf("%s cipher[%s]", ret.Version, cipher)
+		}
+		if err := attachOptions(ctx, ret.DB, options); err != nil {
+			return nil, err
+		}
+		if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
+			return nil, err
+		}
+		// The connection meets the client/server requirements,
+		// no need to try other transport options.
+		return ret, nil
+	}
+	// All the options have been exhausted, returning the last error.
+	return nil, transportError
 }
 
 // TODO (silvano): verify error codes.

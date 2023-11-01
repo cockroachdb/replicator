@@ -32,11 +32,10 @@ import (
 func TestGetColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -498,11 +497,10 @@ func TestGetColumns(t *testing.T) {
 func TestColDataIgnoresViews(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 

@@ -25,9 +25,8 @@ import (
 func TestBaseSmoke(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cleanup, err := NewFixture()
+	fixture, err := NewFixture(t)
 	r.NoError(err)
-	defer cleanup()
 
 	r.NotNil(fixture.SourcePool.DB)
 	r.NotEmpty(fixture.SourcePool.ConnectionString)

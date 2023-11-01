@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -39,8 +40,8 @@ func TestSmoke(t *testing.T) {
 	cmd := New(&Template{
 		Bind:    nil, // No extra CLI flags
 		Metrics: "127.0.0.1:13013",
-		Start: func(cmd *cobra.Command) (started any, cancel func(), err error) {
-			return nil, nil, nil
+		Start: func(ctx *stopper.Context, cmd *cobra.Command) (started any, err error) {
+			return nil, nil
 		},
 		Use: "test",
 		testCallback: func() {

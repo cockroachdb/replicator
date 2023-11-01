@@ -35,10 +35,10 @@ import (
 
 // parseMutation takes a single line from an ndjson and extracts enough
 // information to be able to persist it to the staging table.
-type parseMutation func(context.Context, *request, []byte) (types.Mutation, error)
+type parseMutation func(*request, []byte) (types.Mutation, error)
 
 // parseNdjsonMutation is a parseMutation function
-func parseNdjsonMutation(_ context.Context, _ *request, rawBytes []byte) (types.Mutation, error) {
+func parseNdjsonMutation(_ *request, rawBytes []byte) (types.Mutation, error) {
 	var payload struct {
 		After   json.RawMessage `json:"after"`
 		Before  json.RawMessage `json:"before"`
@@ -81,7 +81,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 	var flush func(muts []types.Mutation) error
 
 	if h.Config.Immediate {
-		batcher, err := h.Immediate.Get(ctx, target.Schema())
+		batcher, err := h.Immediate.Get(target.Schema())
 		if err != nil {
 			return err
 		}
@@ -134,7 +134,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		if len(buf) == 0 {
 			continue
 		}
-		mut, err := parser(ctx, req, buf)
+		mut, err := parser(req, buf)
 		if err != nil {
 			return err
 		}

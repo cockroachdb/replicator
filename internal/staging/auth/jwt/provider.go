@@ -17,7 +17,6 @@
 package jwt
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -38,10 +38,8 @@ var Set = wire.NewSet(ProvideAuth)
 // This provider will also start a background goroutine to look for
 // configuration changes in the database.
 func ProvideAuth(
-	ctx context.Context, db types.StagingQuerier, stagingDB ident.StagingSchema,
-) (auth types.Authenticator, cancel func(), err error) {
-	cancel = func() {}
-
+	ctx *stopper.Context, db types.StagingQuerier, stagingDB ident.StagingSchema,
+) (auth types.Authenticator, err error) {
 	keyTable := ident.NewTable(stagingDB.Schema(), PublicKeysTable)
 	revokedTable := ident.NewTable(stagingDB.Schema(), RevokedIdsTable)
 
@@ -66,17 +64,16 @@ func ProvideAuth(
 
 	// Start a refresh loop that will also listen for HUP signals.
 	if *RefreshDelay > 0 {
-		var background context.Context
-		background, cancel = context.WithCancel(context.Background())
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, syscall.SIGHUP)
-		go func(ctx context.Context) {
+		ctx.Go(func() error {
 			defer close(ch)
 			defer signal.Stop(ch)
+
 			for {
 				select {
-				case <-ctx.Done():
-					return
+				case <-ctx.Stopping():
+					return nil
 				case <-ch:
 					log.Debug("reloading JWT data due to SIGHUP")
 				case <-time.After(*RefreshDelay):
@@ -85,7 +82,7 @@ func ProvideAuth(
 					log.WithError(err).Warn("could not refresh JWT data")
 				}
 			}
-		}(background)
+		})
 	}
 
 	auth = impl
