@@ -17,7 +17,6 @@
 package script
 
 import (
-	"context"
 	"net/url"
 	"sync"
 
@@ -118,7 +117,6 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 // ProvideUserScript is called by wire to bind the UserScript to the
 // target database.
 func ProvideUserScript(
-	ctx context.Context,
 	applyConfigs *applycfg.Configs,
 	boot *Loader,
 	diags *diag.Diagnostics,
@@ -133,7 +131,7 @@ func ProvideUserScript(
 		}, nil
 	}
 
-	watcher, err := watchers.Get(ctx, target.AsSchema())
+	watcher, err := watchers.Get(target.AsSchema())
 	if err != nil {
 		return nil, err
 	}

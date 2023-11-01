@@ -35,7 +35,7 @@ import (
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(*stopper.Context, *Config) (*FSLogical, func(), error) {
+func Start(*stopper.Context, *Config) (*FSLogical, error) {
 	panic(wire.Build(
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
@@ -53,9 +53,8 @@ func Start(*stopper.Context, *Config) (*FSLogical, func(), error) {
 }
 
 // Build remaining testable components from a common fixture.
-func startLoopsFromFixture(*all.Fixture, *Config) ([]*logical.Loop, func(), error) {
+func startLoopsFromFixture(*all.Fixture, *Config) ([]*logical.Loop, error) {
 	panic(wire.Build(
-		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*base.Fixture), "Context"),
 		wire.FieldsOf(new(*all.Fixture),

@@ -24,270 +24,145 @@ import (
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(context *stopper.Context, config *Config) (*FSLogical, func(), error) {
-	diagnostics, cleanup := diag.New(context)
+func Start(context *stopper.Context, config *Config) (*FSLogical, error) {
+	diagnostics := diag.New(context)
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	targetSchema := ProvideScriptTarget(config)
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	targetPool, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	watchers, cleanup3, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	client, cleanup4, err := ProvideFirestoreClient(context, config, userScript)
+	client, err := ProvideFirestoreClient(context, config, userScript)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetStatements, cleanup5, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
+	targetStatements, err := logical.ProvideTargetStatements(context, baseConfig, targetPool, diagnostics)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, cleanup6, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingPool, cleanup7, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	tombstones, err := ProvideTombstones(context, config, client, factory, userScript)
+	tombstones, err := ProvideTombstones(config, client, factory, userScript)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	v, err := ProvideLoops(context, config, client, factory, memoMemo, stagingPool, tombstones, userScript)
+	v, err := ProvideLoops(config, client, factory, memoMemo, stagingPool, tombstones, userScript)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	fsLogical := &FSLogical{
 		Diagnostics: diagnostics,
 		Loops:       v,
 	}
-	return fsLogical, func() {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
+	return fsLogical, nil
 }
 
 // Build remaining testable components from a common fixture.
-func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loop, func(), error) {
+func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loop, error) {
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
 	configs := fixture.Configs
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	diagnostics, cleanup := diag.New(context)
+	diagnostics := diag.New(context)
 	targetSchema := ProvideScriptTarget(config)
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetPool, cleanup2, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	targetPool, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	watchers, cleanup3, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	client, cleanup4, err := ProvideFirestoreClient(context, config, userScript)
+	client, err := ProvideFirestoreClient(context, config, userScript)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetStatements, cleanup5, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
+	targetStatements, err := logical.ProvideTargetStatements(context, baseConfig, targetPool, diagnostics)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, cleanup6, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	typesMemo := fixture.Memo
-	stagingPool, cleanup7, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	checker := fixture.VersionChecker
 	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, typesMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	tombstones, err := ProvideTombstones(context, config, client, factory, userScript)
+	tombstones, err := ProvideTombstones(config, client, factory, userScript)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	v, err := ProvideLoops(context, config, client, factory, typesMemo, stagingPool, tombstones, userScript)
+	v, err := ProvideLoops(config, client, factory, typesMemo, stagingPool, tombstones, userScript)
 	if err != nil {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	return v, func() {
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
+	return v, nil
 }

@@ -35,15 +35,13 @@ import (
 func TestLeases(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 
-	enclosing, cancel, err := base.CreateSchema(ctx, fixture.StagingPool, "leases_")
+	enclosing, err := base.CreateSchema(ctx, fixture.StagingPool, "leases_")
 	r.NoError(err)
-	defer cancel()
 
 	tbl, err := base.CreateTable(ctx, fixture.StagingPool, enclosing, schema)
 	r.NoError(err)

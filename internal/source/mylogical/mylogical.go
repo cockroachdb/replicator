@@ -18,7 +18,6 @@ package mylogical
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 )
@@ -31,15 +30,9 @@ type MYLogical struct {
 
 var (
 	_ stdlogical.HasDiagnostics = (*MYLogical)(nil)
-	_ stdlogical.HasStoppable   = (*MYLogical)(nil)
 )
 
 // GetDiagnostics implements [stdlogical.HasDiagnostics].
 func (l *MYLogical) GetDiagnostics() *diag.Diagnostics {
 	return l.Diagnostics
-}
-
-// GetStoppable implements [stdlogical.HasStoppable].
-func (l *MYLogical) GetStoppable() types.Stoppable {
-	return l.Loop
 }

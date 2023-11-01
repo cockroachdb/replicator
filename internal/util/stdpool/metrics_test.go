@@ -28,11 +28,9 @@ import (
 func TestConcurrentRegistration(t *testing.T) {
 	r := require.New(t)
 
-	_, cancel, err := base.NewFixture()
+	_, err := base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
-	_, cancel, err = base.NewFixture()
+	_, err = base.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 }

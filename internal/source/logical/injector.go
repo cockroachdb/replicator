@@ -26,15 +26,17 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
-func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), error) {
+func NewFactoryForTests(ctx *stopper.Context, config Config) (*Factory, error) {
 	panic(wire.Build(
 		Set,
 		diag.New,
 		script.Set,
 		staging.Set,
 		target.Set,
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 	))
 }

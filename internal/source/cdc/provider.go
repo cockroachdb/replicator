@@ -42,9 +42,9 @@ type MetaTable ident.Table
 func (t MetaTable) Table() ident.Table { return ident.Table(t) }
 
 // ProvideImmediate is called by wire.
-func ProvideImmediate(loops *logical.Factory) (*Immediate, func(), error) {
-	imm := &Immediate{loops: loops}
-	return imm, imm.cleanup, nil
+func ProvideImmediate(ctx *stopper.Context, loops *logical.Factory) (*Immediate, error) {
+	imm := &Immediate{loops: loops, stop: ctx}
+	return imm, nil
 }
 
 // ProvideMetaTable is called by wire. It returns the
@@ -86,7 +86,7 @@ func ProvideResolvers(
 		return nil, err
 	}
 	for _, schema := range schemas {
-		if _, _, err := ret.get(ctx, schema); err != nil {
+		if _, _, err := ret.get(schema); err != nil {
 			return nil, errors.Wrapf(err, "could not bootstrap resolver for schema %s", schema)
 		}
 	}

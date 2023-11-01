@@ -79,7 +79,6 @@ var (
 )
 
 func newResolver(
-	ctx context.Context,
 	cfg *Config,
 	leases types.Leases,
 	pool *types.StagingPool,
@@ -88,7 +87,7 @@ func newResolver(
 	target ident.Schema,
 	watchers types.Watchers,
 ) (*resolver, error) {
-	watcher, err := watchers.Get(ctx, target)
+	watcher, err := watchers.Get(target)
 	if err != nil {
 		return nil, err
 	}
@@ -579,8 +578,6 @@ func (r *resolver) retireLoop(ctx *stopper.Context) {
 				next, nextUpdated = r.retirements.Get()
 			case <-ctx.Stopping():
 				return nil
-			case <-ctx.Done():
-				return ctx.Err()
 			}
 		}
 	})
@@ -605,9 +602,7 @@ type Resolvers struct {
 }
 
 // get creates or returns the [logical.Loop] and the enclosed resolver.
-func (r *Resolvers) get(
-	ctx context.Context, target ident.Schema,
-) (*logical.Loop, *resolver, error) {
+func (r *Resolvers) get(target ident.Schema) (*logical.Loop, *resolver, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -615,7 +610,7 @@ func (r *Resolvers) get(
 		return found, found.Dialect().(*resolver), nil
 	}
 
-	ret, err := newResolver(ctx, r.cfg, r.leases, r.pool, r.metaTable, r.stagers, target, r.watchers)
+	ret, err := newResolver(r.cfg, r.leases, r.pool, r.metaTable, r.stagers, target, r.watchers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -625,7 +620,7 @@ func (r *Resolvers) get(
 		return nil, ret, nil
 	}
 
-	loop, err := r.loops.Start(r.stop, &logical.LoopConfig{
+	loop, err := r.loops.Start(&logical.LoopConfig{
 		Dialect:      ret,
 		LoopName:     "changefeed-" + target.Raw(),
 		TargetSchema: target,

@@ -8,66 +8,39 @@ package base
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"testing"
 )
 
 // Injectors from injector.go:
 
 // NewFixture constructs a self-contained test fixture.
-func NewFixture() (*Fixture, func(), error) {
-	context, cleanup := ProvideContext()
-	diagnostics, cleanup2 := diag.New(context)
-	sourcePool, cleanup3, err := ProvideSourcePool(context, diagnostics)
+func NewFixture(t testing.TB) (*Fixture, error) {
+	context := ProvideContext(t)
+	diagnostics := diag.New(context)
+	sourcePool, err := ProvideSourcePool(context, diagnostics)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	sourceSchema, cleanup4, err := ProvideSourceSchema(context, sourcePool)
+	sourceSchema, err := ProvideSourceSchema(context, sourcePool)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingPool, cleanup5, err := ProvideStagingPool(context)
+	stagingPool, err := ProvideStagingPool(context)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingSchema, cleanup6, err := ProvideStagingSchema(context, stagingPool)
+	stagingSchema, err := ProvideStagingSchema(context, stagingPool)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetPool, cleanup7, err := ProvideTargetPool(context, sourcePool, diagnostics)
+	targetPool, err := ProvideTargetPool(context, sourcePool, diagnostics)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetStatements, cleanup8 := ProvideTargetStatements(targetPool)
-	targetSchema, cleanup9, err := ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
+	targetStatements := ProvideTargetStatements(context, targetPool)
+	targetSchema, err := ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
 	if err != nil {
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	fixture := &Fixture{
 		Context:      context,
@@ -79,15 +52,5 @@ func NewFixture() (*Fixture, func(), error) {
 		TargetPool:   targetPool,
 		TargetSchema: targetSchema,
 	}
-	return fixture, func() {
-		cleanup9()
-		cleanup8()
-		cleanup7()
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
+	return fixture, nil
 }

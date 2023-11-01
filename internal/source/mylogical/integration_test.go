@@ -91,11 +91,10 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	dbName := fixture.TargetSchema.Schema()
@@ -133,8 +132,6 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	if !a.NoError(err) {
 		return
 	}
-
-	defer cancel()
 
 	myPool, cancel, err := setupMYPool(config)
 	if !a.NoError(err) {
@@ -198,11 +195,10 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	repl, cancelLoop, err := Start(ctx, config)
+	repl, err := Start(ctx, config)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancelLoop()
 
 	for {
 		var count int
@@ -371,11 +367,10 @@ func TestDataTypes(t *testing.T) {
 	}
 
 	// Create a basic test fixture.
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	dbName := fixture.TargetSchema.Schema()
@@ -470,11 +465,10 @@ func TestDataTypes(t *testing.T) {
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	repl, cancelLoop, err := Start(ctx, config)
+	repl, err := Start(ctx, config)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancelLoop()
 
 	// Wait for rows to show up.
 	for idx, tc := range tcs {

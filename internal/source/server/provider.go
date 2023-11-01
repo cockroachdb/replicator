@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -55,47 +56,46 @@ var Set = wire.NewSet(
 // authenticator, or a no-op authenticator if Config.DisableAuth has
 // been set.
 func ProvideAuthenticator(
-	ctx context.Context,
+	ctx *stopper.Context,
 	diags *diag.Diagnostics,
 	config *Config,
 	pool *types.StagingPool,
 	stagingDB ident.StagingSchema,
-) (types.Authenticator, func(), error) {
+) (types.Authenticator, error) {
 	var auth types.Authenticator
-	var cancel func()
 	var err error
 	if config.DisableAuth {
 		log.Info("authentication disabled, any caller may write to the target database")
 		auth = trust.New()
-		cancel = func() {}
 	} else {
-		auth, cancel, err = jwt.ProvideAuth(ctx, pool, stagingDB)
+		auth, err = jwt.ProvideAuth(ctx, pool, stagingDB)
 	}
 	if d, ok := auth.(diag.Diagnostic); ok {
 		if err := diags.Register("auth", d); err != nil {
-			cancel()
-			return nil, nil, err
+			return nil, err
 		}
 	}
-	return auth, cancel, err
+	return auth, err
 }
 
 // ProvideListener is called by Wire to construct the incoming network
 // socket for the server.
-func ProvideListener(config *Config, diags *diag.Diagnostics) (net.Listener, func(), error) {
+func ProvideListener(
+	ctx *stopper.Context, config *Config, diags *diag.Diagnostics,
+) (net.Listener, error) {
 	// Start listening only when everything else is ready.
 	l, err := net.Listen("tcp", config.BindAddr)
 	if err != nil {
-		return nil, nil, errors.Wrapf(err, "could not bind to %q", config.BindAddr)
+		return nil, errors.Wrapf(err, "could not bind to %q", config.BindAddr)
 	}
 	log.WithField("address", l.Addr()).Info("Server listening")
 	if err := diags.Register("listener", diag.DiagnosticFn(func(context.Context) any {
 		return l.Addr().String()
 	})); err != nil {
-		_ = l.Close()
-		return nil, nil, err
+		return nil, err
 	}
-	return l, func() { _ = l.Close() }, nil
+	ctx.Defer(func() { _ = l.Close() })
+	return l, nil
 }
 
 // ProvideMux is called by Wire to construct the http.ServeMux that
@@ -126,21 +126,19 @@ func ProvideMux(
 // goroutine and will gracefully drain the server when the cancel
 // function is called.
 func ProvideServer(
+	ctx *stopper.Context,
 	auth types.Authenticator,
 	diags *diag.Diagnostics,
 	listener net.Listener,
 	mux *http.ServeMux,
 	tlsConfig *tls.Config,
-) (*Server, func()) {
+) *Server {
 	srv := &http.Server{
 		Handler:   h2c.NewHandler(mux, &http2.Server{}),
 		TLSConfig: tlsConfig,
 	}
 
-	ch := make(chan struct{})
-	go func() {
-		defer close(ch)
-
+	ctx.Go(func() error {
 		var err error
 		if srv.TLSConfig != nil {
 			err = srv.ServeTLS(listener, "", "")
@@ -148,20 +146,21 @@ func ProvideServer(
 			err = srv.Serve(listener)
 		}
 		if errors.Is(err, http.ErrServerClosed) {
-			return
+			return nil
 		}
-		log.WithError(err).Error("unable to serve requests")
-	}()
-
-	return &Server{auth, diags, mux, ch}, func() {
-		log.Info("Server shutting down")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		return errors.Wrap(err, "unable to serve requests")
+	})
+	ctx.Go(func() error {
+		<-ctx.Stopping()
 		if err := srv.Shutdown(ctx); err != nil {
 			log.WithError(err).Error("did not shut down cleanly")
+		} else {
+			log.Info("Server shutdown complete")
 		}
-		log.Info("Server shutdown complete")
-	}
+		return nil
+	})
+
+	return &Server{auth, diags, mux}
 }
 
 // ProvideTLSConfig is called by Wire to load the certificate and key

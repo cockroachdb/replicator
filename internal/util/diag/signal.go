@@ -19,28 +19,28 @@
 package diag
 
 import (
-	"context"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 )
 
 // logOnSignal installs a signal handler that will log the current state
 // of the diagnostics.
-func logOnSignal(ctx context.Context, d *Diagnostics) {
+func logOnSignal(ctx *stopper.Context, d *Diagnostics) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGUSR1)
-	go func() {
+	ctx.Go(func() error {
 		defer signal.Stop(ch)
 		for {
 			select {
-			case <-ctx.Done():
-				return
+			case <-ctx.Stopping():
+				return nil
 			case <-ch:
 				log.WithFields(d.Payload(ctx)).Info()
 			}
 		}
-	}()
+	})
 }

@@ -17,22 +17,22 @@
 package stdpool
 
 import (
-	"context"
 	"net/url"
 	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 
 // OpenTarget selects from target connector implementations based on the
 // URL scheme contained in the connection string.
 func OpenTarget(
-	ctx context.Context, connectString string, options ...Option,
-) (*types.TargetPool, func(), error) {
+	ctx *stopper.Context, connectString string, options ...Option,
+) (*types.TargetPool, error) {
 	u, err := url.Parse(connectString)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "could not parse connection string")
+		return nil, errors.Wrap(err, "could not parse connection string")
 	}
 
 	switch strings.ToLower(u.Scheme) {
@@ -43,6 +43,6 @@ func OpenTarget(
 	case "ora", "oracle":
 		return OpenOracleAsTarget(ctx, connectString, options...)
 	default:
-		return nil, nil, errors.Errorf("unknown URL scheme: %s", u.Scheme)
+		return nil, errors.Errorf("unknown URL scheme: %s", u.Scheme)
 	}
 }

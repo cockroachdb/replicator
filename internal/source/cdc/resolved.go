@@ -63,7 +63,7 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 
 // resolved acts upon a resolved timestamp message.
 func (h *Handler) resolved(ctx context.Context, req *request) error {
-	_, resolver, err := h.Resolvers.get(ctx, req.target.Schema())
+	_, resolver, err := h.Resolvers.get(req.target.Schema())
 	if err != nil {
 		return err
 	}
