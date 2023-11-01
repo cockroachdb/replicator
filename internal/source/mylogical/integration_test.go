@@ -109,7 +109,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
 			ChaosProb:     fc.chaosProb,
 			Immediate:     fc.immediate,
-			RetryDelay:    time.Nanosecond,
+			RetryDelay:    time.Millisecond,
 			StagingSchema: fixture.StagingDB.Schema(),
 			TargetConn:    crdbPool.ConnectionString,
 		},

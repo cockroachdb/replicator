@@ -684,7 +684,7 @@ func testMassBackfillWithForeignKeys(
 				ForeignKeysEnabled: true,
 				StagingConn:        baseFixture.StagingPool.ConnectionString,
 				StagingSchema:      baseFixture.StagingDB.Schema(),
-				RetryDelay:         time.Nanosecond,
+				RetryDelay:         time.Millisecond,
 				TargetConn:         baseFixture.TargetPool.ConnectionString,
 			},
 		}

@@ -180,6 +180,9 @@ func (c *BaseConfig) Preflight() error {
 	}
 	if c.RetryDelay == 0 {
 		c.RetryDelay = defaultRetryDelay
+	} else if c.RetryDelay < time.Millisecond {
+		// Set a sane lower bound to avoid spammy loops.
+		c.RetryDelay = time.Millisecond
 	}
 	if c.StagingSchema.Empty() {
 		return errors.New("no staging database specified")

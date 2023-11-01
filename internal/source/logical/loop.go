@@ -289,17 +289,26 @@ func (l *loop) runOnceUsing(
 			case <-ctx.Stopping():
 				return nil
 			case ch <- msgRollback:
-				// We'll recover by injecting a new rollback message and
-				// then restarting the message stream from the previous
-				// consistent point.
+				// We'll recover by injecting a new rollback message,
+				// waiting for a bit, and then restarting the message
+				// stream from the previous consistent point.
 				log.WithError(err).Errorf(
 					"error from replication source %s; continuing",
 					l.loopConfig.LoopName)
-				continue
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
 				return errors.New("stopping loop due to consumer backpressure during rollback")
+			}
+
+			// Interruptable sleep since RetryDelay is likely several
+			// seconds in a reasonable configuration.
+			select {
+			case <-time.After(l.factory.baseConfig.RetryDelay):
+			case <-ctx.Stopping():
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
 	})

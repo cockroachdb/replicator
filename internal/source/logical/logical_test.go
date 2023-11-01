@@ -179,7 +179,7 @@ func testLogicalSmoke(t *testing.T, mode *logicalTestMode) {
 		ChaosProb:          chaosProb,
 		ForeignKeysEnabled: mode.fk,
 		Immediate:          mode.immediate,
-		RetryDelay:         time.Nanosecond,
+		RetryDelay:         time.Millisecond,
 		StagingConn:        fixture.StagingPool.ConnectionString,
 		StagingSchema:      fixture.StagingDB.Schema(),
 		StandbyTimeout:     5 * time.Millisecond,
