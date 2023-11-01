@@ -19,7 +19,6 @@ package cdc
 // This file contains code repackaged from url.go.
 
 import (
-	"context"
 	"encoding/json"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -32,10 +31,8 @@ import (
 // returned by the event_op() function.
 // SELECT *, event_op() as operation
 // See (https://www.cockroachlabs.com/docs/stable/cdc-queries.html#cdc-query-function-support)
-func (h *Handler) parseNdjsonQueryMutation(
-	ctx context.Context, req *request, rawBytes []byte,
-) (types.Mutation, error) {
-	keys, err := h.getPrimaryKey(ctx, req)
+func (h *Handler) parseNdjsonQueryMutation(req *request, rawBytes []byte) (types.Mutation, error) {
+	keys, err := h.getPrimaryKey(req)
 	if err != nil {
 		return types.Mutation{}, err
 	}
@@ -50,7 +47,7 @@ func (h *Handler) parseNdjsonQueryMutation(
 
 // getPrimaryKey returns a map that contains all the columns that make up the primary key
 // for the target table and their ordinal position within the key.
-func (h *Handler) getPrimaryKey(ctx context.Context, req *request) (*ident.Map[int], error) {
+func (h *Handler) getPrimaryKey(req *request) (*ident.Map[int], error) {
 	if req.keys != nil {
 		return req.keys, nil
 	}
@@ -58,7 +55,7 @@ func (h *Handler) getPrimaryKey(ctx context.Context, req *request) (*ident.Map[i
 	if !ok {
 		return nil, errors.Errorf("expecting ident.Table, got %T", req.target)
 	}
-	watcher, err := h.Resolvers.watchers.Get(ctx, table.Schema())
+	watcher, err := h.Resolvers.watchers.Get(table.Schema())
 	if err != nil {
 		return nil, err
 	}

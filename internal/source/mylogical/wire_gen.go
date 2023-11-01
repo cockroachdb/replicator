@@ -23,123 +23,70 @@ import (
 
 // Start creates a MySQL/MariaDB logical replication loop using the
 // provided configuration.
-func Start(ctx *stopper.Context, config *Config) (*MYLogical, func(), error) {
-	diagnostics, cleanup := diag.New(ctx)
+func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
+	diagnostics := diag.New(ctx)
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dialect, err := ProvideDialect(config, loader)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetPool, cleanup2, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
+	targetPool, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetStatements, cleanup3, err := logical.ProvideTargetStatements(baseConfig, targetPool, diagnostics)
+	targetStatements, err := logical.ProvideTargetStatements(ctx, baseConfig, targetPool, diagnostics)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
-	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingPool, cleanup6, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
+	stagingPool, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	loop, err := ProvideLoop(ctx, config, dialect, factory)
+	loop, err := ProvideLoop(config, dialect, factory)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	myLogical := &MYLogical{
 		Diagnostics: diagnostics,
 		Loop:        loop,
 	}
-	return myLogical, func() {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
+	return myLogical, nil
 }

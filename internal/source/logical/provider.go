@@ -17,7 +17,6 @@
 package logical
 
 import (
-	"context"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -29,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -66,7 +66,7 @@ func ProvideDLQConfig(config *BaseConfig) *dlq.Config {
 // ProvideFactory returns a utility which can create multiple logical
 // loops.
 func ProvideFactory(
-	ctx context.Context,
+	ctx *stopper.Context,
 	appliers types.Appliers,
 	applyConfigs *applycfg.Configs,
 	baseConfig *BaseConfig,
@@ -97,6 +97,7 @@ func ProvideFactory(
 		memo:         memo,
 		scriptLoader: scriptLoader,
 		stagingPool:  stagingPool,
+		stop:         ctx,
 		targetPool:   targetPool,
 		watchers:     watchers,
 	}, nil
@@ -112,9 +113,9 @@ func ProvideStagingDB(config *BaseConfig) (ident.StagingSchema, error) {
 // accesses the staging cluster. The pool will be closed by the cancel
 // function.
 func ProvideStagingPool(
-	ctx context.Context, config *BaseConfig, diags *diag.Diagnostics,
-) (*types.StagingPool, func(), error) {
-	ret, cancel, err := stdpool.OpenPgxAsStaging(ctx,
+	ctx *stopper.Context, config *BaseConfig, diags *diag.Diagnostics,
+) (*types.StagingPool, error) {
+	ret, err := stdpool.OpenPgxAsStaging(ctx,
 		config.StagingConn,
 		stdpool.WithConnectionLifetime(5*time.Minute),
 		stdpool.WithDiagnostics(diags, "staging"),
@@ -123,7 +124,7 @@ func ProvideStagingPool(
 		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// This sanity-checks the configured schema against the product. For
@@ -131,20 +132,19 @@ func ProvideStagingPool(
 	// names.
 	sch, err := ret.Product.ExpandSchema(config.StagingSchema)
 	if err != nil {
-		cancel()
-		return nil, nil, err
+		return nil, err
 	}
 	config.StagingSchema = sch
 
-	return ret, cancel, err
+	return ret, err
 }
 
 // ProvideTargetPool is called by Wire to create a connection pool that
 // accesses the target cluster. The pool will be closed by the cancel
 // function.
 func ProvideTargetPool(
-	ctx context.Context, config *BaseConfig, diags *diag.Diagnostics,
-) (*types.TargetPool, func(), error) {
+	ctx *stopper.Context, config *BaseConfig, diags *diag.Diagnostics,
+) (*types.TargetPool, error) {
 	options := []stdpool.Option{
 		stdpool.WithConnectionLifetime(5 * time.Minute),
 		stdpool.WithDiagnostics(diags, "target"),
@@ -164,25 +164,26 @@ func ProvideTargetPool(
 	if txTimeout != 0 {
 		options = append(options, stdpool.WithTransactionTimeout(txTimeout))
 	}
-	ret, cancel, err := stdpool.OpenTarget(ctx, config.TargetConn, options...)
+	ret, err := stdpool.OpenTarget(ctx, config.TargetConn, options...)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return ret, cancel, err
+	return ret, err
 }
 
 // ProvideTargetStatements is called by Wire to construct a
 // prepared-statement cache. Anywhere the associated TargetPool is
 // reused should also reuse the cache.
 func ProvideTargetStatements(
-	config *BaseConfig, pool *types.TargetPool, diags *diag.Diagnostics,
-) (*types.TargetStatements, func(), error) {
+	ctx *stopper.Context, config *BaseConfig, pool *types.TargetPool, diags *diag.Diagnostics,
+) (*types.TargetStatements, error) {
 	ret := stmtcache.New[string](pool.DB, config.TargetStatementCacheSize)
 	if err := diags.Register("targetStatements", ret); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return &types.TargetStatements{Cache: ret}, ret.Close, nil
+	ctx.Defer(ret.Close)
+	return &types.TargetStatements{Cache: ret}, nil
 }
 
 // ProvideUserScriptConfig is called by Wire to extract the user-script

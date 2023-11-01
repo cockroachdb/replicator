@@ -18,8 +18,6 @@
 package all
 
 import (
-	"context"
-
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
@@ -49,8 +47,6 @@ func ProvideDLQConfig() (*dlq.Config, error) {
 
 // ProvideWatcher is called by Wire to construct a Watcher
 // bound to the testing database.
-func ProvideWatcher(
-	ctx context.Context, target sinktest.TargetSchema, watchers types.Watchers,
-) (types.Watcher, error) {
-	return watchers.Get(ctx, target.Schema())
+func ProvideWatcher(target sinktest.TargetSchema, watchers types.Watchers) (types.Watcher, error) {
+	return watchers.Get(target.Schema())
 }

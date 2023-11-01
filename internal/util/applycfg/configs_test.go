@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,8 +32,7 @@ func TestConfigs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	diags, cancel := diag.New(ctx)
-	defer cancel()
+	diags := diag.New(stopper.WithContext(ctx))
 
 	cfgs, err := ProvideConfigs(diags)
 	r.NoError(err)

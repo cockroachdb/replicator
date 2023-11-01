@@ -32,9 +32,8 @@ import (
 func TestDLQ(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -74,9 +73,8 @@ func TestDLQ(t *testing.T) {
 func TestMissingColumns(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 
@@ -99,9 +97,8 @@ func TestMissingColumns(t *testing.T) {
 func TestMissingTable(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	ctx := fixture.Context
 	_, err = fixture.DLQs.Get(ctx, fixture.TargetSchema.Schema(), "foo")

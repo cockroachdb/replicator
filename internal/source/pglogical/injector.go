@@ -33,7 +33,7 @@ import (
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(ctx *stopper.Context, config *Config) (*PGLogical, func(), error) {
+func Start(ctx *stopper.Context, config *Config) (*PGLogical, error) {
 	panic(wire.Build(
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),

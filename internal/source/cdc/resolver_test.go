@@ -33,9 +33,8 @@ func TestResolverDeQueue(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	baseFixture, cancel, err := all.NewFixture()
+	baseFixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	fixture, cancel, err := newTestFixture(baseFixture, &Config{
 		MetaTableName: ident.New("resolved_timestamps"),
@@ -55,7 +54,7 @@ func TestResolverDeQueue(t *testing.T) {
 
 	// Disable call to loop.Start().
 	fixture.Resolvers.noStart = true
-	_, resolver, err := fixture.Resolvers.get(ctx, tbl.Name().Schema())
+	_, resolver, err := fixture.Resolvers.get(tbl.Name().Schema())
 	r.NoError(err)
 
 	for i := int64(0); i < rowCount; i++ {
