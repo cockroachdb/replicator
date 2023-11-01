@@ -24,7 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/pkg/errors"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 // factory vends singleton instance of apply.
@@ -33,10 +33,10 @@ type factory struct {
 	configs  *applycfg.Configs
 	dlqs     types.DLQs
 	product  types.Product
+	stop     *stopper.Context
 	watchers types.Watchers
 	mu       struct {
 		sync.RWMutex
-		cleanup   []func()
 		instances *ident.TableMap[*apply]
 	}
 }
@@ -78,16 +78,11 @@ func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if f.mu.instances == nil {
-		return nil, errors.New("factory has been shut down")
-	}
-
 	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
-	ret, cancel, err := f.newApply(product, table)
+	ret, err := f.newApply(f.stop, product, table)
 	if err == nil {
-		f.mu.cleanup = append(f.mu.cleanup, cancel)
 		f.mu.instances.Put(table, ret)
 	}
 	return ret, err
@@ -97,9 +92,5 @@ func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) 
 func (f *factory) getUnlocked(table ident.Table) *apply {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	// Used after shutdown.
-	if f.mu.instances == nil {
-		return nil
-	}
 	return f.mu.instances.GetZero(table)
 }

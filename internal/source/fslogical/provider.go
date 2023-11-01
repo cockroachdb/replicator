@@ -17,7 +17,6 @@
 package fslogical
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,7 +51,6 @@ var enableWipe bool
 // ProvideLoops is called by wire to construct a logical-replication
 // loop for each configured collection/table pair.
 func ProvideLoops(
-	ctx *stopper.Context,
 	cfg *Config,
 	fs *firestore.Client,
 	loops *logical.Factory,
@@ -106,7 +104,7 @@ func ProvideLoops(
 		loopCfg.LoopName = sourceName.Raw()
 
 		var err error
-		ret[idx], err = loops.Start(ctx, loopCfg)
+		ret[idx], err = loops.Start(loopCfg)
 		if err != nil {
 			return err
 		}
@@ -126,8 +124,8 @@ func ProvideLoops(
 // The UserScript is added as a fake dependency to ensure that any
 // script-driven configuration is performed first.
 func ProvideFirestoreClient(
-	ctx context.Context, cfg *Config, _ *script.UserScript,
-) (*firestore.Client, func(), error) {
+	ctx *stopper.Context, cfg *Config, _ *script.UserScript,
+) (*firestore.Client, error) {
 	// Project ID is usually baked into the JSON key file.
 	projectID := firestore.DetectProjectID
 	if cfg.ProjectID != "" {
@@ -140,22 +138,24 @@ func ProvideFirestoreClient(
 			projectID,
 			option.WithCredentialsFile(cfg.CredentialsFile))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		return client, func() { _ = client.Close() }, nil
+		ctx.Defer(func() { _ = client.Close() })
+		return client, nil
 	}
 
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-
-	return client, func() {
+	ctx.Defer(func() {
 		_ = client.Close()
 		if enableWipe {
 			wipeFirestore(emulator, projectID)
 		}
-	}, nil
+	})
+
+	return client, nil
 }
 
 // ProvideScriptTarget exports [Config.TargetSchema] for the script
@@ -167,11 +167,7 @@ func ProvideScriptTarget(cfg *Config) script.TargetSchema {
 // ProvideTombstones is called by wire to construct a helper that
 // manages document tombstones.
 func ProvideTombstones(
-	ctx *stopper.Context,
-	cfg *Config,
-	fs *firestore.Client,
-	loops *logical.Factory,
-	userscript *script.UserScript,
+	cfg *Config, fs *firestore.Client, loops *logical.Factory, userscript *script.UserScript,
 ) (*Tombstones, error) {
 	ret := &Tombstones{cfg: cfg}
 	if cfg.TombstoneCollection == "" {
@@ -193,7 +189,7 @@ func ProvideTombstones(
 	loopConfig := cfg.LoopConfig.Copy()
 	loopConfig.Dialect = ret
 	loopConfig.LoopName = cfg.TombstoneCollection
-	_, err := loops.Start(ctx, loopConfig)
+	_, err := loops.Start(loopConfig)
 	if err != nil {
 		return nil, err
 	}

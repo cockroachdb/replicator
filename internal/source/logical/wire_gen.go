@@ -7,7 +7,6 @@
 package logical
 
 import (
-	"context"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
@@ -16,105 +15,63 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 // Injectors from injector.go:
 
-func NewFactoryForTests(ctx context.Context, config Config) (*Factory, func(), error) {
+func NewFactoryForTests(ctx *stopper.Context, config Config) (*Factory, error) {
 	scriptConfig, err := ProvideUserScriptConfig(config)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	loader, err := script.ProvideLoader(scriptConfig)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	baseConfig, err := ProvideBaseConfig(config, loader)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	diagnostics, cleanup := diag.New(ctx)
-	targetPool, cleanup2, err := ProvideTargetPool(ctx, baseConfig, diagnostics)
+	diagnostics := diag.New(ctx)
+	targetPool, err := ProvideTargetPool(ctx, baseConfig, diagnostics)
 	if err != nil {
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	targetStatements, cleanup3, err := ProvideTargetStatements(baseConfig, targetPool, diagnostics)
+	targetStatements, err := ProvideTargetStatements(ctx, baseConfig, targetPool, diagnostics)
 	if err != nil {
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlqConfig := ProvideDLQConfig(baseConfig)
-	watchers, cleanup4, err := schemawatch.ProvideFactory(targetPool, diagnostics)
+	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
 	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, cleanup5, err := apply.ProvideFactory(targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	appliers, err := apply.ProvideFactory(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	stagingPool, cleanup6, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
+	stagingPool, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	stagingSchema, err := ProvideStagingDB(baseConfig)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	factory, err := ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
 	if err != nil {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
+		return nil, err
 	}
-	return factory, func() {
-		cleanup6()
-		cleanup5()
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-	}, nil
+	return factory, nil
 }

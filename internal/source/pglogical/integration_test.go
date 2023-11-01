@@ -94,11 +94,10 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	dbSchema := fixture.TargetSchema.Schema()
@@ -221,11 +220,10 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 			MainPath: "/testdata/logical_test.ts",
 		}
 	}
-	repl, cancelLoop, err := Start(ctx, cfg)
+	repl, err := Start(ctx, cfg)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancelLoop()
 
 	// Wait for backfill.
 	for _, tgt := range tgts {
@@ -365,11 +363,10 @@ func TestDataTypes(t *testing.T) {
 	}
 
 	// Create a basic test fixture.
-	fixture, cancel, err := base.NewFixture()
+	fixture, err := base.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
-	defer cancel()
 
 	ctx := fixture.Context
 	dbSchema := fixture.TargetSchema.Schema()
@@ -429,7 +426,7 @@ func TestDataTypes(t *testing.T) {
 	pubNameRaw := publicationName(dbName).Raw()
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	repl, cancelLoop, err := Start(ctx, &Config{
+	repl, err := Start(fixture.Context, &Config{
 		BaseConfig: logical.BaseConfig{
 			RetryDelay:    time.Millisecond,
 			StagingSchema: fixture.StagingDB.Schema(),
@@ -446,7 +443,6 @@ func TestDataTypes(t *testing.T) {
 	if !a.NoError(err) {
 		return
 	}
-	defer cancelLoop()
 
 	// Wait for rows to show up.
 	for idx, tc := range tcs {

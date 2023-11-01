@@ -33,7 +33,7 @@ import (
 
 // Start creates a MySQL/MariaDB logical replication loop using the
 // provided configuration.
-func Start(ctx *stopper.Context, config *Config) (*MYLogical, func(), error) {
+func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	panic(wire.Build(
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),

@@ -136,7 +136,7 @@ func (h *Handler) processMutationsDeferred(
 func (h *Handler) processMutationsImmediate(
 	ctx context.Context, target ident.Schema, toProcess *ident.TableMap[[]types.Mutation],
 ) error {
-	batcher, err := h.Immediate.Get(ctx, target)
+	batcher, err := h.Immediate.Get(target)
 	if err != nil {
 		return err
 	}

@@ -31,17 +31,15 @@ import (
 // A Server receives incoming CockroachDB changefeed messages and
 // applies them to a target cluster.
 type Server struct {
-	auth    types.Authenticator
-	diags   *diag.Diagnostics
-	mux     *http.ServeMux
-	stopped chan struct{}
+	auth  types.Authenticator
+	diags *diag.Diagnostics
+	mux   *http.ServeMux
 }
 
 var (
 	_ stdlogical.HasAuthenticator = (*Server)(nil)
 	_ stdlogical.HasDiagnostics   = (*Server)(nil)
 	_ stdlogical.HasServeMux      = (*Server)(nil)
-	_ stdlogical.HasStoppable     = (*Server)(nil)
 )
 
 // GetAuthenticator implements [stdlogical.HasAuthenticator].
@@ -57,15 +55,4 @@ func (s *Server) GetDiagnostics() *diag.Diagnostics {
 // GetServeMux implements [stdlogical.HasServeMux].
 func (s *Server) GetServeMux() *http.ServeMux {
 	return s.mux
-}
-
-// GetStoppable implements [stdlogical.HasStoppable].
-func (s *Server) GetStoppable() types.Stoppable {
-	return s
-}
-
-// Stopped returns a channel that will be closed when the server has
-// been shut down.
-func (s *Server) Stopped() <-chan struct{} {
-	return s.stopped
 }

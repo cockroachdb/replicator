@@ -295,8 +295,6 @@ func (l *loop) runOnceUsing(
 				log.WithError(err).Errorf(
 					"error from replication source %s; continuing",
 					l.loopConfig.LoopName)
-			case <-ctx.Done():
-				return ctx.Err()
 			default:
 				return errors.New("stopping loop due to consumer backpressure during rollback")
 			}
@@ -307,8 +305,6 @@ func (l *loop) runOnceUsing(
 			case <-time.After(l.factory.baseConfig.RetryDelay):
 			case <-ctx.Stopping():
 				return nil
-			case <-ctx.Done():
-				return ctx.Err()
 			}
 		}
 	})
@@ -356,8 +352,7 @@ func (l *loop) runOnceUsing(
 							select {
 							case <-ch:
 								log.Info("continuing after backfill")
-							case <-ctx.Done():
-								return ctx.Err()
+							case <-ctx.Stopping():
 							}
 						}
 						return nil
@@ -381,8 +376,6 @@ func (l *loop) runOnceUsing(
 				case <-ctx.Stopping():
 					// Graceful shutdown.
 					return nil
-				case <-ctx.Done():
-					return ctx.Err()
 				}
 			}
 		})
@@ -434,21 +427,22 @@ func (l *loop) chooseFillStrategy() (choice fillFn, events Events, isBackfill bo
 }
 
 // doBackfill provides the implementation of Events.Backfill.
-func (l *loop) doBackfill(ctx context.Context, loopName string, backfiller Backfiller) error {
+func (l *loop) doBackfill(loopName string, backfiller Backfiller) error {
 	// Create a copy of the individual loop configuration, with an
 	// updated name.
 	cfg := l.loopConfig.Copy()
 	cfg.Dialect = backfiller
 	cfg.LoopName = loopName
 
-	// Create a (most likely nested) stopper.
-	stop := stopper.WithContext(ctx)
+	// Create a nested stopper.
+	stop := stopper.WithContext(l.running)
+	// We don't need any grace time since the sub-loop has exited.
+	defer func() { stop.Stop(0) }()
+
 	filler, err := l.factory.newLoop(stop, cfg)
 	if err != nil {
 		return err
 	}
-	// We don't need any grace time since the sub-loop has exited.
-	defer func() { stop.Stop(0) }()
 
 	return filler.loop.runOnceUsing(
 		stop,

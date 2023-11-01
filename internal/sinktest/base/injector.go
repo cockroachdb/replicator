@@ -19,9 +19,13 @@
 
 package base
 
-import "github.com/google/wire"
+import (
+	"testing"
+
+	"github.com/google/wire"
+)
 
 // NewFixture constructs a self-contained test fixture.
-func NewFixture() (*Fixture, func(), error) {
+func NewFixture(t testing.TB) (*Fixture, error) {
 	panic(wire.Build(TestSet))
 }

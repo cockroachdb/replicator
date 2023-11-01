@@ -27,9 +27,8 @@ import (
 func TestChecker(t *testing.T) {
 	r := require.New(t)
 
-	fixture, cancel, err := all.NewFixture()
+	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	defer cancel()
 
 	checker := fixture.VersionChecker
 	ctx := fixture.Context
