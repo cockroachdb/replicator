@@ -139,7 +139,7 @@ func testSmoke(t *testing.T, chaosProb float32) {
 			BackfillWindow:     time.Minute,
 			ChaosProb:          chaosProb,
 			ForeignKeysEnabled: true,
-			RetryDelay:         time.Nanosecond,
+			RetryDelay:         time.Millisecond,
 			StandbyTimeout:     10 * time.Millisecond,
 			StagingConn:        fixture.StagingPool.ConnectionString,
 			StagingSchema:      fixture.StagingDB.Schema(),
