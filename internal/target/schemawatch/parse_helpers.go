@@ -121,10 +121,26 @@ func coerceJSON(a any) (any, error) {
 	return json.Marshal(a)
 }
 
+// reifyJSON converts an incoming byte array to a reified type.
+func reifyJSON(v any) (any, error) {
+	if buf, ok := v.([]byte); ok {
+		if err := json.Unmarshal(buf, &v); err != nil {
+			return nil, err
+		}
+	}
+	return v, nil
+}
+
 func parseHelper(product types.Product, typeName string) func(any) (any, error) {
 	switch product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:
-		// Just pass through, since we have similar representations.
+		switch typeName {
+		case "JSON", "JSONB":
+			// Ensure that data bound for a JSON column is reified.
+			return reifyJSON
+		default:
+			return nil
+		}
 	case types.ProductMariaDB, types.ProductMySQL:
 		// Coerce types to the what the mysql driver expects.
 		switch typeName {

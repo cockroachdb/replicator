@@ -180,7 +180,7 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 		if err != nil {
 			a.errors.Inc()
 		}
-		return err
+		return errors.Wrap(err, a.target.Raw())
 	}
 
 	a.mu.RLock()
@@ -535,7 +535,15 @@ func (a *apply) upsertBagsLocked(
 
 		// Copy the conflicting data from the table into the Conflict.
 		for idx, col := range a.mu.templates.Columns {
-			c.Target.Put(col.Name, blockingData[idx])
+			v := blockingData[idx]
+			// Allow runtime type fixups
+			if col.Parse != nil {
+				v, err = col.Parse(v)
+				if err != nil {
+					return errors.Wrapf(err, "could not invoke type helper on column %s", col.Name)
+				}
+			}
+			c.Target.Put(col.Name, v)
 		}
 
 		// Supply before data if we received it from upstream.
