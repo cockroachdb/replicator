@@ -109,6 +109,7 @@ func createFixture(
 }
 
 func testQueryHandler(t *testing.T, htc *fixtureConfig) {
+	t.Parallel()
 	t.Helper()
 	fixture, tableInfo := createFixture(t, htc)
 	ctx := fixture.Context
@@ -299,6 +300,7 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 }
 
 func testHandler(t *testing.T, cfg *fixtureConfig) {
+	t.Parallel()
 	t.Helper()
 	fixture, tableInfo := createFixture(t, cfg)
 	ctx := fixture.Context
