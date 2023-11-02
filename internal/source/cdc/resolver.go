@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -33,6 +34,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -57,14 +59,29 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 // incoming resolved timestamps and (asynchronously) applies them.
 // Resolver instances are created for each destination schema.
 type resolver struct {
-	cfg         *Config
-	leases      types.Leases
-	marked      notify.Var[hlc.Time] // Called by Mark.
-	pool        *types.StagingPool
-	retirements notify.Var[hlc.Time] // Drives a goroutine to remove applied mutations.
-	stagers     types.Stagers
-	target      ident.Schema
-	watcher     types.Watcher
+	cfg        *Config
+	committed  notify.Var[hlc.Time] // Drives a goroutine to remove applied mutations.
+	leases     types.Leases
+	marked     notify.Var[hlc.Time] // Called by Mark to fast-wake the processing loop.
+	processing atomic.Bool          // True whenever Process is running.
+	proposed   notify.Var[hlc.Time] // Drives metrics.
+	pool       *types.StagingPool
+	stagers    types.Stagers
+	target     ident.Schema
+	watcher    types.Watcher
+
+	metrics struct {
+		committedAge            prometheus.Gauge
+		committedTime           prometheus.Gauge
+		flushDuration           prometheus.Observer
+		markDuration            prometheus.Observer
+		processDuration         prometheus.Observer
+		processing              prometheus.Gauge
+		proposedAge             prometheus.Gauge
+		proposedTime            prometheus.Gauge
+		recordDuration          prometheus.Observer
+		selectTimestampDuration prometheus.Observer
+	}
 
 	sql struct {
 		mark            string
@@ -101,6 +118,19 @@ func newResolver(
 		target:  target,
 		watcher: watcher,
 	}
+
+	labels := prometheus.Labels{"schema": target.Raw()}
+	ret.metrics.committedAge = committedAge.With(labels)
+	ret.metrics.committedTime = committedTime.With(labels)
+	ret.metrics.flushDuration = flushDuration.With(labels)
+	ret.metrics.markDuration = markDuration.With(labels)
+	ret.metrics.processDuration = processDuration.With(labels)
+	ret.metrics.processing = processing.With(labels)
+	ret.metrics.proposedAge = proposedAge.With(labels)
+	ret.metrics.proposedTime = proposedTime.With(labels)
+	ret.metrics.recordDuration = recordDuration.With(labels)
+	ret.metrics.selectTimestampDuration = selectTimestampDuration.With(labels)
+
 	ret.sql.selectTimestamp = fmt.Sprintf(selectTimestampTemplate, metaTable)
 	ret.sql.mark = fmt.Sprintf(markTemplate, metaTable)
 	ret.sql.record = fmt.Sprintf(recordTemplate, metaTable)
@@ -136,28 +166,30 @@ INSERT INTO %[1]s (target_schema, source_nanos, source_logical)
 SELECT * FROM to_insert`
 
 func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
-	tag, err := r.pool.Exec(ctx,
-		r.sql.mark,
-		r.target.Schema().Raw(),
-		// The sql driver gets the wrong type back from CRDB v20.2
-		fmt.Sprintf("%d", ts.Nanos()),
-		fmt.Sprintf("%d", ts.Logical()),
-	)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	if tag.RowsAffected() == 0 {
-		log.Tracef("ignoring no-op resolved timestamp %s", ts)
+	return retry.Retry(ctx, func(ctx context.Context) error {
+		start := time.Now()
+		tag, err := r.pool.Exec(ctx,
+			r.sql.mark,
+			r.target.Schema().Raw(),
+			// The sql driver gets the wrong type back from CRDB v20.2
+			fmt.Sprintf("%d", ts.Nanos()),
+			fmt.Sprintf("%d", ts.Logical()),
+		)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if tag.RowsAffected() == 0 {
+			log.Tracef("ignoring no-op resolved timestamp %s", ts)
+			return nil
+		}
+		r.marked.Set(ts)
+		r.metrics.markDuration.Observe(time.Since(start).Seconds())
+		log.WithFields(log.Fields{
+			"schema":   r.target,
+			"resolved": ts,
+		}).Trace("marked new resolved timestamp")
 		return nil
-	}
-	log.WithFields(log.Fields{
-		"schema":   r.target,
-		"resolved": ts,
-	}).Trace("marked new resolved timestamp")
-
-	r.marked.Set(ts)
-
-	return nil
+	})
 }
 
 // BackfillInto implements logical.Backfiller.
@@ -181,9 +213,11 @@ func (r *resolver) readInto(
 	cp, cpUpdated := state.GetConsistentPoint()
 	resumeFrom := cp.(*resolvedStamp)
 
-	// Resume deletions on restart.
+	// Bootstrap metrics and deletions on restart even if no new
+	// resolved timestamps are arriving.
 	if resumeFrom.CommittedTime != hlc.Zero() {
-		r.retirements.Set(resumeFrom.CommittedTime)
+		r.committed.Set(resumeFrom.CommittedTime)
+		r.proposed.Set(resumeFrom.ProposedTime)
 	}
 
 	// See discussion on BackupPolling field. A timer is preferred to
@@ -260,8 +294,6 @@ func (r *resolver) readInto(
 			cp, cpUpdated = state.GetConsistentPoint()
 			if next, ok := cp.(*resolvedStamp); ok && next.ProposedTime == hlc.Zero() {
 				resumeFrom = next
-				// Allow applied mutations to be deleted.
-				r.retirements.Set(next.CommittedTime)
 				log.WithFields(log.Fields{
 					"loop":       r.target,
 					"resumeFrom": resumeFrom,
@@ -309,6 +341,9 @@ func (r *resolver) nextProposedStamp(
 func (r *resolver) Process(
 	ctx context.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
+	r.processing.Store(true)
+	defer r.processing.Store(false)
+
 	for msg := range ch {
 		if logical.IsRollback(msg) {
 			// We don't have any state that needs to be cleaned up.
@@ -333,13 +368,19 @@ VALUES ($1, $2, $3, now())`
 // timestamps from the source cluster to be logged for performance
 // analysis and cross-cluster reconciliation via AOST queries.
 func (r *resolver) Record(ctx context.Context, ts hlc.Time) error {
-	_, err := r.pool.Exec(ctx,
-		r.sql.record,
-		r.target.Schema().Raw(),
-		ts.Nanos(),
-		ts.Logical(),
-	)
-	return errors.WithStack(err)
+	return retry.Retry(ctx, func(ctx context.Context) error {
+		start := time.Now()
+		_, err := r.pool.Exec(ctx,
+			r.sql.record,
+			r.target.Schema().Raw(),
+			ts.Nanos(),
+			ts.Logical(),
+		)
+		if err == nil {
+			r.metrics.recordDuration.Observe(time.Since(start).Seconds())
+		}
+		return errors.WithStack(err)
+	})
 }
 
 // ZeroStamp implements logical.Dialect.
@@ -350,7 +391,7 @@ func (r *resolver) ZeroStamp() stamp.Stamp {
 // process makes incremental progress in fulfilling the given
 // resolvedStamp.
 func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logical.Events) error {
-	start := time.Now()
+	processStart := time.Now()
 	targets := r.watcher.Get().Order
 
 	if len(targets) == 0 {
@@ -413,7 +454,7 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		}); err != nil {
 			return err
 		}
-
+		r.metrics.flushDuration.Observe(time.Since(processStart).Seconds())
 		log.WithFields(log.Fields{
 			"duration": time.Since(flushStart),
 			"schema":   r.target,
@@ -431,6 +472,10 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 	// timestamp.
 	for hadData := true; hadData; {
 		if err := retry.Retry(ctx, func(ctx context.Context) error {
+			// Update internal state for metrics reporting.
+			r.committed.Set(rs.CommittedTime)
+			r.proposed.Set(rs.ProposedTime)
+
 			unstageTX, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 			if err != nil {
 				return errors.Wrap(err, "could not open staging transaction")
@@ -540,10 +585,11 @@ func (r *resolver) process(ctx context.Context, rs *resolvedStamp, events logica
 		}
 	}
 
+	r.metrics.processDuration.Observe(time.Since(processStart).Seconds())
 	log.WithFields(log.Fields{
 		"committed": rs.CommittedTime,
 		"count":     total,
-		"duration":  time.Since(start),
+		"duration":  time.Since(processStart),
 		"schema":    r.target,
 	}).Debugf("processed resolved timestamp")
 	return nil
@@ -571,6 +617,7 @@ var (
 // selectTimestamp locates the next unresolved timestamp to flush. The after
 // parameter allows us to skip over most of the table contents.
 func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Time, error) {
+	start := time.Now()
 	var sourceNanos int64
 	var sourceLogical int
 	if err := r.pool.QueryRow(ctx,
@@ -584,6 +631,7 @@ func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Tim
 		}
 		return hlc.Zero(), errors.WithStack(err)
 	}
+	r.metrics.selectTimestampDuration.Observe(time.Since(start).Seconds())
 	return hlc.New(sourceNanos, sourceLogical), nil
 }
 
@@ -591,42 +639,82 @@ func (r *resolver) selectTimestamp(ctx context.Context, after hlc.Time) (hlc.Tim
 // eventually discarded. This method will return immediately.
 func (r *resolver) retireLoop(ctx *stopper.Context) {
 	ctx.Go(func() error {
-		next, nextUpdated := r.retirements.Get()
-		for {
-			log.Tracef("retiring mutations in %s <= %s", r.target, next)
+		for committed, updated := r.committed.Get(); ; {
+			log.Tracef("retiring mutations in %s <= %s", r.target, committed)
 
 			targetTables := r.watcher.Get().Columns
 			if err := targetTables.Range(func(table ident.Table, _ []types.ColData) error {
 				stager, err := r.stagers.Get(ctx, table)
 				if err != nil {
-					// Don't log, just stop if canceled.
-					if errors.Is(err, context.Canceled) {
-						return err
-					}
-					// Warn, but keep running.
-					log.WithError(err).Warnf("could not acquire stager for %s", table)
-					return nil
+					return errors.Wrapf(err, "could not acquire stager")
 				}
 				// Retain staged data for an extra amount of time.
 				if off := r.cfg.RetireOffset; off > 0 {
-					next = hlc.New(next.Nanos()-off.Nanoseconds(), next.Logical())
+					committed = hlc.New(committed.Nanos()-off.Nanoseconds(), committed.Logical())
 				}
-				if err := stager.Retire(ctx, r.pool, next); err != nil {
-					if errors.Is(err, context.Canceled) {
-						return err
-					}
-					log.WithError(err).Warnf("error while retiring staged mutations in %s", table)
-				}
-				return nil
+				err = stager.Retire(ctx, r.pool, committed)
+				return errors.Wrapf(err, "could not retire metations")
 			}); err != nil {
 				log.WithError(err).Warnf("error in retire loop for %s", r.target)
 			}
 
 			select {
-			case <-nextUpdated:
-				next, nextUpdated = r.retirements.Get()
+			case <-updated:
+				committed, updated = r.committed.Get()
 			case <-ctx.Stopping():
 				return nil
+			}
+		}
+	})
+}
+
+// reportMetrics starts a goroutine to update those metrics which
+// are relative to the current wall time.
+func (r *resolver) reportMetrics(ctx *stopper.Context) {
+	const tick = time.Second
+	ctx.Go(func() error {
+		// Tick the values if we're processing a large batch.
+		ticker := time.NewTicker(tick)
+		defer ticker.Stop()
+
+		committed, committedUpdated := r.committed.Get()
+		proposed, proposedUpdated := r.proposed.Get()
+		for {
+			processing := r.processing.Load()
+			if processing {
+				r.metrics.processing.Set(1)
+			} else {
+				r.metrics.processing.Set(0)
+			}
+
+			if processing && committed != hlc.Zero() {
+				r.metrics.committedAge.Set(
+					time.Since(time.Unix(0, committed.Nanos())).Seconds())
+				r.metrics.committedTime.Set(float64(committed.Nanos()) / 1e9)
+			} else {
+				r.metrics.committedAge.Set(0)
+				r.metrics.committedTime.Set(0)
+			}
+
+			if processing && proposed != hlc.Zero() {
+				r.metrics.proposedAge.Set(
+					time.Since(time.Unix(0, proposed.Nanos())).Seconds())
+				r.metrics.proposedTime.Set(float64(proposed.Nanos()) / 1e9)
+			} else {
+				r.metrics.proposedAge.Set(0)
+				r.metrics.proposedTime.Set(0)
+			}
+
+			select {
+			case <-ctx.Stopping():
+				return nil
+			case <-ticker.C:
+			case <-committedUpdated:
+				committed, committedUpdated = r.committed.Get()
+				ticker.Reset(tick)
+			case <-proposedUpdated:
+				proposed, proposedUpdated = r.proposed.Get()
+				ticker.Reset(tick)
 			}
 		}
 	})
@@ -680,7 +768,8 @@ func (r *Resolvers) get(target ident.Schema) (*logical.Loop, *resolver, error) {
 
 	r.mu.instances.Put(target, loop)
 
-	// Start a goroutine to retire old data.
+	// Start goroutines to report metrics and to retire old data.
+	ret.reportMetrics(r.stop)
 	ret.retireLoop(r.stop)
 
 	return loop, ret, nil
