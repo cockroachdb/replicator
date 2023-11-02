@@ -987,7 +987,9 @@ func TestAllDataTypes(t *testing.T) {
 	}
 
 	for _, tc := range testcases {
+		tc := tc // Capture for t.Parallel().
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			r := require.New(t)
 
 			// Creating a new database for each loop is, as of v22.2 and
