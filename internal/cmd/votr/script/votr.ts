@@ -36,20 +36,33 @@ const vectorMerge =
         (op: api.MergeOperation): api.MergeResult => {
             // Replay prevention: Don't process messages from older
             // clock values in the src column.
-            let src: number = op.proposed.src;
-            if (src === undefined) {
-                throw new Error("src column missing");
+            let newInfo = false;
+            let learned = {};
+            let whence = {};
+            for (let key in op.proposed.whence) {
+                let incomingClock: string = op.proposed.whence[key] ?? 0;
+                let existingClock: string = op.target.whence[key] ?? 0;
+                if (incomingClock > existingClock) {
+                    newInfo = true;
+                    whence[key] = incomingClock;
+                    learned[key] = true;
+                } else {
+                    whence[key] = existingClock;
+                }
             }
-            let incomingClock: string = op.proposed.whence[src] ?? 0;
-            let existingClock: string = op.target.whence[src] ?? 0;
-            if (incomingClock <= existingClock) {
+            for (let key in op.target.whence) {
+                if (whence[key] === undefined) {
+                    whence[key] = op.target.whence[key];
+                }
+            }
+            console.log(JSON.stringify(learned), JSON.stringify(whence));
+            if (!newInfo) {
                 return {drop: true};
             }
 
             // Use the target's view of the vector clock, but update it
             // with the mutation source's value.
-            op.proposed.whence = op.target.whence;
-            op.proposed.whence[src] = incomingClock;
+            op.proposed.whence = whence;
 
             // Absent a fallback, act like last-one-wins.
             if (!fallback) {

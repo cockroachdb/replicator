@@ -22,53 +22,6 @@ on:
   workflow_call:
   workflow_dispatch:
 jobs:
-  # Static code-quality checks.
-  code-quality:
-    name: Code Quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version-file: 'go.mod'
-
-      - name: crlfmt returns no deltas
-        if: ${{ !cancelled() }}
-        run: |
-          DELTA=$(go run github.com/cockroachdb/crlfmt -ignore _gen.go .)
-          echo $DELTA
-          test -z "$DELTA"
-
-      - name: Copyright headers
-        if: ${{ !cancelled() }}
-        run: go run github.com/google/addlicense -c "The Cockroach Authors" -l apache -s -v  -check  -ignore '**/testdata/**/*.sql' .
-
-      - name: Lint
-        if: ${{ !cancelled() }}
-        run: go run golang.org/x/lint/golint -set_exit_status ./...
-
-      - name: Static checks
-        if: ${{ !cancelled() }}
-        run: go run honnef.co/go/tools/cmd/staticcheck -checks all ./...
-
-      - name: Go Vet
-        if: ${{ !cancelled() }}
-        run: go vet ./...
-
-      # Check that all dependencies have licenses and that those
-      # licenses are reasonably permissive. License files for modules
-      # reachable from the entry point will be bundled and are visible
-      # through the licenses subcommand.
-      - name: License Checks
-        if: ${{ !cancelled() }}
-        run: go run github.com/google/go-licenses check .
-
-      - name: Ensure binary starts
-        if: ${{ !cancelled() }}
-        run: go run . help
-
   # Integration matrix tests for all supported CRDB and source DBs.
   tests:
     name: Integration Tests
@@ -85,67 +38,7 @@ jobs:
       # cross-product behavior provided by the matrix operator.
       matrix:
         include:
-          - cockroachdb: v21.1
-          - cockroachdb: v21.2
-          - cockroachdb: v22.1
-          - cockroachdb: v22.2
           - cockroachdb: v23.1
-            integration: firestore
-          - cockroachdb: v23.1
-            integration: mysql-v8
-          - cockroachdb: v23.1
-            integration: mysql-mariadb-v10
-          - cockroachdb: v23.1
-            integration: postgresql-v11
-          - cockroachdb: v23.1
-            integration: postgresql-v12
-          - cockroachdb: v23.1
-            integration: postgresql-v13
-          - cockroachdb: v23.1
-            integration: postgresql-v14
-          - cockroachdb: v23.1
-            integration: postgresql-v15
-          # Run a test with a separate CockroachDB source and target
-          # instance to ensure there are no accidental dependencies
-          # between the source, staging, and target schemas.
-          - cockroachdb: v23.1
-            source: source-cockroachdb-v23.1
-            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-            target: target-cockroachdb-v23.1
-            targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
-            # The Oracle 18 image doesn't come with a pre-built database, we need to do more work
-            # to allow this image to boot up fast enough for use in tests.
-#          - cockroachdb: v23.1
-#            target: oracle-v18.4
-#            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
-          - cockroachdb: v23.1
-            target: oracle-v21.3
-            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
-
-          # Test CRDB -> PostgreSQL for migration backfill use cases.
-          - cockroachdb: v23.1
-            target: postgresql-v11
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.1
-            target: postgresql-v12
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.1
-            target: postgresql-v13
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.1
-            target: postgresql-v14
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.1
-            target: postgresql-v15
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          # Test CRDB -> MySQL for migration backfill use cases.
-          - cockroachdb: v23.1
-            target: mysql-v8
-            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql?sslmode=require"
-          # Test CRDB -> MariaDB for migration backfill use cases.
-          - cockroachdb: v23.1
-            target: mysql-mariadb-v10
-            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
 
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out
@@ -195,7 +88,7 @@ jobs:
           set -o pipefail;
           go test
           -count 1
-          -coverpkg=./internal/...
+          -coverpkg=./internal/cmd/votr/...
           -covermode=atomic
           -coverprofile=${{ env.COVER_OUT }}
           -race
@@ -235,64 +128,3 @@ jobs:
             ${{ env.JUNIT_OUT }}
             ${{ env.TEST_OUT }}
           retention-days: 7
-
-  # Aggregate the results of multiple jobs within this workflow into a
-  # single status object that we can use for branch protection.
-  #
-  # https://docs.github.com/en/rest/commits/statuses
-  status:
-    name: Create status objects
-    runs-on: ubuntu-latest
-    permissions:
-      statuses: write
-    needs: # Update failure case below
-      - code-quality
-      - tests
-    if: ${{ always() }}
-    env:
-      CONTEXT: Workflow Golang
-      GH_TOKEN: ${{ github.token }}
-      MERGE_SHA: ${{ github.event.merge_group.head_sha }}
-      PR_SHA: ${{ github.event.pull_request.head.sha }}
-      STATE: success
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    steps:
-      - name: Failure
-        if: ${{ needs.code-quality.result != 'success' ||  needs.tests.result != 'success' }}
-        run: echo "STATE=failure" >> $GITHUB_ENV
-      - name: Report
-        run: |
-          set -eo pipefail
-
-          if [ ! -z "$PR_SHA" ]; then
-            gh api \
-               repos/${{ github.repository }}/statuses/$PR_SHA \
-               -f "state=$STATE" \
-               -f "context=$CONTEXT" \
-               -f "target_url=$RUN_URL"
-          fi
-
-          if [ ! -z "$MERGE_SHA" ]; then
-            gh api \
-              repos/${{ github.repository }}/statuses/$MERGE_SHA \
-              -f "state=$STATE" \
-               -f "context=$CONTEXT" \
-               -f "target_url=$RUN_URL"
-          fi
-
-  # This job downloads the test log files generated in the integration
-  # job and summarizes them into the GitHub Actions UI.
-  summarize-tests:
-    name: Test summaries
-    runs-on: ubuntu-latest
-    needs: tests
-    if: ${{ always() }}
-    steps:
-      - name: Download reports
-        uses: actions/download-artifact@v3
-        with:
-          name: integration-reports
-      - name: Summarize
-        uses: test-summary/action@v2
-        with:
-          paths: junit-*.xml

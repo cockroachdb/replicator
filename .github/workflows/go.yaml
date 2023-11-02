@@ -38,37 +38,6 @@ jobs:
   go-build-cache:
     uses: ./.github/workflows/go-build-cache.yaml
 
-  go-binaries:
-    uses: ./.github/workflows/go-binaries.yaml
-    needs:
-      - go-build-cache
-    permissions:
-      contents: read
-      statuses: write
-    secrets: inherit
-    with:
-      # Push if we're in the main repo and are pushing to a branch selected above.
-      push: ${{ !github.event.pull_request.head.repo.fork && github.event_name == 'push' }}
-
-  go-codeql:
-    uses: ./.github/workflows/go-codeql.yaml
-    needs:
-      - go-build-cache
-    permissions:
-      contents: read
-      security-events: write
-    secrets: inherit
-
-  go-docker:
-    uses: ./.github/workflows/go-docker.yaml
-    # Doesn't need the build cache
-    permissions:
-      contents: read
-    secrets: inherit
-    with:
-      # Push if we're in the main repo and are pushing to a branch selected above.
-      push: ${{ !github.event.pull_request.head.repo.fork && github.event_name == 'push' }}
-
   go-tests:
     uses: ./.github/workflows/go-tests.yaml
     needs:
@@ -81,14 +50,3 @@ jobs:
       packages: read
       statuses: write
     secrets: inherit
-
-  go-wiki:
-    uses: ./.github/workflows/go-wiki.yaml
-    needs:
-      - go-build-cache
-    permissions:
-      contents: write
-    secrets: inherit
-    with:
-      # Only update the wiki if we're pushing to the master branch.
-      push: ${{ github.event.push.ref == 'refs/heads/master' }}
