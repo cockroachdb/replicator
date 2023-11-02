@@ -116,6 +116,7 @@ func TestIntegration(t *testing.T) {
 }
 
 func testIntegration(t *testing.T, cfg testConfig) {
+	t.Parallel()
 	a := assert.New(t)
 	r := require.New(t)
 
