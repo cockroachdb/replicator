@@ -420,6 +420,11 @@ func TestGetColumns(t *testing.T) {
 
 	for i, test := range testcases {
 		t.Run(fmt.Sprintf("%d:%s", i, test.tableSchema), func(t *testing.T) {
+			// This test can't be marked as parallel until the test
+			// cases above are able to take a *Fixture as input.
+			// Otherwise, concurrent tests would clash on tables defined
+			// in the same schema, leading to a race condition.
+
 			if test.skip {
 				t.Skip("not applicable")
 			}
