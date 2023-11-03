@@ -569,7 +569,7 @@ func setupMYPool(config *Config) (*client.Pool, func(), error) {
 		}
 		defer conn.Close()
 
-		_, err = conn.Execute(fmt.Sprintf("DROP DATABASE %s", database.Raw()))
+		_, err = conn.Execute(fmt.Sprintf("DROP DATABASE `%s`", database.Raw()))
 		if err != nil {
 			log.WithError(err).Error("could not drop database")
 		}
@@ -583,21 +583,16 @@ func loadInitialGTIDSet(ctx context.Context, flavor string, myPool *client.Pool)
 	var gtidSet string
 	switch flavor {
 	case mysql.MySQLFlavor:
-		res, err := myExec(ctx, myPool, "select source_uuid, min(interval_start), max(interval_end) from mysql.gtid_executed group by source_uuid;")
+		res, err := myExec(ctx, myPool, "select @@GLOBAL.gtid_executed;")
 		if err != nil {
 			return "", err
 		}
-		var uuid string
-		var last int64
-
 		if len(res.Values) > 0 {
-			uuid = string(res.Values[0][0].AsString())
-			last = res.Values[0][2].AsInt64()
-			log.Infof("Master status: %s %d", uuid, last)
+			gtidSet = string(res.Values[0][0].AsString())
+			log.Infof("Master status: %s", gtidSet)
 		} else {
 			return "", errors.New("Unable to retrieve master status")
 		}
-		gtidSet = fmt.Sprintf("%s:1-%d", uuid, last)
 	case mysql.MariaDBFlavor:
 		res, err := myExec(ctx, myPool, "select @@gtid_binlog_pos;")
 		if err != nil {

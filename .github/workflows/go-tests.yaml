@@ -93,6 +93,8 @@ jobs:
           - cockroachdb: v23.1
             integration: mysql-v8
           - cockroachdb: v23.1
+            integration: mysql-v5  
+          - cockroachdb: v23.1
             integration: mysql-mariadb-v10
           - cockroachdb: v23.1
             integration: postgresql-v11

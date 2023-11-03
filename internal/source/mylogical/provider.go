@@ -54,6 +54,7 @@ func ProvideDialect(config *Config, _ *script.Loader) (logical.Dialect, error) {
 		TLSConfig: config.tlsConfig,
 	}
 	return &conn{
+		config:       config,
 		columns:      &ident.TableMap[[]types.ColData]{},
 		flavor:       flavor,
 		relations:    make(map[uint64]ident.Table),
