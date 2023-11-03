@@ -37,6 +37,7 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const loopName = "mylogicaltest"
@@ -54,6 +55,8 @@ func (f startStamp) MarshalText() (text []byte, err error) {
 func TestMain(m *testing.M) {
 	all.IntegrationMain(m, all.MySQLName)
 }
+
+const defaultSourceConn = "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable"
 
 type fixtureConfig struct {
 	backfill  bool
@@ -89,13 +92,10 @@ func TestMYLogical(t *testing.T) {
 
 func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
-
+	r := require.New(t)
 	// Create a basic test fixture.
 	fixture, err := all.NewFixture(t)
-	if !a.NoError(err) {
-		return
-	}
-
+	r.NoError(err)
 	ctx := fixture.Context
 	dbName := fixture.TargetSchema.Schema()
 	crdbPool := fixture.TargetPool
@@ -103,49 +103,18 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	// Create the schema in both locations.
 	tgt := ident.NewTable(dbName, ident.New("t"))
 
-	config := &Config{
-		BaseConfig: logical.BaseConfig{
-			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
-			ChaosProb:     fc.chaosProb,
-			Immediate:     fc.immediate,
-			RetryDelay:    time.Millisecond,
-			StagingSchema: fixture.StagingDB.Schema(),
-			TargetConn:    crdbPool.ConnectionString,
-		},
-		LoopConfig: logical.LoopConfig{
-			LoopName:     loopName,
-			TargetSchema: dbName,
-		},
-		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
-		ProcessID:  123456,
-	}
-	if fc.backfill {
-		config.BackfillWindow = time.Minute
-	}
-	if fc.script {
-		config.ScriptConfig = script.Config{
-			FS:       scripttest.ScriptFSFor(tgt),
-			MainPath: "/testdata/logical_test.ts",
-		}
-	}
-	err = config.Preflight()
-	if !a.NoError(err) {
-		return
-	}
+	config, err := getConfig(fixture, fc, tgt)
+	r.NoError(err)
 
 	myPool, cancel, err := setupMYPool(config)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	defer cancel()
 
 	// MySQL only has a single-level namespace; that is, no user-defined schemas.
-	if _, err := myExec(ctx, myPool,
+	_, err = myExec(ctx, myPool,
 		fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v varchar(20))`, tgt.Table().Raw()),
-	); !a.NoError(err) {
-		log.Fatal(err)
-		return
-	}
+	)
+	r.NoError(err)
 
 	var crdbCol, crdbSchema string
 	if fc.script {
@@ -159,20 +128,16 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 		return
 	}
 
-	flavor, err := getFlavor(config)
-	if !a.NoError(err) {
-		return
-	}
+	flavor, _, err := getFlavor(config)
+	r.NoError(err)
 
 	gtidSet, err := loadInitialGTIDSet(ctx, flavor, myPool)
 	config.DefaultConsistentPoint = gtidSet
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	// Insert data into source table.
 	const rowCount = 1024
-	if _, err := myDo(ctx, myPool,
+	_, err = myDo(ctx, myPool,
 		func(ctx context.Context, conn *client.Conn) (*mysql.Result, error) {
 			if err := conn.Begin(); err != nil {
 				return nil, err
@@ -190,15 +155,12 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 
 			return nil, conn.Commit()
 		},
-	); !a.NoError(err) {
-		return
-	}
+	)
+	r.NoError(err)
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	repl, err := Start(ctx, config)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	for {
 		var count int
@@ -224,9 +186,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 			return nil, conn.Commit()
 		})
 
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	// Wait for the update to propagate.
 	for {
 		var count int
@@ -251,12 +211,8 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 			return nil, conn.Commit()
 		})
 
-	if !a.NoError(err) {
-		return
-	}
-
+	r.NoError(err)
 	// Wait for the deletes to propagate.
-
 	for {
 		var count int
 		if err := crdbPool.QueryRowContext(ctx,
@@ -276,9 +232,69 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	a.NoError(ctx.Wait())
 }
 
+func TestColumNames(t *testing.T) {
+	a := assert.New(t)
+	r := require.New(t)
+	// Create a basic test fixture.
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+	dbName := fixture.TargetSchema.Schema()
+	ctx := fixture.Context
+	config, err := getConfig(fixture, &fixtureConfig{}, ident.Table{})
+	r.NoError(err)
+	myPool, cancel, err := setupMYPool(config)
+	r.NoError(err)
+	defer cancel()
+	flavor, _, err := getFlavor(config)
+	r.NoError(err)
+	myConn := &conn{
+		flavor: flavor,
+		config: config,
+	}
+	tests := []struct {
+		name     string
+		table    ident.Table
+		stmt     string
+		colnames [][]byte
+		keys     []uint64
+	}{
+		{
+			name:     "simple",
+			table:    ident.NewTable(dbName, ident.New("one")),
+			stmt:     "CREATE TABLE one (k INT PRIMARY KEY, v INT)",
+			colnames: [][]byte{[]byte("k"), []byte("v")},
+			keys:     []uint64{0},
+		},
+		{
+			name:     "few cols",
+			table:    ident.NewTable(dbName, ident.New("two")),
+			stmt:     "CREATE TABLE two (k INT PRIMARY KEY, a INT,b INT, c INT, d INT)",
+			colnames: [][]byte{[]byte("k"), []byte("a"), []byte("b"), []byte("c"), []byte("d")},
+			keys:     []uint64{0},
+		},
+		{
+			name:     "few keys",
+			table:    ident.NewTable(dbName, ident.New("three")),
+			stmt:     "CREATE TABLE three (k1 INT, a INT,b INT, c INT, d INT,k2 int, primary key (k1,k2))",
+			colnames: [][]byte{[]byte("k1"), []byte("a"), []byte("b"), []byte("c"), []byte("d"), []byte("k2")},
+			keys:     []uint64{0, 5},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := myExec(ctx, myPool, tt.stmt)
+			r.NoError(err)
+			colnames, keys, err := myConn.getColNames(tt.table)
+			a.NoError(err)
+			a.Equal(tt.colnames, colnames)
+			a.Equal(tt.keys, keys)
+		})
+	}
+}
 func TestDataTypes(t *testing.T) {
 	a := assert.New(t)
-
+	r := require.New(t)
 	// Build a long value for string and byte types.
 	var sb strings.Builder
 	shortString := "0123456789ABCDEF"
@@ -287,6 +303,29 @@ func TestDataTypes(t *testing.T) {
 	}
 	longString := sb.String()
 	log.Debug(longString)
+	// Create a basic test fixture.
+	fixture, err := all.NewFixture(t)
+	if !a.NoError(err) {
+		return
+	}
+
+	ctx := fixture.Context
+	dbName := fixture.TargetSchema.Schema()
+	crdbPool := fixture.TargetPool
+
+	config, err := getConfig(fixture, &fixtureConfig{}, ident.Table{})
+	r.NoError(err)
+
+	myPool, cancel, err := setupMYPool(config)
+	r.NoError(err)
+	defer cancel()
+
+	flavor, version, err := getFlavor(config)
+	r.NoError(err)
+	gtidSet, err := loadInitialGTIDSet(ctx, flavor, myPool)
+	config.DefaultConsistentPoint = gtidSet
+	r.NoError(err)
+
 	tcs := []struct {
 		mysql  string
 		size   string
@@ -329,8 +368,6 @@ func TestDataTypes(t *testing.T) {
 		// INTEGER(size)
 		{`int`, ``, `int`, []any{0, -1, 112358}},
 		{`integer`, `(16)`, `int`, []any{0, -1, 112358}},
-		// JSON
-		{`json`, ``, `json`, []any{`{"hello":"world"}`}},
 		// LONGBLOB
 		{`longblob`, ``, `blob`, []any{[]byte(longString)}},
 		// LONGTEXT
@@ -365,51 +402,14 @@ func TestDataTypes(t *testing.T) {
 		// YEAR
 		{`year`, ``, `string`, []any{"2022"}},
 	}
-
-	// Create a basic test fixture.
-	fixture, err := all.NewFixture(t)
-	if !a.NoError(err) {
-		return
-	}
-
-	ctx := fixture.Context
-	dbName := fixture.TargetSchema.Schema()
-	crdbPool := fixture.TargetPool
-
-	config := &Config{
-		BaseConfig: logical.BaseConfig{
-			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
-			Immediate:     false,           // we care about transaction semantics
-			RetryDelay:    10 * time.Second,
-			StagingSchema: fixture.StagingDB.Schema(),
-			TargetConn:    crdbPool.ConnectionString,
-		},
-		LoopConfig: logical.LoopConfig{
-			LoopName:     loopName,
-			TargetSchema: dbName,
-		},
-		SourceConn: "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable",
-		ProcessID:  123456,
-	}
-	err = config.Preflight()
-	if !a.NoError(err) {
-		return
-	}
-
-	myPool, cancel, err := setupMYPool(config)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
-
-	flavor, err := getFlavor(config)
-	if !a.NoError(err) {
-		return
-	}
-	gtidSet, err := loadInitialGTIDSet(ctx, flavor, myPool)
-	config.DefaultConsistentPoint = gtidSet
-	if !a.NoError(err) {
-		return
+	// JSON is not supported on MySQL 5.6
+	if !strings.HasPrefix(version, "5.6") {
+		tcs = append(tcs, struct {
+			mysql  string
+			size   string
+			crdb   string
+			values []any
+		}{`json`, ``, `json`, []any{`{"hello":"world"}`}})
 	}
 
 	// Create a dummy table for each type
@@ -436,7 +436,7 @@ func TestDataTypes(t *testing.T) {
 			return
 		}
 
-		if _, err := myDo(ctx, myPool,
+		_, err := myDo(ctx, myPool,
 			func(ctx context.Context, conn *client.Conn) (*mysql.Result, error) {
 				if err := conn.Begin(); err != nil {
 					return nil, err
@@ -459,16 +459,13 @@ func TestDataTypes(t *testing.T) {
 
 				return nil, conn.Commit()
 			},
-		); !a.NoError(err) {
-			return
-		}
+		)
+		r.NoError(err)
 	}
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	repl, err := Start(ctx, config)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	// Wait for rows to show up.
 	for idx, tc := range tcs {
@@ -493,6 +490,38 @@ func TestDataTypes(t *testing.T) {
 
 	ctx.Stop(time.Second)
 	a.NoError(ctx.Wait())
+}
+
+// getConfig is an helper function to create a configuration for the connector
+func getConfig(fixture *all.Fixture, fc *fixtureConfig, tgt ident.Table) (*Config, error) {
+	dbName := fixture.TargetSchema.Schema()
+	crdbPool := fixture.TargetPool
+	config := &Config{
+		BaseConfig: logical.BaseConfig{
+			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
+			ChaosProb:     fc.chaosProb,
+			Immediate:     fc.immediate,
+			RetryDelay:    time.Millisecond,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+		},
+		LoopConfig: logical.LoopConfig{
+			LoopName:     loopName,
+			TargetSchema: dbName,
+		},
+		SourceConn: defaultSourceConn,
+		ProcessID:  123456,
+	}
+	if fc.backfill {
+		config.BackfillWindow = time.Minute
+	}
+	if fc.script {
+		config.ScriptConfig = script.Config{
+			FS:       scripttest.ScriptFSFor(tgt),
+			MainPath: "/testdata/logical_test.ts",
+		}
+	}
+	return config, config.Preflight()
 }
 
 func myDo(
@@ -569,7 +598,7 @@ func setupMYPool(config *Config) (*client.Pool, func(), error) {
 		}
 		defer conn.Close()
 
-		_, err = conn.Execute(fmt.Sprintf("DROP DATABASE %s", database.Raw()))
+		_, err = conn.Execute(fmt.Sprintf("DROP DATABASE `%s`", database.Raw()))
 		if err != nil {
 			log.WithError(err).Error("could not drop database")
 		}
@@ -583,21 +612,16 @@ func loadInitialGTIDSet(ctx context.Context, flavor string, myPool *client.Pool)
 	var gtidSet string
 	switch flavor {
 	case mysql.MySQLFlavor:
-		res, err := myExec(ctx, myPool, "select source_uuid, min(interval_start), max(interval_end) from mysql.gtid_executed group by source_uuid;")
+		res, err := myExec(ctx, myPool, "select @@GLOBAL.gtid_executed;")
 		if err != nil {
 			return "", err
 		}
-		var uuid string
-		var last int64
-
 		if len(res.Values) > 0 {
-			uuid = string(res.Values[0][0].AsString())
-			last = res.Values[0][2].AsInt64()
-			log.Infof("Master status: %s %d", uuid, last)
+			gtidSet = string(res.Values[0][0].AsString())
+			log.Infof("Master status: %s", gtidSet)
 		} else {
 			return "", errors.New("Unable to retrieve master status")
 		}
-		gtidSet = fmt.Sprintf("%s:1-%d", uuid, last)
 	case mysql.MariaDBFlavor:
 		res, err := myExec(ctx, myPool, "select @@gtid_binlog_pos;")
 		if err != nil {
