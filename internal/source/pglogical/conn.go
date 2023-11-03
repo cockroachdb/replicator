@@ -154,6 +154,11 @@ func (c *conn) Process(
 		case *pglogrepl.TruncateMessage:
 			err = errors.Errorf("the TRUNCATE operation cannot be supported on table %d", msg.RelationNum)
 
+		case *pglogrepl.TypeMessage:
+			// This type is intentionally discarded. We interpret the
+			// type of the data based on the target table, not the
+			// source.
+
 		default:
 			err = errors.Errorf("unimplemented logical replication message %T", msg)
 		}

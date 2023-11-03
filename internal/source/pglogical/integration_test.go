@@ -39,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -310,6 +311,7 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 // https://www.postgresql.org/docs/current/datatype.html
 func TestDataTypes(t *testing.T) {
 	a := assert.New(t)
+	r := require.New(t)
 
 	// Build a long value for string and byte types.
 	var sb strings.Builder
@@ -318,10 +320,11 @@ func TestDataTypes(t *testing.T) {
 	}
 	longString := sb.String()
 
-	tcs := []struct {
+	type tc struct {
 		name   string
 		values []any // We automatically test for NULL below.
-	}{
+	}
+	tcs := []tc{
 		{`bigint`, []any{0, -1, 112358}},
 		// bigserial doesn't exist as a reifiable type in pg?
 		{`bit`, []any{"10010101"}},
@@ -364,9 +367,7 @@ func TestDataTypes(t *testing.T) {
 
 	// Create a basic test fixture.
 	fixture, err := base.NewFixture(t)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	ctx := fixture.Context
 	dbSchema := fixture.TargetSchema.Schema()
@@ -374,10 +375,24 @@ func TestDataTypes(t *testing.T) {
 	crdbPool := fixture.TargetPool
 
 	pgPool, cancel, err := setupPGPool(dbName)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	defer cancel()
+
+	enumQ := fmt.Sprintf(`CREATE TYPE %s."Simple-Enum" AS ENUM ('foo', 'bar')`, dbSchema)
+	_, err = crdbPool.ExecContext(ctx, enumQ)
+	r.NoError(err, enumQ)
+	_, err = pgPool.Exec(ctx, enumQ)
+	r.NoError(err, enumQ)
+	tcs = append(tcs,
+		tc{
+			fmt.Sprintf(`%s."Simple-Enum"`, dbSchema),
+			[]any{"foo", "bar"},
+		},
+		tc{
+			fmt.Sprintf(`%s."Simple-Enum"[]`, dbSchema),
+			[]any{"{foo}", "{bar}"},
+		},
+	)
 
 	// Create a dummy table for each type
 	tgts := make([]ident.Table, len(tcs))
