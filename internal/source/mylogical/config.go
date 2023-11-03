@@ -34,6 +34,8 @@ type Config struct {
 	logical.BaseConfig
 	logical.LoopConfig
 
+	FetchMetadata bool
+
 	SourceConn string // Connection string for the source db.
 	ProcessID  uint32 // A unique ID to identify this process to the master.
 
@@ -62,6 +64,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"the replication process id to report to the source database")
 	f.StringVar(&c.SourceConn, "sourceConn", "",
 		"the source database's connection string")
+	f.BoolVar(&c.FetchMetadata, "fetchMetadata", false,
+		"fetch column metadata explicitly, for older version of MySQL that don't support binlog_row_metadata")
 }
 
 func newClientTLSConfig(

@@ -51,6 +51,8 @@ import (
 type conn struct {
 	// Columns, as ordered by the source database.
 	columns *ident.TableMap[[]types.ColData]
+	// The connector configuration.
+	config *Config
 	// Flavor is one of the mysql.MySQLFlavor or mysql.MariaDBFlavor constants
 	flavor string
 	// Map source ids to target tables.
@@ -392,6 +394,37 @@ func (c *conn) onDataTuple(
 	return nil
 }
 
+// getTableMetadata fetches table metadata from the database
+// if binlog_row_metadata = minimal
+func (c *conn) getColNames(table ident.Table) ([][]byte, []uint64, error) {
+	cl, err := getConnection(c.config)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cl.Close()
+	db, _ := table.Schema().Split()
+	log.Tracef("getting col names %s %s", db, table.Table().String())
+	res, err := cl.Execute(`
+		SELECT COLUMN_NAME, COLUMN_KEY='PRI'
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+		ORDER BY ORDINAL_POSITION;
+	`, db.Raw(), table.Table().Raw())
+
+	if err != nil {
+		return nil, nil, err
+	}
+	names := make([][]byte, 0, len(res.Values))
+	keys := make([]uint64, 0, len(res.Values))
+	for i, row := range res.Values {
+		names = append(names, row[0].AsString())
+		if row[1].AsInt64() == 1 {
+			keys = append(keys, uint64(i))
+		}
+	}
+	return names, keys, nil
+}
+
 // onRelation updates the source database namespace mappings.
 // Columns names are only available if
 // set global binlog_row_metadata = full;
@@ -400,20 +433,35 @@ func (c *conn) onRelation(msg *replication.TableMapEvent) error {
 		ident.MustSchema(ident.New(string(msg.Schema)), ident.Public),
 		ident.New(string(msg.Table)))
 	log.Tracef("Learned %+v", tbl)
+	columnNames, primaryKeys := msg.ColumnName, msg.PrimaryKey
+	// In case we need to fetch the metadata directly from the
+	// source, we will do it the first time we see the table,
+	// to avoid calls for each row event (for older version of MySQL)
+	if c.config.FetchMetadata {
+		if _, ok := c.relations[msg.TableID]; ok {
+			return nil
+		}
+		var err error
+		columnNames, primaryKeys, err = c.getColNames(tbl)
+		if err != nil {
+			return err
+		}
+	}
 	c.relations[msg.TableID] = tbl
 	colData := make([]types.ColData, msg.ColumnCount)
 	primary := make(map[uint64]bool)
-	for _, p := range msg.PrimaryKey {
+	for _, p := range primaryKeys {
 		primary[p] = true
 	}
-	if len(msg.ColumnName) != len(msg.ColumnType) {
-		return errors.New("all columns names are required 'set global binlog_row_metadata = full'")
+	if len(columnNames) != len(msg.ColumnType) {
+		return errors.Errorf("all columns names are required. Got %d columns and %d names.",
+			len(msg.ColumnType), len(columnNames))
 	}
 	for idx, ctype := range msg.ColumnType {
 		_, found := primary[uint64(idx)]
 		colData[idx] = types.ColData{
 			Ignored: false,
-			Name:    ident.New(string(msg.ColumnName[idx])),
+			Name:    ident.New(string(columnNames[idx])),
 			Primary: found,
 			Type:    fmt.Sprintf("%d", ctype),
 		}
@@ -429,6 +477,14 @@ var (
 		{"enforce_gtid_consistency", "ON", "1"},
 		{"binlog_row_metadata", "FULL"},
 	}
+
+	mySQL5SystemSettings = [][]string{
+		{"gtid_mode", "ON", "1"},
+		{"enforce_gtid_consistency", "ON", "1"},
+		{"binlog_row_image", "FULL"},
+		{"binlog_format", "ROW"},
+		{"log_bin", "1"},
+	}
 	mariaDBSystemSettings = [][]string{
 		{"log_bin", "1"},
 		{"binlog_format", "ROW"},
@@ -436,46 +492,64 @@ var (
 	}
 )
 
+// getConnection returns a connection to the source database
+func getConnection(config *Config) (*client.Conn, error) {
+	addr := fmt.Sprintf("%s:%d", config.host, config.port)
+	return client.Connect(addr, config.user, config.password, "", func(c *client.Conn) {
+		c.SetTLSConfig(config.tlsConfig)
+	})
+}
+
 // getFlavor connects to the server and tries to determine the type of server by looking at the
 // @@version_comment system variable.
 // Based on the type of server it also verifies that the settings defined in the
 // mySQLSystemSettings and mariaDBSystemSettings slices are correctly configured for the replication to work.
-// It returns mysql.MariaDBFlavor or mysql.MySQLFlavor upon success.
-func getFlavor(config *Config) (string, error) {
-	addr := fmt.Sprintf("%s:%d", config.host, config.port)
-	c, err := client.Connect(addr, config.user, config.password, "", func(c *client.Conn) {
-		c.SetTLSConfig(config.tlsConfig)
-	})
+// It returns mysql.MariaDBFlavor or mysql.MySQLFlavor upon success, together with the version information
+func getFlavor(config *Config) (string, string, error) {
+	c, err := getConnection(config)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer c.Close()
-	res, err := c.Execute("select @@version_comment;")
+	res, err := c.Execute("select @@version;")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(res.Values) == 0 {
-		return "", errors.New("unable to retrieve version")
+		return "", "", errors.New("unable to retrieve version")
 	}
 
 	version := string(res.Values[0][0].AsString())
 	log.Infof("Version info: %s", version)
-	if strings.Contains(version, "mariadb") {
+	if strings.Contains(strings.ToLower(version), "mariadb") {
 		for _, v := range mariaDBSystemSettings {
 			err = checkSystemSetting(c, v[0], v[1:])
 			if err != nil {
-				return "", err
+				return "", "", err
 			}
 		}
-		return mysql.MariaDBFlavor, nil
+		return mysql.MariaDBFlavor, version, nil
+	}
+	if strings.HasPrefix(version, "5.") {
+		log.Warn("Detecting MySQL 5.X; forcing metadata fetch")
+		config.FetchMetadata = true
+	}
+	if config.FetchMetadata {
+		for _, v := range mySQL5SystemSettings {
+			err = checkSystemSetting(c, v[0], v[1:])
+			if err != nil {
+				return "", "", err
+			}
+		}
+		return mysql.MySQLFlavor, version, nil
 	}
 	for _, v := range mySQLSystemSettings {
 		err = checkSystemSetting(c, v[0], v[1:])
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return mysql.MySQLFlavor, nil
+	return mysql.MySQLFlavor, version, nil
 }
 
 // checkSystemSetting verifies that the given system variable is set to one of

@@ -74,6 +74,38 @@ services:
     # Expose the emulator on port 8181 to avoid conflict with CRDB admin UI.
     ports:
       - "8181:8080"
+  mysql-v5.7:
+    image: mysql:5.7
+    platform: linux/x86_64
+    environment:
+      MYSQL_ROOT_PASSWORD: SoupOrSecret
+      MYSQL_DATABASE: _cdc_sink
+    command:
+      --default-authentication-plugin=mysql_native_password
+      --gtid-mode=on
+      --enforce-gtid-consistency=on
+      --binlog-row-image=full
+      --server-id=1
+      --log-bin=log-bin
+    ports:
+      - "3306:3306"
+  mysql-v5.6:
+    image: mysql:5.6
+    platform: linux/x86_64
+    environment:
+      MYSQL_ROOT_PASSWORD: SoupOrSecret
+      MYSQL_DATABASE: _cdc_sink
+    command:
+      --default-authentication-plugin=mysql_native_password
+      --gtid-mode=on
+      --enforce-gtid-consistency=on
+      --server-id=1
+      --log-bin=mysql-binlog
+      --binlog-format=row
+      --binlog-row-image=full
+      --log-slave-updates=ON
+    ports:
+      - "3306:3306"
   mysql-v8:
     image: mysql:8-debian
     platform: linux/x86_64
