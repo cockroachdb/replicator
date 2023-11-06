@@ -89,11 +89,12 @@ func ProvideDialect(
 	sourceConfig.RuntimeParams["replication"] = "database"
 
 	return &conn{
-		columns:         &ident.TableMap[[]types.ColData]{},
-		publicationName: config.Publication,
-		relations:       make(map[uint32]ident.Table),
-		slotName:        config.Slot,
-		sourceConfig:    sourceConfig,
+		columns:               &ident.TableMap[[]types.ColData]{},
+		publicationName:       config.Publication,
+		relations:             make(map[uint32]ident.Table),
+		skipEmptyTransactions: config.SkipEmptyTransactions,
+		slotName:              config.Slot,
+		sourceConfig:          sourceConfig,
 	}, nil
 }
 
