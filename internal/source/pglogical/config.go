@@ -24,13 +24,18 @@ import (
 
 // Config contains the configuration necessary for creating a
 // replication connection. All field, other than TestControls, are
-// mandatory.
+// mandatory unless explicitly indicated.
 type Config struct {
 	logical.BaseConfig
 	logical.LoopConfig
 
 	// The name of the publication to attach to.
 	Publication string
+	// Skip empty transactions. False by default.
+	// In Postgres version < v15, the stream might contain empty transactions.
+	// See https://github.com/postgres/postgres/commit/d5a9d86d8f
+	// Setting this to true will allow cdc-sink to ignore them.
+	SkipEmptyTransactions bool
 	// The replication slot to attach to.
 	Slot string
 	// Connection string for the source db.
@@ -44,6 +49,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.LoopConfig.LoopName = "pglogical"
 	c.LoopConfig.Bind(f)
 
+	f.BoolVar(&c.SkipEmptyTransactions, "skipEmptyTransactions", false,
+		"skip writing to the memo table when a transaction has no content")
 	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&c.Publication, "publicationName", "",

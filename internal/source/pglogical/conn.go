@@ -63,6 +63,8 @@ type conn struct {
 	publicationName string
 	// Map source ids to target tables.
 	relations map[uint32]ident.Table
+	// Allows empty transactions to be skipped
+	skipEmptyTransactions bool
 	// The name of the slot within the publication.
 	slotName string
 	// The configuration for opening replication connections.
@@ -89,7 +91,10 @@ func (c *conn) Process(
 	// written in the WAL synchronously with the upstream transaction.
 	ignoreBefore, _ := events.GetConsistentPoint()
 	ignoreLSN := ignoreBefore.(*lsnStamp).AsLSN()
-
+	// On Postgres versions before v15, mutations that are not part of the publication slots
+	// still product transactions, but they have no content
+	// (see https://github.com/postgres/postgres/commit/d5a9d86d8f)
+	var emptyTransaction bool
 	for msg := range ch {
 		// Ensure that we resynchronize.
 		if logical.IsRollback(msg) {
@@ -118,7 +123,12 @@ func (c *conn) Process(
 				continue
 			}
 			batch, err = events.OnBegin(ctx)
-
+			if err != nil {
+				return err
+			}
+			// Resetting the emptyTransaction detector, and continuing.
+			emptyTransaction = true
+			continue
 		case *pglogrepl.CommitMessage:
 			if msg.CommitLSN <= ignoreLSN {
 				log.Tracef("ignoring CommitMessage at %s before %s",
@@ -134,13 +144,20 @@ func (c *conn) Process(
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-
+			ignoreLSN = msg.CommitLSN
+			if emptyTransaction {
+				emptyTransactionCount.Inc()
+				if c.skipEmptyTransactions {
+					skippedEmptyTransactionCount.Inc()
+					log.Trace("skipping empty transaction")
+					continue
+				}
+			}
 			// The COMMIT records are written in order, so they're a
 			// better marker to record.
 			if err := events.SetConsistentPoint(ctx, &lsnStamp{msg.CommitLSN, msg.CommitTime}); err != nil {
 				return err
 			}
-			ignoreLSN = msg.CommitLSN
 
 		case *pglogrepl.DeleteMessage:
 			err = c.onDataTuple(ctx, batch, msg.RelationID, msg.OldTuple, true /* isDelete */)
@@ -165,6 +182,8 @@ func (c *conn) Process(
 		if err != nil {
 			return err
 		}
+		// If we see any message after a begin, then the transaction is not empty.
+		emptyTransaction = false
 	}
 	return nil
 }
@@ -278,6 +297,10 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 				if err != nil {
 					return errors.WithStack(err)
 				}
+				log.WithFields(log.Fields{
+					"logicalMsg": logicalMsg.Type().String(),
+				}).Debug("xlog data")
+
 				select {
 				case ch <- logicalMsg:
 				case <-state.Stopping():
