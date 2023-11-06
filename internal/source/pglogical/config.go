@@ -31,6 +31,10 @@ type Config struct {
 
 	// The name of the publication to attach to.
 	Publication string
+	// Skip empty transactions.
+	// In Postgres version < v15, the stream might contain empty transactions.
+	// Setting this to true will allow cdc-sink to ignore them.
+	SkipEmptyTransactions bool
 	// The replication slot to attach to.
 	Slot string
 	// Connection string for the source db.
@@ -44,6 +48,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.LoopConfig.LoopName = "pglogical"
 	c.LoopConfig.Bind(f)
 
+	f.BoolVar(&c.SkipEmptyTransactions, "skipEmptyTransactions", false, "skip empty transaction in the replication fedd")
 	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&c.Publication, "publicationName", "",
