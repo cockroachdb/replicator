@@ -18,7 +18,7 @@
 package start
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/source/server"
+	"github.com/cockroachdb/cdc-sink/internal/source/cdc/server"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/spf13/cobra"

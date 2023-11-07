@@ -30,10 +30,11 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	jwtAuth "github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
+	jwtAuth "github.com/cockroachdb/cdc-sink/internal/util/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	joonix "github.com/joonix/log"
 	"github.com/prometheus/client_golang/prometheus"
@@ -161,13 +162,15 @@ func testIntegration(t *testing.T, cfg testConfig) {
 			MetaTableName: ident.New("resolved_timestamps"),
 			RetireOffset:  time.Hour, // Allow post-hoc inspection of staged data.
 		},
-		BindAddr:           "127.0.0.1:0",
-		GenerateSelfSigned: cfg.webhook && supportsWebhook, // Webhook implies self-signed TLS is ok.
+		HTTP: stdserver.Config{
+			BindAddr:           "127.0.0.1:0",
+			GenerateSelfSigned: cfg.webhook && supportsWebhook, // Webhook implies self-signed TLS is ok.
+		},
 	})
 	r.NoError(err)
 	defer cancel()
 	// This is normally taken care of by stdlogical.Command.
-	stdlogical.AddHandlers(targetFixture.Authenticator, targetFixture.Server.mux, targetFixture.Diagnostics)
+	stdlogical.AddHandlers(targetFixture.Authenticator, targetFixture.Server.GetServeMux(), targetFixture.Diagnostics)
 
 	// Set up source and target tables.
 	source, err := sourceFixture.CreateSourceTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY, val STRING)")

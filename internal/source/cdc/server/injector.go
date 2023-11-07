@@ -21,35 +21,19 @@ package server
 
 import (
 	"context"
-	"net"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
-type testFixture struct {
-	Authenticator types.Authenticator
-	Config        *Config
-	Diagnostics   *diag.Diagnostics
-	Listener      net.Listener
-	StagingPool   *types.StagingPool
-	Server        *Server
-	StagingDB     ident.StagingSchema
-	Stagers       types.Stagers
-	Watcher       types.Watchers
-}
-
-// We want this to be as close as possible to Start, it just exposes
-// additional plumbing details via the returned testFixture pointer.
-func newTestFixture(*stopper.Context, *Config) (*testFixture, func(), error) {
+func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) {
 	panic(wire.Build(
 		Set,
 		cdc.Set,
@@ -61,6 +45,5 @@ func newTestFixture(*stopper.Context, *Config) (*testFixture, func(), error) {
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*Config), "CDC"),
-		wire.Struct(new(testFixture), "*"),
 	))
 }

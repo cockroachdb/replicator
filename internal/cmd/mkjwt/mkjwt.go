@@ -30,7 +30,7 @@ import (
 	"os"
 	"strings"
 
-	jwtAuth "github.com/cockroachdb/cdc-sink/internal/staging/auth/jwt"
+	jwtAuth "github.com/cockroachdb/cdc-sink/internal/util/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/pkg/errors"

@@ -21,13 +21,14 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"net"
 )
 
 // Injectors from injector.go:
 
-func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
+func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) {
 	diagnostics := diag.New(ctx)
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
@@ -239,7 +240,7 @@ type testFixture struct {
 	Diagnostics   *diag.Diagnostics
 	Listener      net.Listener
 	StagingPool   *types.StagingPool
-	Server        *Server
+	Server        *stdserver.Server
 	StagingDB     ident.StagingSchema
 	Stagers       types.Stagers
 	Watcher       types.Watchers
