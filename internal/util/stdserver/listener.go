@@ -14,35 +14,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build wireinject
-// +build wireinject
-
-package server
+package stdserver
 
 import (
 	"context"
+	"net"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
-	"github.com/google/wire"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
-func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
-	panic(wire.Build(
-		Set,
-		cdc.Set,
-		diag.New,
-		logical.Set,
-		script.Set,
-		staging.Set,
-		target.Set,
-		wire.Bind(new(context.Context), new(*stopper.Context)),
-		wire.Bind(new(logical.Config), new(*Config)),
-		wire.FieldsOf(new(*Config), "CDC"),
-	))
+// Listener constructs the incoming network socket for the server.
+func Listener(ctx *stopper.Context, config *Config, diags *diag.Diagnostics) (net.Listener, error) {
+	// Start listening only when everything else is ready.
+	l, err := net.Listen("tcp", config.BindAddr)
+	if err != nil {
+		return nil, errors.Wrapf(err, "could not bind to %q", config.BindAddr)
+	}
+	log.WithField("address", l.Addr()).Info("Server listening")
+	if err := diags.Register("listener", diag.DiagnosticFn(func(context.Context) any {
+		return l.Addr().String()
+	})); err != nil {
+		return nil, err
+	}
+	ctx.Defer(func() { _ = l.Close() })
+	return l, nil
 }

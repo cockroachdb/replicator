@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package server
+package stdserver
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"

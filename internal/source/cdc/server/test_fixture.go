@@ -17,43 +17,51 @@
 //go:build wireinject
 // +build wireinject
 
-package cdc
+package server
 
 import (
 	"context"
+	"net"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
+	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/util/auth/trust"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
 type testFixture struct {
-	*all.Fixture
-	Handler   *Handler
-	Resolvers *Resolvers
+	Authenticator types.Authenticator
+	Config        *Config
+	Diagnostics   *diag.Diagnostics
+	Listener      net.Listener
+	StagingPool   *types.StagingPool
+	Server        *stdserver.Server
+	StagingDB     ident.StagingSchema
+	Stagers       types.Stagers
+	Watcher       types.Watchers
 }
 
-func newTestFixture(*all.Fixture, *Config) (*testFixture, error) {
+// We want this to be as close as possible to Start, it just exposes
+// additional plumbing details via the returned testFixture pointer.
+func newTestFixture(*stopper.Context, *Config) (*testFixture, func(), error) {
 	panic(wire.Build(
 		Set,
-		wire.FieldsOf(new(*base.Fixture), "Context"),
-		wire.FieldsOf(new(*all.Fixture),
-			"Configs", "Fixture", "Memo", "Stagers", "VersionChecker"),
+		cdc.Set,
 		diag.New,
-		leases.Set,
 		logical.Set,
 		script.Set,
+		staging.Set,
 		target.Set,
-		trust.New, // Is valid to use as a provider.
-		wire.Struct(new(testFixture), "*"),
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Bind(new(logical.Config), new(*Config)),
+		wire.FieldsOf(new(*Config), "CDC"),
+		wire.Struct(new(testFixture), "*"),
 	))
 }

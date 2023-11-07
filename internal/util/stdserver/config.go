@@ -14,20 +14,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package server
+package stdserver
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )
 
-// Config contains the user-visible configuration for running a CDC
-// changefeed server.
+// Config contains the user-visible configuration for running an http server.
 type Config struct {
-	CDC cdc.Config
-
 	BindAddr           string
 	DisableAuth        bool
 	GenerateSelfSigned bool
@@ -35,17 +30,8 @@ type Config struct {
 	TLSPrivateKey      string
 }
 
-var _ logical.Config = (*Config)(nil)
-
-// Base implements logical.Config.
-func (c *Config) Base() *logical.BaseConfig {
-	return c.CDC.Base()
-}
-
 // Bind registers flags.
 func (c *Config) Bind(flags *pflag.FlagSet) {
-	c.CDC.Bind(flags)
-
 	flags.StringVar(
 		&c.BindAddr,
 		"bindAddr",
@@ -75,10 +61,6 @@ func (c *Config) Bind(flags *pflag.FlagSet) {
 
 // Preflight implements logical.Config.
 func (c *Config) Preflight() error {
-	if err := c.CDC.Preflight(); err != nil {
-		return err
-	}
-
 	if c.BindAddr == "" {
 		return errors.New("bindAddr unset")
 	}
@@ -88,6 +70,5 @@ func (c *Config) Preflight() error {
 	if c.GenerateSelfSigned && c.TLSCertFile != "" {
 		return errors.New("self-signed certificate requested, but also specified a TLS certificate")
 	}
-
 	return nil
 }

@@ -26,10 +26,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/staging/auth/broken"
-	"github.com/cockroachdb/cdc-sink/internal/staging/auth/reject"
-	"github.com/cockroachdb/cdc-sink/internal/staging/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/auth/broken"
+	"github.com/cockroachdb/cdc-sink/internal/util/auth/reject"
+	"github.com/cockroachdb/cdc-sink/internal/util/auth/trust"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/stretchr/testify/require"
 )
