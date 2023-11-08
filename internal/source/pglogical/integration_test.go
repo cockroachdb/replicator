@@ -23,6 +23,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/uuid"
+	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgxpool"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -93,7 +95,7 @@ func TestPGLogical(t *testing.T) {
 
 func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
-
+	r := require.New(t)
 	// Create a basic test fixture.
 	fixture, err := base.NewFixture(t)
 	if !a.NoError(err) {
@@ -106,11 +108,12 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	crdbPool := fixture.TargetPool
 
 	pgPool, cancel, err := setupPGPool(dbName)
-	if !a.NoError(err) {
-		return
-	}
-	defer cancel()
+	r.NoError(err)
 
+	defer cancel()
+	cancel, err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
+	r.NoError(err)
+	defer cancel()
 	// Create the schema in both locations.
 	var tgts []ident.Table
 	if fc.script {
@@ -187,9 +190,7 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 			})
 		}
 	}
-	if !a.NoError(eg.Wait()) {
-		return
-	}
+	r.NoError(err)
 
 	pubNameRaw := publicationName(dbName).Raw()
 	// Start the connection, to demonstrate that we can backfill pending mutations.
@@ -222,9 +223,7 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 		}
 	}
 	repl, err := Start(ctx, cfg)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 
 	// Wait for backfill.
 	for _, tgt := range tgts {
@@ -244,17 +243,13 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 
 	// Let's perform an update in a single transaction.
 	tx, err := pgPool.Begin(ctx)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	for _, tgt := range tgts {
 		if _, err := tx.Exec(ctx, fmt.Sprintf("UPDATE %s SET v = 'updated'", tgt)); !a.NoError(err) {
 			return
 		}
 	}
-	if !a.NoError(tx.Commit(ctx)) {
-		return
-	}
+	r.NoError(tx.Commit(ctx))
 
 	// Wait for the update to propagate.
 	for _, tgt := range tgts {
@@ -274,17 +269,13 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 
 	// Delete some rows.
 	tx, err = pgPool.Begin(ctx)
-	if !a.NoError(err) {
-		return
-	}
+	r.NoError(err)
 	for _, tgt := range tgts {
 		if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE pk < 50", tgt)); !a.NoError(err) {
 			return
 		}
 	}
-	if !a.NoError(tx.Commit(ctx)) {
-		return
-	}
+	r.NoError(tx.Commit(ctx))
 
 	// Wait for the deletes to propagate.
 	for _, tgt := range tgts {
@@ -378,6 +369,10 @@ func TestDataTypes(t *testing.T) {
 	r.NoError(err)
 	defer cancel()
 
+	cancel, err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
+	r.NoError(err)
+	defer cancel()
+
 	enumQ := fmt.Sprintf(`CREATE TYPE %s."Simple-Enum" AS ENUM ('foo', 'bar')`, dbSchema)
 	_, err = crdbPool.ExecContext(ctx, enumQ)
 	r.NoError(err, enumQ)
@@ -437,9 +432,7 @@ func TestDataTypes(t *testing.T) {
 		a.NoError(tx.Commit(ctx))
 	}
 	log.Info(tgts)
-
 	pubNameRaw := publicationName(dbName).Raw()
-
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	repl, err := Start(fixture.Context, &Config{
 		BaseConfig: logical.BaseConfig{
@@ -484,6 +477,141 @@ func TestDataTypes(t *testing.T) {
 	a.NoError(ctx.Wait())
 }
 
+func TestEmptyTransactions(t *testing.T) {
+	t.Run("donot-skip-empty", func(t *testing.T) {
+		testEmptyTransactions(t, false)
+	})
+	t.Run("skip-empty", func(t *testing.T) {
+		testEmptyTransactions(t, true)
+	})
+}
+func testEmptyTransactions(t *testing.T, skipEmpty bool) {
+	a := assert.New(t)
+	r := require.New(t)
+	versions := regexp.MustCompile("PostgreSQL 1[1234]")
+	// Create a basic test fixture.
+	fixture, err := base.NewFixture(t)
+	r.NoError(err)
+	if !versions.MatchString(fixture.SourcePool.Version) {
+		t.Skipf("not applicable for Postgres >= 15. Version: %s", fixture.SourcePool.Version)
+	}
+	ctx := fixture.Context
+	dbSchema := fixture.TargetSchema.Schema()
+	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
+	crdbPool := fixture.TargetPool
+
+	replTable := ident.NewTable(dbSchema, ident.New("replTable"))
+	localTable := ident.NewTable(dbSchema, ident.New("localTable"))
+
+	// Replicate only replTable
+	pgPool, cancel, err := setupPGPool(dbName)
+	r.NoError(err)
+	defer cancel()
+
+	// Create replTable in both locations.
+	var schema = fmt.Sprintf("CREATE TABLE %s (k INT PRIMARY KEY, v int)", replTable)
+	log.Info(schema)
+	_, err = crdbPool.ExecContext(ctx, schema)
+	if !a.NoErrorf(err, "CRDB %s", replTable) {
+		return
+	}
+
+	if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
+		return
+	}
+	var localSchema = fmt.Sprintf("CREATE TABLE %s (k INT PRIMARY KEY, v int)", localTable.Table())
+	if _, err := pgPool.Exec(ctx, localSchema); !a.NoErrorf(err, "PG %s", localTable) {
+		return
+	}
+	// setup replication for only the replTable
+	cancel, err = setupPublication(ctx, pgPool, dbName, fmt.Sprintf(`TABLE %s`, replTable))
+	r.NoError(err)
+	defer cancel()
+
+	if _, err := pgPool.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s VALUES (1,1)`, replTable)); !a.NoErrorf(err, "%s", replTable) {
+		return
+	}
+
+	pubNameRaw := publicationName(dbName).Raw()
+
+	// tracks internal messages
+	queue := make([]any, 0, 20)
+	// Start the connection, to demonstrate that we can backfill pending mutations.
+	repl, err := Start(fixture.Context, &Config{
+		BaseConfig: logical.BaseConfig{
+			RetryDelay:    time.Millisecond,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+		},
+		LoopConfig: logical.LoopConfig{
+			LoopName:     "pglogicaltest",
+			TargetSchema: dbSchema,
+		},
+		Publication:           pubNameRaw,
+		SkipEmptyTransactions: skipEmpty,
+		Slot:                  pubNameRaw,
+		SourceConn:            *pgConnString + dbName.Raw(),
+		spy: func(label string, in any) {
+			if label == "process" {
+				queue = append(queue, in)
+			}
+		},
+	})
+	if !a.NoError(err) {
+		return
+	}
+
+	var count int
+	for count == 0 {
+		count, err = base.GetRowCount(ctx, crdbPool, replTable)
+		if !a.NoError(err) {
+			return
+		}
+		if count == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	a.Equal(1, count)
+	qlen := len(queue)
+	// Now insert a row into a table that is not replicated.
+	// In older version of postgres we will still see begin/commit events.
+	if _, err := pgPool.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s VALUES (2,2)`, localTable)); !a.NoErrorf(err, "%s", replTable) {
+		return
+	}
+	gotCommit := false
+spyLoop:
+	for {
+		if qlen <= len(queue) {
+			time.Sleep(100 * time.Millisecond)
+		}
+		qlen++
+		if gotCommit {
+			// After the commit, we should see a Stamp only
+			// if are not skipping transactions.
+			switch queue[qlen].(type) {
+			case *struct{}:
+				a.True(skipEmpty)
+				break spyLoop
+			case *lsnStamp:
+				a.False(skipEmpty)
+				break spyLoop
+			default:
+			}
+		}
+		if _, ok := queue[qlen].(*pglogrepl.CommitMessage); ok {
+			gotCommit = true
+		}
+
+	}
+	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
+
+	ctx.Stop(time.Second)
+	a.NoError(ctx.Wait())
+
+}
+
 // Allowable publication slot names are a subset of allowable
 // database names, so we need to replace the must-quote dashes in
 // the database name.
@@ -514,27 +642,41 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 		return nil, func() {}, err
 	}
 
-	pubName := publicationName(database)
+	return retConn, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// Can't drop the default database from its own connection.
+		_, err = baseConn.Exec(ctx, fmt.Sprintf("DROP DATABASE %s", database))
+		if err != nil {
+			log.WithError(err).Error("could not drop database")
+		}
+		baseConn.Close()
+		log.Trace("finished pg pool cleanup")
+	}, nil
+}
 
+func setupPublication(
+	ctx context.Context, retConn *pgxpool.Pool, database ident.Ident, scope string,
+) (func(), error) {
+	pubName := publicationName(database)
 	if _, err := retConn.Exec(ctx,
-		fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES", pubName),
+		fmt.Sprintf("CREATE PUBLICATION %s FOR %s", pubName, scope),
 	); err != nil {
-		return nil, func() {}, err
+		return func() {}, err
 	}
 
 	if _, err := retConn.Exec(ctx,
 		"SELECT pg_create_logical_replication_slot($1, 'pgoutput')",
 		pubName.Raw(),
 	); err != nil {
-		return nil, func() {}, err
+		return func() {}, err
 	}
-
-	return retConn, func() {
+	return func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		_, err := retConn.Exec(ctx, "SELECT pg_drop_replication_slot($1)", pubName.Raw())
 		if err != nil {
-			log.WithError(err).Error("could not drop database")
+			log.WithError(err).Error("could not drop replication slot")
 		}
 		_, err = retConn.Exec(ctx, fmt.Sprintf("DROP PUBLICATION %s", pubName))
 		if err != nil {
@@ -542,12 +684,6 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 		}
 		retConn.Close()
 
-		// Can't drop the default database from its own connection.
-		_, err = baseConn.Exec(ctx, fmt.Sprintf("DROP DATABASE %s", database))
-		if err != nil {
-			log.WithError(err).Error("could not drop database")
-		}
-		baseConn.Close()
 		log.Trace("finished pg pool cleanup")
 	}, nil
 }

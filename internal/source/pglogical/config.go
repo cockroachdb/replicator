@@ -24,14 +24,14 @@ import (
 
 // Config contains the configuration necessary for creating a
 // replication connection. All field, other than TestControls, are
-// mandatory.
+// mandatory unless explicitly indicated.
 type Config struct {
 	logical.BaseConfig
 	logical.LoopConfig
 
 	// The name of the publication to attach to.
 	Publication string
-	// Skip empty transactions.
+	// Skip empty transactions. False by default.
 	// In Postgres version < v15, the stream might contain empty transactions.
 	// See https://github.com/postgres/postgres/commit/d5a9d86d8f
 	// Setting this to true will allow cdc-sink to ignore them.
@@ -40,6 +40,9 @@ type Config struct {
 	Slot string
 	// Connection string for the source db.
 	SourceConn string
+
+	// Fields used for testing introspection
+	spy func(string, any)
 }
 
 // Bind adds flags to the set.

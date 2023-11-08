@@ -48,6 +48,8 @@ var (
 	_ logical.OffsetStamp = (*lsnStamp)(nil)
 )
 
+const processLabel = "process"
+
 func (s *lsnStamp) AsLSN() pglogrepl.LSN        { return s.LSN }
 func (s *lsnStamp) AsTime() time.Time           { return s.TxTime }
 func (s *lsnStamp) AsOffset() uint64            { return uint64(s.LSN) }
@@ -69,6 +71,9 @@ type conn struct {
 	slotName string
 	// The configuration for opening replication connections.
 	sourceConfig *pgconn.Config
+	// Function that notifies of relevant internal events that can
+	// used during testing.
+	spy func(string, any)
 }
 
 var _ logical.Dialect = (*conn)(nil)
@@ -108,6 +113,10 @@ func (c *conn) Process(
 		}
 
 		log.Tracef("message %T", msg)
+		if c.spy != nil {
+			// Notify that we have received a message.
+			c.spy(processLabel, msg)
+		}
 		var err error
 		switch msg := msg.(type) {
 		case *pglogrepl.RelationMessage:
@@ -147,13 +156,22 @@ func (c *conn) Process(
 			ignoreLSN = msg.CommitLSN
 			if emptyTransaction {
 				skippedEmptyTransactions.Inc()
-				log.Debug("skipping empty transaction")
+				if c.spy != nil {
+					var empty struct{}
+					// Notify that we have seen an empty transaction.
+					c.spy(processLabel, &empty)
+				}
+				log.Trace("skipping empty transaction")
 				continue
 			}
 			// The COMMIT records are written in order, so they're a
 			// better marker to record.
 			if err := events.SetConsistentPoint(ctx, &lsnStamp{msg.CommitLSN, msg.CommitTime}); err != nil {
 				return err
+			}
+			if c.spy != nil {
+				// Notify that we have are setting a consistent point
+				c.spy(processLabel, &lsnStamp{msg.CommitLSN, msg.CommitTime})
 			}
 
 		case *pglogrepl.DeleteMessage:
