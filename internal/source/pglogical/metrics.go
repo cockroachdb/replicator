@@ -38,4 +38,8 @@ var (
 		Name: "pglogical_empty_transactions",
 		Help: "the number of empty transactions we have seen",
 	})
+	unchangedToastedColumns = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pglogical_unchanged_toasted_columns",
+		Help: "the number of times we see unchanged toasted columns",
+	})
 )

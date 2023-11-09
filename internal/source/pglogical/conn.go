@@ -69,6 +69,8 @@ type conn struct {
 	slotName string
 	// The configuration for opening replication connections.
 	sourceConfig *pgconn.Config
+	// Experimental support for toasted columns
+	experimentalToastedColumns bool
 }
 
 var _ logical.Dialect = (*conn)(nil)
@@ -329,6 +331,7 @@ func (c *conn) decodeMutation(
 	var mut types.Mutation
 	var key []string
 	enc := make(map[string]any)
+	toasted := make([]ident.Ident, 0)
 	targetCols, ok := c.columns.Get(tbl)
 	if !ok {
 		return mut, errors.Errorf("no column data for %s", tbl)
@@ -349,6 +352,15 @@ func (c *conn) decodeMutation(
 				key = append(key, string(sourceCol.Data))
 			}
 		case pglogrepl.TupleDataTypeToast:
+			if c.experimentalToastedColumns {
+				unchangedToastedColumns.Inc()
+				toasted = append(toasted, targetCol.Name)
+				// TupleDataTypeToast is just a marker that tells us
+				// that a TOASTed column has not changed.
+				// Putting a placeholders for downstream apply handlers.
+				enc[targetCol.Name.Raw()] = types.ToastedColumnPlaceholder
+				continue
+			}
 			return mut, errors.Errorf(
 				"TOASTed columns are not supported in %s.%s", tbl, targetCol.Name)
 		default:
@@ -365,7 +377,12 @@ func (c *conn) decodeMutation(
 	if len(key) == 0 {
 		key = []string{uuid.New().String()}
 	}
-
+	if len(toasted) > 0 {
+		if mut.Meta == nil {
+			mut.Meta = make(map[string]any)
+		}
+		mut.Meta[types.ToastedColumnPlaceholder] = toasted
+	}
 	var err error
 	mut.Key, err = json.Marshal(key)
 	if err != nil {

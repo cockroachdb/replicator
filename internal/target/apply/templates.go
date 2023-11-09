@@ -90,6 +90,7 @@ var (
 			}
 			return ret, nil
 		},
+		"toasted": func() string { return types.ToastedColumnPlaceholder },
 	}
 
 	tmplCRDB *template.Template
@@ -166,6 +167,7 @@ type templates struct {
 
 	conditional *template.Template
 	delete      *template.Template
+	toasted     *template.Template
 	upsert      *template.Template
 
 	// The variables below here are updated during evaluation.
@@ -184,6 +186,7 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 		ret.conditional = tmplCRDB.Lookup("conditional.tmpl")
 		ret.delete = tmplCRDB.Lookup("delete.tmpl")
 		ret.upsert = tmplCRDB.Lookup("upsert.tmpl")
+		ret.toasted = tmplCRDB.Lookup("toasted.tmpl")
 
 	case types.ProductMariaDB, types.ProductMySQL:
 		ret.conditional = tmplMy.Lookup("conditional.tmpl")
@@ -296,6 +299,25 @@ func (t *templates) deleteExpr(rowCount int) (string, error) {
 
 	var buf strings.Builder
 	err := t.delete.Execute(&buf, &cpy)
+	return buf.String(), errors.WithStack(err)
+}
+
+func (t *templates) toastedExpr(rowCount int, mode applyMode) (string, error) {
+	if mode != applyUnconditional {
+		return "", errors.New("toasted columns supported only with applyUnconditional")
+	}
+	if t.toasted == nil {
+		return "", errors.New("toasted columns supported only with CRDB target")
+	}
+	if t.BulkUpsert {
+		rowCount = 1
+	}
+	// Make a copy that we can tweak.
+	cpy := *t
+	cpy.RowCount = rowCount
+
+	var buf strings.Builder
+	err := t.toasted.Execute(&buf, &cpy)
 	return buf.String(), errors.WithStack(err)
 }
 
