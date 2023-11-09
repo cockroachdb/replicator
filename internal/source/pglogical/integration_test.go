@@ -21,8 +21,10 @@ package pglogical
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -480,6 +482,117 @@ func TestDataTypes(t *testing.T) {
 
 	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
 
+	ctx.Stop(time.Second)
+	a.NoError(ctx.Wait())
+}
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func randStringBytes(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+	return string(b)
+}
+
+func TestToast(t *testing.T) {
+	a := assert.New(t)
+	r := require.New(t)
+	// need a long string that is not compressible.
+	longString := randStringBytes(1 << 12)
+
+	// Create a basic test fixture.
+	fixture, err := base.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+	dbSchema := fixture.TargetSchema.Schema()
+	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
+	crdbPool := fixture.TargetPool
+
+	pgPool, cancel, err := setupPGPool(dbName)
+	r.NoError(err)
+	defer cancel()
+
+	name := ident.NewTable(dbSchema, ident.New("toast"))
+	// Create the schema in both locations.
+	var schema = fmt.Sprintf("CREATE TABLE %s (k INT PRIMARY KEY, j text, i int, deleted bool not null default false )", name)
+	if _, err := crdbPool.ExecContext(ctx, schema); !a.NoError(err) {
+		return
+	}
+
+	if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
+		return
+	}
+
+	if _, err := pgPool.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s VALUES ($1, $2::text, $3)`, name), 1, longString, 1,
+	); !a.NoErrorf(err, "%s", name) {
+		return
+	}
+	updates := 10
+	for i := 2; i <= updates; i++ {
+		if _, err := pgPool.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET i = $2 WHERE k = $1`, name), 1, i,
+		); !a.NoErrorf(err, "%s", name) {
+			return
+		}
+	}
+
+	pubNameRaw := publicationName(dbName).Raw()
+
+	cfg := &Config{
+		BaseConfig: logical.BaseConfig{
+			RetryDelay:    time.Millisecond,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+		},
+		LoopConfig: logical.LoopConfig{
+			LoopName:     "pglogicaltest",
+			TargetSchema: dbSchema,
+		},
+		Publication:              pubNameRaw,
+		Slot:                     pubNameRaw,
+		SourceConn:               *pgConnString + dbName.Raw(),
+		ToastedColumnPlaceholder: "__cdc__toast__",
+	}
+	cfg.ScriptConfig = script.Config{
+		FS:       scripttest.ScriptFSFor(name),
+		MainPath: "/testdata/toast_test.ts",
+	}
+	// Start the connection, to demonstrate that we can backfill pending mutations.
+	repl, err := Start(fixture.Context, cfg)
+
+	if !a.NoError(err) {
+		return
+	}
+
+	t.Run("toast", func(t *testing.T) {
+		a := assert.New(t)
+		var count int
+		for count < updates {
+			row := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT i from %s limit 1", name))
+			err = row.Scan(&count)
+			if err == sql.ErrNoRows {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			r.NoError(err)
+			if count < updates {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		var text sql.NullString
+		row := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT j from %s where k=1", name))
+		err = row.Scan(&text)
+
+		a.Equal(longString, text.String)
+		a.Equalf(updates, count, "mismatch in %s", name)
+
+	})
+
+	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
 	ctx.Stop(time.Second)
 	a.NoError(ctx.Wait())
 }

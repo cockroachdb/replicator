@@ -69,6 +69,8 @@ type conn struct {
 	slotName string
 	// The configuration for opening replication connections.
 	sourceConfig *pgconn.Config
+	// Placeholder for toastedColumns
+	toastedColumPlaceholder string
 }
 
 var _ logical.Dialect = (*conn)(nil)
@@ -346,6 +348,13 @@ func (c *conn) decodeMutation(
 				key = append(key, string(sourceCol.Data))
 			}
 		case pglogrepl.TupleDataTypeToast:
+			if c.toastedColumPlaceholder != "" {
+				// TupleDataTypeToast is just a marker that tells us
+				// that a TOASTed column has not changed.
+				// Putting a placeholders for downstream apply handlers.
+				enc[targetCol.Name.Raw()] = c.toastedColumPlaceholder
+				continue
+			}
 			return mut, errors.Errorf(
 				"TOASTed columns are not supported in %s.%s", tbl, targetCol.Name)
 		default:
