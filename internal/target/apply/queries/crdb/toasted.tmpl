@@ -1,0 +1,17 @@
+{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+
+WITH data ({{- template "names" .Columns -}} ) AS (
+VALUES{{- nl -}}
+{{- template "exprs" . -}}
+),
+{{- nl -}}
+action AS (
+SELECT {{ template "toasted"  . }}
+FROM data
+LEFT JOIN  {{ .TableName }} as current
+USING ({{ template "names" .PK }}))
+
+UPSERT INTO {{ .TableName }} (
+{{ template "names" .Columns }}
+)
+SELECT {{ template "names" .Columns }}  FROM action

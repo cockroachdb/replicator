@@ -21,8 +21,11 @@ package pglogical
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strings"
 	"testing"
@@ -490,7 +493,7 @@ func TestEmptyTransactions(t *testing.T) {
 func getCounterValue(t *testing.T, counter prometheus.Counter) int {
 	r := require.New(t)
 	var metric = &dto.Metric{}
-	err := emptyTransactionCount.Write(metric)
+	err := counter.Write(metric)
 	r.NoError(err)
 	return int(metric.Counter.GetValue())
 }
@@ -613,6 +616,139 @@ func testEmptyTransactions(t *testing.T, skipEmpty bool) {
 	ctx.Stop(time.Second)
 	a.NoError(ctx.Wait())
 
+}
+
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func randString(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+	return string(b)
+}
+
+func TestToast(t *testing.T) {
+	a := assert.New(t)
+	r := require.New(t)
+	// We need a long string that is not compressible.
+	longString := randString(1 << 12)
+	longObj, err := json.Marshal(longString)
+	r.NoError(err)
+	// Create a basic test fixture.
+	fixture, err := base.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+	dbSchema := fixture.TargetSchema.Schema()
+	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
+	crdbPool := fixture.TargetPool
+
+	pgPool, cancel, err := setupPGPool(dbName)
+	r.NoError(err)
+	defer cancel()
+
+	cancel, err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
+	r.NoError(err)
+	defer cancel()
+
+	name := ident.NewTable(dbSchema, ident.New("toast"))
+	// Create the schema in both locations.
+	schema := fmt.Sprintf(`
+	CREATE TABLE %s
+	  (k INT PRIMARY KEY,
+	   i int,
+	   j jsonb,
+	   s string,
+	   t text,
+	   deleted bool not null default false)`, name)
+	if _, err := crdbPool.ExecContext(ctx, schema); !a.NoError(err) {
+		return
+	}
+	schema = fmt.Sprintf(`
+	CREATE TABLE %s
+	  (k INT PRIMARY KEY,
+	   i int,
+	   j jsonb,
+	   s text,
+	   t text,
+	   deleted bool not null default false)`, name)
+	if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
+		return
+	}
+	// Inserting an initial value. The t,s,j columns contains a large object that
+	// will be toast-ed in the Postgres side.
+	_, err = pgPool.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s VALUES ($1, $2, $3, $4, $5)`, name),
+		1, 0, longObj, longString, longString)
+	r.NoError(err)
+	// We update the "i" column few times without changing the j column.
+	updates := 10
+	for i := 1; i <= updates; i++ {
+		if _, err := pgPool.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET i = $2 WHERE k = $1`, name), 1, i,
+		); !a.NoErrorf(err, "%s", name) {
+			return
+		}
+	}
+
+	pubNameRaw := publicationName(dbName).Raw()
+
+	cfg := &Config{
+		BaseConfig: logical.BaseConfig{
+			RetryDelay:    time.Millisecond,
+			StagingSchema: fixture.StagingDB.Schema(),
+			TargetConn:    crdbPool.ConnectionString,
+			Immediate:     true,
+		},
+		LoopConfig: logical.LoopConfig{
+			LoopName:     "pglogicaltest",
+			TargetSchema: dbSchema,
+		},
+		Publication:                pubNameRaw,
+		Slot:                       pubNameRaw,
+		SourceConn:                 *pgConnString + dbName.Raw(),
+		ExperimentalToastedColumns: true,
+	}
+	repl, err := Start(fixture.Context, cfg)
+
+	if !a.NoError(err) {
+		return
+	}
+
+	t.Run("toast", func(t *testing.T) {
+		a := assert.New(t)
+		count := 1
+		for count < updates {
+			row := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT i from %s limit 1", name))
+			err = row.Scan(&count)
+			if err == sql.ErrNoRows {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			r.NoError(err)
+			if count < updates {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		a.Equalf(updates, count, "mismatch in %s", name)
+		var text sql.NullString
+		var st sql.NullString
+		var json []byte
+		row := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT j,s,t from %s where k=1", name))
+		err = row.Scan(&json, &st, &text)
+		// Verify that the toasted column has the initial value
+		a.Equal(longObj, json)
+		a.Equal(longString, st.String)
+		a.Equal(longString, text.String)
+		// Verify that we actually seen empty toasted column markers
+		a.Equal(updates*3, getCounterValue(t, unchangedToastedColumns))
+
+	})
+
+	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
+	ctx.Stop(time.Second)
+	a.NoError(ctx.Wait())
 }
 
 // Allowable publication slot names are a subset of allowable
