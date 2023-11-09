@@ -90,6 +90,7 @@ var (
 			}
 			return ret, nil
 		},
+		"toasted": func() string { return types.ToastedColumnPlaceholder },
 	}
 
 	tmplCRDB *template.Template
@@ -168,6 +169,7 @@ type templates struct {
 	delete      *template.Template
 	upsert      *template.Template
 
+	tmpl *template.Template
 	// The variables below here are updated during evaluation.
 	ForDelete bool // True if we only iterate over PKs to delete
 	RowCount  int  // The number of rows to be applied.
@@ -184,11 +186,13 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 		ret.conditional = tmplCRDB.Lookup("conditional.tmpl")
 		ret.delete = tmplCRDB.Lookup("delete.tmpl")
 		ret.upsert = tmplCRDB.Lookup("upsert.tmpl")
+		ret.tmpl = tmplCRDB
 
 	case types.ProductMariaDB, types.ProductMySQL:
 		ret.conditional = tmplMy.Lookup("conditional.tmpl")
 		ret.delete = tmplMy.Lookup("delete.tmpl")
 		ret.upsert = tmplMy.Lookup("upsert.tmpl")
+		ret.tmpl = tmplMy
 
 	case types.ProductOracle:
 		// Bulk execution of DELETE not supported. See:
@@ -197,11 +201,12 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 		ret.delete = tmplOra.Lookup("delete.tmpl")
 		ret.upsert = tmplOra.Lookup("upsert.tmpl")
 		ret.conditional = ret.upsert
-
+		ret.tmpl = tmplOra
 	case types.ProductPostgreSQL:
 		ret.conditional = tmplPG.Lookup("conditional.tmpl")
 		ret.delete = tmplPG.Lookup("delete.tmpl")
 		ret.upsert = tmplPG.Lookup("upsert.tmpl")
+		ret.tmpl = tmplPG
 
 	default:
 		return nil, errors.Errorf("unsupported product %s", mapping.Product)
@@ -296,6 +301,26 @@ func (t *templates) deleteExpr(rowCount int) (string, error) {
 
 	var buf strings.Builder
 	err := t.delete.Execute(&buf, &cpy)
+	return buf.String(), errors.WithStack(err)
+}
+
+func (t *templates) customExpr(rowCount int, name string, mode applyMode) (string, error) {
+	if mode != applyUnconditional {
+		return "", errors.New("custom templates supported only with applyUnconditional")
+	}
+	custom := t.tmpl.Lookup(name + ".tmpl")
+	if custom == nil {
+		return "", errors.Errorf("template %s.tmpl not found", name)
+	}
+	if t.BulkUpsert {
+		rowCount = 1
+	}
+	// Make a copy that we can tweak.
+	cpy := *t
+	cpy.RowCount = rowCount
+
+	var buf strings.Builder
+	err := custom.Execute(&buf, &cpy)
 	return buf.String(), errors.WithStack(err)
 }
 

@@ -200,10 +200,24 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 				}
 				deletes = deletes[:0]
 			}
+		} else if custom, ok := muts[i].Meta[types.CustomUpsert]; ok {
+			// Flush
+			if err := a.upsertLocked(ctx, tx, upserts, ""); err != nil {
+				return countError(err)
+			}
+			upserts = upserts[:0]
+			template, ok := custom.(string)
+			if !ok {
+				return errors.Errorf("invalid value for Meta[%s]", types.CustomUpsert)
+			}
+			// Apply custom template on its own.
+			if err := a.upsertLocked(ctx, tx, []types.Mutation{muts[i]}, template); err != nil {
+				return countError(err)
+			}
 		} else {
 			upserts = append(upserts, muts[i])
 			if len(upserts) == cap(upserts) {
-				if err := a.upsertLocked(ctx, tx, upserts); err != nil {
+				if err := a.upsertLocked(ctx, tx, upserts, ""); err != nil {
 					return countError(err)
 				}
 				upserts = upserts[:0]
@@ -215,7 +229,7 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 	if err := a.deleteLocked(ctx, tx, deletes); err != nil {
 		return countError(err)
 	}
-	if err := a.upsertLocked(ctx, tx, upserts); err != nil {
+	if err := a.upsertLocked(ctx, tx, upserts, ""); err != nil {
 		return countError(err)
 	}
 	a.durations.Observe(time.Since(start).Seconds())
@@ -296,7 +310,7 @@ func (a *apply) deleteLocked(
 // upsertLocked decodes the mutations into property bags and calls
 // upsertBagsLocked.
 func (a *apply) upsertLocked(
-	ctx context.Context, db types.TargetQuerier, muts []types.Mutation,
+	ctx context.Context, db types.TargetQuerier, muts []types.Mutation, template string,
 ) error {
 	// Decode the mutations into schema-aware property bags. These will
 	// group property values into those known in the schema, versus
@@ -310,8 +324,7 @@ func (a *apply) upsertLocked(
 	); err != nil {
 		return err
 	}
-
-	return a.upsertBagsLocked(ctx, db, applyConditional, muts, allPayloadData)
+	return a.upsertBagsLocked(ctx, db, applyConditional, muts, allPayloadData, template)
 }
 
 // upsertArgsLocked shuffles the contents of the property bags into the
@@ -438,6 +451,7 @@ func (a *apply) upsertBagsLocked(
 	mode applyMode,
 	muts []types.Mutation,
 	bags []*merge.Bag,
+	template string,
 ) error {
 	// Don't test len(muts), we discard them when applying merged data.
 	if len(bags) == 0 {
@@ -455,8 +469,13 @@ func (a *apply) upsertBagsLocked(
 	// transaction.
 	stmt, err := a.cache.Prepare(ctx,
 		db,
-		fmt.Sprintf("upsert-%s-%d-%d-%v", a.target, a.mu.gen, len(bags), mode),
+		fmt.Sprintf("upsert-%s-%d-%d-%v-%s", a.target, a.mu.gen, len(bags), mode, template),
 		func() (string, error) {
+			if template != "" {
+				// We only support applyUnconditional with custom templates.
+				mode = applyUnconditional
+				return a.mu.templates.customExpr(len(bags), template, mode)
+			}
 			return a.mu.templates.upsertExpr(len(bags), mode)
 		})
 	if err != nil {
@@ -465,6 +484,9 @@ func (a *apply) upsertBagsLocked(
 
 	merger := a.mu.templates.Merger
 
+	if template != "" && merger != nil {
+		return errors.New("merge not supported with custom templates")
+	}
 	// If no merge function is defined or if we're forcing upserts,
 	// we'll just execute the statement and return.
 	if mode == applyUnconditional || merger == nil {
@@ -605,7 +627,7 @@ func (a *apply) upsertBagsLocked(
 	log.WithField("resolves", len(fixups)).Trace("resolved merge conflicts")
 
 	// We'll recurse into this function, but apply unconditionally.
-	return a.upsertBagsLocked(ctx, db, applyUnconditional, nil, fixups)
+	return a.upsertBagsLocked(ctx, db, applyUnconditional, nil, fixups, template)
 }
 
 // newBagLocked constructs a new property bag using cached metadata.

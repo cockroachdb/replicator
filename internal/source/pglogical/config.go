@@ -40,6 +40,8 @@ type Config struct {
 	Slot string
 	// Connection string for the source db.
 	SourceConn string
+	// Enable support for toasted columns
+	ToastedColumns bool
 }
 
 // Bind adds flags to the set.
@@ -55,6 +57,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&c.Publication, "publicationName", "",
 		"the publication within the source database to replicate")
+	f.BoolVar(&c.ToastedColumns, "enableToastedColumns", false,
+		"Enable support for toasted columns")
 }
 
 // Preflight updates the configuration with sane defaults or returns an
