@@ -126,6 +126,13 @@ type Memo interface {
 	Put(ctx context.Context, tx StagingQuerier, key string, value []byte) error
 }
 
+// CustomUpsert defines a custom upsert template that will
+// be used for the mutation.
+// A mutation may specify a custom upsert by adding
+// an entry in the Meta map below
+// Meta[CustomUpsert] = "custom.template.name"
+const CustomUpsert = "upsert.custom"
+
 // A Mutation describes a row to upsert into the target database.  That
 // is, it is a collection of column values to apply to a row in some
 // table.
@@ -219,6 +226,11 @@ type Stagers interface {
 	// the timestamp values.
 	Unstage(ctx context.Context, tx StagingQuerier, q *UnstageCursor, fn UnstageCallback) (*UnstageCursor, bool, error)
 }
+
+// ToastedColumnPlaceholder is a placeholder to identify a unchanged
+// Postgres toasted column. Must be quoted, so it can be used
+// in JSON columns.
+const ToastedColumnPlaceholder = `"__cdc__sink__toasted__"`
 
 // ColData hold SQL column metadata.
 type ColData struct {

@@ -95,6 +95,7 @@ func ProvideDialect(
 		skipEmptyTransactions: config.SkipEmptyTransactions,
 		slotName:              config.Slot,
 		sourceConfig:          sourceConfig,
+		toastedColumns:        config.ToastedColumns,
 	}, nil
 }
 
