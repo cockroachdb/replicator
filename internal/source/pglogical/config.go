@@ -40,6 +40,12 @@ type Config struct {
 	Slot string
 	// Connection string for the source db.
 	SourceConn string
+	// Placeholder for TOAST-ed columns.
+	// If it's set then we'll inject the placeholder as
+	// the value for a TOAST-ed column if the source
+	// value is missing. User can use the placeholder in
+	// userscripts to handle updates.
+	ToastedColumnPlaceholder string
 }
 
 // Bind adds flags to the set.
@@ -55,6 +61,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&c.Publication, "publicationName", "",
 		"the publication within the source database to replicate")
+	f.StringVar(&c.ToastedColumnPlaceholder, "toastedColumPlaceholder", "",
+		"A placeholder to identify that a toasted column was not updated")
 }
 
 // Preflight updates the configuration with sane defaults or returns an

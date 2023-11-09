@@ -1,15 +1,17 @@
 {{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
-{{- /*
-UPSERT INTO "database"."schema"."table"
- ("pk0","pk1","val0","val1","geom","geog")
- VALUES (
-$1::STRING,
-st_geomfromgeojson($2::JSONB),
-st_geogfromgeojson($3::JSONB))
-*/ -}}
+
+WITH data ({{- template "names" .Columns -}} ) AS (
+VALUES{{- nl -}}
+{{- template "exprs" . -}}
+),
+{{- nl -}}
+action AS (
+SELECT {{ template "toasted"  . }}
+FROM data
+LEFT JOIN  {{ .TableName }} as current
+USING ({{ template "names" .PK }}))  
+
 UPSERT INTO {{ .TableName }} (
 {{ template "names" .Columns }}
-) VALUES
-{{ template "exprs" . }}
-
-{{- /* Trim whitespace */ -}}
+) 
+SELECT {{ template "names" .Columns }}  FROM action 

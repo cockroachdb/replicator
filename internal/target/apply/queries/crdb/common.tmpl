@@ -48,6 +48,29 @@ The validity check allows us to distinguish null vs. unset in the payload.
     {{- end -}}
 {{- end -}}
 
+{{- define "toasted" -}}
+    {{- range $idx, $col := .Columns -}}
+        {{- if $idx -}},{{- end }}
+        {{- if $col.Primary -}}
+            data.{{$col.Name}}
+        {{-  else if eq $col.Type "JSONB"  -}}
+            CASE WHEN data.{{$col.Name}}='"__cdc__toast__"'::JSONB
+            THEN current.{{$col.Name}}  ELSE data.{{$col.Name}}
+            END
+        {{- else if eq $col.Type "TEXT"  -}}
+            CASE WHEN data.{{$col.Name}}='"__cdc__toast__"'::TEXT
+            THEN current.{{$col.Name}}  ELSE data.{{$col.Name}}
+            END
+        {{- else if eq $col.Type "STRING"  -}}
+            CASE WHEN data.{{$col.Name}}='"__cdc__toast__"'::STRING
+            THEN current.{{$col.Name}}  ELSE data.{{$col.Name}}
+            END
+        {{- else -}}
+            data.{{$col.Name}}
+        {{- end -}}
+    {{- end -}}
+{{- end -}}
+
 {{- /* join creates a comma-separated list of its input: a, b, c, ... */ -}}
 {{- define "join" -}}
     {{- range $idx, $val := . }}
