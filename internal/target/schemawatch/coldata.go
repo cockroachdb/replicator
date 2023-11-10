@@ -181,7 +181,7 @@ cols AS (
 		 CASE
 			WHEN extra = 'DEFAULT_GENERATED'
 		         OR data_type NOT in ('char','varchar', 'text')
-			     OR column_default IS NULL 
+			     OR column_default IS NULL
 			THEN column_default
 			ELSE quote (column_default)
 	     END as column_default,
@@ -292,7 +292,7 @@ const sqlColumnsQueryPg = `
                        quote_ident(udt_catalog) || '.' || quote_ident(udt_schema) || '.' || quote_ident(udt_name) ||
                        CASE WHEN collation_name IS NOT NULL THEN ' COLLATE ' || collation_name ELSE '' END AS data_type,
                        column_default,
-                       is_generated NOT IN ('NEVER', 'NO') AS ignored
+                       false AS ignored
                   FROM %[1]s.information_schema.columns
               ),
          ordered AS (

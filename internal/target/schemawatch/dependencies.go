@@ -220,21 +220,26 @@ ORDER BY 2, 1`
 // referenced table is defined.
 const depOrderTemplatePg = `
 WITH RECURSIVE
-  constraints
+  constraints(table_catalog, table_schema, table_name, constraint_name)
     AS (
       SELECT
-        table_catalog, table_schema, table_name, constraint_name
+        table_catalog AS table_catalog,
+        table_schema AS table_schema,
+        table_name AS table_name,
+        constraint_name AS constraint_name
       FROM
         %[1]s.information_schema.table_constraints
     ),
-  tables
+  tables(table_catalog, table_schema, table_name)
     AS (
       SELECT
-        table_catalog, table_schema, table_name
+        table_catalog AS table_catalog,
+        table_schema AS table_schema,
+        table_name AS table_name
       FROM
         %[1]s.information_schema.tables
     ),
-  refs
+  refs(child_catalog, child_schema, child_table_name, parent_catalog, parent_schema, parent_table_name)
     AS (
       SELECT
         ref.constraint_catalog AS child_catalog,
@@ -244,57 +249,77 @@ WITH RECURSIVE
         ref.unique_constraint_schema AS parent_schema,
         parent.table_name AS parent_table_name
       FROM
-        %[1]s.information_schema.referential_constraints AS ref
-        JOIN constraints AS child ON
-            ref.constraint_catalog = child.table_catalog
-            AND ref.constraint_schema = child.table_schema
-            AND ref.constraint_name = child.constraint_name
-        JOIN constraints AS parent ON
-            ref.unique_constraint_catalog = parent.table_catalog
-            AND ref.unique_constraint_schema = parent.table_schema
-            AND ref.unique_constraint_name = parent.constraint_name
+        %[1]s.information_schema.referential_constraints AS ref,
+        constraints AS child,
+        constraints AS parent
       WHERE
-        (child.table_catalog, child.table_schema, child.table_name)
-        != (parent.table_catalog, parent.table_schema, parent.table_name)
+        ref.constraint_catalog = child.table_catalog
+        AND ref.constraint_schema = child.table_schema
+        AND ref.constraint_name = child.constraint_name
+        AND ref.unique_constraint_catalog = parent.table_catalog
+        AND ref.unique_constraint_schema = parent.table_schema
+        AND ref.unique_constraint_name = parent.constraint_name
+        AND (child.table_catalog, child.table_schema, child.table_name) !=
+          (parent.table_catalog, parent.table_schema, parent.table_name)
     ),
-  roots
+  roots(table_catalog, table_schema, table_name)
     AS (
       SELECT
-        tables.table_catalog, tables.table_schema, tables.table_name
-      FROM
-        tables
-      WHERE
-        (tables.table_catalog, tables.table_schema, tables.table_name)
-        NOT IN (SELECT child_catalog, child_schema, child_table_name FROM refs)
+        t.table_catalog AS table_catalog,
+        t.table_schema AS table_schema,
+        t.table_name AS table_name
+      FROM tables as t
+      LEFT JOIN refs AS r
+        ON r.child_catalog = t.table_catalog
+        AND r.child_schema = t.table_schema
+        AND r.child_table_name = t.table_name
+      WHERE r.child_table_name IS NULL
     ),
-  depths
+  depths(table_catalog, table_schema, table_name, depth)
     AS (
-      SELECT table_catalog, table_schema, table_name, 0 AS depth FROM roots
+      SELECT
+        roots.table_catalog AS table_catalog,
+        roots.table_schema AS table_schema,
+        roots.table_name AS table_name,
+        0 AS depth
+      FROM roots
+      -- UNION ALL
+      --   SELECT
+      --     refs.child_catalog AS table_catalog,
+      --     refs.child_schema AS table_schema,
+      --     refs.child_table_name AS table_name,
+      --     depths.depth + 1 AS depth
+      --   FROM
+      --     depths, refs
+      --   WHERE
+      --     refs.parent_catalog = depths.table_catalog
+      --     AND refs.parent_schema = depths.table_schema
+      --     AND refs.parent_table_name = depths.table_name
+    ),
+  cycle_detect(table_catalog, table_schema, table_name, depth)
+    AS (
+      SELECT
+        table_catalog AS table_catalog,
+        table_schema AS table_schema,
+        table_name AS table_name,
+        -1 AS depth
+      FROM tables
       UNION ALL
         SELECT
-          refs.child_catalog,
-          refs.child_schema,
-          refs.child_table_name,
-          depths.depth + 1
-        FROM
-          depths, refs
-        WHERE
-          refs.parent_catalog = depths.table_catalog
-          AND refs.parent_schema = depths.table_schema
-          AND refs.parent_table_name = depths.table_name
-    ),
-  cycle_detect
-    AS (
-      SELECT table_catalog, table_schema, table_name, -1 AS depth FROM tables
-      UNION ALL
-        SELECT table_catalog, table_schema, table_name, depth FROM depths
+          table_catalog AS table_catalog,
+          table_schema AS table_schema,
+          table_name AS table_name,
+          depth AS depth
+        FROM depths
     )
 SELECT
-  table_name, max(depth) AS depth
+  cd.table_name AS table_name,
+  max(cd.depth) AS depth
 FROM
-  cycle_detect
+  cycle_detect AS cd
 WHERE
-  table_catalog = $1 AND table_schema = $2
+  cd.table_catalog = $1
+  AND cd.table_schema = $2
 GROUP BY
   table_name
 ORDER BY
