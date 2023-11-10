@@ -145,7 +145,7 @@ func muts(num int) []*message {
 				Key:    []byte(key),
 				Time:   hlc.New(1699713050000*1000*1000, 0),
 			},
-			source: sourceInfo{connector: "mysql", table: tTable, operationType: snapshotOp},
+			source: sourceInfo{connector: "mysql", table: tTable, operationType: insertOp},
 		}
 	}
 	return res

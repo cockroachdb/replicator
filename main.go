@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/cmd/debezium"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/dumphelp"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/dumptemplates"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/fslogical"
@@ -104,6 +105,7 @@ func main() {
 	f.CountVarP(&verbosity, "verbose", "v", "increase logging verbosity to debug; repeat for trace")
 
 	root.AddCommand(
+		debezium.Command(),
 		dumphelp.Command(),
 		dumptemplates.Command(),
 		fslogical.Command(),
