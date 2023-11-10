@@ -1,0 +1,19 @@
+{
+  "key": {
+    "schema": {
+      "type": "struct",
+      "fields": [
+        {
+          "type": "int32",
+          "optional": false,
+          "field": "i"
+        }
+      ],
+      "optional": false,
+      "name": "cdc-connector.inventory.v.Key"
+    },
+    "payload": {
+      "i": 3
+    }
+  }
+}

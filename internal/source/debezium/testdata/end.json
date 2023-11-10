@@ -1,0 +1,32 @@
+{
+    "key": {
+      "schema": {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "string",
+            "optional": false,
+            "field": "id"
+          }
+        ],
+        "optional": false,
+        "name": "io.debezium.connector.common.TransactionMetadataKey",
+        "version": 1
+      },
+      "payload": {
+        "id": "0000003c:00000660:0003"
+      }
+    },
+    "value": {
+      "status": "END",
+      "id": "0000003c:00000660:0003",
+      "event_count": 1,
+      "data_collections": [
+        {
+          "data_collection": "MyDB.dbo.test",
+          "event_count": 1
+        }
+      ],
+      "ts_ms": 1701815751163
+    }
+  }

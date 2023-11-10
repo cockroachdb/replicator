@@ -1,0 +1,48 @@
+{
+  "key": {
+    "schema": {
+      "type": "struct",
+      "fields": [
+        {
+          "type": "int32",
+          "optional": false,
+          "field": "i"
+        },
+         {
+          "type": "int32",
+          "optional": false,
+          "field": "j"
+        }
+      ],
+      "optional": false,
+      "name": "cdc-connector.inventory.v.Key"
+    },
+    "payload": {
+      "i": 17,"j": 1
+    }
+  },
+  "value": {
+      "before": null,
+      "after": {"i":17,"j":1,"k":1},
+      "source": {
+        "version": "2.5.0-SNAPSHOT",
+        "connector": "mysql",
+        "name": "cdc-connector",
+        "ts_ms": 1699713050000,
+        "snapshot": "last",
+        "db": "inventory",
+        "sequence": null,
+        "table": "t",
+        "server_id": 0,
+        "gtid": null,
+        "file": "mysql-bin.000006",
+        "pos": 15263,
+        "row": 0,
+        "thread": null,
+        "query": null
+      },
+      "op": "r",
+      "ts_ms": 1699713052243,
+      "transaction": null
+  }
+}

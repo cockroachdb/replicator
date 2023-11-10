@@ -1,0 +1,43 @@
+{
+    "key": {
+      "schema": {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int32",
+            "optional": false,
+            "field": "pk"
+          }
+        ],
+        "optional": false,
+        "name": "cdc-connector.MyDB.dbo.test.Key"
+      },
+      "payload": {
+        "pk": 2
+      }
+    },
+    "value": {
+      "before": null,
+      "after": {"pk":2,"v":"a"},
+      "source": {
+        "version": "2.4.1.Final",
+        "connector": "sqlserver",
+        "name": "cdc-connector",
+        "ts_ms": 1701872914147,
+        "snapshot": "false",
+        "db": "inventory",
+        "sequence": null,
+        "table": "t",
+        "change_lsn": "0000003e:00007608:0002",
+        "commit_lsn": "0000003e:00007608:0003",
+        "event_serial_no": 1
+      },
+      "op": "c",
+      "ts_ms": 1701872922789,
+      "transaction": {
+        "id": "0000003e:00007608:0003",
+        "total_order": 1,
+        "data_collection_order": 1
+      }
+    }
+  }

@@ -19,3 +19,5 @@ cdc-sink
 cockroach-data/
 goroutine_dump/
 heap_profiler/
+tmp/
+sidecar/
