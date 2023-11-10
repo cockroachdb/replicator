@@ -1,0 +1,27 @@
+{
+    "key": {
+      "schema": {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "string",
+            "optional": false,
+            "field": "id"
+          }
+        ],
+        "optional": false,
+        "name": "io.debezium.connector.common.TransactionMetadataKey",
+        "version": 1
+      },
+      "payload": {
+        "id": "0000003c:00000660:0003"
+      }
+    },
+    "value": {
+      "status": "BEGIN",
+      "id": "0000003c:00000660:0003",
+      "event_count": null,
+      "data_collections": null,
+      "ts_ms": 1701815702567
+    }
+  }

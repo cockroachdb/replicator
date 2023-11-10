@@ -1,0 +1,108 @@
+{
+  "key": {
+    "schema": {
+      "type": "struct",
+      "fields": [
+        {
+          "type": "text",
+          "optional": false,
+          "field": "databaseName"
+        }
+      ],
+      "optional": false,
+      "name": "cdc-connector.inventory.v.Key"
+    },
+    "payload": {
+      "databaseName": "inventory"
+    }
+  },
+  "value": {
+      "source": {
+        "version": "2.5.0-SNAPSHOT",
+        "connector": "mysql",
+        "name": "cdc-connector",
+        "ts_ms": 1699713095000,
+        "snapshot": "false",
+        "db": "inventory",
+        "sequence": null,
+        "table": "js",
+        "server_id": 223344,
+        "gtid": null,
+        "file": "mysql-bin.000006",
+        "pos": 15554,
+        "row": 0,
+        "thread": null,
+        "query": null
+      },
+      "ts_ms": 1699713097229,
+      "databaseName": "inventory",
+      "schemaName": null,
+      "ddl": "create table js (i int primary key, v json, r float)",
+      "tableChanges": [
+        {
+          "type": "CREATE",
+          "id": "\"inventory\".\"js\"",
+          "table": {
+            "defaultCharsetName": "utf8mb4",
+            "primaryKeyColumnNames": [
+              "i"
+            ],
+            "columns": [
+              {
+                "name": "i",
+                "jdbcType": 4,
+                "nativeType": null,
+                "typeName": "INT",
+                "typeExpression": "INT",
+                "charsetName": null,
+                "length": null,
+                "scale": null,
+                "position": 1,
+                "optional": false,
+                "autoIncremented": false,
+                "generated": false,
+                "comment": null,
+                "defaultValueExpression": null,
+                "enumValues": null
+              },
+              {
+                "name": "v",
+                "jdbcType": 1111,
+                "nativeType": null,
+                "typeName": "JSON",
+                "typeExpression": "JSON",
+                "charsetName": null,
+                "length": null,
+                "scale": null,
+                "position": 2,
+                "optional": true,
+                "autoIncremented": false,
+                "generated": false,
+                "comment": null,
+                "defaultValueExpression": null,
+                "enumValues": null
+              },
+              {
+                "name": "r",
+                "jdbcType": 6,
+                "nativeType": null,
+                "typeName": "FLOAT",
+                "typeExpression": "FLOAT",
+                "charsetName": null,
+                "length": null,
+                "scale": null,
+                "position": 3,
+                "optional": true,
+                "autoIncremented": false,
+                "generated": false,
+                "comment": null,
+                "defaultValueExpression": null,
+                "enumValues": null
+              }
+            ],
+            "comment": null
+          }
+        }
+      ]
+    }
+}
