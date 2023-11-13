@@ -160,7 +160,7 @@ func ProvideServer(
 		return nil
 	})
 
-	return &Server{auth, diags, mux}
+	return &Server{listener.Addr(), auth, diags, mux}
 }
 
 // ProvideTLSConfig is called by Wire to load the certificate and key
