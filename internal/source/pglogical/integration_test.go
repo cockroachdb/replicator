@@ -22,6 +22,7 @@ package pglogical
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -492,7 +493,7 @@ func TestEmptyTransactions(t *testing.T) {
 func getCounterValue(t *testing.T, counter prometheus.Counter) int {
 	r := require.New(t)
 	var metric = &dto.Metric{}
-	err := emptyTransactionCount.Write(metric)
+	err := counter.Write(metric)
 	r.NoError(err)
 	return int(metric.Counter.GetValue())
 }
@@ -619,7 +620,7 @@ func testEmptyTransactions(t *testing.T, skipEmpty bool) {
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-func randStringBytes(n int) string {
+func randString(n int) string {
 	b := make([]byte, n)
 	for i := range b {
 		b[i] = letterBytes[rand.Intn(len(letterBytes))]
@@ -630,9 +631,10 @@ func randStringBytes(n int) string {
 func TestToast(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
-	// need a long string that is not compressible.
-	longString := randStringBytes(1 << 12)
-
+	// We need a long string that is not compressible.
+	longString := randString(1 << 12)
+	longObj, err := json.Marshal(longString)
+	r.NoError(err)
 	// Create a basic test fixture.
 	fixture, err := base.NewFixture(t)
 	r.NoError(err)
@@ -652,21 +654,34 @@ func TestToast(t *testing.T) {
 
 	name := ident.NewTable(dbSchema, ident.New("toast"))
 	// Create the schema in both locations.
-	var schema = fmt.Sprintf("CREATE TABLE %s (k INT PRIMARY KEY, j text, i int, deleted bool not null default false )", name)
+	schema := fmt.Sprintf(`
+	CREATE TABLE %s
+	  (k INT PRIMARY KEY,
+	   i int,
+	   j jsonb,
+	   s string,
+	   t text,
+	   deleted bool not null default false)`, name)
 	if _, err := crdbPool.ExecContext(ctx, schema); !a.NoError(err) {
 		return
 	}
-
+	schema = fmt.Sprintf(`
+	CREATE TABLE %s
+	  (k INT PRIMARY KEY,
+	   i int,
+	   j jsonb,
+	   s text,
+	   t text,
+	   deleted bool not null default false)`, name)
 	if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
 		return
 	}
-	// Inserting an initial value. The j columns contains a large object that
+	// Inserting an initial value. The t,s,j columns contains a large object that
 	// will be toast-ed in the Postgres side.
-	if _, err := pgPool.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s VALUES ($1, $2::text, $3)`, name), 1, longString, 1,
-	); !a.NoErrorf(err, "%s", name) {
-		return
-	}
+	_, err = pgPool.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s VALUES ($1, $2, $3, $4, $5)`, name),
+		1, 0, longObj, longString, longString)
+	r.NoError(err)
 	// We update the "i" column few times without changing the j column.
 	updates := 10
 	for i := 1; i <= updates; i++ {
@@ -684,21 +699,17 @@ func TestToast(t *testing.T) {
 			RetryDelay:    time.Millisecond,
 			StagingSchema: fixture.StagingDB.Schema(),
 			TargetConn:    crdbPool.ConnectionString,
+			Immediate:     true,
 		},
 		LoopConfig: logical.LoopConfig{
 			LoopName:     "pglogicaltest",
 			TargetSchema: dbSchema,
 		},
-		Publication:              pubNameRaw,
-		Slot:                     pubNameRaw,
-		SourceConn:               *pgConnString + dbName.Raw(),
-		ToastedColumnPlaceholder: "\"__cdc__toast__\"",
+		Publication:                pubNameRaw,
+		Slot:                       pubNameRaw,
+		SourceConn:                 *pgConnString + dbName.Raw(),
+		ExperimentalToastedColumns: true,
 	}
-	// cfg.ScriptConfig = script.Config{
-	// 	FS:       scripttest.ScriptFSFor(name),
-	// 	MainPath: "/testdata/toast_test.ts",
-	// }
-	// Start the connection, to demonstrate that we can backfill pending mutations.
 	repl, err := Start(fixture.Context, cfg)
 
 	if !a.NoError(err) {
@@ -720,17 +731,18 @@ func TestToast(t *testing.T) {
 				time.Sleep(100 * time.Millisecond)
 			}
 		}
-		var text sql.NullString
-		row := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT j from %s where k=1", name))
-		err = row.Scan(&text)
-		// Verify that the toasted column has the initial value
-		a.Equal(longString, text.String)
 		a.Equalf(updates, count, "mismatch in %s", name)
-		var m = &dto.Metric{}
-		err := unchangedToastedColumns.Write(m)
-		r.NoError(err)
-		// Verify that we actually seen 10 empty toasted column markers
-		a.Equal(updates, int(m.Counter.GetValue()))
+		var text sql.NullString
+		var st sql.NullString
+		var json []byte
+		row := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT j,s,t from %s where k=1", name))
+		err = row.Scan(&json, &st, &text)
+		// Verify that the toasted column has the initial value
+		a.Equal(longObj, json)
+		a.Equal(longString, st.String)
+		a.Equal(longString, text.String)
+		// Verify that we actually seen empty toasted column markers
+		a.Equal(updates*3, getCounterValue(t, unchangedToastedColumns))
 
 	})
 
