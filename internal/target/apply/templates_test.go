@@ -489,10 +489,11 @@ func checkTemplate(t *testing.T, global *templateGlobal, tc *templateTestCase) {
 	})
 	t.Run("toasted", func(t *testing.T) {
 		r := require.New(t)
-		if tmpls.toasted == nil || tc.name != "base" {
+
+		if tc.name != "base" || global.product != types.ProductCockroachDB {
 			t.Skip("toasted only for crdb target, base upsert")
 		}
-		s, err := tmpls.toastedExpr(2, applyUnconditional)
+		s, err := tmpls.customExpr(2, "toasted", applyUnconditional)
 		r.NoError(err)
 		checkFile(t,
 			fmt.Sprintf("testdata/%s/%s.toasted.sql", global.dir, tc.name),
