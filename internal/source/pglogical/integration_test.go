@@ -200,12 +200,13 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
 		BaseConfig: logical.BaseConfig{
-			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
-			ChaosProb:     fc.chaosProb,
-			Immediate:     fc.immediate,
-			RetryDelay:    time.Millisecond,
-			StagingSchema: fixture.StagingDB.Schema(),
-			TargetConn:    crdbPool.ConnectionString,
+			ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
+			ChaosProb:      fc.chaosProb,
+			Immediate:      fc.immediate,
+			RetryDelay:     time.Millisecond,
+			StagingSchema:  fixture.StagingDB.Schema(),
+			TargetConn:     crdbPool.ConnectionString,
+			StandbyTimeout: 100 * time.Millisecond,
 		},
 		LoopConfig: logical.LoopConfig{
 			LoopName:     "pglogicaltest",
