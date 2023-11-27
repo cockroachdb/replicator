@@ -67,6 +67,8 @@ type conn struct {
 	slotName string
 	// The configuration for opening replication connections.
 	sourceConfig *pgconn.Config
+	// How ofter to commit the consistent point
+	standbyTimeout time.Duration
 	// Support for toasted columns
 	toastedColumns bool
 }
@@ -84,6 +86,7 @@ func (c *conn) Process(
 			_ = batch.OnRollback(ctx)
 		}
 	}()
+	cpDeadline := time.Now().Add(c.standbyTimeout)
 
 	// We rely on the upstream database to replay events in the case of
 	// errors, so we may receive events that we've already processed.
@@ -153,10 +156,13 @@ func (c *conn) Process(
 				log.Trace("skipping empty transaction")
 				continue
 			}
-			// The COMMIT records are written in order, so they're a
-			// better marker to record.
-			if err := events.SetConsistentPoint(ctx, &lsnStamp{msg.CommitLSN, msg.CommitTime}); err != nil {
-				return err
+			if time.Now().After(cpDeadline) {
+				cpDeadline = time.Now().Add(c.standbyTimeout)
+				// The COMMIT records are written in order, so they're a
+				// better marker to record.
+				if err := events.SetConsistentPoint(ctx, &lsnStamp{msg.CommitLSN, msg.CommitTime}); err != nil {
+					return err
+				}
 			}
 
 		case *pglogrepl.DeleteMessage:
@@ -216,8 +222,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	}
 	dialSuccessCount.Inc()
 
-	const standbyTimeout = time.Second * 10
-	standbyDeadline := time.Now().Add(standbyTimeout)
+	standbyDeadline := time.Now().Add(c.standbyTimeout)
 
 	for {
 		select {
@@ -226,7 +231,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 		default:
 		}
 		if time.Now().After(standbyDeadline) {
-			standbyDeadline = time.Now().Add(standbyTimeout)
+			standbyDeadline = time.Now().Add(c.standbyTimeout)
 			cp, _ := state.GetConsistentPoint()
 			if lsn, ok := cp.(*lsnStamp); ok {
 				if err := pglogrepl.SendStandbyStatusUpdate(ctx, replConn, pglogrepl.StandbyStatusUpdate{
