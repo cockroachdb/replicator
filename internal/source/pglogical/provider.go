@@ -89,13 +89,14 @@ func ProvideDialect(
 	sourceConfig.RuntimeParams["replication"] = "database"
 
 	return &conn{
-		columns:                    &ident.TableMap[[]types.ColData]{},
-		publicationName:            config.Publication,
-		relations:                  make(map[uint32]ident.Table),
-		skipEmptyTransactions:      config.SkipEmptyTransactions,
-		slotName:                   config.Slot,
-		sourceConfig:               sourceConfig,
-		experimentalToastedColumns: config.ExperimentalToastedColumns,
+		columns:               &ident.TableMap[[]types.ColData]{},
+		publicationName:       config.Publication,
+		relations:             make(map[uint32]ident.Table),
+		skipEmptyTransactions: config.SkipEmptyTransactions,
+		slotName:              config.Slot,
+		sourceConfig:          sourceConfig,
+		standbyTimeout:        config.StandbyTimeout,
+		toastedColumns:        config.ToastedColumns,
 	}, nil
 }
 

@@ -705,10 +705,10 @@ func TestToast(t *testing.T) {
 			LoopName:     "pglogicaltest",
 			TargetSchema: dbSchema,
 		},
-		Publication:                pubNameRaw,
-		Slot:                       pubNameRaw,
-		SourceConn:                 *pgConnString + dbName.Raw(),
-		ExperimentalToastedColumns: true,
+		Publication:    pubNameRaw,
+		Slot:           pubNameRaw,
+		SourceConn:     *pgConnString + dbName.Raw(),
+		ToastedColumns: true,
 	}
 	repl, err := Start(fixture.Context, cfg)
 

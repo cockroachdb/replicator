@@ -210,6 +210,7 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 			if !ok {
 				return errors.Errorf("invalid value for Meta[%s]", types.CustomUpsert)
 			}
+			log.Infof("applying custom template for %s", string(muts[i].Key))
 			// Apply custom template on its own.
 			if err := a.upsertLocked(ctx, tx, []types.Mutation{muts[i]}, template); err != nil {
 				return countError(err)
