@@ -30,10 +30,6 @@ var (
 		Name: "pglogical_dial_success_total",
 		Help: "the number of times we successfully dialed a replication connection",
 	})
-	skippedEmptyTransactionCount = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "pglogical_skipped_empty_transactions",
-		Help: "the number of times we skipped an empty transaction",
-	})
 	emptyTransactionCount = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "pglogical_empty_transactions",
 		Help: "the number of empty transactions we have seen",

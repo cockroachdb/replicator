@@ -63,8 +63,6 @@ type conn struct {
 	publicationName string
 	// Map source ids to target tables.
 	relations map[uint32]ident.Table
-	// Allows empty transactions to be skipped
-	skipEmptyTransactions bool
 	// The name of the slot within the publication.
 	slotName string
 	// The configuration for opening replication connections.
@@ -147,13 +145,13 @@ func (c *conn) Process(
 				return ctx.Err()
 			}
 			ignoreLSN = msg.CommitLSN
+			// In Postgres version < v15, the stream might contain empty transactions.
+			// See https://github.com/postgres/postgres/commit/d5a9d86d8f
+			// We will skip them to avoid unnecessary writes to the memo table.
 			if emptyTransaction {
 				emptyTransactionCount.Inc()
-				if c.skipEmptyTransactions {
-					skippedEmptyTransactionCount.Inc()
-					log.Trace("skipping empty transaction")
-					continue
-				}
+				log.Trace("skipping empty transaction")
+				continue
 			}
 			// The COMMIT records are written in order, so they're a
 			// better marker to record.

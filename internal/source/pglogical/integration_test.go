@@ -481,15 +481,6 @@ func TestDataTypes(t *testing.T) {
 	a.NoError(ctx.Wait())
 }
 
-func TestEmptyTransactions(t *testing.T) {
-	t.Run("donot-skip-empty", func(t *testing.T) {
-		testEmptyTransactions(t, false)
-	})
-	t.Run("skip-empty", func(t *testing.T) {
-		testEmptyTransactions(t, true)
-	})
-}
-
 func getCounterValue(t *testing.T, counter prometheus.Counter) int {
 	r := require.New(t)
 	var metric = &dto.Metric{}
@@ -498,16 +489,13 @@ func getCounterValue(t *testing.T, counter prometheus.Counter) int {
 	return int(metric.Counter.GetValue())
 }
 
-// testEmptyTransactions must be run sequentially
-// we are tracking metrics to verify that we see,
-// and skip if required, empty transactions.
-func testEmptyTransactions(t *testing.T, skipEmpty bool) {
+// TestEmptyTransactions verify that we skip transactions.
+func TestEmptyTransactions(t *testing.T) {
 
 	a := assert.New(t)
 	r := require.New(t)
 
 	emptyTxnSeenStart := getCounterValue(t, emptyTransactionCount)
-	emptyTxnSkippedStart := getCounterValue(t, skippedEmptyTransactionCount)
 
 	applicableVersions := regexp.MustCompile("PostgreSQL 1[1234]")
 	// Create a basic test fixture.
@@ -570,10 +558,9 @@ func testEmptyTransactions(t *testing.T, skipEmpty bool) {
 			LoopName:     "pglogicaltest",
 			TargetSchema: dbSchema,
 		},
-		Publication:           pubNameRaw,
-		SkipEmptyTransactions: skipEmpty,
-		Slot:                  pubNameRaw,
-		SourceConn:            *pgConnString + dbName.Raw(),
+		Publication: pubNameRaw,
+		Slot:        pubNameRaw,
+		SourceConn:  *pgConnString + dbName.Raw(),
 	})
 	r.NoError(err)
 
@@ -609,10 +596,6 @@ func testEmptyTransactions(t *testing.T, skipEmpty bool) {
 	// Check emptyTransactionCount, we should see one empty transaction.
 	a.Equal(emptyTxnSeenStart+1, getCounterValue(t, emptyTransactionCount))
 	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
-	// If we are skipping transactions, check the skippedEmptyTransactionCount.
-	if skipEmpty {
-		a.Equal(emptyTxnSkippedStart+1, getCounterValue(t, skippedEmptyTransactionCount))
-	}
 	ctx.Stop(time.Second)
 	a.NoError(ctx.Wait())
 
