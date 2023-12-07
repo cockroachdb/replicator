@@ -89,6 +89,8 @@ type sourceJS struct {
 // field is ignored, since that can be taken care of by the Map
 // function.
 type targetJS struct {
+	// Override built-in apply behavior.
+	Apply applyJS `goja:"apply"`
 	// Column names.
 	CASColumns []string `goja:"cas"`
 	// Column to duration.
@@ -110,12 +112,13 @@ type targetJS struct {
 // script. It will load all required resources, parse, and execute the
 // top-level API calls.
 type Loader struct {
+	apiModule    *goja.Object          // The imported cdc-sink module.
 	fs           fs.FS                 // Used by require.
 	options      Options               // Target of api.setOptions().
 	requireStack []*url.URL            // Allows relative import paths.
 	requireCache map[string]goja.Value // Keys are URLs.
 	rt           *goja.Runtime         // JS Runtime.
-	rtMu         *sync.Mutex           // Serialize access to the VM.
+	rtMu         *sync.RWMutex         // Serialize access to the VM.
 	sources      map[string]*sourceJS  // User configuration.
 	targets      map[string]*targetJS  // User configuration.
 }
@@ -224,7 +227,7 @@ var module = {exports: exports};`, key),
 		Format:     esbuild.FormatCommonJS,
 		Loader:     esbuild.LoaderDefault,
 		Sourcefile: key,
-		Target:     esbuild.ES2015,
+		Target:     esbuild.ES2022,
 	}
 	// Source maps improve error messages from the JS runtime.
 	if strings.HasSuffix(key, ".js") || strings.HasSuffix(key, ".ts") {

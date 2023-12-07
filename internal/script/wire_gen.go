@@ -22,7 +22,7 @@ import (
 
 // Evaluate the loaded script.
 func Evaluate(ctx *stopper.Context, loader *Loader, configs *applycfg.Configs, diags *diag.Diagnostics, targetSchema TargetSchema, watchers types.Watchers) (*UserScript, error) {
-	userScript, err := ProvideUserScript(configs, loader, diags, targetSchema, watchers)
+	userScript, err := ProvideUserScript(ctx, configs, loader, diags, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -30,6 +30,8 @@ func Evaluate(ctx *stopper.Context, loader *Loader, configs *applycfg.Configs, d
 }
 
 func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema TargetSchema) (*UserScript, error) {
+	baseFixture := fixture.Fixture
+	context := baseFixture.Context
 	configs := fixture.Configs
 	loader, err := ProvideLoader(config)
 	if err != nil {
@@ -37,7 +39,7 @@ func newScriptFromFixture(fixture *all.Fixture, config *Config, targetSchema Tar
 	}
 	diagnostics := fixture.Diagnostics
 	watchers := fixture.Watchers
-	userScript, err := ProvideUserScript(configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}

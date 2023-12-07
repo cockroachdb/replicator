@@ -21,6 +21,7 @@ package script
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -45,6 +46,7 @@ func Evaluate(
 func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, error) {
 	panic(wire.Build(
 		Set,
-		wire.FieldsOf(new(*all.Fixture), "Diagnostics", "Configs", "Watchers"),
+		wire.FieldsOf(new(*base.Fixture), "Context"),
+		wire.FieldsOf(new(*all.Fixture), "Configs", "Diagnostics", "Fixture", "Watchers"),
 	))
 }
