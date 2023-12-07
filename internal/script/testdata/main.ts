@@ -17,8 +17,9 @@
  */
 
 import * as api from "cdc-sink@v1"; // Well-known module name
+import {ApplyOp} from "cdc-sink@v1"; // Verify additional code imports.
 import externalData from "./data.txt"; // Can import additional files from disk.
-import * as lib from "./lib"; // Verify additional code imports.
+import * as lib from "./lib";
 // import * as something from "https://some.cdn/package@1" is viable
 
 api.configureSource("expander", {
@@ -109,5 +110,53 @@ api.configureTable("merge_drop_all", {
 api.configureTable("merge_or_dlq", {
     merge: api.standardMerge(() => ({dlq: "dead"}))
 });
+
+// Demonstrate how upsert and delete SQL operations can be entirely
+// overridden by the userscript. In this test, we perform some basic
+// arithmetic on the keys and values to validate that this script is
+// actually running.
+api.configureTable("sql_test", {
+    apply: async (ops: Iterable<ApplyOp>): Promise<void> => {
+        let tx = api.getTX();
+
+        // We can perform arbitrary queries against the database. This
+        // API returns a Promise. We're in an async function and can
+        // therefore use await to improve readability.
+        let rows = tx.query(
+            `SELECT *
+             FROM (VALUES (1, 2), (3, 4))`);
+        for (let row of await rows) {
+            console.log("rows query", JSON.stringify(row));
+        }
+
+        // This is a not-entirely-contrived example where one might
+        // interact with a database that can't update, but can delete
+        // and then insert.
+        for (let op of ops) {
+            await tx.exec(
+                `DELETE
+                 FROM ${tx.table()}
+                 WHERE pk = $1`, 2 * +op.pk[0])
+            if (op.action == "upsert") {
+                await tx.exec(
+                    `INSERT INTO ${tx.table()} (pk, val)
+                     VALUES ($1, $2)`,
+                    2 * +op.data.pk, -2 * +op.data.val);
+            }
+        }
+
+        await countCurrentTable()
+    },
+});
+
+// Another example of a query that uses its result.
+async function countCurrentTable() {
+    let tx = api.getTX();
+    let rows = await tx.query(`SELECT count(*)
+                               FROM ${tx.table()}`);
+    for (let row of rows) {
+        console.log(`there are now ${row[0]} rows in ${api.getTX().table()}`)
+    }
+}
 
 api.setOptions({"hello": "world"});
