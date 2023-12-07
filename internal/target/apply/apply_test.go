@@ -282,6 +282,25 @@ func TestApply(t *testing.T) {
 
 		a.NoError(fixture.Configs.Set(jumbleName, nil))
 	})
+
+	t.Run("delegate_apply", func(t *testing.T) {
+		r := require.New(t)
+		tbl := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("fake_table"))
+		fake := &fakeApplier{}
+
+		cfg := applycfg.NewConfig()
+		cfg.Delegate = fake
+		a.NoError(fixture.Configs.Set(tbl, cfg))
+		found, err := fixture.Appliers.Get(ctx, tbl)
+		r.NoError(err)
+		r.Same(fake, found)
+	})
+}
+
+type fakeApplier struct{}
+
+func (f *fakeApplier) Apply(context.Context, types.TargetQuerier, []types.Mutation) error {
+	return nil
 }
 
 type dataTypeTestCase struct {

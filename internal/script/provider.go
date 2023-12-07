@@ -18,16 +18,19 @@ package script
 
 import (
 	"net/url"
+	"runtime"
 	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 // Set is used by Wire.
@@ -65,7 +68,7 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 		options:      options,
 		requireCache: make(map[string]goja.Value),
 		rt:           goja.New(),
-		rtMu:         &sync.Mutex{},
+		rtMu:         &sync.RWMutex{},
 		sources:      make(map[string]*sourceJS),
 		targets:      make(map[string]*targetJS),
 	}
@@ -117,6 +120,7 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 // ProvideUserScript is called by wire to bind the UserScript to the
 // target database.
 func ProvideUserScript(
+	ctx *stopper.Context,
 	applyConfigs *applycfg.Configs,
 	boot *Loader,
 	diags *diag.Diagnostics,
@@ -144,6 +148,12 @@ func ProvideUserScript(
 		target:  target.AsSchema(),
 		watcher: watcher,
 	}
+	// Limit the total number of background tasks that the script
+	// can start at any given time.
+	ret.tasks, _ = errgroup.WithContext(ctx)
+	ret.tasks.SetLimit(2 * runtime.GOMAXPROCS(0))
+	// Generate helpful message if execJS is not called.
+	ret.rt.Interrupt(errUseExec)
 
 	if err := ret.bind(boot); err != nil {
 		return nil, err

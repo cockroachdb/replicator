@@ -110,4 +110,26 @@ api.configureTable("merge_or_dlq", {
     merge: api.standardMerge(() => ({dlq: "dead"}))
 });
 
+// Demonstrate how upsert and delete SQL operations can be entirely
+// overridden by the userscript. In this test, we perform some basic
+// arithmetic on the keys and values to validate that this script is
+// actually running.
+api.configureTable("sql_test", {
+    delete: (tx:api.TargetTX, keys: api.DocumentValue[][]):Promise<any> =>
+        Promise.all(keys.map(key => tx.exec(
+            `DELETE FROM ${tx.table()} WHERE pk = $1`, 2*+key[0]))),
+    upsert: async (tx:api.TargetTX, docs:api.Document[]):Promise<any> => {
+        // We can perform arbitrary queries against the database. This
+        // API returns a Promise. We're in an async function and can
+        // therefore use await to improve readability.
+        let rows = tx.query(`SELECT * FROM (VALUES (1, 2), (3, 4))`);
+        for (let row of await rows) {
+            console.log("rows query", JSON.stringify(row));
+        }
+        return Promise.all(docs.map(doc =>
+            tx.exec(`UPSERT INTO ${tx.table()} (pk, val) VALUES ($1, $2)`,
+                2*+doc.pk, -2*+doc.val)));
+    },
+});
+
 api.setOptions({"hello": "world"});

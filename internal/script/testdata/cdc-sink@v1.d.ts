@@ -35,7 +35,7 @@ declare module "cdc-sink@v1" {
      * data type which can be coerced to a JSON representation is safe
      * to use as a property value.
      */
-    interface Document { // Interface necessary to break type cycle.
+    type Document = {
         [x: string]: DocumentValue;
     }
 
@@ -144,6 +144,31 @@ declare module "cdc-sink@v1" {
      */
     type ConfigureTableOptions = {
         /**
+         * Override cdc-sink's default delete behavior for incoming
+         * primary keys. The userscript assumes all responsibility for
+         * interacting with the target database.
+         *
+         * If a custom delete behavior is provided, it is also necessary
+         * to provide a custom upsert operation.
+         *
+         * @param tx - Provides access to the target database transaction.
+         * @param keys - The primary keys of records to delete.
+         */
+        delete(tx: TargetTX, keys: DocumentValue[][]): Promise<any>;
+        /**
+         * Override cdc-sink's default upsert behavior for incoming
+         * documents. The userscript assumes all responsibility for
+         * interacting with the target database.
+         *
+         * If a custom upsert behavior is provided, it is also necessary
+         * to provide a custom delete operation.
+         *
+         * @param tx - Provides access to the target database transaction.
+         * @param docs - The documents to upsert.
+         */
+        upsert(tx: TargetTX, docs: Document[]): Promise<any>;
+    } | {
+        /**
          * A list of columns to enable compare-and-set behavior.
          */
         cas: Column[];
@@ -244,6 +269,78 @@ declare module "cdc-sink@v1" {
      * This is an opaque type returned from {@link standardMerge}.
      */
     type StandardMerge = {};
+
+    /**
+     * A TargetColumn provides a view of cdc-sink's introspection of a
+     * table in the destination database.
+     */
+    type TargetColumn = {
+        /**
+         * The column's DEFAULT expression, if one exists.
+         */
+        defaultExpr?: string;
+        /**
+         * True if the column wouldn't normally be operated on by cdc-sink.
+         */
+        ignored: boolean;
+        /**
+         * A quoted, SQL-safe representation of the column name.
+         */
+        name: string;
+        /**
+         * True if the column is part of the primary key.
+         */
+        primary: boolean;
+        /**
+         * The type of the SQL column.
+         */
+        type: string;
+    };
+
+    /**
+     * TargetTX allows the userscript to execute arbitrary SQL
+     * statements against the target database.
+     */
+    type TargetTX = {
+        /**
+         * Returns schema information about the destination table.
+         * Columns are returned such that primary key columns will be
+         * sorted first and in their index order.
+         */
+        columns(): TargetColumn[];
+
+        /**
+         * Execute a SQL command that returns no rows.
+         * @param query - A SQL command to execute in the target
+         * database. Substitution parameter syntax is target-specific.
+         * @param params - Values for substitution parameters.
+         * @returns A promise that resolves when the database command
+         * has completed.
+         */
+        exec(query: string, ...params: any): Promise<void>;
+
+        /**
+         * Execute a SQL query that returns some number of rows.
+         * @param query - A SQL command to execute in the target
+         * database. Substitution parameter syntax is target-specific.
+         * @param params - Values for substitution parameters.
+         * @returns A promise that will resolve to an iterable over the
+         * column values.
+         */
+        query(query: string, ...params: any): Promise<Iterable<any[]>>;
+
+        /**
+         * Returns a quoted, SQL-safe representation of the target
+         * schema.
+         */
+        schema(): string;
+
+        /**
+         * Returns a quoted, fully-qualified, SQL-safe representation of
+         * the target table.
+         */
+        table(): string;
+    };
 
     /**
      * @returns a string containing a random UUID.

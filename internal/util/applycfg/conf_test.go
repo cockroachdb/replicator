@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +33,7 @@ func TestCopyEquals(t *testing.T) {
 	cfg := &Config{
 		CASColumns: TargetColumns{ident.New("cas")},
 		Deadlines:  ident.MapOf[time.Duration](ident.New("dl"), time.Hour),
+		Delegate:   types.Applier(nil),
 		Exprs:      ident.MapOf[string]("expr", "foo"),
 		Extras:     ident.New("extras"),
 		Ignore:     ident.MapOf[bool]("ign", true),

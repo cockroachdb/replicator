@@ -50,7 +50,7 @@ func ProvideFactory(
 		stop:     ctx,
 		watchers: watchers,
 	}
-	f.mu.instances = &ident.TableMap[*apply]{}
+	f.mu.instances = &ident.TableMap[types.Applier]{}
 	if err := diags.Register("apply", f); err != nil {
 		return nil, err
 	}

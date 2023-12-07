@@ -32,6 +32,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// A JS function which is provided with an array of primary keys to
+// delete.
+type deleteJS func(tx *targetTX, keys goja.Value) *goja.Promise
+
+// A JS function which is provided with access to the target database in
+// order to upsert a mutation (or do anything the user so desires).
+type upsertJS func(tx *targetTX, mutData goja.Value) *goja.Promise
+
 // A JS function to dispatch source documents onto target tables.
 //
 // Look on my Works, ye Mighty, and despair!
@@ -93,6 +101,8 @@ type targetJS struct {
 	CASColumns []string `goja:"cas"`
 	// Column to duration.
 	Deadlines map[string]string `goja:"deadlines"`
+	// Override database delete logic. Must be set with Upsert.
+	Delete deleteJS `goja:"delete"`
 	// Column to SQL expression to pass through.
 	Exprs map[string]string `goja:"exprs"`
 	// Column name.
@@ -104,6 +114,8 @@ type targetJS struct {
 	// Two- or three-way merge operator. The bindMerge method will
 	// validate the type of value.
 	Merge goja.Value `goja:"merge"`
+	// Override apply / upsert behavior. Must be set with Delete.
+	Upsert upsertJS `goja:"upsert"`
 }
 
 // Loader is responsible for the first-pass execution of the user
@@ -115,7 +127,7 @@ type Loader struct {
 	requireStack []*url.URL            // Allows relative import paths.
 	requireCache map[string]goja.Value // Keys are URLs.
 	rt           *goja.Runtime         // JS Runtime.
-	rtMu         *sync.Mutex           // Serialize access to the VM.
+	rtMu         *sync.RWMutex         // Serialize access to the VM.
 	sources      map[string]*sourceJS  // User configuration.
 	targets      map[string]*targetJS  // User configuration.
 }
@@ -224,7 +236,7 @@ var module = {exports: exports};`, key),
 		Format:     esbuild.FormatCommonJS,
 		Loader:     esbuild.LoaderDefault,
 		Sourcefile: key,
-		Target:     esbuild.ES2015,
+		Target:     esbuild.ES2022,
 	}
 	// Source maps improve error messages from the JS runtime.
 	if strings.HasSuffix(key, ".js") || strings.HasSuffix(key, ".ts") {

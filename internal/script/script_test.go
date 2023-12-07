@@ -19,6 +19,7 @@ package script
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -77,6 +78,9 @@ func TestScript(t *testing.T) {
 		fmt.Sprintf("CREATE TABLE %s.all_features(msg VARCHAR(%d) PRIMARY KEY)", schema, size))
 	r.NoError(err)
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
+	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.sql_test(pk INT PRIMARY KEY, val INT NOT NULL)", schema))
+	r.NoError(err)
 
 	var opts mapOptions
 
@@ -85,9 +89,10 @@ func TestScript(t *testing.T) {
 		MainPath: "/testdata/main.ts",
 		Options:  &opts,
 	}, TargetSchema(schema))
+	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
 	r.NoError(err)
 	a.Equal(3, s.Sources.Len())
-	a.Equal(5, s.Targets.Len())
+	a.Equal(6, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -230,4 +235,59 @@ func TestScript(t *testing.T) {
 			a.Equal(&merge.Resolution{DLQ: "dead"}, result)
 		}
 	}
+
+	// The SQL in the test script is opinionated.
+	t.Run("sql_test", func(t *testing.T) {
+		if fixture.TargetPool.Product != types.ProductCockroachDB {
+			t.Skip("user script has opinionated SQL")
+		}
+		r := require.New(t)
+		tbl = ident.NewTable(schema, ident.New("sql_test"))
+		cfg := s.Targets.GetZero(tbl)
+		r.NotNil(cfg)
+		del := cfg.Delegate
+		r.IsType(new(applier), del)
+		r.NoError(del.Apply(ctx, fixture.TargetPool, []types.Mutation{
+			{
+				Data: json.RawMessage(`{"pk":0,"val":0}`),
+				Key:  json.RawMessage(`[0]`),
+			},
+			{
+				Data: json.RawMessage(`{"pk":1,"val":1}`),
+				Key:  json.RawMessage(`[1]`),
+			},
+			{
+				Data: json.RawMessage(`{"pk":2,"val":2}`),
+				Key:  json.RawMessage(`[2]`),
+			},
+		}))
+		rows, err := fixture.TargetPool.QueryContext(ctx,
+			fmt.Sprintf("SELECT pk, val FROM %s ORDER BY pk", tbl))
+		r.NoError(err)
+		ct := 0
+		for rows.Next() {
+			ct++
+			var pk, val int
+			r.NoError(rows.Scan(&pk, &val))
+			r.Equal(pk, -1*val)
+		}
+		r.NoError(rows.Err())
+		r.Equal(3, ct)
+
+		// Check deletion
+		r.NoError(del.Apply(ctx, fixture.TargetPool, []types.Mutation{
+			{
+				Key: json.RawMessage(`[0]`),
+			},
+			{
+				Key: json.RawMessage(`[1]`),
+			},
+			{
+				Key: json.RawMessage(`[2]`),
+			},
+		}))
+		r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
+			"SELECT count(*) FROM %s", tbl)).Scan(&ct))
+		r.Equal(0, ct)
+	})
 }

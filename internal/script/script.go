@@ -29,8 +29,10 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/dop251/goja"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 // A Dispatch function receives a source mutation and assigns mutations
@@ -81,6 +83,9 @@ type Target struct {
 	Map Map `json:"-"`
 }
 
+// errUserExec is used to interrupt the JS runtime.
+var errUseExec = errors.New("UserScript.execJS() must be used when calling JS code")
+
 // UserScript encapsulates a user-provided configuration expressed as a
 // JavaScript program.
 //
@@ -97,10 +102,12 @@ type UserScript struct {
 	Sources *ident.Map[*Source]
 	Targets *ident.TableMap[*Target]
 
-	rt      *goja.Runtime // The JavaScript VM. See execJS.
-	rtMu    *sync.Mutex   // Serialize access to the VM.
-	target  ident.Schema  // The schema being populated.
-	watcher types.Watcher // Access to target schema.
+	rt      *goja.Runtime        // The JavaScript VM. See execJS.
+	rtExit  notify.Var[struct{}] // Forms an ersatz event loop for checking promise status.
+	rtMu    *sync.RWMutex        // Serialize access to the VM or its side-effects.
+	tasks   *errgroup.Group      // Limits number of concurrent background tasks.
+	target  ident.Schema         // The schema being populated.
+	watcher types.Watcher        // Access to target schema.
 }
 
 var _ diag.Diagnostic = (*UserScript)(nil)
@@ -159,7 +166,13 @@ func (s *UserScript) bind(loader *Loader) error {
 		}
 		tgt := &Target{Config: *applycfg.NewConfig()}
 		s.Targets.Put(table, tgt)
-
+		if bag.Delete != nil && bag.Upsert != nil {
+			tgt.Delegate = newApplier(s, table, bag.Delete, bag.Upsert)
+			// If we're using a Delete & Upsert, no other options are valid.
+			continue
+		} else if (bag.Delete == nil) != (bag.Upsert == nil) {
+			return errors.Errorf("configureTable(%q): both delete and upsert must be specified", table)
+		}
 		for _, cas := range bag.CASColumns {
 			tgt.CASColumns = append(tgt.CASColumns, ident.New(cas))
 		}
@@ -208,7 +221,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 
 		// Execute the user function to route the mutation.
 		var dispatches map[string][]map[string]any
-		if err := s.execJS(func() (err error) {
+		if err := s.execJS(func(*goja.Runtime) (err error) {
 			meta := mut.Meta
 			if meta == nil {
 				meta = make(map[string]any)
@@ -295,7 +308,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 
 		// Execute the user code to return the replacement values.
 		var rawMapped map[string]any
-		if err := s.execJS(func() (err error) {
+		if err := s.execJS(func(*goja.Runtime) (err error) {
 			meta := mut.Meta
 			if meta == nil {
 				meta = make(map[string]any)
@@ -398,22 +411,22 @@ func (s *UserScript) bindMerge(table ident.Table, merger goja.Value) (merge.Merg
 		// Execute the callback while holding a lock on the runtime to
 		// ensure single-threaded access.
 		var jsResult *mergeResult
-		if err := s.execJS(func() error {
+		if err := s.execJS(func(rt *goja.Runtime) error {
 			// Export the conflict as the js merge operation.
 			op := &mergeOp{
 				Meta:     con.Proposed.Meta,
-				Target:   s.rt.NewDynamicObject(&bagWrapper{con.Target, s.rt}),
-				Proposed: s.rt.NewDynamicObject(&bagWrapper{con.Proposed, s.rt}),
+				Target:   s.rt.NewDynamicObject(&bagWrapper{con.Target, rt}),
+				Proposed: s.rt.NewDynamicObject(&bagWrapper{con.Proposed, rt}),
 			}
 			if con.Before != nil {
-				op.Before = s.rt.NewDynamicObject(&bagWrapper{con.Before, s.rt})
+				op.Before = s.rt.NewDynamicObject(&bagWrapper{con.Before, rt})
 			}
 			if len(con.Unmerged) > 0 {
 				unmerged := make([]any, len(con.Unmerged))
 				for idx, ident := range con.Unmerged {
 					unmerged[idx] = ident.Raw()
 				}
-				op.Unmerged = s.rt.NewArray(unmerged...)
+				op.Unmerged = rt.NewArray(unmerged...)
 			}
 
 			// Invoke the JS by way of the golang func binding.
@@ -472,13 +485,65 @@ func (s *UserScript) bindMerge(table ident.Table, merger goja.Value) (merge.Merg
 	return ret, nil
 }
 
+// await is a helper method to safely wait for a promise to be resolved
+// or rejected. The JS runtime will update the promise from whichever
+// goroutine is executing within execJS, so we can only read the promise
+// state when no JS code is running.
+func (s *UserScript) await(ctx context.Context, promise *goja.Promise) (goja.Value, error) {
+	for {
+		// We only need a read barrier for any updates that were made
+		// during the last call to execJS.
+		s.rtMu.RLock()
+		// The wake channel will be closed whenever the next time execJS
+		// exits. This forms an ersatz event loop.
+		_, wake := s.rtExit.Get()
+		// Read the promise state.
+		state := promise.State()
+		value := promise.Result()
+		s.rtMu.RUnlock()
+
+		switch state {
+		case goja.PromiseStateFulfilled:
+			// Success.
+			return value, nil
+		case goja.PromiseStateRejected:
+			// Return the JS error as a golang error.
+			return nil, errors.Errorf("userscript promise rejected: %v", value)
+		case goja.PromiseStatePending:
+			// Wait for the next time execJS is finished or for context
+			// cancellation.
+			select {
+			case <-wake:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		default:
+			return nil, errors.Errorf("unimplemented: %v", state)
+		}
+	}
+}
+
 // execJS ensures that the callback has exclusive access to the JS VM.
-func (s *UserScript) execJS(fn func() error) error {
+// The VM will be left in an interrupted state to return a useful error
+// message if execJS is not called. The rtExit variable will be notified
+// when the callback has finished executing to create an event loop.
+func (s *UserScript) execJS(fn func(rt *goja.Runtime) error) error {
 	s.rtMu.Lock()
 	s.rt.ClearInterrupt()
 	defer func() {
-		s.rt.Interrupt(context.Canceled)
+		s.rt.Interrupt(errUseExec)
+		s.rtExit.Notify()
 		s.rtMu.Unlock()
 	}()
-	return fn()
+	return fn(s.rt)
+}
+
+// execTask runs a background task, but limits the total number of
+// active tasks to a reasonable value.
+func (s *UserScript) execTask(fn func()) {
+	s.tasks.Go(func() error {
+		fn()
+		return nil
+	})
 }
