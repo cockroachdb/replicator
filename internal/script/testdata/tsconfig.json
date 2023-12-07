@@ -1,2 +1,11 @@
+// This improves code introspection in GoLand. It's not used by cdc-sink
+// code itself.
 {
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "DOM",
+      "ES2022"
+    ]
+  }
 }

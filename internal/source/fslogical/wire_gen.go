@@ -51,7 +51,7 @@ func Start(context *stopper.Context, config *Config) (*FSLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	userScript, err := script.ProvideUserScript(configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	if err != nil {
 		return nil, err
 	}
-	userScript, err := script.ProvideUserScript(configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
 	if err != nil {
 		return nil, err
 	}
