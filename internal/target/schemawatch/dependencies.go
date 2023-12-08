@@ -48,6 +48,7 @@ WITH RECURSIVE
         table_catalog, table_schema, table_name
       FROM
         information_schema.tables
+      WHERE table_type = 'BASE TABLE'
     ),
   refs
     AS (
@@ -165,7 +166,8 @@ const depOrderTemplateCRDB = `
 WITH RECURSIVE
  tables AS (
    SELECT schema_name AS sch, table_name AS tbl
-   FROM [SHOW TABLES FROM %[1]s]),
+   FROM [SHOW TABLES FROM %[1]s]
+   WHERE type='table'),
  refs AS (
    SELECT
     constraint_schema AS child_sch, table_name AS child_tbl, referenced_table_name AS parent_tbl
@@ -233,6 +235,8 @@ WITH RECURSIVE
         table_catalog, table_schema, table_name
       FROM
         %[1]s.information_schema.tables
+      WHERE
+        table_type = 'BASE TABLE'
     ),
   refs
     AS (
