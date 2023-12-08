@@ -522,11 +522,18 @@ func TestColDataIgnoresViews(t *testing.T) {
 	}
 	viewName := vi.Name()
 
-	colData, ok := fixture.Watcher.Get().Columns.Get(tableName)
+	schemaData := fixture.Watcher.Get()
+	colData, ok := schemaData.Columns.Get(tableName)
 	a.True(ok)
 	a.NotNil(colData)
 
-	viewData, ok := fixture.Watcher.Get().Columns.Get(viewName)
+	viewData, ok := schemaData.Columns.Get(viewName)
 	a.False(ok)
 	a.Nil(viewData)
+
+	for _, level := range schemaData.Order {
+		for _, entry := range level {
+			a.False(ident.Equal(viewName, entry), "should not find view in Order")
+		}
+	}
 }
