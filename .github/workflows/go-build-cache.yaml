@@ -35,7 +35,7 @@ jobs:
 
       - name: Set up Go
         id: setup
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           # This step is going to create a mostly-empty cache; there's
           # no argument to use-but-don't-push the cache. We'll tweak the
@@ -59,7 +59,7 @@ jobs:
 
       - name: Set up Go
         id: setup
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
