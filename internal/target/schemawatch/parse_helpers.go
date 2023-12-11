@@ -36,7 +36,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	ora "github.com/sijms/go-ora/v2"
 )
 
 var (
@@ -65,8 +64,7 @@ var (
 				if !ok {
 					return nil, errors.Errorf("expecting string, got %T", a)
 				}
-				t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC)
-				return ora.TimeStampTZ(t), err
+				return time.ParseInLocation(time.RFC3339Nano, s, time.UTC)
 			},
 		},
 		{
@@ -78,10 +76,9 @@ var (
 					return nil, errors.Errorf("expecting string, got %T", a)
 				}
 				if t, err := time.ParseInLocation(time.RFC3339Nano, s, time.UTC); err == nil {
-					return ora.TimeStamp(t), nil
+					return t, nil
 				}
-				t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC)
-				return ora.TimeStamp(t), err
+				return time.ParseInLocation("2006-01-02T15:04:05", s, time.UTC)
 			},
 		},
 		{
@@ -91,8 +88,7 @@ var (
 				if !ok {
 					return nil, errors.Errorf("expecting string, got %T", a)
 				}
-				t, err := time.ParseInLocation("2006-01-02", s, time.UTC)
-				return ora.TimeStamp(t), err
+				return time.ParseInLocation("2006-01-02", s, time.UTC)
 			},
 		},
 	}

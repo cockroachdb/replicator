@@ -23,7 +23,6 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/uuid"
-	ora "github.com/sijms/go-ora/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,18 +46,17 @@ func TestOraParseHelpers(t *testing.T) {
 		{
 			typ:      "TIMESTAMP(9) WITH TIME ZONE",
 			input:    now.Format(time.RFC3339Nano),
-			expected: ora.TimeStampTZ(now),
+			expected: now,
 		},
 		{
 			typ:      "TIMESTAMP(9)",
 			input:    now.Format("2006-01-02T15:04:05.999999999"),
-			expected: ora.TimeStamp(now),
+			expected: now,
 		},
 		{
-			typ:   "DATE",
-			input: now.Format("2006-01-02"),
-			expected: ora.TimeStamp(time.Date(
-				now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)),
+			typ:      "DATE",
+			input:    now.Format("2006-01-02"),
+			expected: time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC),
 		},
 	}
 
