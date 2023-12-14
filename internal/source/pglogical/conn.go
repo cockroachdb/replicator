@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/uuid"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -78,7 +79,7 @@ var _ logical.Dialect = (*conn)(nil)
 // Process implements logical.Dialect and receives a sequence of logical
 // replication messages, or possibly a rollbackMessage.
 func (c *conn) Process(
-	ctx context.Context, ch <-chan logical.Message, events logical.Events,
+	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	var batch logical.Batch
 	defer func() {
@@ -197,7 +198,9 @@ func (c *conn) Process(
 // ReadInto implements logical.Dialect, opens a replication connection,
 // and writes parsed messages into the provided channel. This method
 // also manages the keepalive protocol.
-func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state logical.State) error {
+func (c *conn) ReadInto(
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
+) error {
 	replConn, err := pgconn.ConnectConfig(ctx, c.sourceConfig)
 	if err != nil {
 		return errors.WithStack(err)
@@ -226,7 +229,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 
 	for {
 		select {
-		case <-state.Stopping():
+		case <-ctx.Stopping():
 			return nil
 		default:
 		}
@@ -308,7 +311,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 
 				select {
 				case ch <- logicalMsg:
-				case <-state.Stopping():
+				case <-ctx.Stopping():
 					return nil
 				case <-ctx.Done():
 					return errors.WithStack(ctx.Err())

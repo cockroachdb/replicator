@@ -17,20 +17,19 @@
 package logical
 
 import (
-	"context"
-
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 
 // See discussion in Factory.Immediate.
 type fakeDialect struct{}
 
-func (f *fakeDialect) ReadInto(_ context.Context, _ chan<- Message, _ State) error {
+func (f *fakeDialect) ReadInto(_ *stopper.Context, _ chan<- Message, _ State) error {
 	return errors.New("fake")
 }
 
-func (f *fakeDialect) Process(_ context.Context, _ <-chan Message, _ Events) error {
+func (f *fakeDialect) Process(_ *stopper.Context, _ <-chan Message, _ Events) error {
 	return errors.New("fake")
 }
 

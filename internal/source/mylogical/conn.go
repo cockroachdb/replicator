@@ -36,6 +36,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
@@ -90,7 +91,7 @@ func (c *conn) Diagnostic(_ context.Context) any {
 // Process implements logical.Dialect and receives a sequence of logical
 // replication messages, or possibly a rollbackMessage.
 func (c *conn) Process(
-	ctx context.Context, ch <-chan logical.Message, events logical.Events,
+	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	var batch logical.Batch
 	defer func() {
@@ -239,7 +240,9 @@ func (c *conn) Process(
 
 // ReadInto implements logical.Dialect, opens a replication connection,
 // and writes supported events into the provided channel.
-func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state logical.State) error {
+func (c *conn) ReadInto(
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
+) error {
 	syncer := replication.NewBinlogSyncer(c.sourceConfig)
 	defer syncer.Close()
 
@@ -257,7 +260,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 	// Send the initial consistent point we're reading from.
 	select {
 	case ch <- cp.(*consistentPoint):
-	case <-state.Stopping():
+	case <-ctx.Stopping():
 		return ctx.Err()
 	}
 
@@ -267,7 +270,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 		go func() {
 			select {
 			case <-eventCtx.Done():
-			case <-state.Stopping():
+			case <-ctx.Stopping():
 			}
 			cancelEventRead()
 		}()
@@ -290,7 +293,7 @@ func (c *conn) ReadInto(ctx context.Context, ch chan<- logical.Message, state lo
 			*replication.MariadbAnnotateRowsEvent:
 			select {
 			case ch <- *ev:
-			case <-state.Stopping():
+			case <-ctx.Stopping():
 				return nil
 			}
 		case *replication.GenericEvent,

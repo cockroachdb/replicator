@@ -53,8 +53,3 @@ func (f *fanEvents) OnBegin(ctx context.Context) (Batch, error) {
 func (f *fanEvents) SetConsistentPoint(ctx context.Context, cp stamp.Stamp) error {
 	return f.loop.SetConsistentPoint(ctx, cp)
 }
-
-// Stopping implements State and delegates to the enclosing loop.
-func (f *fanEvents) Stopping() <-chan struct{} {
-	return f.loop.Stopping()
-}

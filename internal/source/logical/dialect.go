@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
 
 // Backfiller is an optional capability interface for Dialect
@@ -37,11 +38,11 @@ type Backfiller interface {
 	// logical-replication messages that should be applied in a
 	// high-throughput manner. Implementations should treat BackfillInto
 	// as a signal to "catch up" with replication and then return once
-	// the backfill process has completed or when [State.ShouldStop]
-	// returns true.
+	// the backfill process has completed or [stopper.Context.Stopping]
+	// is closed.
 	//
 	// See also discussion on Dialect.ReadInto.
-	BackfillInto(ctx context.Context, ch chan<- Message, state State) error
+	BackfillInto(ctx *stopper.Context, ch chan<- Message, state State) error
 }
 
 // Dialect encapsulates the source-specific implementation details.
@@ -57,14 +58,14 @@ type Dialect interface {
 	// The state argument provides the last consistent point that was
 	// processed by the stream. This can be used to verify successful
 	// resynchronization with the source database.
-	ReadInto(ctx context.Context, ch chan<- Message, state State) error
+	ReadInto(ctx *stopper.Context, ch chan<- Message, state State) error
 
 	// Process decodes the logical replication messages, to call the
 	// various Events methods. Implementations of Process should exit
 	// gracefully when the channel is closed, this may represent a
 	// switch from backfilling to a streaming mode. If this method
 	// returns an error, the entire replication loop will be restarted.
-	Process(ctx context.Context, ch <-chan Message, events Events) error
+	Process(ctx *stopper.Context, ch <-chan Message, events Events) error
 
 	// ZeroStamp constructs a new, zero-valued stamp that represents
 	// a consistent point at the beginning of the source's history.
@@ -154,11 +155,6 @@ type State interface {
 	// SetConsistentPoint stores a value to be returned by a future call
 	// to GetConsistentPoint.
 	SetConsistentPoint(ctx context.Context, cp stamp.Stamp) error
-	// Stopping returns a channel that will be closed to allow for
-	// graceful draining or to switch in and out of backfill mode. This
-	// should be checked  on occasion by [Dialect.ReadInto] and
-	// [Backfiller.BackfillInto].
-	Stopping() <-chan struct{}
 }
 
 // OffsetStamp is a Stamp which can represent itself as an absolute

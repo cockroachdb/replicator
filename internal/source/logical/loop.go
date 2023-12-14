@@ -165,12 +165,6 @@ func (l *loop) SetConsistentPoint(_ context.Context, next stamp.Stamp) error {
 	return nil
 }
 
-// Stopping implements State. See also [stopperEvents], which is passed
-// to the Dialect implementations with a per-iteration stop channel.
-func (l *loop) Stopping() <-chan struct{} {
-	return l.running.Stopping()
-}
-
 // run blocks while the connection is processing messages.
 func (l *loop) run() {
 	defer log.Debugf("replication loop %q shut down", l.loopConfig.LoopName)
@@ -200,13 +194,15 @@ func (l *loop) run() {
 // behavior, a lease will be obtained before any further action is
 // taken.
 func (l *loop) runOnce() error {
-	var stop *stopper.Context
+	// If the dialect implements Lessor, we'll create a stopper derived
+	// from the lease's validity context.
+	stop := l.running
 	if lessor, ok := l.loopConfig.Dialect.(Lessor); ok {
 		// Loop until we can acquire a lease.
 		var lease types.Lease
 		for {
 			var err error
-			lease, err = lessor.Acquire(l.running)
+			lease, err = lessor.Acquire(stop)
 			// Lease acquired.
 			if err == nil {
 				log.Tracef("lease %s acquired", l.loopConfig.LoopName)
@@ -224,7 +220,7 @@ func (l *loop) runOnce() error {
 				select {
 				case <-time.After(duration):
 					continue
-				case <-l.running.Stopping():
+				case <-stop.Stopping():
 					return nil
 				}
 			}
@@ -234,8 +230,6 @@ func (l *loop) runOnce() error {
 		defer lease.Release()
 		// Ensure that all work is bound to the lifetime of the lease.
 		stop = stopper.WithContext(lease.Context())
-	} else {
-		stop = l.running
 	}
 
 	// Ensure our in-memory consistent point matches the database.
@@ -263,9 +257,6 @@ func (l *loop) runOnceUsing(
 
 	// Calls to the parent Stop() are automatically chained.
 	ctx = stopper.WithContext(ctx)
-
-	// Make the stopping channel available to the dialect.
-	events = &stopperEvents{events, ctx.Stopping()}
 
 	// Start a background goroutine to maintain the replication
 	// connection. This source goroutine is set up to be robust; if
@@ -385,7 +376,7 @@ func (l *loop) runOnceUsing(
 	return errors.Wrapf(ctx.Wait(), "loop %s", l.loopConfig.LoopName)
 }
 
-type fillFn = func(context.Context, chan<- Message, State) error
+type fillFn = func(*stopper.Context, chan<- Message, State) error
 
 // chooseFillStrategy returns the strategy that will be used for
 // generating replication messages.
@@ -460,15 +451,4 @@ func (l *loop) storeConsistentPoint(p stamp.Stamp) error {
 	return l.factory.memo.Put(context.Background(),
 		l.factory.stagingPool, l.loopConfig.LoopName, data,
 	)
-}
-
-// stopperEvents exposes the iteration stop signal to the Dialect.
-type stopperEvents struct {
-	Events
-	stopping <-chan struct{}
-}
-
-// Stopping returns the per-iteration stop signal.
-func (s *stopperEvents) Stopping() <-chan struct{} {
-	return s.stopping
 }

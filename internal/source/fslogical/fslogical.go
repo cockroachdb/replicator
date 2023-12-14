@@ -33,6 +33,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/api/iterator"
@@ -86,7 +87,7 @@ type (
 // BackfillInto implements logical.Dialect. It uses an ID-based cursor
 // approach to scan documents in their updated-at order.
 func (d *Dialect) BackfillInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	cp, cpUpdated := state.GetConsistentPoint()
 pickCatchUpTime:
@@ -114,7 +115,7 @@ pickCatchUpTime:
 				// although the loop might decide to stop us to switch
 				// out of backfill mode.
 				continue pickCatchUpTime
-			case <-state.Stopping():
+			case <-ctx.Stopping():
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
@@ -127,7 +128,7 @@ pickCatchUpTime:
 // It will return the next incremental consistentPoint and whether the
 // backfill is expected to continue.
 func (d *Dialect) backfillOneBatch(
-	ctx context.Context, ch chan<- logical.Message, docsUpdatedBefore time.Time, cp *consistentPoint,
+	ctx *stopper.Context, ch chan<- logical.Message, docsUpdatedBefore time.Time, cp *consistentPoint,
 ) error {
 	// Iterate over the collection by (updated_at, __doc_id__) using
 	// a cursor-like approach so that we can checkpoint along the way.
@@ -159,6 +160,8 @@ func (d *Dialect) backfillOneBatch(
 	send := func(msg logical.Message) error {
 		select {
 		case ch <- msg:
+			return nil
+		case <-ctx.Stopping():
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -194,17 +197,18 @@ func (d *Dialect) backfillOneBatch(
 // ReadInto implements logical.Dialect and subscribes to streaming
 // updates from the source.
 func (d *Dialect) ReadInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	// The call to snaps.Next() below needs to be made interruptable.
-	ctx, cancel := context.WithCancel(ctx)
+	queryCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
+		defer cancel()
+
 		select {
-		case <-state.Stopping():
-			// Cancel early to interrupt call to snaps.Next() below.
-			cancel()
 		case <-ctx.Done():
+		case <-ctx.Stopping():
+		case <-queryCtx.Done():
 			// Normal exit path when ReadInto exits.
 		}
 	}()
@@ -214,13 +218,15 @@ func (d *Dialect) ReadInto(
 	q := d.query.
 		OrderBy(d.updatedAtProperty.Raw(), firestore.Asc).
 		StartAt(cp.(*consistentPoint).AsTime().Truncate(time.Second))
-	snaps := q.Snapshots(ctx)
+	snaps := q.Snapshots(queryCtx)
 	defer snaps.Stop()
 
 	// Helper for interruptible send.
 	send := func(msg logical.Message) error {
 		select {
 		case ch <- msg:
+			return nil
+		case <-ctx.Stopping():
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -293,7 +299,7 @@ func (d *Dialect) Diagnostic(_ context.Context) any {
 
 // Process implements logical.Dialect.
 func (d *Dialect) Process(
-	ctx context.Context, ch <-chan logical.Message, events logical.Events,
+	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	var batch logical.Batch
 	defer func() {
