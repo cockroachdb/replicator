@@ -61,11 +61,6 @@ func (e *serialEvents) SetConsistentPoint(ctx context.Context, cp stamp.Stamp) e
 	return e.loop.SetConsistentPoint(ctx, cp)
 }
 
-// Stopping implements State and delegates to the enclosing loop.
-func (e *serialEvents) Stopping() <-chan struct{} {
-	return e.loop.Stopping()
-}
-
 // A serialBatch corresponds exactly to a database transaction.
 type serialBatch struct {
 	parent *serialEvents

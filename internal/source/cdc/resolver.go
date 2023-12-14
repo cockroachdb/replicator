@@ -194,20 +194,20 @@ func (r *resolver) Mark(ctx context.Context, ts hlc.Time) error {
 
 // BackfillInto implements logical.Backfiller.
 func (r *resolver) BackfillInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	return r.readInto(ctx, ch, state)
 }
 
 // ReadInto implements logical.Dialect.
 func (r *resolver) ReadInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	return r.readInto(ctx, ch, state)
 }
 
 func (r *resolver) readInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	// This will either be from a previous iteration or ZeroStamp.
 	cp, cpUpdated := state.GetConsistentPoint()
@@ -269,7 +269,7 @@ func (r *resolver) readInto(
 			if toSend != nil {
 				select {
 				case ch <- toSend:
-				case <-state.Stopping():
+				case <-ctx.Stopping():
 					return nil
 				case <-ctx.Done():
 					return ctx.Err()
@@ -304,7 +304,7 @@ func (r *resolver) readInto(
 			_, wakeup = r.marked.Get()
 		case <-backupTimer.C:
 			// Looks for work added by other cdc-sink instances.
-		case <-state.Stopping():
+		case <-ctx.Stopping():
 			// Clean shutdown
 			return nil
 		case <-ctx.Done():
@@ -339,7 +339,7 @@ func (r *resolver) nextProposedStamp(
 // Process implements logical.Dialect. It receives a resolved timestamp
 // from ReadInto and drains the associated mutations.
 func (r *resolver) Process(
-	ctx context.Context, ch <-chan logical.Message, events logical.Events,
+	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	r.processing.Store(true)
 	defer r.processing.Store(false)
