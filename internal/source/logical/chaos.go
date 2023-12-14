@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 
@@ -62,7 +63,7 @@ var (
 	_ Dialect    = (*chaosBackfiller)(nil)
 )
 
-func (d *chaosBackfiller) BackfillInto(ctx context.Context, ch chan<- Message, state State) error {
+func (d *chaosBackfiller) BackfillInto(ctx *stopper.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {
 		return doChaos("BackfillInto")
 	}
@@ -99,14 +100,14 @@ func (d *chaosDialect) Acquire(ctx context.Context) (types.Lease, error) {
 	return &fakeLease{ctx, cancel}, nil
 }
 
-func (d *chaosDialect) ReadInto(ctx context.Context, ch chan<- Message, state State) error {
+func (d *chaosDialect) ReadInto(ctx *stopper.Context, ch chan<- Message, state State) error {
 	if rand.Float32() < d.prob {
 		return doChaos("ReadInto")
 	}
 	return d.delegate.ReadInto(ctx, ch, state)
 }
 
-func (d *chaosDialect) Process(ctx context.Context, ch <-chan Message, events Events) error {
+func (d *chaosDialect) Process(ctx *stopper.Context, ch <-chan Message, events Events) error {
 	if rand.Float32() < d.prob {
 		return doChaos("Process")
 	}
@@ -156,10 +157,6 @@ func (e *chaosEvents) SetConsistentPoint(ctx context.Context, cp stamp.Stamp) er
 		return doChaos("SetConsistentPoint")
 	}
 	return e.delegate.SetConsistentPoint(ctx, cp)
-}
-
-func (e *chaosEvents) Stopping() <-chan struct{} {
-	return e.delegate.Stopping()
 }
 
 type chaosBatch struct {

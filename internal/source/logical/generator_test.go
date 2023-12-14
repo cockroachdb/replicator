@@ -19,7 +19,6 @@ package logical_test
 // This file contains support code for logical_test.go.
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -29,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -96,7 +96,7 @@ func (g *generatorDialect) emit(numBatches int) {
 
 // BackfillInto delegates to ReadInto.
 func (g *generatorDialect) BackfillInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	return g.ReadInto(ctx, ch, state)
 }
@@ -104,7 +104,7 @@ func (g *generatorDialect) BackfillInto(
 // ReadInto waits to be woken up by a call to emit, then writes
 // n-many counter messages into the channel.
 func (g *generatorDialect) ReadInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	log.Trace("ReadInto starting")
 	defer g.atomic.readIntoExits.Add(1)
@@ -132,7 +132,7 @@ func (g *generatorDialect) ReadInto(
 				g.readIntoMu.lastBatchSent = nextBatchNumber
 				g.readIntoMu.Unlock()
 
-			case <-state.Stopping():
+			case <-ctx.Stopping():
 				// Graceful shutdown requested.
 				return nil
 
@@ -146,7 +146,7 @@ func (g *generatorDialect) ReadInto(
 		// Wait for more work or to be shut down
 		select {
 		case <-g.workRequested:
-		case <-state.Stopping():
+		case <-ctx.Stopping():
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -157,7 +157,7 @@ func (g *generatorDialect) ReadInto(
 // Process triggers a transaction flow to send one mutation to each
 // configured table.
 func (g *generatorDialect) Process(
-	ctx context.Context, ch <-chan logical.Message, events logical.Events,
+	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	log.Trace("Process starting")
 	defer g.atomic.processExits.Add(1)

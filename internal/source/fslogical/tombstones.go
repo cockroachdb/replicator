@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/golang/groupcache/lru"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -105,17 +106,17 @@ func (t *Tombstones) NotifyDeleted(ref *firestore.DocumentRef) {
 // ReadInto implements logical.Dialect. It parses tombstone documents
 // from the source into tombstoneEvent messages.
 func (t *Tombstones) ReadInto(
-	ctx context.Context, ch chan<- logical.Message, state logical.State,
+	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
 ) error {
 	// Make call to snaps.Next() interruptable.
-	ctx, cancel := context.WithCancel(ctx)
+	queryCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		select {
-		case <-state.Stopping():
+		case <-ctx.Stopping():
 			// Cancel in order to interrupt call to snaps.Next() below.
 			cancel()
-		case <-ctx.Done():
+		case <-queryCtx.Done():
 			// Normal flow when ReadInto completes.
 		}
 	}()
@@ -184,7 +185,7 @@ func (t *Tombstones) ReadInto(
 
 // Process implements logical.Dialect and triggers row deletions.
 func (t *Tombstones) Process(
-	ctx context.Context, ch <-chan logical.Message, events logical.Events,
+	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
 ) error {
 	var batch logical.Batch
 	defer func() {
