@@ -29,6 +29,10 @@ const (
 	// integration tests for some databases. We expect this to be of the
 	// format "database-v123".
 	IntegrationEnvName = "CDC_INTEGRATION"
+	// DB2Name  must be kept in alignment with the
+	// .github/docker-compose.yml file and the integration matrix
+	// variable in workflows/tests.yaml.
+	DB2Name = "db2"
 	// MySQLName must be kept in alignment with the
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
