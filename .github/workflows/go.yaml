@@ -82,6 +82,19 @@ jobs:
       statuses: write
     secrets: inherit
 
+  go-db2:
+    uses: ./.github/workflows/go-test-db2.yaml
+    needs:
+      - go-build-cache
+    # We use the merge queue prior to pushing to a branch, so there's no
+    # reason to repeat tests that just ran.
+    if: ${{ github.event_name != 'push' }}
+    permissions:
+      contents: read
+      packages: read
+      statuses: write
+    secrets: inherit
+
   go-wiki:
     uses: ./.github/workflows/go-wiki.yaml
     needs:
