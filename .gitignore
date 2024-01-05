@@ -15,6 +15,12 @@ cdc-sink
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Temporary directory
+tmp/
+
+# Downloaded drivers
+drivers/
+
 # CockroachDB data directory
 cockroach-data/
 goroutine_dump/

@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/cmd/db2"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/dumphelp"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/dumptemplates"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/fslogical"
@@ -104,6 +105,8 @@ func main() {
 	f.CountVarP(&verbosity, "verbose", "v", "increase logging verbosity to debug; repeat for trace")
 
 	root.AddCommand(
+		db2.Command(),
+		db2.Install(),
 		dumphelp.Command(),
 		dumptemplates.Command(),
 		fslogical.Command(),
