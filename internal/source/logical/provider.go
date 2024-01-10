@@ -120,7 +120,7 @@ func ProvideStagingPool(
 		stdpool.WithConnectionLifetime(5*time.Minute),
 		stdpool.WithDiagnostics(diags, "staging"),
 		stdpool.WithMetrics("staging"),
-		stdpool.WithPoolSize(128),
+		stdpool.WithPoolSize(config.StagingDBConns),
 		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
 	)
 	if err != nil {
@@ -149,8 +149,7 @@ func ProvideTargetPool(
 		stdpool.WithConnectionLifetime(5 * time.Minute),
 		stdpool.WithDiagnostics(diags, "target"),
 		stdpool.WithMetrics("target"),
-		stdpool.WithPoolSize(128),
-		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
+		stdpool.WithPoolSize(config.TargetDBConns),
 	}
 
 	// We want to force our longest transaction time to respect the
