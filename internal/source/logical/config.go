@@ -29,11 +29,11 @@ import (
 const (
 	defaultApplyTimeout    = 30 * time.Second
 	defaultBackfillWindow  = 10 * time.Minute
+	defaultDBConns         = 128
 	defaultFanShards       = 16
 	defaultRetryDelay      = 10 * time.Second
 	defaultStandbyTimeout  = 5 * time.Second
 	defaultTargetCacheSize = 128 // Statements may have a non-trivial cost in the db.
-	defaultTargetDBConns   = 1024
 	defaultBytesInFlight   = 10 * 1024 * 1024
 )
 
@@ -85,6 +85,9 @@ type BaseConfig struct {
 	StandbyTimeout time.Duration
 	// Connection stsring for the staging cluster.
 	StagingConn string
+	// The number of connections to the staging database. If zero, a
+	// default value will be used.
+	StagingDBConns int
 	// The name of a SQL schema in the staging cluster to store
 	// metadata in.
 	StagingSchema ident.Schema
@@ -138,10 +141,12 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"how often to commit the consistent point")
 	f.StringVar(&c.StagingConn, "stagingConn", "",
 		"the staging CockroachDB cluster's connection string; required if target is other than CRDB")
+	f.IntVar(&c.StagingDBConns, "stagingDBConns", defaultDBConns,
+		"the maximum pool size for connections to the staging cluster")
 	f.StringVar(&c.TargetConn, "targetConn", "",
 		"the target database's connection string; always required")
-	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultTargetDBConns,
-		"the maximum pool size to the target cluster")
+	f.IntVar(&c.TargetDBConns, "targetDBConns", defaultDBConns,
+		"the maximum pool size for connections to the target")
 	f.IntVar(&c.TargetStatementCacheSize, "targetStatementCacheSize", defaultTargetCacheSize,
 		"the maximum number of prepared statements to retain")
 }
@@ -193,11 +198,14 @@ func (c *BaseConfig) Preflight() error {
 	if c.StagingConn == "" {
 		c.StagingConn = c.TargetConn // TargetConn is tested below.
 	}
+	if c.StagingDBConns == 0 {
+		c.StagingDBConns = defaultDBConns
+	}
 	if c.TargetConn == "" {
 		return errors.New("targetConn must be set")
 	}
 	if c.TargetDBConns == 0 {
-		c.TargetDBConns = defaultTargetDBConns
+		c.TargetDBConns = defaultDBConns
 	}
 	if c.TargetStatementCacheSize == 0 {
 		c.TargetStatementCacheSize = defaultTargetCacheSize
