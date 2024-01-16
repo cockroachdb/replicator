@@ -37,11 +37,13 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 // This test inserts and deletes rows from a trivial table.
@@ -294,6 +296,70 @@ func TestApply(t *testing.T) {
 		found, err := fixture.Appliers.Get(ctx, tbl)
 		r.NoError(err)
 		r.Same(fake, found)
+	})
+
+	// This sub-test uses the apply from concurrent goroutines to allow
+	// the race checker to help us.
+	t.Run("concurrent_apply", func(t *testing.T) {
+		r := require.New(t)
+		const batchSize = 1_000
+		const distinctKeys = 10_000
+		const numUpserts = 100_000
+		const numWorkers = 10
+		const upsertsPerWorker = numUpserts / numWorkers
+
+		// Clean up data.
+		_, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE 1=1", tbl.Name()))
+		r.NoError(err)
+		ct, err := tbl.RowCount(ctx)
+		r.NoError(err)
+		r.Equal(0, ct)
+
+		var nextKey atomic.Int32
+		eg, egCtx := errgroup.WithContext(ctx)
+		for i := 0; i < numWorkers; i++ {
+			eg.Go(func() error {
+				remaining := upsertsPerWorker
+				for remaining > 0 {
+					currentBatchSize := remaining
+					if currentBatchSize > batchSize {
+						currentBatchSize = batchSize
+					}
+					muts := make([]types.Mutation, currentBatchSize)
+					for i := range muts {
+						key := nextKey.Add(1) % distinctKeys
+						p := Payload{Pk0: int(key), Pk1: fmt.Sprintf("X%dX", key)}
+						dataBytes, err := json.Marshal(p)
+						a.NoError(err)
+						keyBytes, err := json.Marshal([]any{p.Pk0, p.Pk1})
+						a.NoError(err)
+
+						muts[i] = types.Mutation{Data: dataBytes, Key: keyBytes}
+					}
+					if err := retry.Retry(egCtx, func(retryCtx context.Context) error {
+						tx, err := fixture.TargetPool.BeginTx(retryCtx, nil)
+						if err != nil {
+							return errors.WithStack(err)
+						}
+						defer tx.Rollback()
+
+						if err := app.Apply(retryCtx, tx, muts); err != nil {
+							return err
+						}
+						return errors.WithStack(tx.Commit())
+					}); err != nil {
+						return err
+					}
+					remaining -= batchSize
+				}
+				return nil
+			})
+		}
+		r.NoError(eg.Wait())
+
+		ct, err = tbl.RowCount(ctx)
+		r.NoError(err)
+		r.Equal(distinctKeys, ct)
 	})
 }
 
