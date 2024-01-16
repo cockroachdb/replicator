@@ -21,11 +21,13 @@ package retry
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/pkg/errors"
+	"github.com/sijms/go-ora/v2/network"
 )
 
 // Marker is a settable flag.
@@ -79,6 +81,7 @@ type inLoop struct{}
 // suppressed within an inner loop, allowing the retryable error to
 // percolate into the outer loop.
 func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) error) error {
+	const maxAttempts = 10
 	if outerMarker, ok := ctx.Value(inLoop{}).(*Marker); ok {
 		return fn(ctx, outerMarker)
 	}
@@ -86,6 +89,7 @@ func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) 
 	var sideEffect Marker
 	ctx = context.WithValue(ctx, inLoop{}, &sideEffect)
 	actionsCount.Inc()
+	attempt := 0
 	for {
 		err := fn(ctx, &sideEffect)
 		if err == nil || sideEffect.Marked() {
@@ -103,8 +107,20 @@ func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) 
 				return err
 			}
 			retryCount.WithLabelValues(pgErr.Code).Inc()
+		} else if oraErr := (*network.OracleError)(nil); errors.As(err, &oraErr) {
+			switch oraErr.ErrCode {
+			case 1: // Constraint violation; MERGE reads at read-committed, so concurrent INSERTS are possible.
+			case 60: // Deadlock detected
+			default:
+				abortedCount.WithLabelValues(strconv.Itoa(oraErr.ErrCode))
+				return err
+			}
 		} else {
 			return err
+		}
+		attempt++
+		if attempt >= maxAttempts {
+			return errors.Wrapf(err, "maximum number of retries (%d) exceeded", maxAttempts)
 		}
 	}
 }
