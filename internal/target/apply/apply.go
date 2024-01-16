@@ -272,21 +272,29 @@ func (a *apply) deleteLocked(
 		}
 	}
 
+	// The statement and its cache key will vary if the target supports
+	// bulk deletions. In bulk mode, the number of rows does not impact
+	// the generated SQL, since we rely on the driver to transfer
+	// multiple arrays of column values.
+	var stmtCacheKey string
+	if a.mu.templates.BulkDelete {
+		var err error
+		allArgs, err = toColumns(len(a.mu.templates.PKDelete), len(muts), allArgs)
+		if err != nil {
+			return err
+		}
+		stmtCacheKey = fmt.Sprintf("delete-%s-%d", a.target, a.mu.gen)
+	} else {
+		stmtCacheKey = fmt.Sprintf("delete-%s-%d-%d", a.target, a.mu.gen, len(muts))
+	}
 	stmt, err := a.cache.Prepare(ctx,
 		db,
-		fmt.Sprintf("delete-%s-%d-%d", a.target, a.mu.gen, len(muts)),
+		stmtCacheKey,
 		func() (string, error) {
 			return a.mu.templates.deleteExpr(len(muts))
 		})
 	if err != nil {
 		return err
-	}
-
-	if a.mu.templates.BulkDelete {
-		allArgs, err = toColumns(len(a.mu.templates.PKDelete), len(muts), allArgs)
-		if err != nil {
-			return err
-		}
 	}
 
 	tag, err := stmt.ExecContext(ctx, allArgs...)
@@ -466,10 +474,19 @@ func (a *apply) upsertBagsLocked(
 	}
 
 	// Get a prepared statement handle that's attached to the
-	// transaction.
+	// transaction. The statement and its cache key will vary if the
+	// target supports bulk upserts. In bulk mode, the number of rows
+	// does not impact the generated SQL, since we rely on the driver to
+	// transfer multiple arrays of column values.
+	var stmtCacheKey string
+	if a.mu.templates.BulkUpsert {
+		stmtCacheKey = fmt.Sprintf("upsert-%s-%d-%v-%s", a.target, a.mu.gen, mode, template)
+	} else {
+		stmtCacheKey = fmt.Sprintf("upsert-%s-%d-%d-%v-%s", a.target, a.mu.gen, len(bags), mode, template)
+	}
 	stmt, err := a.cache.Prepare(ctx,
 		db,
-		fmt.Sprintf("upsert-%s-%d-%d-%v-%s", a.target, a.mu.gen, len(bags), mode, template),
+		stmtCacheKey,
 		func() (string, error) {
 			if template != "" {
 				// We only support applyUnconditional with custom templates.
