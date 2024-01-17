@@ -115,8 +115,13 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 
 	f.DurationVar(&c.ApplyTimeout, "applyTimeout", defaultApplyTimeout,
 		"the maximum amount of time to wait for an update to be applied")
-	f.DurationVar(&c.BackfillWindow, "backfillWindow", defaultBackfillWindow,
-		"use a high-throughput, but non-transactional mode if replication is this far behind (0 disables this feature)")
+	// Disable the use of backfill mode, which is subtly incorrect and obviated by the work on
+	// https://github.com/cockroachdb/cdc-sink/issues/504
+	var ignoreBackfill time.Duration
+	f.DurationVar(&ignoreBackfill, "backfillWindow", defaultBackfillWindow, "deprecated")
+	if err := f.MarkDeprecated("backfillWindow", "backfill mode is not presently available"); err != nil {
+		panic(err)
+	}
 	f.IntVar(&c.BytesInFlight, "bytesInFlight", defaultBytesInFlight,
 		"apply backpressure when amount of in-flight mutation data reaches this limit")
 	f.BoolVar(&c.Immediate, "immediate", false,
