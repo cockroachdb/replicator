@@ -362,6 +362,13 @@ func (d *Dialect) Process(
 				return err
 			}
 
+			// This is a hack to fix a chaos test flake. This code will
+			// be getting overhauled as part of
+			// https://github.com/cockroachdb/cdc-sink/issues/504
+			if batch == nil {
+				return errors.New("internally desynchronized")
+			}
+
 			// Pass an empty destination table, because we know that
 			// this is configured via a user-script.
 			if err := batch.OnData(ctx,
@@ -391,6 +398,13 @@ func (d *Dialect) Process(
 				return err
 			}
 
+			// This is a hack to fix a chaos test flake. This code will
+			// be getting overhauled as part of
+			// https://github.com/cockroachdb/cdc-sink/issues/504
+			if batch == nil {
+				return errors.New("internally desynchronized")
+			}
+
 			// Pass an empty destination table, because we know that
 			// this is configured via a user-script.
 			if err := batch.OnData(ctx,
@@ -403,6 +417,13 @@ func (d *Dialect) Process(
 			}
 
 		case batchEnd:
+			// This is a hack to fix a chaos test flake. This code will
+			// be getting overhauled as part of
+			// https://github.com/cockroachdb/cdc-sink/issues/504
+			if batch == nil {
+				return errors.New("internally desynchronized")
+			}
+
 			select {
 			case err := <-batch.OnCommit(ctx):
 				if err != nil {
