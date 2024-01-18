@@ -178,7 +178,12 @@ func (r *request) parseURL(urlInput *url.URL) error {
 		if dir == "" {
 			break
 		}
-		remaining = dir[:len(dir)-1] // Strip trailing separator.
+		// Strip trailing separator from dir.
+		remaining = dir[:len(dir)-1]
+		// Ignore empty or dangling path elements e.g.: /my_db/public/
+		if file == "" {
+			continue
+		}
 		unescapedSegment, err := url.QueryUnescape(file)
 		if err != nil {
 			return errors.Wrap(err, "could not unescape path")
