@@ -32,6 +32,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Analogous to mapJS, save that it operates on a primary-key array. A
+// null or empty slice will be interpreted as a request to elide the
+// delete operation.
+//
+// [ pk0, pk1, ..., pkN ] => [ pk0, pkN, ... ]
+type deleteKeyJS func(
+	key []any,
+	meta map[string]any,
+) ([]any, error)
+
 // A JS function to dispatch source documents onto target tables.
 //
 // Look on my Works, ye Mighty, and despair!
@@ -95,6 +105,8 @@ type targetJS struct {
 	CASColumns []string `goja:"cas"`
 	// Column to duration.
 	Deadlines map[string]string `goja:"deadlines"`
+	// PK to PK mapper.
+	DeleteKey deleteKeyJS `goja:"deleteKey"`
 	// Column to SQL expression to pass through.
 	Exprs map[string]string `goja:"exprs"`
 	// Column name.

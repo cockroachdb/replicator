@@ -35,6 +35,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// DeleteKey is similar to Map in that it has the opportunity to modify
+// or filter a mutation before subsequent processing. Rather than
+// operating on [types.Mutation.Data], it should instead base its
+// behavior on [types.Mutation.Key]. DeleteKey functions are internally
+// synchronized to ensure single-threaded access to the underlying JS
+// VM.
+type DeleteKey func(ctx context.Context, mut types.Mutation) (types.Mutation, bool, error)
+
+var identityDelete DeleteKey = func(_ context.Context, mut types.Mutation) (types.Mutation, bool, error) {
+	return mut, true, nil
+}
+
 // A Dispatch function receives a source mutation and assigns mutations
 // to some number of downstream tables. Dispatch functions are
 // internally synchronized to ensure single-threaded access to the
@@ -78,6 +90,9 @@ type Source struct {
 // for a target table.
 type Target struct {
 	applycfg.Config
+	// A user-provided function to modify of filter mutations that
+	// delete a row in the target table.
+	DeleteKey DeleteKey `json:"-"`
 	// A user-provided function to modify or filter mutations bound for
 	// the target table.
 	Map Map `json:"-"`
@@ -218,6 +233,11 @@ func (s *UserScript) bind(loader *Loader) error {
 			}
 			tgt.Deadlines.Put(ident.New(k), d)
 		}
+		if bag.DeleteKey == nil {
+			tgt.DeleteKey = identityDelete
+		} else {
+			tgt.DeleteKey = s.bindDeleteKey(table, bag.DeleteKey)
+		}
 		for k, v := range bag.Exprs {
 			tgt.Exprs.Put(ident.New(k), v)
 		}
@@ -243,6 +263,70 @@ func (s *UserScript) bind(loader *Loader) error {
 	}
 
 	return nil
+}
+
+func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) DeleteKey {
+	return func(ctx context.Context, mut types.Mutation) (types.Mutation, bool, error) {
+		// Unpack key into slice.
+		var key []any
+		if err := json.Unmarshal(mut.Key, &key); err != nil {
+			return mut, false, errors.WithStack(err)
+		}
+		meta := mut.Meta
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+
+		var jsKeyLen int
+		var keyBytes json.RawMessage
+		if err := s.execJS(func(*goja.Runtime) error {
+			jsKey, err := deleteKey(key, meta)
+			if err != nil {
+				return err
+			}
+			jsKeyLen = len(jsKey)
+
+			keyBytes, err = json.Marshal(jsKey)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			return err
+		}); err != nil {
+			return mut, false, err
+		}
+
+		// Allow delete to be elided.
+		if jsKeyLen == 0 {
+			return mut, false, nil
+		}
+
+		// Sanity check now, rather than in apply code.
+		colData, ok := s.watcher.Get().Columns.Get(table)
+		if !ok {
+			return mut, false, errors.Errorf("deleteKey missing schema data for %s", table)
+		}
+
+		pkCount := 0
+		for idx := range colData {
+			if colData[idx].Primary {
+				pkCount = idx + 1
+			} else {
+				break
+			}
+		}
+
+		if jsKeyLen != pkCount {
+			return mut, false, errors.Errorf("deleteKey function returned %d elements, but %s has %d PK columns",
+				jsKeyLen, table, pkCount)
+		}
+
+		return types.Mutation{
+			Key:  keyBytes,
+			Time: mut.Time,
+		}, true, nil
+
+	}
 }
 
 // bindDispatch exports a user-provided function as a Dispatch.
