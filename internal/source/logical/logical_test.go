@@ -438,7 +438,8 @@ func TestDeletesWithNoDispatch(t *testing.T) {
 				"main.ts": &fstest.MapFile{Data: []byte(`
 import * as api from "cdc-sink@v1";
 api.configureTable("tgt", {
-  map: (doc) => doc,
+  deleteKey: key => [ key[0] ],
+  map: doc => doc,
 });
 `)}}}}
 
@@ -453,7 +454,7 @@ api.configureTable("tgt", {
 
 	r.NoError(batch.OnData(ctx, tgt.Table(), tgt, []types.Mutation{
 		{
-			Key: []byte(`[ 1 ]`),
+			Key: []byte(`[ 1, "ignored" ]`),
 		},
 	}))
 

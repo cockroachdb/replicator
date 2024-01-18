@@ -113,25 +113,32 @@ func (e *scriptBatch) OnData(
 	// function, if any.
 	return routing.Range(func(tbl ident.Table, tblMuts []types.Mutation) error {
 		// Find the per-target map function.
+		var deleteKeyFn script.DeleteKey
 		var mapFn script.Map
 		if cfg, ok := e.Script.Targets.Get(tbl); ok {
+			deleteKeyFn = cfg.DeleteKey
 			mapFn = cfg.Map
 		}
 
-		// Fast-path: No map, so we can just send the data as-is.
-		if mapFn == nil {
+		// Fast-path: No mappers, so we can just send the data as-is.
+		if mapFn == nil && deleteKeyFn == nil {
 			return e.Batch.OnData(ctx, source, tbl, tblMuts)
 		}
 
-		// We want to separate out the deletes, since they don't make
-		// sense to send to the mapper function. This loop uses the
-		// slice-filter trick.
+		// Deletes and updates have separate functions, since we delete
+		// by PK and upsert by Document. This loop uses the slice filter
+		// trick to separate the deletes from upserts.
 		var deletes []types.Mutation
 		var idx int
 		for _, mut := range tblMuts {
-			// Deletes are filtered out.
 			if mut.IsDelete() {
-				deletes = append(deletes, mut)
+				mut, ok, err := deleteKeyFn(ctx, mut)
+				if err != nil {
+					return err
+				}
+				if ok {
+					deletes = append(deletes, mut)
+				}
 				continue
 			}
 

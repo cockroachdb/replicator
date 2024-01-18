@@ -187,6 +187,15 @@ declare module "cdc-sink@v1" {
          */
         deadlines: { [k: Column]: Duration };
         /**
+         * A mapping function which may modify the primary key value(s)
+         * to be deleted from a target table.
+         * @param key - The element(s) of the primary key to be deleted
+         * @param meta - Source-specific metadata about the deletion.
+         * @readonly The primary key to delete, or null to elide the
+         * deletion.
+         */
+        deleteKey: (key: DocumentValue[], meta: Document) => DocumentValue[] | null;
+        /**
          * Replacement SQL expressions to use when upserting columns.
          * The placeholder <code>$0</code> will be replaced with the
          * specific value.

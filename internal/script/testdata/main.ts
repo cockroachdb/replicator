@@ -55,6 +55,10 @@ api.configureTable("all_features", {
         "dl0": "1h",
         "dl1": "1m"
     },
+    // Allow deletions to be modified to suit differing schemas.
+    deleteKey: key => {
+        return [key[0], key[2]];
+    },
     // Provide alternate SQL expressions to (possibly filtered) data.
     exprs: {
         "expr0": "fnv32($0::BYTES)",
@@ -92,6 +96,16 @@ api.configureTable("all_features", {
         })
         return {apply: op.target};
     }),
+});
+
+// Elide all deletes for the table, e.g.: for archival use cases.
+api.configureTable("delete_elide", {
+    deleteKey: () => null,
+});
+
+// Swap the order of PK elements.
+api.configureTable("delete_swap", {
+    deleteKey: key => [key[1], key[0]]
 });
 
 api.configureTable("drop_all", {

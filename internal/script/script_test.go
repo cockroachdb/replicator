@@ -81,6 +81,9 @@ func TestScript(t *testing.T) {
 	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("CREATE TABLE %s.sql_test(pk INT PRIMARY KEY, val INT NOT NULL)", schema))
 	r.NoError(err)
+	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.delete_swap(pk0 INT, pk1 INT, PRIMARY KEY (pk0, pk1))", schema))
+	r.NoError(err)
 
 	var opts mapOptions
 
@@ -92,7 +95,7 @@ func TestScript(t *testing.T) {
 	r.NoError(err)
 	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
 	a.Equal(3, s.Sources.Len())
-	a.Equal(6, s.Targets.Len())
+	a.Equal(8, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -181,6 +184,26 @@ func TestScript(t *testing.T) {
 					a.Equal(int64(42), v)
 				}
 			}
+		}
+	}
+
+	// Unconditionally ignore deletions.
+	tbl = ident.NewTable(schema, ident.New("delete_elide"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		if filter := cfg.DeleteKey; a.NotNil(filter) {
+			_, keep, err := filter(context.Background(), types.Mutation{Key: []byte(`[ 1, 2 ]`)})
+			a.NoError(err)
+			a.False(keep)
+		}
+	}
+
+	tbl = ident.NewTable(schema, ident.New("delete_swap"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		if filter := cfg.DeleteKey; a.NotNil(filter) {
+			mut, keep, err := filter(context.Background(), types.Mutation{Key: []byte(`[ 1, 2 ]`)})
+			a.NoError(err)
+			a.True(keep)
+			a.Equal(json.RawMessage(`[2,1]`), mut.Key)
 		}
 	}
 
