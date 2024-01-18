@@ -87,6 +87,18 @@ func TestParseChangefeedURL(t *testing.T) {
 			url:      strings.Join([]string{"", dbName, schemaName}, "/"),
 		},
 		{
+			name:     "webhook to schema dangling slash",
+			decision: "webhook schema",
+			target:   schemaIdent,
+			url:      strings.Join([]string{"", dbName, schemaName, ""}, "/"),
+		},
+		{
+			name:     "webhook to schema many empty slashes",
+			decision: "webhook schema",
+			target:   schemaIdent,
+			url:      strings.Join([]string{"", dbName, "", "", schemaName, ""}, "/"),
+		},
+		{
 			name:     "webhook to table",
 			decision: "webhook table",
 			target:   tableIdent,
@@ -151,6 +163,12 @@ func TestParseChangefeedURL(t *testing.T) {
 			decision: "ndjson table",
 			target:   tableIdent,
 			url:      strings.Join([]string{"", dbName, schemaName, tableName, ndjson}, "/"),
+		},
+		{
+			name:     "ndjson to table extra slashes",
+			decision: "ndjson table",
+			target:   tableIdent,
+			url:      strings.Join([]string{"", dbName, schemaName, "", "", tableName, "", ndjson, ""}, "/"),
 		},
 		{
 			name:     "ndjson full to table",
