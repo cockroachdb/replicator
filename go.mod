@@ -33,7 +33,7 @@ require (
 	golang.org/x/sync v0.6.0
 	golang.org/x/tools v0.16.1
 	google.golang.org/api v0.157.0
-	google.golang.org/grpc v1.60.1
+	google.golang.org/grpc v1.61.0
 	honnef.co/go/tools v0.4.6
 )
 
