@@ -1,0 +1,15 @@
+// For IDEs
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "lib": [
+          "DOM",
+          "ES2022"
+        ],
+      "moduleResolution": "node",
+      "baseUrl": ".",
+      "paths": {
+          "cdc-sink@v1": ["cdc-sink@v1.d.ts"]
+        }
+    }
+}
