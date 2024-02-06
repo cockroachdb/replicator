@@ -117,6 +117,12 @@ type Leases interface {
 	Singleton(ctx context.Context, name string, fn func(ctx context.Context) error)
 }
 
+// A Mapper transforms mutations.
+type Mapper interface {
+	// Map transforms mutations based on a user specified logic.
+	Map(context.Context, TargetQuerier, []Mutation) ([]Mutation, error)
+}
+
 // A Memo is a key store that persists a value associated to a key
 type Memo interface {
 	// Get retrieves the value associate to the given key.

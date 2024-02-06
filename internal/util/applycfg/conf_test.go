@@ -37,6 +37,7 @@ func TestCopyEquals(t *testing.T) {
 		Exprs:      ident.MapOf[string]("expr", "foo"),
 		Extras:     ident.New("extras"),
 		Ignore:     ident.MapOf[bool]("ign", true),
+		OpMap:      types.Mapper(nil),
 		Merger: merge.Func(func(context.Context, *merge.Conflict) (*merge.Resolution, error) {
 			panic("unused")
 		}),

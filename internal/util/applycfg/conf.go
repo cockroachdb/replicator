@@ -51,6 +51,7 @@ type Config struct {
 	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.
 	Extras      TargetColumn              // JSONB column to store unmapped values in.
 	Ignore      *ident.Map[bool]          // Source column names to ignore.
+	OpMap       types.Mapper              // Generic mapper with access to the target database.
 	Merger      merge.Merger              // Conflict resolution.
 	SourceNames *ident.Map[SourceColumn]  // Look for alternate name in the incoming data.
 }
@@ -75,6 +76,7 @@ func (t *Config) Copy() *Config {
 	t.Exprs.CopyInto(ret.Exprs)
 	ret.Extras = t.Extras
 	t.Ignore.CopyInto(ret.Ignore)
+	ret.OpMap = t.OpMap
 	ret.Merger = t.Merger
 	t.SourceNames.CopyInto(ret.SourceNames)
 
@@ -84,8 +86,8 @@ func (t *Config) Copy() *Config {
 // Equal returns true if the other Config is equivalent to the receiver.
 //
 // This method is intended for testing only. It does not compare the
-// Merger field, since not all implementations of that interface are
-// guaranteed to have a defined comparison operation (e.g. merge.Func).
+// Delegate, Merger and OpMap fields, since not all implementations
+// of that interface are guaranteed to have a defined comparison operation (e.g. merge.Func).
 func (t *Config) Equal(o *Config) bool {
 	return t == o || // Identity or nil-nil.
 		(t != nil) && (o != nil) &&
@@ -108,6 +110,7 @@ func (t *Config) IsZero() bool {
 		t.Exprs.Len() == 0 &&
 		t.Extras.Empty() &&
 		t.Ignore.Len() == 0 &&
+		t.OpMap == nil &&
 		t.Merger == nil &&
 		t.SourceNames.Len() == 0
 }
@@ -130,6 +133,9 @@ func (t *Config) Patch(other *Config) *Config {
 	}
 	if other.Ignore != nil {
 		other.Ignore.CopyInto(t.Ignore)
+	}
+	if other.OpMap != nil {
+		t.OpMap = other.OpMap
 	}
 	if other.Merger != nil {
 		t.Merger = other.Merger

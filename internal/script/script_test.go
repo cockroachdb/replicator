@@ -27,8 +27,10 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,6 +87,10 @@ func TestScript(t *testing.T) {
 		fmt.Sprintf("CREATE TABLE %s.delete_swap(pk0 INT, pk1 INT, PRIMARY KEY (pk0, pk1))", schema))
 	r.NoError(err)
 
+	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.soft_delete(pk0 INT, deleted VARCHAR(1), PRIMARY KEY (pk0))", schema))
+	r.NoError(err)
+
 	var opts mapOptions
 
 	s, err := newScriptFromFixture(fixture, &Config{
@@ -95,7 +101,7 @@ func TestScript(t *testing.T) {
 	r.NoError(err)
 	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
 	a.Equal(3, s.Sources.Len())
-	a.Equal(8, s.Targets.Len())
+	a.Equal(9, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -217,6 +223,49 @@ func TestScript(t *testing.T) {
 		}
 	}
 
+	// Hard delete becoming a soft delete
+	tbl = ident.NewTable(schema, ident.New("soft_delete"))
+	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+		op := cfg.OpMap
+		r.IsType(new(mapper), op)
+		time := hlc.New(int64(time.Now().Nanosecond()), 0)
+		meta := map[string]any{"test": 1}
+		if filter := cfg.OpMap; a.NotNil(filter) {
+			muts, err := op.Map(context.Background(),
+				fixture.TargetPool,
+				[]types.Mutation{
+					{
+						Before: []byte(`{"pk":1,"deleted":"N"}`),
+						Data:   nil,
+						Key:    []byte(`[1]`),
+						Meta:   meta,
+						Time:   time,
+					},
+					{
+						Before: nil,
+						Data:   []byte(`{"pk":2,"deleted":"N"}`),
+						Key:    []byte(`[2]`),
+						Meta:   meta,
+						Time:   time,
+					},
+				})
+			a.NoError(err)
+			r.Equal(2, len(muts))
+			// First muts is a delete, converted to a soft delete
+			a.JSONEq(`{"pk":1,"deleted":"Y"}`, string(muts[0].Data))
+			a.JSONEq(`{"pk":1,"deleted":"N"}`, string(muts[0].Before))
+			r.Equal(time, muts[0].Time)
+			r.Equal(meta, muts[0].Meta)
+			r.Equal(json.RawMessage(`[1]`), muts[0].Key)
+			// Second muts is an insert, verify it is unchanged.
+			a.JSONEq(`{"pk":2,"deleted":"N"}`, string(muts[1].Data))
+			log.Info(string(muts[1].Before))
+			r.Equal(json.RawMessage(nil), muts[1].Before)
+			r.Equal(time, muts[1].Time)
+			r.Equal(meta, muts[1].Meta)
+			r.Equal(json.RawMessage(`[2]`), muts[1].Key)
+		}
+	}
 	// A merge function that sends all conflicts to a DLQ.
 	tbl = ident.NewTable(schema, ident.New("merge_dlq_all"))
 	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {

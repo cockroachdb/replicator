@@ -145,12 +145,8 @@ declare module "cdc-sink@v1" {
      * the deletion of some primary key or an upsert to be applied.
      */
     type ApplyOp = {
-        action: "delete";
-
-        pk: DocumentValue[];
-    } | {
-        action: "upsert";
-
+        action: "delete" | "upsert";
+        before: Document;
         data: Document;
         meta: Document;
         pk: DocumentValue[];
@@ -224,6 +220,41 @@ declare module "cdc-sink@v1" {
          * Enables a user-defined, two- or three-way merge function.
          */
         merge: MergeFunction | StandardMerge;
+    } |  {
+        /**
+         * A list of columns to enable compare-and-set behavior.
+         */
+        cas: Column[];
+        /**
+         * Enable deadlining behavior, to discard mutations when the
+         * named timestamp column is older than the given duration.
+         */
+        deadlines: { [k: Column]: Duration };
+        /**
+         * Replacement SQL expressions to use when upserting columns.
+         * The placeholder <code>$0</code> will be replaced with the
+         * specific value.
+         */
+        exprs: { [k: Column]: string };
+        /**
+         * The name of a JSONB column that unmapped properties will be
+         * stored in.
+         */
+        extras: Column;
+        /**
+         * Columns that may be ignored in the input data. This allows,
+         * for example, columns to be dropped from the destination
+         * table.
+         */
+        ignore: { [k: Column]: boolean }
+        /**
+         * Enables a user-defined, two- or three-way merge function.
+         */
+        merge: MergeFunction | StandardMerge;
+         /**
+         * Generic mapping operation.
+         */
+        opMap(ops: Iterable<ApplyOp>): Promise<Iterable<ApplyOp>>;
     };
 
     /**

@@ -125,6 +125,25 @@ api.configureTable("merge_or_dlq", {
     merge: api.standardMerge(() => ({dlq: "dead"}))
 });
 
+
+// Demonstrate how to turn a hard delete into a soft delete
+api.configureTable("soft_delete", {
+    opMap: async (ops: Iterable<ApplyOp>): Promise<Iterable<ApplyOp>> => {
+        // creating a new array
+        let result : ApplyOp[] = [];
+        for (let op of ops) {
+            if (op.action == "delete") {
+                op.action = "upsert"
+                // clone op.before into op.data
+                op.data =  { ...op.before }
+                op.data["deleted"] = "Y"
+            }
+            result.push(op)
+        }
+        return result
+    }
+});
+
 // Demonstrate how upsert and delete SQL operations can be entirely
 // overridden by the userscript. In this test, we perform some basic
 // arithmetic on the keys and values to validate that this script is

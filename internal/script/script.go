@@ -73,6 +73,11 @@ var identity Map = func(_ context.Context, mut types.Mutation) (types.Mutation, 
 	return mut, true, nil
 }
 
+// A OpMap function may modify the mutations that are applied to a
+// specific table. Map functions are internally synchronized to
+// ensure single-threaded access to the underlying JS VM.
+type OpMap func(ctx context.Context, mut []types.Mutation) ([]types.Mutation, error)
+
 // A Source holds user-provided configuration options for a
 // generic data-source.
 type Source struct {
@@ -254,6 +259,9 @@ func (s *UserScript) bind(loader *Loader) error {
 			if err != nil {
 				return err
 			}
+		}
+		if bag.OpMap != nil {
+			tgt.OpMap = newMapper(s, table, bag.OpMap)
 		}
 		for k, v := range bag.Ignore {
 			if v {
