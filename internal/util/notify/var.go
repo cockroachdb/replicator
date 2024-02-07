@@ -17,7 +17,14 @@
 // Package notify contains utility code for notification behaviors.
 package notify
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrNoUpdate is a sentinel value that can be returned by the callback
+// passed to [Var.Update].
+var ErrNoUpdate = errors.New("no update required")
 
 // A Var holds a value that can be set or retrieved. It also provides
 // a channel that indicates when the value has changed.
@@ -100,8 +107,10 @@ func (v *Var[T]) Set(next T) <-chan struct{} {
 }
 
 // Update atomically updates the stored value using the current value as
-// an input. If the callback returns an error, no action is taken and
-// the unchanged value is returned.
+// an input. The callback may return [ErrNoUpdate] to take no action;
+// this error will not be returned to the caller. If the callback
+// returns any other error, no action is taken and the unchanged value
+// is returned.
 func (v *Var[T]) Update(fn func(old T) (new T, _ error)) (T, <-chan struct{}, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -110,6 +119,8 @@ func (v *Var[T]) Update(fn func(old T) (new T, _ error)) (T, <-chan struct{}, er
 	if err == nil {
 		v.mu.data = next
 		v.notifyLocked()
+	} else if errors.Is(err, ErrNoUpdate) {
+		err = nil
 	}
 	return v.mu.data, v.mu.updated, err
 }

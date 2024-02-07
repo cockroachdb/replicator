@@ -94,6 +94,20 @@ func TestVar(t *testing.T) {
 	default:
 	}
 
+	// Verify ErrNoUpdate returns a nil error.
+	current, chNoUpdate, err = v.Update(func(old int) (int, error) {
+		r.Equal(2, old)
+		return -1, ErrNoUpdate
+	})
+	r.Equal(2, current)
+	r.NoError(err)
+	r.Equal(ch3, chNoUpdate)
+	select {
+	case <-ch3:
+		r.Fail("no update, so channel should not have closed")
+	default:
+	}
+
 	// Just invalidate the channel.
 	v.Notify()
 	select {
