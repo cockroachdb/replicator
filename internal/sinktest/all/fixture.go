@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -39,6 +40,7 @@ type Fixture struct {
 	*base.Fixture
 
 	Appliers       types.Appliers
+	Checkpoints    *checkpoint.Checkpoints
 	Configs        *applycfg.Configs
 	Diagnostics    *diag.Diagnostics
 	DLQConfig      *dlq.Config

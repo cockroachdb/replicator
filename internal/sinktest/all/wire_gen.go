@@ -8,6 +8,7 @@ package all
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
@@ -78,6 +79,10 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
@@ -91,6 +96,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	allFixture := &Fixture{
 		Fixture:        fixture,
 		Appliers:       appliers,
+		Checkpoints:    checkpoints,
 		Configs:        configs,
 		Diagnostics:    diagnostics,
 		DLQConfig:      config,
