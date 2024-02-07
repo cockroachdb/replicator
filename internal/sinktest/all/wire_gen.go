@@ -9,6 +9,7 @@ package all
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
+	"github.com/cockroachdb/cdc-sink/internal/staging/resolved"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
@@ -82,6 +83,10 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	resolvedResolved, err := resolved.ProvideResolved(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	watcher, err := ProvideWatcher(targetSchema, watchers)
@@ -96,6 +101,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		DLQConfig:      config,
 		DLQs:           dlQs,
 		Memo:           memoMemo,
+		Resolved:       resolvedResolved,
 		Stagers:        stagers,
 		VersionChecker: checker,
 		Watchers:       watchers,

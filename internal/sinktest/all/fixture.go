@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/cdc-sink/internal/staging/resolved"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -44,6 +45,7 @@ type Fixture struct {
 	DLQConfig      *dlq.Config
 	DLQs           types.DLQs
 	Memo           types.Memo
+	Resolved       *resolved.Resolved
 	Stagers        types.Stagers
 	VersionChecker *version.Checker
 	Watchers       types.Watchers

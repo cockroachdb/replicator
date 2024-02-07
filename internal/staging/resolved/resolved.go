@@ -1,0 +1,105 @@
+// Copyright 2024 The Cockroach Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Package resolved contains a utility for persisting resolved timestamps.
+package resolved
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// Resolved is a factory for [Group] instances, which manage resolved
+// timestamps associated with a group of tables.
+type Resolved struct {
+	pool      *types.StagingPool
+	metaTable ident.Table
+}
+
+// Start a background goroutine to update the provided bounds variable.
+// The returned Group facade allows the bounds to be modified in
+// conjunction with updating the resolved timestamp staging table. The
+// returned Group is not memoized.
+func (r *Resolved) Start(
+	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range],
+) (*Group, error) {
+	ret := &Group{
+		bounds: bounds,
+		pool:   r.pool,
+		target: group,
+	}
+
+	labels := prometheus.Labels{"schema": group.Name.Raw()}
+	ret.metrics.committedAge = committedAge.With(labels)
+	ret.metrics.committedTime = committedTime.With(labels)
+	ret.metrics.markDuration = markDuration.With(labels)
+	ret.metrics.proposedAge = proposedAge.With(labels)
+	ret.metrics.proposedTime = proposedTime.With(labels)
+	ret.metrics.recordDuration = recordDuration.With(labels)
+	ret.metrics.refreshDuration = refreshDuration.With(labels)
+
+	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable)
+	ret.sql.mark = fmt.Sprintf(markTemplate, r.metaTable)
+	ret.sql.record = fmt.Sprintf(recordTemplate, r.metaTable)
+
+	// Populate data immediately.
+	if err := ret.refreshBounds(ctx); err != nil {
+		return nil, err
+	}
+	ret.refreshJob(ctx)
+	ret.reportMetrics(ctx)
+
+	return ret, nil
+}
+
+const scanForTargetTemplate = `
+SELECT DISTINCT target_schema
+FROM %[1]s
+WHERE target_applied_at IS NULL
+`
+
+// ScanForTargetSchemas reports any group names that have unresolved
+// timestamps.
+func (r *Resolved) ScanForTargetSchemas(ctx context.Context) ([]ident.Schema, error) {
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(scanForTargetTemplate, r.metaTable))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rows.Close()
+	var ret []ident.Schema
+	for rows.Next() {
+		var schemaRaw string
+		if err := rows.Scan(&schemaRaw); err != nil {
+			return nil, errors.WithStack(err)
+		}
+
+		sch, err := ident.ParseSchema(schemaRaw)
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, sch)
+	}
+
+	return ret, nil
+}
