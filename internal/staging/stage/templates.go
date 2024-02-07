@@ -20,6 +20,7 @@ import (
 	"embed"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -41,8 +42,21 @@ var (
 )
 
 type templateData struct {
-	Cursor        *types.UnstageCursor // Required input.
-	StagingSchema ident.Schema         // Required input.
+	Cursor         *types.UnstageCursor // Required input.
+	IgnoreLeases   bool                 // Don't block leased keys.
+	SetApplied     bool                 // Set the applied column to true.
+	SetLeaseExpiry time.Time            // Set the lease column to this value.
+	StagingSchema  ident.Schema         // Required input.
+}
+
+func newTemplateData(cursor *types.UnstageCursor, stagingSchema ident.Schema) *templateData {
+	return &templateData{
+		Cursor:         cursor,
+		IgnoreLeases:   cursor.IgnoreLeases,
+		SetApplied:     cursor.LeaseExpiry.IsZero(),
+		SetLeaseExpiry: cursor.LeaseExpiry,
+		StagingSchema:  stagingSchema,
+	}
 }
 
 func (d *templateData) Eval() (string, error) {

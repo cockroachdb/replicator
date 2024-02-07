@@ -80,11 +80,7 @@ func (f *factory) Unstage(
 	// Duplicate the cursor so callers can choose to advance.
 	cursor = cursor.Copy()
 
-	data := &templateData{
-		Cursor:        cursor,
-		StagingSchema: f.stagingDB.Schema(),
-	}
-	q, err := data.Eval()
+	q, err := newTemplateData(cursor, f.stagingDB).Eval()
 	if err != nil {
 		return nil, false, err
 	}
