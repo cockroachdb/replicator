@@ -21,6 +21,7 @@ package staging
 import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
+	"github.com/cockroachdb/cdc-sink/internal/staging/resolved"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
@@ -34,5 +35,6 @@ var Set = wire.NewSet(
 	leases.Set,
 	memo.Set,
 	stage.Set,
+	resolved.Set,
 	version.Set,
 )
