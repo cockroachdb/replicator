@@ -38,7 +38,6 @@ func TestSmoke(t *testing.T) {
 	ready := make(chan struct{})
 
 	cmd := New(&Template{
-		Bind:    nil, // No extra CLI flags
 		Metrics: "127.0.0.1:13013",
 		Start: func(ctx *stopper.Context, cmd *cobra.Command) (started any, err error) {
 			return nil, nil

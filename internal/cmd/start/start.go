@@ -26,12 +26,12 @@ import (
 
 // Command returns the command to start the server.
 func Command() *cobra.Command {
-	var cfg server.Config
+	cfg := &server.Config{}
 	return stdlogical.New(&stdlogical.Template{
-		Bind:  cfg.Bind,
-		Short: "start the server",
+		Config: cfg,
+		Short:  "start the server",
 		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
-			return server.NewServer(ctx, &cfg)
+			return server.NewServer(ctx, cfg)
 		},
 		Use: "start",
 	})

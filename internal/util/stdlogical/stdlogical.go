@@ -43,6 +43,12 @@ import (
 // MetricsAddrFlag is a global flag that will start an HTTP server.
 const MetricsAddrFlag = "metricsAddr"
 
+// Config is our standard protocol for configuration objects.
+type Config interface {
+	Bind(set *pflag.FlagSet)
+	Preflight() error
+}
+
 // HasAuthenticator allows the object to supply a [types.Authenticator].
 type HasAuthenticator interface {
 	GetAuthenticator() types.Authenticator
@@ -61,8 +67,8 @@ type HasServeMux interface {
 
 // A Template contains the input for [New].
 type Template struct {
-	// An optional function for CLI flag registration.
-	Bind func(*pflag.FlagSet)
+	// An optional object for CLI flag registration.
+	Config Config
 	// An optional default value for [MetricsAddrFlag].
 	Metrics string
 	// Passed to [cobra.Command.Short].
@@ -92,6 +98,13 @@ func New(t *Template) *cobra.Command {
 					info[s.Key] = s.Value
 				}
 				log.WithFields(info).Info("cdc-sink starting")
+			}
+
+			// Validate configuration.
+			if t.Config != nil {
+				if err := t.Config.Preflight(); err != nil {
+					return err
+				}
 			}
 
 			// Delegate startup. main.go provides a stopper.
@@ -136,8 +149,8 @@ func New(t *Template) *cobra.Command {
 			return nil
 		},
 	}
-	if t.Bind != nil {
-		t.Bind(cmd.Flags())
+	if t.Config != nil {
+		t.Config.Bind(cmd.Flags())
 	}
 	cmd.Flags().StringVar(&metricsAddr, MetricsAddrFlag, t.Metrics,
 		"a host:port on which to serve metrics and diagnostics")
