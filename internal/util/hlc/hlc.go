@@ -87,6 +87,9 @@ func (t Time) Logical() int { return t.logical }
 // Nanos returns the nanosecond wall time.
 func (t Time) Nanos() int64 { return t.nanos }
 
+// Next returns the time plus one logical tick.
+func (t Time) Next() Time { return Time{t.nanos, t.logical + 1} }
+
 // MarshalJSON represents the time as a JSON string. This is used when
 // logging timestamps.
 func (t Time) MarshalJSON() ([]byte, error) {
