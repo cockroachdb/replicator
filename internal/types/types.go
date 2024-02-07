@@ -154,17 +154,30 @@ func (m Mutation) IsDelete() bool {
 // Stager describes a service which can durably persist some
 // number of Mutations.
 type Stager interface {
+	// MarkApplied will mark the given mutations as having been applied.
+	// This is used with lease-based unstaging or when certain mutation
+	// should be skipped.
+	MarkApplied(ctx context.Context, db StagingQuerier, muts []Mutation) error
+
 	// Retire will delete staged mutations whose timestamp is less than
 	// or equal to the given end time. Note that this call may take an
 	// arbitrarily long amount of time to complete and its effects may
 	// not occur within a single database transaction.
 	Retire(ctx context.Context, db StagingQuerier, end hlc.Time) error
 
-	// Store implementations should be idempotent.
-	Store(ctx context.Context, db StagingQuerier, muts []Mutation) error
+	// Stage writes the mutations into the staging table. This method is
+	// idempotent.
+	Stage(ctx context.Context, db StagingQuerier, muts []Mutation) error
+
+	// StageIfExists will stage a mutation only if there is already a
+	// mutation staged for its key. It returns a filtered copy of the
+	// mutations that were not staged. This method is used to implement
+	// the non-transactional mode, where we try to apply a mutation to
+	// some key if there isn't already a mutation queued for that key.
+	StageIfExists(ctx context.Context, db StagingQuerier, muts []Mutation) ([]Mutation, error)
 }
 
-// UnstageCallback is provided to Stagers.SelectMany to receive the
+// UnstageCallback is provided to [Stagers.Unstage] to receive the
 // incoming data.
 type UnstageCallback func(ctx context.Context, tbl ident.Table, mut Mutation) error
 
@@ -172,13 +185,24 @@ type UnstageCallback func(ctx context.Context, tbl ident.Table, mut Mutation) er
 // will be updated by the method, allowing callers to call Unstage
 // in a loop until it returns false.
 type UnstageCursor struct {
+	// If true, un-applied mutations with an active lease will be
+	// returned. This is intended for final cleanups and testing.
+	IgnoreLeases bool
+
+	// If non-zero, the retrieved mutations will be marked with a
+	// lease-expiration time, rather than being marked as applied.
+	// Callers making use of lease expirations must make a subsequent
+	// call to [Stagers.MarkApplied] to prevent the mutation from
+	// being applied later.
+	LeaseExpiry time.Time
+
 	// A half-open interval: [ StartAt, EndBefore )
 	StartAt, EndBefore hlc.Time
 
 	// StartAfterKey is used when processing very large batches that
 	// occur within a single timestamp, to provide an additional offset
 	// for skipping already-processed rows. The implementation of
-	// [Stagers.SelectMany] will automatically populate this field.
+	// [Stagers.Unstage] will automatically populate this field.
 	StartAfterKey ident.TableMap[json.RawMessage]
 
 	// Targets defines the order in which data for the selected tables
@@ -199,8 +223,10 @@ type UnstageCursor struct {
 // Copy returns a copy of the cursor so that it may be updated.
 func (c *UnstageCursor) Copy() *UnstageCursor {
 	cpy := &UnstageCursor{
-		StartAt:        c.StartAt,
 		EndBefore:      c.EndBefore,
+		StartAt:        c.StartAt,
+		IgnoreLeases:   c.IgnoreLeases,
+		LeaseExpiry:    c.LeaseExpiry,
 		Targets:        make([]ident.Table, len(c.Targets)),
 		TimestampLimit: c.TimestampLimit,
 		UpdateLimit:    c.UpdateLimit,

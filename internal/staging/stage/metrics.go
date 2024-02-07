@@ -49,17 +49,17 @@ var (
 		Name: "stage_stale_mutations_count",
 		Help: "the number of un-applied staged mutations left after retiring applied mutations",
 	}, metrics.TableLabels)
-	stageStoreCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "stage_store_mutations_total",
-		Help: "the number of mutations stored for this table",
+	stageCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_mutations_total",
+		Help: "the number of mutations staged for this table",
 	}, metrics.TableLabels)
-	stageStoreDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "stage_store_duration_seconds",
-		Help:    "the length of time it took to successfully store mutations",
+	stageDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "stage_duration_seconds",
+		Help:    "the length of time it took to successfully stage mutations",
 		Buckets: metrics.LatencyBuckets,
 	}, metrics.TableLabels)
-	stageStoreErrors = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "stage_store_errors_total",
-		Help: "the number of times an error was encountered while storing mutations",
+	stageErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_errors_total",
+		Help: "the number of times an error was encountered while staging mutations",
 	}, metrics.TableLabels)
 )

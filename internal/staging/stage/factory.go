@@ -57,7 +57,7 @@ func (f *factory) createUnlocked(table ident.Table) (*stage, error) {
 		return ret, nil
 	}
 
-	ret, err := newStore(f.stop, f.db, f.stagingDB, table)
+	ret, err := newStage(f.stop, f.db, f.stagingDB, table)
 	if err == nil {
 		f.mu.instances.Put(table, ret)
 	}
@@ -80,11 +80,7 @@ func (f *factory) Unstage(
 	// Duplicate the cursor so callers can choose to advance.
 	cursor = cursor.Copy()
 
-	data := &templateData{
-		Cursor:        cursor,
-		StagingSchema: f.stagingDB.Schema(),
-	}
-	q, err := data.Eval()
+	q, err := newTemplateData(cursor, f.stagingDB).Eval()
 	if err != nil {
 		return nil, false, err
 	}

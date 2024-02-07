@@ -125,7 +125,7 @@ func (h *Handler) processMutationsDeferred(
 
 		// Stage or apply the per-target mutations.
 		if err := toProcess.Range(func(target ident.Table, muts []types.Mutation) error {
-			return stores.GetZero(target).Store(ctx, tx, muts)
+			return stores.GetZero(target).Stage(ctx, tx, muts)
 		}); err != nil {
 			return err
 		}
