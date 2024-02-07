@@ -22,6 +22,7 @@ package stage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"time"
@@ -64,15 +65,17 @@ type stage struct {
 	selectDuration prometheus.Observer
 	selectError    prometheus.Counter
 	staleCount     prometheus.Gauge
-	storeCount     prometheus.Counter
-	storeDuration  prometheus.Observer
-	storeError     prometheus.Counter
+	stageCount     prometheus.Counter
+	stageDuration  prometheus.Observer
+	stageError     prometheus.Counter
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
-		retire    string // Delete a batch of staged mutations.
-		store     string // Store mutations.
-		unapplied string // Count stale, unapplied mutations.
+		markApplied string // Mark mutations as having been applied.
+		retire      string // Delete a batch of staged mutations.
+		stage       string // General-purpose upsert into staging table.
+		stageExists string // Stage a mutation if one already exists.
+		unapplied   string // Count stale, unapplied mutations.
 	}
 }
 
@@ -86,15 +89,16 @@ CREATE TABLE IF NOT EXISTS %[1]s (
       mut BYTES NOT NULL,
    before BYTES NULL,
   applied BOOL NOT NULL DEFAULT false,
+    lease TIMESTAMP NULL,
   %[2]s
   PRIMARY KEY (nanos, logical, key),
    FAMILY cold (mut, before),
-   FAMILY hot (applied)
+   FAMILY hot (applied, lease)
 )`
 
-// newStore constructs a new mutation stage that will track pending
+// newStage constructs a new mutation stage that will track pending
 // mutations to be applied to the given target table.
-func newStore(
+func newStage(
 	ctx *stopper.Context, db *types.StagingPool, stagingDB ident.Schema, target ident.Table,
 ) (*stage, error) {
 	table := stagingTable(stagingDB, target)
@@ -123,6 +127,11 @@ ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
+	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS lease TIMESTAMP NULL
+`, table)); err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	labels := metrics.TableValues(target)
 	s := &stage{
@@ -133,13 +142,15 @@ ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
 		selectDuration: stageSelectDurations.WithLabelValues(labels...),
 		selectError:    stageSelectErrors.WithLabelValues(labels...),
 		staleCount:     stageStaleMutations.WithLabelValues(labels...),
-		storeCount:     stageStoreCount.WithLabelValues(labels...),
-		storeDuration:  stageStoreDurations.WithLabelValues(labels...),
-		storeError:     stageStoreErrors.WithLabelValues(labels...),
+		stageCount:     stageCount.WithLabelValues(labels...),
+		stageDuration:  stageDuration.WithLabelValues(labels...),
+		stageError:     stageErrors.WithLabelValues(labels...),
 	}
 
+	s.sql.markApplied = fmt.Sprintf(markAppliedTemplate, table)
 	s.sql.retire = fmt.Sprintf(retireTemplate, table)
-	s.sql.store = fmt.Sprintf(putTemplate, table)
+	s.sql.stage = fmt.Sprintf(stageTemplate, table)
+	s.sql.stageExists = fmt.Sprintf(stageIfExistsTemplate, table)
 	s.sql.unapplied = fmt.Sprintf(countTemplate, table)
 
 	// Report unapplied mutations on a periodic basis.
@@ -195,12 +206,12 @@ func (s *stage) GetTable() ident.Table { return s.stage }
 
 // The byte-array casts on $4 and $5 are because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468
-const putTemplate = `
+const stageTemplate = `
 UPSERT INTO %s (nanos, logical, key, mut, before)
 SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[]), unnest($5::BYTES[])`
 
-// Store stores some number of Mutations into the database.
-func (s *stage) Store(
+// Stage implements [types.Stager].
+func (s *stage) Stage(
 	ctx context.Context, db types.StagingQuerier, mutations []types.Mutation,
 ) error {
 	start := time.Now()
@@ -214,7 +225,7 @@ func (s *stage) Store(
 		eg, errCtx := errgroup.WithContext(ctx)
 		err = batches.Batch(len(mutations), func(begin, end int) error {
 			eg.Go(func() error {
-				return s.putOne(errCtx, db, mutations[begin:end])
+				return s.stageOneBatch(errCtx, db, mutations[begin:end])
 			})
 			return nil
 		})
@@ -224,34 +235,101 @@ func (s *stage) Store(
 		err = eg.Wait()
 	} else {
 		err = batches.Batch(len(mutations), func(begin, end int) error {
-			return s.putOne(ctx, db, mutations[begin:end])
+			return s.stageOneBatch(ctx, db, mutations[begin:end])
 		})
 	}
 
 	if err != nil {
-		s.storeError.Inc()
+		s.stageError.Inc()
 		return err
 	}
 
 	d := time.Since(start)
-	s.storeCount.Add(float64(len(mutations)))
-	s.storeDuration.Observe(d.Seconds())
+	s.stageCount.Add(float64(len(mutations)))
+	s.stageDuration.Observe(d.Seconds())
 	log.WithFields(log.Fields{
 		"count":    len(mutations),
 		"duration": d,
 		"target":   s.stage,
-	}).Debug("stored mutations")
+	}).Debug("staged mutations")
 	return nil
 }
 
-func (s *stage) putOne(
+const stageIfExistsTemplate = `
+WITH
+proposed (idx, nanos, logical, key, mut, before) AS ( 
+  SELECT 
+    row_number() OVER (), 
+    unnest($1::INT[]),
+    unnest($2::INT[]),
+    unnest($3::STRING[]),
+    unnest($4::BYTES[]),
+    unnest($5::BYTES[])),
+existing AS (
+  SELECT DISTINCT proposed.key
+  FROM proposed
+  JOIN %[1]s existing
+  ON (proposed.key = existing.key AND NOT existing.applied)),
+action AS (
+  UPSERT INTO %[1]s (nanos, logical, key, mut, before)
+  SELECT nanos, logical, key, mut, before
+  FROM proposed
+  JOIN existing USING (key)
+  RETURNING true) 
+SELECT idx FROM proposed
+JOIN existing USING (key)
+`
+
+// StageIfExists implements [types.Stager].
+func (s *stage) StageIfExists(
 	ctx context.Context, db types.StagingQuerier, mutations []types.Mutation,
-) error {
-	nanos := make([]int64, len(mutations))
-	logical := make([]int, len(mutations))
-	keys := make([]string, len(mutations))
-	jsons := make([][]byte, len(mutations))
-	befores := make([][]byte, len(mutations))
+) ([]types.Mutation, error) {
+	nanos, logical, keys, jsons, befores, err := s.packArgs(ctx, mutations)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(ctx, s.sql.stageExists, nanos, logical, keys, jsons, befores)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rows.Close()
+
+	staged := make(map[int]bool)
+	for rows.Next() {
+		var idx int
+		if err := rows.Scan(&idx); err != nil {
+			return nil, err
+		}
+		// The row counter is 1-based.
+		staged[idx-1] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	// We want to return a new slice and not mangle the input in case
+	// the caller needs to re-use the input (e.g. FK retries).
+	ret := make([]types.Mutation, 0, len(mutations)-len(staged))
+	for idx, mut := range mutations {
+		if !staged[idx] {
+			ret = append(ret, mut)
+		}
+	}
+
+	return ret, nil
+}
+
+// packArgs converts a slice of mutations into the various slices that
+// we'll send to the staging database.
+func (s *stage) packArgs(
+	ctx context.Context, mutations []types.Mutation,
+) (nanos []int64, logical []int, keys []string, jsons [][]byte, befores [][]byte, err error) {
+	nanos = make([]int64, len(mutations))
+	logical = make([]int, len(mutations))
+	keys = make([]string, len(mutations))
+	jsons = make([][]byte, len(mutations))
+	befores = make([][]byte, len(mutations))
 
 	numWorkers := runtime.GOMAXPROCS(0)
 	eg, errCtx := errgroup.WithContext(ctx)
@@ -287,12 +365,46 @@ func (s *stage) putOne(
 		})
 	}
 
-	if err := eg.Wait(); err != nil {
+	err = eg.Wait()
+	return
+}
+
+// stageOneBatch appends the mutations to the staging table.
+func (s *stage) stageOneBatch(
+	ctx context.Context, db types.StagingQuerier, mutations []types.Mutation,
+) error {
+	nanos, logical, keys, jsons, befores, err := s.packArgs(ctx, mutations)
+	if err != nil {
 		return err
 	}
+	_, err = db.Exec(ctx, s.sql.stage, nanos, logical, keys, jsons, befores)
+	return errors.Wrap(err, s.sql.stage)
+}
 
-	_, err := db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons, befores)
-	return errors.Wrap(err, s.sql.store)
+const markAppliedTemplate = `
+WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
+UPDATE %s x SET applied=true, lease=NULL
+FROM t
+WHERE (x.key, x.nanos, x.logical) = (t.key, t.nanos, t.logical) 
+`
+
+// MarkApplied sets the applied column to true for the given mutations.
+func (s *stage) MarkApplied(
+	ctx context.Context, db types.StagingQuerier, muts []types.Mutation,
+) error {
+	keys := make([]json.RawMessage, len(muts))
+	nanos := make([]int64, len(muts))
+	logical := make([]int, len(muts))
+	for idx, mut := range muts {
+		keys[idx] = mut.Key
+		nanos[idx] = mut.Time.Nanos()
+		logical[idx] = mut.Time.Logical()
+	}
+	return retry.Retry(ctx, func(ctx context.Context) error {
+		tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
+		log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
+		return errors.WithMessage(err, s.sql.markApplied)
+	})
 }
 
 const retireTemplate = `

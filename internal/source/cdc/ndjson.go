@@ -119,7 +119,7 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		}
 		// Start a goroutine to stage the data so we can keep decoding.
 		flush = func(muts []types.Mutation) error {
-			eg.Go(func() error { return store.Store(egCtx, h.StagingPool, muts) })
+			eg.Go(func() error { return store.Stage(egCtx, h.StagingPool, muts) })
 			return nil
 		}
 		commit = eg.Wait
