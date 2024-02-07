@@ -37,6 +37,19 @@ func TestCompare(t *testing.T) {
 	a.True(Compare(Time{1, 1}, Time{1, 2}) < 0)
 }
 
+func TestNext(t *testing.T) {
+	a := assert.New(t)
+
+	a.Equal(New(1, 1), New(1, 0).Next())
+}
+
+func TestRange(t *testing.T) {
+	a := assert.New(t)
+
+	a.True(Range{Time{1, 0}, Time{1, 0}}.Empty())
+	a.False(Range{Time{1, 0}, Time{1, 1}}.Empty())
+}
+
 func TestParse(t *testing.T) {
 	// Implementation copied from sink_table_test.go
 
