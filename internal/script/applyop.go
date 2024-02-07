@@ -17,25 +17,32 @@
 package script
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/pjson"
+	"github.com/pkg/errors"
 )
 
 type applyOp struct {
 	Action string         `goja:"action"` // Always populated. Type must be string.
 	Data   map[string]any `goja:"data"`   // Present in upsert mode.
 	Meta   map[string]any `goja:"meta"`   // Present in upsert mode. Equivalent to map() meta.
+	Before map[string]any `goja:"before"` // Present when before is available in the mutation.
 	PK     []any          `goja:"pk"`     // Always populated.
 }
 
 // applyOpsFromMuts converts a slice of types.Mutation into a
 // slice of *applyOp, suitable to be used in  a userscript.
+// Note: Mutation.Time is not converted, since it is not
+// used in the apply.Applier logic.
 func applyOpsFromMuts(ctx context.Context, muts []types.Mutation) ([]*applyOp, error) {
 	ops := make([]*applyOp, len(muts))
 	pks := make([]*[]any, len(muts))
 	data := make([]*map[string]any, len(muts))
+	before := make([]*map[string]any, len(muts))
 	for idx, mut := range muts {
 		mode := actionUpsert
 		if mut.IsDelete() {
@@ -47,7 +54,9 @@ func applyOpsFromMuts(ctx context.Context, muts []types.Mutation) ([]*applyOp, e
 		}
 		pks[idx] = &ops[idx].PK
 		data[idx] = &ops[idx].Data
+		before[idx] = &ops[idx].Before
 	}
+
 	if err := pjson.Decode(ctx, pks, func(i int) []byte {
 		return muts[i].Key
 	}); err != nil {
@@ -62,7 +71,49 @@ func applyOpsFromMuts(ctx context.Context, muts []types.Mutation) ([]*applyOp, e
 	}); err != nil {
 		return nil, err
 	}
+
+	if err := pjson.Decode(ctx, before, func(i int) []byte {
+		if before := muts[i].Before; len(before) > 0 {
+			return before
+		}
+		return []byte("null")
+	}); err != nil {
+		return nil, err
+	}
 	return ops, nil
+}
+
+// mutsFromApplyOps converts a slice of *applyOp, returned from
+// a userscript into a slice of types.Mutation.
+func mutsFromApplyOps(ctx context.Context, ops []*applyOp) ([]types.Mutation, error) {
+	muts := make([]types.Mutation, len(ops))
+	var err error
+	for idx, op := range ops {
+		muts[idx].Meta = op.Meta
+		muts[idx].Key, err = json.Marshal(op.PK)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if bytes.Equal(muts[idx].Key, []byte("null")) {
+			muts[idx].Key = nil
+		}
+
+		muts[idx].Data, err = json.Marshal(op.Data)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if bytes.Equal(muts[idx].Data, []byte("null")) {
+			muts[idx].Data = nil
+		}
+		muts[idx].Before, err = json.Marshal(op.Before)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if bytes.Equal(muts[idx].Before, []byte("null")) {
+			muts[idx].Before = nil
+		}
+	}
+	return muts, nil
 }
 
 type applyAction string

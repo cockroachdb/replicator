@@ -1655,6 +1655,87 @@ func TestMergeWiring(t *testing.T) {
 	r.NoError(fixture.Diagnostics.Write(ctx, io.Discard, false))
 }
 
+type testMapper struct {
+}
+
+func (m *testMapper) Map(
+	ctx context.Context, tx types.TargetQuerier, muts []types.Mutation,
+) ([]types.Mutation, error) {
+	type Payload struct {
+		PK  int    `json:"pk"`
+		Val string `json:"val"`
+	}
+	p := Payload{PK: 42, Val: "HELLO WORLD!"}
+	bytes, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}, nil
+}
+
+// This tests the opMap feature.
+func TestOpMap(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, err := all.NewFixture(t)
+	if !a.NoError(err) {
+		return
+	}
+
+	ctx := fixture.Context
+
+	type Payload struct {
+		PK  int    `json:"pk"`
+		Val string `json:"val"`
+	}
+
+	tbl, err := fixture.CreateTargetTable(ctx,
+		"CREATE TABLE %s (pk INT PRIMARY KEY, val VARCHAR(2048))")
+	if !a.NoError(err) {
+		return
+	}
+	tblName := sinktest.JumbleTable(tbl.Name())
+
+	configData := applycfg.NewConfig()
+	configData.OpMap = &testMapper{}
+
+	a.NoError(fixture.Configs.Set(tblName, configData))
+	app, err := fixture.Appliers.Get(ctx, tblName)
+	if !a.NoError(err) {
+		return
+	}
+	p := Payload{PK: 42, Val: "Hello world!"}
+	bytes, err := json.Marshal(p)
+	a.NoError(err)
+
+	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
+	count, err := base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
+	if a.NoError(err) && a.Equal(1, count) {
+		var q string
+		switch fixture.TargetPool.Product {
+		case types.ProductCockroachDB, types.ProductPostgreSQL:
+			q = "SELECT val FROM %s WHERE pk = $1"
+		case types.ProductMariaDB, types.ProductMySQL:
+			q = "SELECT val FROM %s WHERE pk = ?"
+		case types.ProductOracle:
+			q = "SELECT val FROM %s WHERE pk = :pk"
+		default:
+			a.Fail("unimplemented product")
+		}
+		row := fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf(q, tbl.Name()), 42)
+		var val string
+		a.NoError(row.Scan(&val))
+		a.Equal("HELLO WORLD!", val)
+	}
+}
+
 // This tests ignoring a primary key column, an extant db column,
 // and a column which only exists in the incoming payload.
 func TestIgnoredColumns(t *testing.T) {

@@ -117,6 +117,18 @@ type Leases interface {
 	Singleton(ctx context.Context, name string, fn func(ctx context.Context) error)
 }
 
+// ApplyMapper transforms mutations. It allows user to provide logic, via
+// a scripting language to interact with a batch of mutations
+// before they are applied to the target database. The user may generate
+// new mutations, change the type of the mutations (e.g. changing a hard delete
+// to a soft delete), or update any of the fields within the mutation.
+// The script may also access the target database via the TargetQuerier
+// interface.
+type ApplyMapper interface {
+	// Map transforms mutations based on a user specified logic.
+	Map(context.Context, TargetQuerier, []Mutation) ([]Mutation, error)
+}
+
 // A Memo is a key store that persists a value associated to a key
 type Memo interface {
 	// Get retrieves the value associate to the given key.

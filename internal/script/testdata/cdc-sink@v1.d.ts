@@ -145,12 +145,8 @@ declare module "cdc-sink@v1" {
      * the deletion of some primary key or an upsert to be applied.
      */
     type ApplyOp = {
-        action: "delete";
-
-        pk: DocumentValue[];
-    } | {
-        action: "upsert";
-
+        action: "delete" | "upsert";
+        before?: Document;
         data: Document;
         meta: Document;
         pk: DocumentValue[];
@@ -176,7 +172,7 @@ declare module "cdc-sink@v1" {
          * @param ops - The operations to apply to the target database.
          */
         apply(ops: Iterable<ApplyOp>): Promise<any>;
-    } | {
+    } | ({
         /**
          * A list of columns to enable compare-and-set behavior.
          */
@@ -186,15 +182,6 @@ declare module "cdc-sink@v1" {
          * named timestamp column is older than the given duration.
          */
         deadlines: { [k: Column]: Duration };
-        /**
-         * A mapping function which may modify the primary key value(s)
-         * to be deleted from a target table.
-         * @param key - The element(s) of the primary key to be deleted
-         * @param meta - Source-specific metadata about the deletion.
-         * @readonly The primary key to delete, or null to elide the
-         * deletion.
-         */
-        deleteKey: (key: DocumentValue[], meta: Document) => DocumentValue[] | null;
         /**
          * Replacement SQL expressions to use when upserting columns.
          * The placeholder <code>$0</code> will be replaced with the
@@ -212,19 +199,40 @@ declare module "cdc-sink@v1" {
          * table.
          */
         ignore: { [k: Column]: boolean }
+    } & ({
+        /**
+         * A mapping function which may modify the primary key value(s)
+         * to be deleted from a target table.
+         * @param key - The element(s) of the primary key to be deleted
+         * @param meta - Source-specific metadata about the deletion.
+         * @readonly The primary key to delete, or null to elide the
+         * deletion.
+         * @deprecated
+         */
+        deleteKey: (key: DocumentValue[], meta: Document) => DocumentValue[] | null;
         /**
          * A mapping function which may modify or discard a single
          * mutation to be applied to the target table.
          * @param d - The source document
          * @param meta - Source-specific metadata about the document.
          * @returns The document to upsert, or null to do nothing.
+         * @deprecated
          */
         map: (d: Document, meta: Document) => Document | null;
         /**
          * Enables a user-defined, two- or three-way merge function.
          */
         merge: MergeFunction | StandardMerge;
-    };
+    } | {
+        /**
+        * A mapping functions that takes a set of operations to be
+        * performed in the target database, and returns new set of operations.
+        * Access to the target database is provided via {@link getTX}.
+        * @param ops - The original operations to apply to the target database.
+        * @returns The new operations to apply to the target database.
+        */
+        opMap(ops: Iterable<ApplyOp>): Promise<Iterable<ApplyOp>>;
+    }));
 
     /**
      * A MergeFunction may be bound to a table to resolve two- or

@@ -105,7 +105,7 @@ type targetJS struct {
 	CASColumns []string `goja:"cas"`
 	// Column to duration.
 	Deadlines map[string]string `goja:"deadlines"`
-	// PK to PK mapper.
+	// PK to PK mapper. Deprecated in favor of opMap.
 	DeleteKey deleteKeyJS `goja:"deleteKey"`
 	// Column to SQL expression to pass through.
 	Exprs map[string]string `goja:"exprs"`
@@ -113,11 +113,14 @@ type targetJS struct {
 	Extras string `goja:"extras"`
 	// Column names.
 	Ignore map[string]bool `goja:"ignore"`
-	// Mutation to mutation.
+	// Mutation to mutation. Deprecated in favor of opMap.
 	Map mapJS `goja:"map"`
 	// Two- or three-way merge operator. The bindMerge method will
 	// validate the type of value.
 	Merge goja.Value `goja:"merge"`
+
+	// Mutation to mutation.
+	OpMap opMapJS `goja:"opMap"`
 }
 
 // Loader is responsible for the first-pass execution of the user

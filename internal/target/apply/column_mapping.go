@@ -43,6 +43,7 @@ type columnMapping struct {
 	Exprs                *ident.Map[string]           // Value-replacement expressions.
 	ExtrasColIdx         int                          // Position of the extras column, or -1 if unconfigured.
 	Ignore               ident.Idents                 // Named columns to ignore in the input.
+	OpMap                types.ApplyMapper            // Generic mutation mapper.
 	Merger               merge.Merger                 // Conflict-resolution callback.
 	Positions            *ident.Map[positionalColumn] // Map of idents to column info and position.
 	Product              types.Product                // Target database product.
@@ -70,6 +71,7 @@ func newColumnMapping(
 		Deadlines:    &ident.Map[time.Duration]{},
 		Exprs:        &ident.Map[string]{},
 		ExtrasColIdx: -1,
+		OpMap:        cfg.OpMap,
 		Positions:    &ident.Map[positionalColumn]{},
 		Product:      product,
 		Renames:      &ident.Map[ident.Ident]{},

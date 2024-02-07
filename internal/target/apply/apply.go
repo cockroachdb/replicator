@@ -61,6 +61,7 @@ type apply struct {
 		bagSpec   *merge.BagSpec
 		gen       int // Use for prepared-statement cache invalidation.
 		templates *templates
+		opMap     types.ApplyMapper
 	}
 }
 
@@ -189,7 +190,15 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 	if a.mu.templates.Positions.Len() == 0 {
 		return errors.Errorf("no ColumnData available for %s", a.target)
 	}
-
+	// If there is an opMap, then we call it to transform the mutations before
+	// we run the default logic.
+	if a.mu.opMap != nil {
+		var err error
+		muts, err = a.mu.opMap.Map(ctx, tx, muts)
+		if err != nil {
+			return countError(err)
+		}
+	}
 	// Accumulate mutations and flush incrementally.
 	for i := range muts {
 		if muts[i].IsDelete() {
@@ -679,6 +688,7 @@ func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.
 	}
 	a.mu.gen++
 	a.mu.templates = tmpl
+	a.mu.opMap = configData.OpMap
 	return nil
 }
 
