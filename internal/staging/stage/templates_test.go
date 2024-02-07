@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -68,17 +69,30 @@ func TestTimeOrderTemplate(t *testing.T) {
 				UpdateLimit:    10000,
 			},
 		},
+		{
+			name: "lease",
+			cursor: &types.UnstageCursor{
+				StartAt:     hlc.New(1, 2),
+				EndBefore:   hlc.New(3, 4),
+				Targets:     []ident.Table{tbl0, tbl1, tbl2, tbl3},
+				LeaseExpiry: time.Unix(1707338896, 0),
+			},
+		},
+		{
+			name: "ignore_lease",
+			cursor: &types.UnstageCursor{
+				StartAt:      hlc.New(1, 2),
+				EndBefore:    hlc.New(3, 4),
+				Targets:      []ident.Table{tbl0, tbl1, tbl2, tbl3},
+				IgnoreLeases: true,
+			},
+		},
 	}
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			r := require.New(t)
-			data := &templateData{
-				Cursor:        tc.cursor,
-				StagingSchema: staging,
-			}
-
-			out, err := data.Eval()
+			out, err := newTemplateData(tc.cursor, staging).Eval()
 			r.NoError(err)
 
 			filename := fmt.Sprintf("./testdata/%s.sql", tc.name)

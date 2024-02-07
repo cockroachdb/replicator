@@ -69,7 +69,7 @@ GROUP BY key
 ),
 data_0 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl0"
-SET applied=true, lease=NULL
+SET lease=TIMESTAMP 'epoch' + (1707338896000::float / 1000)::INTERVAL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[1])
@@ -78,7 +78,7 @@ AND key NOT IN (SELECT key FROM blocked_0)
 RETURNING nanos, logical, key, mut, before),
 data_1 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl1"
-SET applied=true, lease=NULL
+SET lease=TIMESTAMP 'epoch' + (1707338896000::float / 1000)::INTERVAL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[2])
@@ -87,7 +87,7 @@ AND key NOT IN (SELECT key FROM blocked_1)
 RETURNING nanos, logical, key, mut, before),
 data_2 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl2"
-SET applied=true, lease=NULL
+SET lease=TIMESTAMP 'epoch' + (1707338896000::float / 1000)::INTERVAL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[3])
@@ -96,7 +96,7 @@ AND key NOT IN (SELECT key FROM blocked_2)
 RETURNING nanos, logical, key, mut, before),
 data_3 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl3"
-SET applied=true, lease=NULL
+SET lease=TIMESTAMP 'epoch' + (1707338896000::float / 1000)::INTERVAL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[4])

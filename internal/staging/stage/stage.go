@@ -22,6 +22,7 @@ package stage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"time"
@@ -70,9 +71,11 @@ type stage struct {
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
-		retire    string // Delete a batch of staged mutations.
-		store     string // Store mutations.
-		unapplied string // Count stale, unapplied mutations.
+		markApplied string // Mark mutations as having been applied.
+		retire      string // Delete a batch of staged mutations.
+		store       string // Store mutations.
+		storeExists string // Store a mutation if one already exists.
+		unapplied   string // Count stale, unapplied mutations.
 	}
 }
 
@@ -86,10 +89,11 @@ CREATE TABLE IF NOT EXISTS %[1]s (
       mut BYTES NOT NULL,
    before BYTES NULL,
   applied BOOL NOT NULL DEFAULT false,
+    lease TIMESTAMP NULL,
   %[2]s
   PRIMARY KEY (nanos, logical, key),
    FAMILY cold (mut, before),
-   FAMILY hot (applied)
+   FAMILY hot (applied, lease)
 )`
 
 // newStore constructs a new mutation stage that will track pending
@@ -123,6 +127,11 @@ ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
+	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS lease TIMESTAMP NULL
+`, table)); err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	labels := metrics.TableValues(target)
 	s := &stage{
@@ -138,8 +147,10 @@ ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
 		storeError:     stageStoreErrors.WithLabelValues(labels...),
 	}
 
+	s.sql.markApplied = fmt.Sprintf(markAppliedTemplate, table)
 	s.sql.retire = fmt.Sprintf(retireTemplate, table)
 	s.sql.store = fmt.Sprintf(putTemplate, table)
+	s.sql.storeExists = fmt.Sprintf(storeIfExistsTemplate, table)
 	s.sql.unapplied = fmt.Sprintf(countTemplate, table)
 
 	// Report unapplied mutations on a periodic basis.
@@ -240,18 +251,85 @@ func (s *stage) Store(
 		"count":    len(mutations),
 		"duration": d,
 		"target":   s.stage,
-	}).Debug("stored mutations")
+	}).Debug("staged mutations")
 	return nil
 }
 
-func (s *stage) putOne(
+const storeIfExistsTemplate = `
+WITH
+proposed (idx, nanos, logical, key, mut, before) AS ( 
+  SELECT 
+    row_number() OVER (), 
+    unnest($1::INT[]),
+    unnest($2::INT[]),
+    unnest($3::STRING[]),
+    unnest($4::BYTES[]),
+    unnest($5::BYTES[])),
+existing AS (
+  SELECT DISTINCT proposed.key
+  FROM proposed
+  JOIN %[1]s existing
+  ON (proposed.key = existing.key AND NOT existing.applied)),
+action AS (
+  UPSERT INTO %[1]s (nanos, logical, key, mut, before)
+  SELECT nanos, logical, key, mut, before
+  FROM proposed
+  JOIN existing USING (key)
+  RETURNING true) 
+SELECT idx FROM proposed
+JOIN existing USING (key)
+`
+
+// StoreIfExists implements [types.Stager].
+func (s *stage) StoreIfExists(
 	ctx context.Context, db types.StagingQuerier, mutations []types.Mutation,
-) error {
-	nanos := make([]int64, len(mutations))
-	logical := make([]int, len(mutations))
-	keys := make([]string, len(mutations))
-	jsons := make([][]byte, len(mutations))
-	befores := make([][]byte, len(mutations))
+) ([]types.Mutation, error) {
+	nanos, logical, keys, jsons, befores, err := s.packArgs(ctx, mutations)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(ctx, s.sql.storeExists, nanos, logical, keys, jsons, befores)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rows.Close()
+
+	stored := make(map[int]bool)
+	for rows.Next() {
+		var idx int
+		if err := rows.Scan(&idx); err != nil {
+			return nil, err
+		}
+		// The row counter is 1-based.
+		stored[idx-1] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	// We want to return a new slice and not mangle the input in case
+	// the caller needs to re-use the input (e.g. FK retries).
+	ret := make([]types.Mutation, 0, len(mutations)-len(stored))
+	for idx, mut := range mutations {
+		if !stored[idx] {
+			ret = append(ret, mut)
+		}
+	}
+
+	return ret, nil
+}
+
+// packArgs converts a slice of mutations into the various slices that
+// we'll send to the staging database.
+func (s *stage) packArgs(
+	ctx context.Context, mutations []types.Mutation,
+) (nanos []int64, logical []int, keys []string, jsons [][]byte, befores [][]byte, err error) {
+	nanos = make([]int64, len(mutations))
+	logical = make([]int, len(mutations))
+	keys = make([]string, len(mutations))
+	jsons = make([][]byte, len(mutations))
+	befores = make([][]byte, len(mutations))
 
 	numWorkers := runtime.GOMAXPROCS(0)
 	eg, errCtx := errgroup.WithContext(ctx)
@@ -287,12 +365,45 @@ func (s *stage) putOne(
 		})
 	}
 
-	if err := eg.Wait(); err != nil {
+	err = eg.Wait()
+	return
+}
+
+func (s *stage) putOne(
+	ctx context.Context, db types.StagingQuerier, mutations []types.Mutation,
+) error {
+	nanos, logical, keys, jsons, befores, err := s.packArgs(ctx, mutations)
+	if err != nil {
 		return err
 	}
-
-	_, err := db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons, befores)
+	_, err = db.Exec(ctx, s.sql.store, nanos, logical, keys, jsons, befores)
 	return errors.Wrap(err, s.sql.store)
+}
+
+const markAppliedTemplate = `
+WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
+UPDATE %s x SET applied=true, lease=NULL
+FROM t
+WHERE (x.key, x.nanos, x.logical) = (t.key, t.nanos, t.logical) 
+`
+
+// MarkApplied sets the applied column to true for the given mutations.
+func (s *stage) MarkApplied(
+	ctx context.Context, db types.StagingQuerier, muts []types.Mutation,
+) error {
+	keys := make([]json.RawMessage, len(muts))
+	nanos := make([]int64, len(muts))
+	logical := make([]int, len(muts))
+	for idx, mut := range muts {
+		keys[idx] = mut.Key
+		nanos[idx] = mut.Time.Nanos()
+		logical[idx] = mut.Time.Logical()
+	}
+	return retry.Retry(ctx, func(ctx context.Context) error {
+		tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
+		log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
+		return errors.WithMessage(err, s.sql.markApplied)
+	})
 }
 
 const retireTemplate = `
