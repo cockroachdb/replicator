@@ -29,8 +29,8 @@ import (
 func Command() *cobra.Command {
 	cfg := &pglogical.Config{}
 	return stdlogical.New(&stdlogical.Template{
-		Bind:  cfg.Bind,
-		Short: "start a pg logical replication feed",
+		Config: cfg,
+		Short:  "start a pg logical replication feed",
 		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
 			return pglogical.Start(ctx, cfg)
 		},

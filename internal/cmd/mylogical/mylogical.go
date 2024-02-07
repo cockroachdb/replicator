@@ -29,8 +29,8 @@ import (
 func Command() *cobra.Command {
 	cfg := &mylogical.Config{}
 	return stdlogical.New(&stdlogical.Template{
-		Bind:  cfg.Bind,
-		Short: "start a mySQL replication feed",
+		Config: cfg,
+		Short:  "start a mySQL replication feed",
 		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
 			return mylogical.Start(ctx, cfg)
 		},

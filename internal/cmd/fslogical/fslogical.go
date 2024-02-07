@@ -29,8 +29,8 @@ import (
 func Command() *cobra.Command {
 	cfg := &fslogical.Config{}
 	return stdlogical.New(&stdlogical.Template{
-		Bind:  cfg.Bind,
-		Short: "start a Google Cloud Firestore logical replication feed",
+		Config: cfg,
+		Short:  "start a Google Cloud Firestore logical replication feed",
 		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
 			// main.go provides this stopper.
 			return fslogical.Start(ctx, cfg)
