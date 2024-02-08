@@ -34,11 +34,10 @@ func Start(context *stopper.Context, config *Config) (*FSLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	loader, err := script.ProvideLoader(scriptConfig)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	targetSchema := ProvideScriptTarget(config)
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
 		return nil, err
@@ -51,7 +50,7 @@ func Start(context *stopper.Context, config *Config) (*FSLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := ProvideUserScript(context, config, loader, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -65,10 +64,11 @@ func Start(context *stopper.Context, config *Config) (*FSLogical, error) {
 	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
+	appliers := apply.ProvideFactory(acceptor)
 	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {
 		return nil, err
@@ -110,12 +110,11 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	if err != nil {
 		return nil, err
 	}
-	loader, err := script.ProvideLoader(scriptConfig)
+	diagnostics := diag.New(context)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	diagnostics := diag.New(context)
-	targetSchema := ProvideScriptTarget(config)
 	baseConfig, err := logical.ProvideBaseConfig(config, loader)
 	if err != nil {
 		return nil, err
@@ -128,7 +127,7 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	if err != nil {
 		return nil, err
 	}
-	userScript, err := script.ProvideUserScript(context, configs, loader, diagnostics, targetSchema, watchers)
+	userScript, err := ProvideUserScript(context, config, loader, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -142,10 +141,11 @@ func startLoopsFromFixture(fixture *all.Fixture, config *Config) ([]*logical.Loo
 	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
+	appliers := apply.ProvideFactory(acceptor)
 	typesMemo := fixture.Memo
 	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {

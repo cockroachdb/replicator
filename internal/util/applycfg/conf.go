@@ -44,10 +44,10 @@ type (
 // A Config contains per-target-table configuration.
 type Config struct {
 	// NB: Update TestCopyEquals if adding new fields.
-
+	Acceptor    types.TableAcceptor       // Inject user-defined apply behavior instead.
 	CASColumns  TargetColumns             // The columns for compare-and-set operations.
 	Deadlines   *ident.Map[time.Duration] // Deadline-based operation.
-	Delegate    types.Applier             // Inject user-defined apply behavior instead.
+	Delegate    types.Applier             // Inject user-defined apply behavior instead. TODO: DELETE
 	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.
 	Extras      TargetColumn              // JSONB column to store unmapped values in.
 	Ignore      *ident.Map[bool]          // Source column names to ignore.
