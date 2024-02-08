@@ -39,9 +39,17 @@ func TestDoWhenChanged(t *testing.T) {
 	stop.Go(func() error {
 		_, err := DoWhenChanged(stop, -1, &v, func(ctx *stopper.Context, old, new int) error {
 			switch new {
-			case 1:
+			case 0:
+				// This can happen if the goroutine executes before the
+				// call to Set(1) below.
 				r.Equal(-1, old)
-				v.Set(2) // This should cause us to loop around.
+			case 1:
+				// Or statement to account for early-execution case.
+				if old == -1 || old == 0 {
+					v.Set(2) // This should cause us to loop around.
+				} else {
+					r.Failf("unexpected old value", "%d", old)
+				}
 			case 2:
 				r.Equal(1, old)
 				called.Store(true)

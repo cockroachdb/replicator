@@ -25,11 +25,15 @@ import (
 // provided configuration.
 func Start(ctx *stopper.Context, config *Config) (*PGLogical, error) {
 	diagnostics := diag.New(ctx)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
+	if err != nil {
+		return nil, err
+	}
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	loader, err := script.ProvideLoader(scriptConfig)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -49,20 +53,17 @@ func Start(ctx *stopper.Context, config *Config) (*PGLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	configs, err := applycfg.ProvideConfigs(diagnostics)
-	if err != nil {
-		return nil, err
-	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, err := apply.ProvideFactory(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
+	appliers := apply.ProvideFactory(acceptor)
 	stagingPool, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		return nil, err
