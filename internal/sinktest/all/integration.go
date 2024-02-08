@@ -29,10 +29,6 @@ const (
 	// integration tests for some databases. We expect this to be of the
 	// format "database-v123".
 	IntegrationEnvName = "CDC_INTEGRATION"
-	// FirestoreName must be kept in alignment with the
-	// .github/docker-compose.yml file and the integration matrix
-	// variable in workflows/tests.yaml.
-	FirestoreName = "firestore"
 	// MySQLName must be kept in alignment with the
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
