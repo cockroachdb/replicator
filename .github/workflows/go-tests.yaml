@@ -90,8 +90,6 @@ jobs:
           - cockroachdb: v22.1
           - cockroachdb: v22.2
           - cockroachdb: v23.1
-            integration: firestore
-          - cockroachdb: v23.1
             integration: mysql-v8
           - cockroachdb: v23.1
             integration: mysql-v5.6
@@ -154,7 +152,6 @@ jobs:
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out
       DOCKER_LOGS_OUT: docker-${{ strategy.job-index }}.log
-      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8181
       JUNIT_OUT: junit-${{ strategy.job-index }}.xml
       TEST_OUT: go-test-${{ strategy.job-index }}.json
     steps:
