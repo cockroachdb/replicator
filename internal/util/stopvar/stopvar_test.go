@@ -63,33 +63,41 @@ func TestDoWhenChangedOrInterval(t *testing.T) {
 	defer cancel()
 
 	var called atomic.Bool
+	sawMinusOne := make(chan struct{})
 	var v notify.Var[int]
 
 	stop := stopper.WithContext(ctx)
 	stop.Go(func() error {
-		_, err := DoWhenChangedOrInterval(stop, -1, &v, 100*time.Millisecond,
+		_, err := DoWhenChangedOrInterval(stop, -1, &v, time.Millisecond,
 			func(ctx *stopper.Context, old, new int) error {
-				switch new {
-				case 1:
-					r.Equal(-1, old)
-					v.Set(2) // This should cause us to loop around.
-				case 2:
-					switch old {
-					case 1:
-					// First time through, don't do anything.
-					case 2:
-						// Called by interval tick.
-						called.Store(true)
-						stop.Stop(time.Minute)
-					default:
-						r.Failf("unexpected old value", "%d", old)
-					}
+				// The expected sequence old (old, new):
+				// (-1, 0)
+				// (0, 0) ...
+				// (0, 1)
+				// (1, 1) ...
+				// (1, 2)
+				// (2, 2) ...
+
+				switch {
+				case old == new:
+					// Looping due to timer.
+				case old == -1 && new == 0:
+					close(sawMinusOne)
+				case old == 0 && new == 1:
+					v.Set(2)
+				case old == 1 && new == 2:
+					called.Store(true)
+					stop.Stop(time.Minute)
+				default:
+					r.Failf("unexpected state", "old=%d, new=%d", old, new)
 				}
+
 				return nil
 			})
 		return err
 	})
 
+	<-sawMinusOne
 	v.Set(1)
 	r.NoError(stop.Wait())
 	r.True(called.Load())
