@@ -30,11 +30,15 @@ import (
 
 func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) {
 	diagnostics := diag.New(ctx)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
+	if err != nil {
+		return nil, err
+	}
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	loader, err := script.ProvideLoader(scriptConfig)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -67,20 +71,17 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	if err != nil {
 		return nil, err
 	}
-	configs, err := applycfg.ProvideConfigs(diagnostics)
-	if err != nil {
-		return nil, err
-	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, err := apply.ProvideFactory(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
+	appliers := apply.ProvideFactory(acceptor)
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
@@ -128,11 +129,15 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 // additional plumbing details via the returned testFixture pointer.
 func newTestFixture(context *stopper.Context, config *Config) (*testFixture, func(), error) {
 	diagnostics := diag.New(context)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, nil, err
 	}
-	loader, err := script.ProvideLoader(scriptConfig)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -165,20 +170,17 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	configs, err := applycfg.ProvideConfigs(diagnostics)
-	if err != nil {
-		return nil, nil, err
-	}
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, nil, err
 	}
+	appliers := apply.ProvideFactory(acceptor)
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, nil, err

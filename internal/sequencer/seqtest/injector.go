@@ -1,4 +1,4 @@
-// Copyright 2023 The Cockroach Authors
+// Copyright 2024 The Cockroach Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,38 +15,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //go:build wireinject
-// +build wireinject
 
-package script
+package seqtest
 
 import (
+	"context"
+
+	userScript "github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
-// Evaluate the loaded script.
-func Evaluate(
-	ctx *stopper.Context,
-	loader *Loader,
-	configs *applycfg.Configs,
-	diags *diag.Diagnostics,
-	targetSchema TargetSchema,
-	watchers types.Watchers,
-) (*UserScript, error) {
+func NewSequencerFixture(*all.Fixture, *sequencer.Config, *userScript.Config) (*Fixture, error) {
 	panic(wire.Build(
-		ProvideUserScript,
-	))
-}
+		wire.FieldsOf(new(*base.Fixture), "Context", "StagingDB", "StagingPool", "TargetPool"),
+		wire.Bind(new(context.Context), new(*stopper.Context)),
 
-func newScriptFromFixture(*all.Fixture, *Config, TargetSchema) (*UserScript, error) {
-	panic(wire.Build(
-		Set,
-		wire.FieldsOf(new(*base.Fixture), "Context"),
-		wire.FieldsOf(new(*all.Fixture), "Configs", "Diagnostics", "Fixture", "Watchers"),
+		wire.FieldsOf(new(*all.Fixture),
+			"Configs", "Diagnostics", "Fixture", "Stagers", "Watchers"),
+
+		retire.Set,
+		switcher.Set,
+		userScript.Set,
+
+		wire.Struct(new(Fixture), "*"),
+		provideLeases,
 	))
 }
