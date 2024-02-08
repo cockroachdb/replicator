@@ -37,30 +37,23 @@ type factory struct {
 	watchers types.Watchers
 	mu       struct {
 		sync.RWMutex
-		instances *ident.TableMap[types.Applier]
+		instances *ident.TableMap[*apply]
 	}
 }
 
-var (
-	_ types.Appliers  = (*factory)(nil)
-	_ diag.Diagnostic = (*factory)(nil)
-)
+var _ diag.Diagnostic = (*factory)(nil)
 
 // Diagnostic implements [diag.Diagnostic].
-func (f *factory) Diagnostic(ctx context.Context) any {
+func (f *factory) Diagnostic(_ context.Context) any {
 	ret := &ident.TableMap[any]{}
 
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	_ = f.mu.instances.Range(func(tbl ident.Table, applier types.Applier) error {
-		if impl, ok := applier.(*apply); ok {
-			impl.mu.RLock()
-			defer impl.mu.RUnlock()
-			ret.Put(tbl, impl.mu.templates.columnMapping)
-		} else if d, ok := applier.(diag.Diagnostic); ok {
-			ret.Put(tbl, d.Diagnostic(ctx))
-		}
+	_ = f.mu.instances.Range(func(tbl ident.Table, impl *apply) error {
+		impl.mu.RLock()
+		defer impl.mu.RUnlock()
+		ret.Put(tbl, impl.mu.templates.columnMapping)
 		return nil
 	})
 
@@ -68,7 +61,7 @@ func (f *factory) Diagnostic(ctx context.Context) any {
 }
 
 // Get creates or returns a memoized instance of the table's Applier.
-func (f *factory) Get(_ context.Context, table ident.Table) (types.Applier, error) {
+func (f *factory) Get(_ context.Context, table ident.Table) (*apply, error) {
 	// Try read-locked get.
 	if ret := f.getUnlocked(table); ret != nil {
 		return ret, nil
@@ -78,20 +71,12 @@ func (f *factory) Get(_ context.Context, table ident.Table) (types.Applier, erro
 }
 
 // getOrCreateUnlocked takes a write-lock.
-func (f *factory) getOrCreateUnlocked(
-	product types.Product, table ident.Table,
-) (types.Applier, error) {
+func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) (*apply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
-	}
-	// Allow implementations to be injected.
-	cfg, _ := f.configs.Get(table).Get()
-	if del := cfg.Delegate; del != nil {
-		f.mu.instances.Put(table, del)
-		return del, nil
 	}
 	ret, err := f.newApply(f.stop, product, table)
 	if err == nil {
@@ -101,7 +86,7 @@ func (f *factory) getOrCreateUnlocked(
 }
 
 // getUnlocked takes a read-lock.
-func (f *factory) getUnlocked(table ident.Table) types.Applier {
+func (f *factory) getUnlocked(table ident.Table) *apply {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return f.mu.instances.GetZero(table)

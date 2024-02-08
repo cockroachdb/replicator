@@ -219,7 +219,7 @@ func (s *UserScript) bind(loader *Loader) error {
 		tgt := &Target{Config: *applycfg.NewConfig()}
 		s.Targets.Put(table, tgt)
 		if bag.Apply != nil {
-			tgt.Delegate = newApplier(s, table, bag.Apply)
+			tgt.Acceptor = newApplier(s, table, bag.Apply)
 			// If we're using a Delegate, no other options are valid.
 			continue
 		}

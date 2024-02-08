@@ -23,13 +23,20 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/dop251/goja"
 	esbuild "github.com/evanw/esbuild/pkg/api"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 // Analogous to mapJS, save that it operates on a primary-key array. A
@@ -122,9 +129,15 @@ type targetJS struct {
 
 // Loader is responsible for the first-pass execution of the user
 // script. It will load all required resources, parse, and execute the
-// top-level API calls.
+// top-level API calls. It should be noted that a Loader is a global
+// resource which is independent of any particular target schema.
+// In order to resolve the various table names against a specific
+// target schema, call [Loader.Bind] to return a [UserScript] that
+// operates within the given target schema.
 type Loader struct {
 	apiModule    *goja.Object          // The imported cdc-sink module.
+	applyConfigs *applycfg.Configs     // Injected.
+	diags        *diag.Diagnostics     // Injected.
 	fs           fs.FS                 // Used by require.
 	options      Options               // Target of api.setOptions().
 	requireStack []*url.URL            // Allows relative import paths.
@@ -133,6 +146,67 @@ type Loader struct {
 	rtMu         *sync.RWMutex         // Serialize access to the VM.
 	sources      map[string]*sourceJS  // User configuration.
 	targets      map[string]*targetJS  // User configuration.
+}
+
+// Bind resolves the various table names used in the script file to the
+// target schema. Any asynchronous processes launched by the script
+// (e.g. promises) will be executed within the provided
+// [stopper.Context].
+//
+// At present, each returned [UserScript] shares a common JS runtime.
+func (l *Loader) Bind(
+	ctx *stopper.Context, target ident.Schematic, watchers types.Watchers,
+) (*UserScript, error) {
+	// In the unconfigured case, we don't return an initialized Loader.
+	if l.fs == nil {
+		return &UserScript{
+			Sources: &ident.Map[*Source]{},
+			Targets: &ident.TableMap[*Target]{},
+		}, nil
+	}
+
+	sch := target.Schema()
+	watcher, err := watchers.Get(sch)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := &UserScript{
+		Sources:   &ident.Map[*Source]{},
+		Targets:   &ident.TableMap[*Target]{},
+		apiModule: l.apiModule,
+		rt:        l.rt,
+		rtMu:      l.rtMu,
+		target:    sch,
+		watcher:   watcher,
+	}
+
+	// Limit the total number of background tasks that the script
+	// can start at any given time.
+	ret.tasks, _ = errgroup.WithContext(ctx)
+	ret.tasks.SetLimit(2 * runtime.GOMAXPROCS(0))
+	// Generate helpful message if execJS is not called.
+	ret.rt.Interrupt(errUseExec)
+	// Provide continuity of, e.g. getTX(), across
+	ret.rt.SetAsyncContextTracker(ret)
+
+	if err := ret.bind(l); err != nil {
+		return nil, err
+	}
+
+	diagName := fmt.Sprintf("script-%s-%p", sch.Raw(), ret)
+	if err := l.diags.Register(diagName, ret); err != nil {
+		return nil, err
+	}
+	ctx.Defer(func() {
+		l.diags.Unregister(diagName)
+	})
+
+	err = ret.Targets.Range(func(tbl ident.Table, tblCfg *Target) error {
+		return errors.Wrap(l.applyConfigs.Set(tbl, &tblCfg.Config), tbl.Raw())
+	})
+
+	return ret, err
 }
 
 // configureSource is exported to the JS runtime.

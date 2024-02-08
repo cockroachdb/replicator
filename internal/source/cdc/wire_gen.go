@@ -24,11 +24,13 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	authenticator := trust.New()
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
+	configs := fixture.Configs
 	scriptConfig, err := logical.ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	loader, err := script.ProvideLoader(scriptConfig)
+	diagnostics := diag.New(context)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +38,6 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
-	diagnostics := diag.New(context)
 	targetPool, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
 	if err != nil {
 		return nil, err
@@ -45,17 +46,17 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
-	configs := fixture.Configs
 	dlqConfig := logical.ProvideDLQConfig(baseConfig)
 	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, err := apply.ProvideFactory(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
+	appliers := apply.ProvideFactory(acceptor)
 	memo := fixture.Memo
 	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
 	if err != nil {

@@ -172,14 +172,7 @@ func (f *Factory) newLoop(ctx *stopper.Context, config *LoopConfig) (*Loop, erro
 		f.diags.Unregister(config.LoopName)
 	})
 
-	userscript, err := script.Evaluate(
-		ctx,
-		f.scriptLoader,
-		f.applyConfigs,
-		loopDiags,
-		script.TargetSchema(config.TargetSchema),
-		f.watchers,
-	)
+	userscript, err := f.scriptLoader.Bind(ctx, config.TargetSchema, f.watchers)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not initialize userscript for %s", config.LoopName)
 	}
