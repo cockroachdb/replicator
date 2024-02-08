@@ -112,14 +112,15 @@ func TestApply(t *testing.T) {
 	// Use this jumbled name when accessing the API.
 	jumbleName := sinktest.JumbleTable(tbl.Name())
 
-	app, err := fixture.Appliers.Get(ctx, jumbleName)
-	if !a.NoError(err) {
-		return
+	// Helper function to improve readability below.
+	apply := func(muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			jumbleName,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
-
-	app2, err := fixture.Appliers.Get(ctx, tbl.Name())
-	a.NoError(err)
-	a.Same(app, app2)
 
 	t.Run("smoke", func(t *testing.T) {
 		a := assert.New(t)
@@ -141,7 +142,7 @@ func TestApply(t *testing.T) {
 		}
 
 		// Verify insertion
-		a.NoError(app.Apply(ctx, fixture.TargetPool, adds))
+		a.NoError(apply(adds))
 		ct, err := tbl.RowCount(ctx)
 		a.Equal(count, ct)
 		a.NoError(err)
@@ -157,7 +158,7 @@ func TestApply(t *testing.T) {
 		a.Equal(count/2, ct)
 
 		// Verify that they can be deleted.
-		a.NoError(app.Apply(ctx, fixture.TargetPool, dels))
+		a.NoError(apply(dels))
 		ct, err = tbl.RowCount(ctx)
 		a.Equal(0, ct)
 		a.NoError(err)
@@ -168,7 +169,7 @@ func TestApply(t *testing.T) {
 	// the NOT NULL constraint.
 	t.Run("explicit_null", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		if err := apply([]types.Mutation{
 			{
 				Data: []byte(`{"pk0":1, "pk1":0, "has_default":null}`),
 				Key:  []byte(`[1, 0]`),
@@ -190,7 +191,7 @@ func TestApply(t *testing.T) {
 	// Verify unexpected incoming column
 	t.Run("unexpected", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		if err := apply([]types.Mutation{
 			{
 				Data: []byte(`{"pk0":1, "pk1":0, "no_good":true}`),
 				Key:  []byte(`[1, 0]`),
@@ -202,7 +203,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_upsert", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		if err := apply([]types.Mutation{
 			{
 				Data: []byte(`{"pk0":1}`),
 				Key:  []byte(`[1]`),
@@ -214,7 +215,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_delete_too_few", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		if err := apply([]types.Mutation{
 			{
 				Key: []byte(`[1]`),
 			},
@@ -225,7 +226,7 @@ func TestApply(t *testing.T) {
 
 	t.Run("missing_key_delete_too_many", func(t *testing.T) {
 		a := assert.New(t)
-		if err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		if err := apply([]types.Mutation{
 			{
 				Key: []byte(`[1, 2, 3]`),
 			},
@@ -243,7 +244,7 @@ func TestApply(t *testing.T) {
 
 		// The config update is async, so we may need to try again.
 		for {
-			err := app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+			err := apply([]types.Mutation{
 				{
 					Data: []byte(`{"pk0":1, "pk1":"0", "heretofore":"unseen", "are":"OK"}`),
 					Key:  []byte(`[1, "0"]`),
@@ -288,14 +289,14 @@ func TestApply(t *testing.T) {
 	t.Run("delegate_apply", func(t *testing.T) {
 		r := require.New(t)
 		tbl := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("fake_table"))
-		fake := &fakeApplier{}
+		fake := &fakeAcceptor{}
 
 		cfg := applycfg.NewConfig()
-		cfg.Delegate = fake
+		cfg.Acceptor = fake
 		a.NoError(fixture.Configs.Set(tbl, cfg))
-		found, err := fixture.Appliers.Get(ctx, tbl)
-		r.NoError(err)
-		r.Same(fake, found)
+
+		found, _ := fixture.Configs.Get(tbl).Get()
+		r.Same(fake, found.Acceptor)
 	})
 
 	// This sub-test uses the apply from concurrent goroutines to allow
@@ -343,7 +344,7 @@ func TestApply(t *testing.T) {
 						}
 						defer tx.Rollback()
 
-						if err := app.Apply(retryCtx, tx, muts); err != nil {
+						if err := apply(muts); err != nil {
 							return err
 						}
 						return errors.WithStack(tx.Commit())
@@ -363,9 +364,13 @@ func TestApply(t *testing.T) {
 	})
 }
 
-type fakeApplier struct{}
+type fakeAcceptor struct{}
 
-func (f *fakeApplier) Apply(context.Context, types.TargetQuerier, []types.Mutation) error {
+var _ types.TableAcceptor = (*fakeAcceptor)(nil)
+
+func (f *fakeAcceptor) AcceptTableBatch(
+	context.Context, *types.TableBatch, *types.AcceptOptions,
+) error {
 	return nil
 }
 
@@ -1113,8 +1118,15 @@ func TestAllDataTypes(t *testing.T) {
 			r.NoError(err)
 			tblName := sinktest.JumbleTable(tbl.Name())
 
-			app, err := fixture.Appliers.Get(ctx, tblName)
-			r.NoError(err)
+			// Helper function to improve readability below.
+			apply := func(muts []types.Mutation) error {
+				return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+					tblName,
+					hlc.Zero(),
+					muts),
+					&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+				)
+			}
 
 			// Use the staging connection to create a reasonable JSON blob.
 			var jsonValue string
@@ -1134,7 +1146,7 @@ func TestAllDataTypes(t *testing.T) {
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
 				Key:  []byte(`[1]`),
 			}
-			r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
+			r.NoError(apply([]types.Mutation{mut}))
 
 			expectJSON := jsonValue
 			if tc.expectJSON != "" {
@@ -1222,6 +1234,17 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 	// Use this when calling the APIs.
 	jumbleName := sinktest.JumbleTable(tbl.Name())
+	// Helper functions to improve readability below.
+	apply := func(muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			jumbleName,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
+	}
+	// Just for testing instantiation errors in factory.get.
+	nilApply := func() error { return apply(nil) }
 
 	t.Run("check_invalid_cas_name", func(t *testing.T) {
 		a := assert.New(t)
@@ -1233,7 +1256,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 			}),
 		))
 
-		_, err = fixture.Appliers.Get(ctx, jumbleName)
+		err = nilApply()
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -1249,7 +1272,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 			}),
 		))
 
-		_, err = fixture.Appliers.Get(ctx, jumbleName)
+		err = nilApply()
 		if a.Error(err) {
 			a.Contains(err.Error(), "bad_column")
 		}
@@ -1295,10 +1318,6 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		configData.Deadlines.Put(ident.New("ts"), 10*time.Minute)
 	}
 	a.NoError(fixture.Configs.Set(jumbleName, configData))
-	app, err := fixture.Appliers.Get(ctx, jumbleName)
-	if !a.NoError(err) {
-		return
-	}
 
 	now := time.Now().UTC().Round(time.Second)
 	past := now.Add(-time.Hour)
@@ -1343,7 +1362,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		a.NoError(err)
 
 		// Applying a discarded mutation should never result in an error.
-		a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+		a.NoError(apply([]types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d]`, id)),
 		}}))
@@ -1398,16 +1417,21 @@ func TestExpressionColumns(t *testing.T) {
 		ident.New("fixed"), "'constant'",
 	)
 	a.NoError(fixture.Configs.Set(jumbledName, configData))
-	app, err := fixture.Appliers.Get(ctx, jumbledName)
-	if !a.NoError(err) {
-		return
+	// Helper function to improve readability below.
+	apply := func(muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			jumbledName,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
 
 	p := Payload{PK: 42, Val: "Hello", Fixed: "ignored"}
 	bytes, err := json.Marshal(p)
 	a.NoError(err)
 
-	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+	a.NoError(apply([]types.Mutation{{
 		Data: bytes,
 		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
@@ -1426,7 +1450,7 @@ func TestExpressionColumns(t *testing.T) {
 	a.Equal("constant", fixed)
 
 	// Verify that deletes with expressions work.
-	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+	a.NoError(apply([]types.Mutation{{
 		Key: []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
 	count, err = base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
@@ -1499,12 +1523,18 @@ func TestMergeWiring(t *testing.T) {
 	})
 	r.NoError(fixture.Configs.Set(tblName, configData))
 
-	app, err := fixture.Appliers.Get(ctx, tblName)
-	if err != nil {
-		if strings.HasPrefix(err.Error(), "merge operation not implemented") {
+	// Helper function to improve readability below.
+	apply := func(t *testing.T, muts []types.Mutation) error {
+		err := fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			tblName,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
+		if err != nil && strings.HasPrefix(err.Error(), "merge operation not implemented") {
 			t.Skip(err.Error())
 		}
-		r.NoError(err)
+		return err
 	}
 
 	now := time.Now()
@@ -1520,7 +1550,7 @@ func TestMergeWiring(t *testing.T) {
 		}
 		data, err := json.Marshal(blocking)
 		r.NoError(err)
-		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		r.NoError(apply(t, []types.Mutation{
 			{
 				Data: data,
 				Key:  []byte(fmt.Sprintf("[%d]", pk)),
@@ -1558,7 +1588,7 @@ func TestMergeWiring(t *testing.T) {
 		shouldDiscard.Store(true)
 		defer shouldDiscard.Store(false)
 
-		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+		r.NoError(apply(t, stale))
 
 		var val int
 		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
@@ -1575,7 +1605,7 @@ func TestMergeWiring(t *testing.T) {
 		dlqTable, err := fixture.CreateDLQTable(ctx)
 		r.NoError(err)
 
-		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+		r.NoError(apply(t, stale))
 
 		var val int
 		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
@@ -1591,7 +1621,7 @@ func TestMergeWiring(t *testing.T) {
 	// Insert a "stale" value representing a delta of 1.
 	t.Run("merge_record", func(t *testing.T) {
 		r := require.New(t)
-		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+		r.NoError(apply(t, stale))
 
 		var val int
 		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
@@ -1605,7 +1635,7 @@ func TestMergeWiring(t *testing.T) {
 		r := require.New(t)
 		shouldTwoWay.Store(true)
 		defer shouldTwoWay.Store(false)
-		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+		r.NoError(apply(t, stale))
 
 		var val int
 		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
@@ -1618,7 +1648,7 @@ func TestMergeWiring(t *testing.T) {
 		r := require.New(t)
 		shouldTwoWay.Store(true)
 		defer shouldTwoWay.Store(false)
-		r.NoError(app.Apply(ctx, fixture.TargetPool, stale))
+		r.NoError(apply(t, stale))
 
 		var val int
 		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
@@ -1639,7 +1669,7 @@ func TestMergeWiring(t *testing.T) {
 		}
 		data, err := json.Marshal(accepted)
 		r.NoError(err)
-		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		r.NoError(apply(t, []types.Mutation{
 			{
 				Data: data,
 				Key:  []byte(fmt.Sprintf("[%d]", pk)),
@@ -1690,22 +1720,28 @@ func TestIgnoredColumns(t *testing.T) {
 		ident.New("not_required"), true,
 	)
 	a.NoError(fixture.Configs.Set(tblName, configData))
-	app, err := fixture.Appliers.Get(ctx, tblName)
-	if !a.NoError(err) {
-		return
+
+	// Helper function to improve readability below.
+	apply := func(muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			tblName,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
 
 	p := Payload{PK0: 42, PKDeleted: -1, PK1: 43, Val0: "Hello world!", ValIgnored: "Ignored"}
 	bytes, err := json.Marshal(p)
 	a.NoError(err)
 
-	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+	a.NoError(apply([]types.Mutation{{
 		Data: bytes,
 		Key:  []byte(fmt.Sprintf(`[%d, %d]`, p.PK0, p.PK1)),
 	}}))
 
 	// Verify deletion.
-	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+	a.NoError(apply([]types.Mutation{{
 		Key: []byte(fmt.Sprintf(`[%d, %d]`, p.PK0, p.PK1)),
 	}}))
 }
@@ -1740,16 +1776,21 @@ func TestRenamedColumns(t *testing.T) {
 		ident.New("val"), ident.New("val_source"),
 	)
 	a.NoError(fixture.Configs.Set(tblName, configData))
-	app, err := fixture.Appliers.Get(ctx, tblName)
-	if !a.NoError(err) {
-		return
+	// Helper function to improve readability below.
+	apply := func(muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			tblName,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
 
 	p := Payload{PK: 42, Val: "Hello world!"}
 	bytes, err := json.Marshal(p)
 	a.NoError(err)
 
-	a.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+	a.NoError(apply([]types.Mutation{{
 		Data: bytes,
 		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 	}}))
@@ -1819,9 +1860,14 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 		}
 	}
 
-	app, err := fixture.Appliers.Get(ctx, jumbledName)
-	if !a.NoError(err) {
-		return
+	// Helper function to improve readability below.
+	apply := func(muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			jumbledName,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
 
 	p1 := Payload{Pk0: 10, Val: "First"}
@@ -1838,7 +1884,7 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 
 	// Verify insertion.
-	a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
+	a.NoError(apply(muts))
 
 	count, err := base.GetRowCount(ctx, fixture.TargetPool, tbl.Name())
 	if a.NoError(err) && a.Equal(1, count) {
@@ -1883,6 +1929,16 @@ func TestUDTEnum(t *testing.T) {
 		fixture.TargetSchema.Schema()))
 	require.NoError(t, err)
 
+	// Helper function to improve readability below.
+	apply := func(table ident.Table, muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
+	}
+
 	t.Run("scalar", func(t *testing.T) {
 		r := require.New(t)
 		tbl, err := fixture.CreateTargetTable(ctx,
@@ -1891,14 +1947,11 @@ func TestUDTEnum(t *testing.T) {
 		r.NoError(err)
 		tblName := sinktest.JumbleTable(tbl.Name())
 
-		app, err := fixture.Appliers.Get(ctx, tblName)
-		r.NoError(err)
-
 		p := Payload{PK: 42, Val: "bar"}
 		bytes, err := json.Marshal(p)
 		r.NoError(err)
 
-		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+		r.NoError(apply(tblName, []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 		}}))
@@ -1912,14 +1965,11 @@ func TestUDTEnum(t *testing.T) {
 		r.NoError(err)
 		tblName := sinktest.JumbleTable(tbl.Name())
 
-		app, err := fixture.Appliers.Get(ctx, tblName)
-		r.NoError(err)
-
 		p := Payload{PK: 42, Val: []string{"foo", "bar"}}
 		bytes, err := json.Marshal(p)
 		r.NoError(err)
 
-		r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{{
+		r.NoError(apply(tblName, []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
 		}}))
@@ -1972,15 +2022,20 @@ func TestVirtualColumns(t *testing.T) {
 		strings.Contains(fixture.TargetPool.Version, "v21.") {
 		tblDef = strings.ReplaceAll(tblDef, "VIRTUAL", "STORED")
 	}
+
 	tbl, err := fixture.CreateTargetTable(ctx, tblDef)
 	if !a.NoError(err) {
 		return
 	}
-	tblName := sinktest.JumbleTable(tbl.Name())
 
-	app, err := fixture.Appliers.Get(ctx, tblName)
-	if !a.NoError(err) {
-		return
+	// Helper function to improve readability below.
+	apply := func(table ident.Table, muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
 
 	t.Run("computed-is-ignored", func(t *testing.T) {
@@ -1988,12 +2043,13 @@ func TestVirtualColumns(t *testing.T) {
 		p := Payload{A: 1, B: 2, C: 3, CK: 3}
 		bytes, err := json.Marshal(p)
 		a.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
 		muts := []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
-		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
+		a.NoError(apply(tblName, muts))
 	})
 
 	t.Run("unknown-still-breaks", func(t *testing.T) {
@@ -2001,12 +2057,13 @@ func TestVirtualColumns(t *testing.T) {
 		p := Payload{A: 1, B: 2, C: 3, X: -1}
 		bytes, err := json.Marshal(p)
 		a.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
 		muts := []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
-		err = app.Apply(ctx, fixture.TargetPool, muts)
+		err = apply(tblName, muts)
 		if a.Error(err) {
 			a.Contains(err.Error(), "unexpected columns")
 		}
@@ -2016,11 +2073,12 @@ func TestVirtualColumns(t *testing.T) {
 		a := assert.New(t)
 		p := Payload{A: 1, B: 2, C: 3, CK: 3}
 		a.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
 		muts := []types.Mutation{{
 			Key: []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.CK, p.B)),
 		}}
 
-		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
+		a.NoError(apply(tblName, muts))
 	})
 }
 
@@ -2051,11 +2109,15 @@ func testVirtualColumnsMySQL(t *testing.T, fixture *all.Fixture) {
 	if !a.NoError(err) {
 		return
 	}
-	tblName := sinktest.JumbleTable(tbl.Name())
 
-	app, err := fixture.Appliers.Get(ctx, tblName)
-	if !a.NoError(err) {
-		return
+	// Helper function to improve readability below.
+	apply := func(table ident.Table, muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
 
 	t.Run("computed-is-ignored", func(t *testing.T) {
@@ -2063,12 +2125,13 @@ func testVirtualColumnsMySQL(t *testing.T, fixture *all.Fixture) {
 		p := Payload{A: 1, B: 2, C: 3, D: 3}
 		bytes, err := json.Marshal(p)
 		a.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
 		muts := []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.D, p.B)),
 		}}
 
-		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
+		a.NoError(apply(tblName, muts))
 	})
 
 	t.Run("unknown-still-breaks", func(t *testing.T) {
@@ -2076,12 +2139,13 @@ func testVirtualColumnsMySQL(t *testing.T, fixture *all.Fixture) {
 		p := Payload{A: 1, B: 2, C: 3, X: -1}
 		bytes, err := json.Marshal(p)
 		a.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
 		muts := []types.Mutation{{
 			Data: bytes,
 			Key:  []byte(fmt.Sprintf(`[%d, %d, %d]`, p.A, p.D, p.B)),
 		}}
 
-		err = app.Apply(ctx, fixture.TargetPool, muts)
+		err = apply(tblName, muts)
 		if a.Error(err) {
 			a.Contains(err.Error(), "unexpected columns")
 		}
@@ -2091,11 +2155,12 @@ func testVirtualColumnsMySQL(t *testing.T, fixture *all.Fixture) {
 		a := assert.New(t)
 		p := Payload{A: 1, B: 2, C: 3, D: 3}
 		a.NoError(err)
+		tblName := sinktest.JumbleTable(tbl.Name())
 		muts := []types.Mutation{{
 			Key: []byte(fmt.Sprintf(`[%d, %d]`, p.A, p.B)),
 		}}
 
-		a.NoError(app.Apply(ctx, fixture.TargetPool, muts))
+		a.NoError(apply(tblName, muts))
 	})
 }
 
@@ -2156,9 +2221,15 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 		configData.Deadlines.Put(ident.New("ts"), time.Hour)
 	}
 	a.NoError(fixture.Configs.Set(tblName, configData))
-	app, err := fixture.Appliers.Get(ctx, tblName)
-	if !a.NoError(err) {
-		return
+
+	// Helper function to improve readability below.
+	apply := func(table ident.Table, muts []types.Mutation) error {
+		return fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table,
+			hlc.Zero(),
+			muts),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		)
 	}
 
 	// Create a source of Mutatation data.
@@ -2178,7 +2249,7 @@ func benchConditions(b *testing.B, cfg benchConfig) {
 			}
 
 			// Applying a discarded mutation should never result in an error.
-			if !a.NoError(app.Apply(context.Background(), fixture.TargetPool, batch)) {
+			if !a.NoError(apply(tblName, batch)) {
 				return
 			}
 			loops++

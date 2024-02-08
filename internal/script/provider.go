@@ -18,44 +18,29 @@ package script
 
 import (
 	"net/url"
-	"runtime"
 	"sync"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/google/wire"
-	"github.com/pkg/errors"
-	"golang.org/x/sync/errgroup"
 )
 
 // Set is used by Wire.
 var Set = wire.NewSet(
 	ProvideLoader,
-	ProvideUserScript,
 )
-
-// TargetSchema is an injection point for the target database schema in
-// use by the enclosing environment. This is used  for resolving table
-// names in the script.
-type TargetSchema ident.Schema
-
-// AsSchema unwraps the enclosed schema name.
-func (t TargetSchema) AsSchema() ident.Schema {
-	return ident.Schema(t)
-}
 
 // ProvideLoader is called by Wire to perform the initial script
 // loading, parsing, and top-level api handling. This provider
 // may return nil if there is no configuration.
-func ProvideLoader(cfg *Config) (*Loader, error) {
+func ProvideLoader(
+	applyConfigs *applycfg.Configs, cfg *Config, diags *diag.Diagnostics,
+) (*Loader, error) {
 	// Return an empty version if unconfigured.
 	if cfg.FS == nil {
-		return nil, nil
+		return &Loader{}, nil
 	}
 
 	options := cfg.Options
@@ -64,6 +49,8 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 	}
 
 	l := &Loader{
+		applyConfigs: applyConfigs,
+		diags:        diags,
 		fs:           cfg.FS,
 		options:      options,
 		requireCache: make(map[string]goja.Value),
@@ -119,61 +106,6 @@ func ProvideLoader(cfg *Config) (*Loader, error) {
 	}
 
 	return l, nil
-}
-
-// ProvideUserScript is called by wire to bind the UserScript to the
-// target database.
-func ProvideUserScript(
-	ctx *stopper.Context,
-	applyConfigs *applycfg.Configs,
-	boot *Loader,
-	diags *diag.Diagnostics,
-	target TargetSchema,
-	watchers types.Watchers,
-) (*UserScript, error) {
-	if boot == nil {
-		// Un-configured case, return a dummy object.
-		return &UserScript{
-			Sources: &ident.Map[*Source]{},
-			Targets: &ident.TableMap[*Target]{},
-		}, nil
-	}
-
-	watcher, err := watchers.Get(target.AsSchema())
-	if err != nil {
-		return nil, err
-	}
-
-	ret := &UserScript{
-		Sources:   &ident.Map[*Source]{},
-		Targets:   &ident.TableMap[*Target]{},
-		apiModule: boot.apiModule,
-		rt:        boot.rt,
-		rtMu:      boot.rtMu,
-		target:    target.AsSchema(),
-		watcher:   watcher,
-	}
-	// Limit the total number of background tasks that the script
-	// can start at any given time.
-	ret.tasks, _ = errgroup.WithContext(ctx)
-	ret.tasks.SetLimit(2 * runtime.GOMAXPROCS(0))
-	// Generate helpful message if execJS is not called.
-	ret.rt.Interrupt(errUseExec)
-	// Provide continuity of, e.g. getTX(), across
-	ret.rt.SetAsyncContextTracker(ret)
-
-	if err := ret.bind(boot); err != nil {
-		return nil, err
-	}
-	if err := diags.Register("script", ret); err != nil {
-		return nil, err
-	}
-
-	err = ret.Targets.Range(func(tbl ident.Table, tblCfg *Target) error {
-		return errors.Wrap(applyConfigs.Set(tbl, &tblCfg.Config), tbl.Raw())
-	})
-
-	return ret, err
 }
 
 // randomUUID returns a string containing a random UUID. It is exported

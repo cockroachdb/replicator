@@ -22,6 +22,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
@@ -38,6 +39,7 @@ import (
 type Fixture struct {
 	*base.Fixture
 
+	ApplyAcceptor  *apply.Acceptor
 	Appliers       types.Appliers
 	Configs        *applycfg.Configs
 	Diagnostics    *diag.Diagnostics
@@ -91,9 +93,10 @@ func (f *Fixture) PeekStaged(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := &types.UnstageCursor{
-		StartAt:   startAt,
-		EndBefore: endBefore,
-		Targets:   []ident.Table{tbl},
+		EndBefore:    endBefore,
+		IgnoreLeases: true,
+		StartAt:      startAt,
+		Targets:      []ident.Table{tbl},
 	}
 	var ret []types.Mutation
 	for selecting := true; selecting; {

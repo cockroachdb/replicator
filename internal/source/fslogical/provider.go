@@ -158,10 +158,11 @@ func ProvideFirestoreClient(
 	return client, nil
 }
 
-// ProvideScriptTarget exports [Config.TargetSchema] for the script
-// engine.
-func ProvideScriptTarget(cfg *Config) script.TargetSchema {
-	return script.TargetSchema(cfg.TargetSchema)
+// ProvideUserScript is called by Wire.
+func ProvideUserScript(
+	ctx *stopper.Context, cfg *Config, loader *script.Loader, watchers types.Watchers,
+) (*script.UserScript, error) {
+	return loader.Bind(ctx, cfg.TargetSchema, watchers)
 }
 
 // ProvideTombstones is called by wire to construct a helper that
