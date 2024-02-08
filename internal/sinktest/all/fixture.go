@@ -20,9 +20,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
 	"github.com/cockroachdb/cdc-sink/internal/staging/version"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
@@ -39,6 +41,7 @@ import (
 type Fixture struct {
 	*base.Fixture
 
+	ApplyAcceptor  *apply.Acceptor
 	Appliers       types.Appliers
 	Checkpoints    *checkpoint.Checkpoints
 	Configs        *applycfg.Configs
@@ -51,6 +54,16 @@ type Fixture struct {
 	Watchers       types.Watchers
 
 	Watcher types.Watcher // A watcher for TestDB.
+}
+
+// Applier returns a bound function that will apply mutations to the
+// given table.
+func (f *Fixture) Applier(ctx context.Context, table ident.Table) func([]types.Mutation) error {
+	return func(muts []types.Mutation) error {
+		return f.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table, hlc.Zero(), muts,
+		), &types.AcceptOptions{TargetQuerier: f.TargetPool})
+	}
 }
 
 // CreateDLQTable ensures that a DLQ table exists. The name of the table
@@ -93,9 +106,10 @@ func (f *Fixture) PeekStaged(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := &types.UnstageCursor{
-		StartAt:   startAt,
-		EndBefore: endBefore,
-		Targets:   []ident.Table{tbl},
+		EndBefore:    endBefore,
+		IgnoreLeases: true,
+		StartAt:      startAt,
+		Targets:      []ident.Table{tbl},
 	}
 	var ret []types.Mutation
 	for selecting := true; selecting; {

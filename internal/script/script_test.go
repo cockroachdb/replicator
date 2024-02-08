@@ -24,9 +24,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/stretchr/testify/assert"
@@ -87,12 +89,16 @@ func TestScript(t *testing.T) {
 
 	var opts mapOptions
 
-	s, err := newScriptFromFixture(fixture, &Config{
+	loader, err := ProvideLoader(fixture.Configs, &Config{
 		FS:       testData,
 		MainPath: "/testdata/main.ts",
 		Options:  &opts,
-	}, TargetSchema(schema))
+	}, fixture.Diagnostics)
 	r.NoError(err)
+
+	s, err := loader.Bind(ctx, fixture.TargetSchema, fixture.Watchers)
+	r.NoError(err)
+
 	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
 	a.Equal(3, s.Sources.Len())
 	a.Equal(8, s.Targets.Len())
@@ -268,9 +274,9 @@ func TestScript(t *testing.T) {
 		tbl = ident.NewTable(schema, ident.New("sql_test"))
 		cfg := s.Targets.GetZero(tbl)
 		r.NotNil(cfg)
-		del := cfg.Delegate
-		r.IsType(new(applier), del)
-		r.NoError(del.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		acceptor := cfg.Acceptor
+		r.IsType(new(applier), acceptor)
+		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(tbl, hlc.Zero(), []types.Mutation{
 			{
 				Data: json.RawMessage(`{"pk":0,"val":0}`),
 				Key:  json.RawMessage(`[0]`),
@@ -282,8 +288,9 @@ func TestScript(t *testing.T) {
 			{
 				Data: json.RawMessage(`{"pk":2,"val":2}`),
 				Key:  json.RawMessage(`[2]`),
-			},
-		}))
+			}}),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		))
 		rows, err := fixture.TargetPool.QueryContext(ctx,
 			fmt.Sprintf("SELECT pk, val FROM %s ORDER BY pk", tbl))
 		r.NoError(err)
@@ -298,7 +305,7 @@ func TestScript(t *testing.T) {
 		r.Equal(3, ct)
 
 		// Check deletion
-		r.NoError(del.Apply(ctx, fixture.TargetPool, []types.Mutation{
+		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(tbl, hlc.Zero(), []types.Mutation{
 			{
 				Key: json.RawMessage(`[0]`),
 			},
@@ -307,8 +314,9 @@ func TestScript(t *testing.T) {
 			},
 			{
 				Key: json.RawMessage(`[2]`),
-			},
-		}))
+			}}),
+			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+		))
 		r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
 			"SELECT count(*) FROM %s", tbl)).Scan(&ct))
 		r.Equal(0, ct)

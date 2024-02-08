@@ -35,6 +35,9 @@ var (
 	// for latency metrics. The values in this slice assume that the
 	// metric's base units are measured in seconds.
 	LatencyBuckets = Buckets(time.Millisecond.Seconds(), time.Minute.Seconds())
+	// SchemaLabels are the labels to be applied to single-schema vector
+	// metrics.
+	SchemaLabels = []string{schemaLabel}
 	// TableLabels are the labels to be applied to table-specific,
 	// vector metrics.
 	TableLabels = []string{schemaLabel, tableLabel}
@@ -57,6 +60,12 @@ func Buckets(base, max float64) []float64 {
 		}
 		base *= 10
 	}
+}
+
+// SchemaValues returns the values to plug into a vector metric
+// that expects SchemaLabels.
+func SchemaValues(sch ident.Schema) []string {
+	return []string{sch.Raw()}
 }
 
 // TableValues returns the values to plug into a vector metric
