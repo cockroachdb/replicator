@@ -31,9 +31,9 @@ func TestCopyEquals(t *testing.T) {
 	a := assert.New(t)
 
 	cfg := &Config{
+		Acceptor:   types.TableAcceptor(nil),
 		CASColumns: TargetColumns{ident.New("cas")},
 		Deadlines:  ident.MapOf[time.Duration](ident.New("dl"), time.Hour),
-		Delegate:   types.Applier(nil),
 		Exprs:      ident.MapOf[string]("expr", "foo"),
 		Extras:     ident.New("extras"),
 		Ignore:     ident.MapOf[bool]("ign", true),

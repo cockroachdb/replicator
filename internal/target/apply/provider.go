@@ -17,8 +17,6 @@
 package apply
 
 import (
-	"context"
-
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -30,7 +28,6 @@ import (
 // Set is used by Wire.
 var Set = wire.NewSet(
 	ProvideAcceptor,
-	ProvideFactory,
 )
 
 // ProvideAcceptor is called by Wire.
@@ -61,39 +58,4 @@ func ProvideAcceptor(
 		targetPool: target,
 	}
 	return a, nil
-}
-
-// ProvideFactory will be removed in an upcoming change.
-func ProvideFactory(acc *Acceptor) types.Appliers {
-	return &appliersAdapter{acc.factory}
-}
-
-// This will be removed in a subsequent commit.
-type appliersAdapter struct {
-	f *factory
-}
-
-var _ types.Appliers = (*appliersAdapter)(nil)
-
-// Get implements [types.Appliers].
-func (a *appliersAdapter) Get(_ context.Context, target ident.Table) (types.Applier, error) {
-	return &applierAdapter{a.f, target}, nil
-}
-
-// This will be removed in a subsequent commit.
-type applierAdapter struct {
-	f      *factory
-	target ident.Table
-}
-
-var _ types.Applier = (*applierAdapter)(nil)
-
-func (a *applierAdapter) Apply(
-	ctx context.Context, querier types.TargetQuerier, mutations []types.Mutation,
-) error {
-	app, err := a.f.Get(ctx, a.target)
-	if err != nil {
-		return err
-	}
-	return app.Apply(ctx, querier, mutations)
 }

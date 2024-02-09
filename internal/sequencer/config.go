@@ -44,21 +44,16 @@ type Config struct {
 
 // Bind adds configuration flags to the set.
 func (c *Config) Bind(flags *pflag.FlagSet) {
-	flags.IntVar(&c.Parallelism, "bestEffortParallelism", DefaultParallelism,
-		"the number of concurrent database connections to use in best-effort mode")
+	flags.IntVar(&c.Parallelism, "parallelism", DefaultParallelism,
+		"the number of concurrent database transactions to use in best-effort or shingled modes")
 	flags.DurationVar(&c.QuiescentPeriod, "quiescentPeriod", DefaultQuiescentPeriod,
 		"how often to retry deferred mutations")
 	flags.DurationVar(&c.RetireOffset, "retireOffset", DefaultRetireOffset,
 		"delay removal of applied mutations")
-	flags.IntVar(&c.SweepLimit, "bestEffortSweepLimit", DefaultSweepLimit,
-		"how many deferred mutations to attempt to retry at once")
-	flags.IntVar(&c.TimestampLimit, "serialTimestampLimit", DefaultTimestampLimit,
-		"the maximum number of source timestamps to coalesce into a target transaction")
-
-	// Compatibility with older fan_events flag.
-	flags.IntVar(&c.Parallelism, "fanShards", DefaultParallelism,
-		"use --bestEffortParallelism instead")
-	_ = flags.MarkDeprecated("fanShards", "use --bestEffortParallelism instead")
+	flags.IntVar(&c.SweepLimit, "sweepLimit", DefaultSweepLimit,
+		"how many deferred mutations to attempt to retry at once in best-effort mode")
+	flags.IntVar(&c.TimestampLimit, "timestampLimit", DefaultTimestampLimit,
+		"the maximum number of source timestamps to coalesce into a target transaction in serial mode")
 }
 
 // Preflight ensure that the configuration has sane defaults.

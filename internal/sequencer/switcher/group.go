@@ -133,6 +133,7 @@ func (g *groupSequencer) switchModeLocked(
 	case ModeSerial:
 		nextSeq = g.serial
 	case ModeShingle:
+		// Will return the delegate if parallelism == 1.
 		nextSeq, err = g.shingle.Wrap(ctx, g.serial)
 	default:
 		err = errors.Errorf("unimplemented: %v", next)

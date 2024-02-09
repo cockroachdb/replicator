@@ -22,8 +22,11 @@ package mylogical
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	scriptRuntime "github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	scriptSequencer "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -36,12 +39,16 @@ import (
 func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	panic(wire.Build(
 		wire.Bind(new(context.Context), new(*stopper.Context)),
-		wire.Bind(new(logical.Config), new(*Config)),
 		wire.Struct(new(MYLogical), "*"),
+		wire.FieldsOf(new(*Config), "Script"),
+		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Staging", "Target"),
 		Set,
+		bypass.Set,
+		chaos.Set,
 		diag.New,
-		logical.Set,
-		script.Set,
+		scriptRuntime.Set,
+		scriptSequencer.Set,
+		sinkprod.Set,
 		staging.Set,
 		target.Set,
 	))

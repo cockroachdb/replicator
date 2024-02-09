@@ -26,10 +26,10 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/scripttest"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/client"
@@ -39,8 +39,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-const loopName = "mylogicaltest"
 
 type startStamp int
 
@@ -59,34 +57,17 @@ func TestMain(m *testing.M) {
 const defaultSourceConn = "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable"
 
 type fixtureConfig struct {
-	backfill  bool
-	chaosProb float32
-	immediate bool
-	script    bool
+	chaos  bool
+	script bool
 }
 
 func TestMYLogical(t *testing.T) {
 	t.Run("consistent", func(t *testing.T) { testMYLogical(t, &fixtureConfig{}) })
-	t.Run("consistent-backfill", func(t *testing.T) {
-		testMYLogical(t, &fixtureConfig{backfill: true})
-	})
-	t.Run("consistent-backfill-chaos", func(t *testing.T) {
-		testMYLogical(t, &fixtureConfig{backfill: true, chaosProb: 0.0005})
-	})
 	t.Run("consistent-chaos", func(t *testing.T) {
-		testMYLogical(t, &fixtureConfig{chaosProb: 0.0005})
+		testMYLogical(t, &fixtureConfig{chaos: true})
 	})
 	t.Run("consistent-script", func(t *testing.T) {
 		testMYLogical(t, &fixtureConfig{script: true})
-	})
-	t.Run("immediate", func(t *testing.T) {
-		testMYLogical(t, &fixtureConfig{immediate: true})
-	})
-	t.Run("immediate-chaos", func(t *testing.T) {
-		testMYLogical(t, &fixtureConfig{immediate: true, chaosProb: 0.0005})
-	})
-	t.Run("immediate-script", func(t *testing.T) {
-		testMYLogical(t, &fixtureConfig{immediate: true, script: true})
 	})
 }
 
@@ -132,7 +113,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	r.NoError(err)
 
 	gtidSet, err := loadInitialGTIDSet(ctx, flavor, myPool)
-	config.DefaultConsistentPoint = gtidSet
+	config.InitialGTID = gtidSet
 	r.NoError(err)
 
 	// Insert data into source table.
@@ -227,6 +208,12 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	}
 
 	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
+
+	// Verify that a WAL offset was indeed recorded.
+	key := fmt.Sprintf("mysql-wal-offset-%s", fixture.TargetSchema.Raw())
+	if off, err := fixture.Memo.Get(ctx, fixture.StagingPool, key); a.NoError(err) {
+		a.NotEmpty(off)
+	}
 
 	ctx.Stop(time.Second)
 	a.NoError(ctx.Wait())
@@ -323,7 +310,7 @@ func TestDataTypes(t *testing.T) {
 	flavor, version, err := getFlavor(config)
 	r.NoError(err)
 	gtidSet, err := loadInitialGTIDSet(ctx, flavor, myPool)
-	config.DefaultConsistentPoint = gtidSet
+	config.InitialGTID = gtidSet
 	r.NoError(err)
 
 	tcs := []struct {
@@ -492,31 +479,27 @@ func TestDataTypes(t *testing.T) {
 	a.NoError(ctx.Wait())
 }
 
-// getConfig is an helper function to create a configuration for the connector
+// getConfig is a helper function to create a configuration for the connector
 func getConfig(fixture *all.Fixture, fc *fixtureConfig, tgt ident.Table) (*Config, error) {
 	dbName := fixture.TargetSchema.Schema()
 	crdbPool := fixture.TargetPool
 	config := &Config{
-		BaseConfig: logical.BaseConfig{
-			ApplyTimeout:  2 * time.Minute, // Increase to make using the debugger easier.
-			ChaosProb:     fc.chaosProb,
-			Immediate:     fc.immediate,
-			RetryDelay:    time.Millisecond,
-			StagingSchema: fixture.StagingDB.Schema(),
-			TargetConn:    crdbPool.ConnectionString,
+		Staging: sinkprod.StagingConfig{
+			Schema: fixture.StagingDB.Schema(),
 		},
-		LoopConfig: logical.LoopConfig{
-			LoopName:     loopName,
-			TargetSchema: dbName,
+		Target: sinkprod.TargetConfig{
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Conn:         crdbPool.ConnectionString,
 		},
-		SourceConn: defaultSourceConn,
-		ProcessID:  123456,
+		SourceConn:   defaultSourceConn,
+		ProcessID:    123456,
+		TargetSchema: dbName,
 	}
-	if fc.backfill {
-		config.BackfillWindow = time.Minute
+	if fc.chaos {
+		config.Sequencer.Chaos = 0.0005
 	}
 	if fc.script {
-		config.ScriptConfig = script.Config{
+		config.Script = script.Config{
 			FS:       scripttest.ScriptFSFor(tgt),
 			MainPath: "/testdata/logical_test.ts",
 		}
