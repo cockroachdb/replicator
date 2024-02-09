@@ -32,11 +32,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/scripttest"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/uuid"
@@ -62,10 +62,8 @@ func TestMain(m *testing.M) {
 }
 
 type fixtureConfig struct {
-	backfill  bool
-	chaosProb float32
-	immediate bool
-	script    bool
+	chaos  bool
+	script bool
 }
 
 // This is a general smoke-test of the logical replication feed.
@@ -73,27 +71,17 @@ type fixtureConfig struct {
 // The probabilities are chosen to make the tests pass within a
 // reasonable timeframe, given the large number of rows that we insert.
 func TestPGLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testPGLogical(t, &fixtureConfig{}) })
-	t.Run("consistent-backfill", func(t *testing.T) {
-		testPGLogical(t, &fixtureConfig{backfill: true})
-	})
-	t.Run("consistent-backfill-chaos", func(t *testing.T) {
-		testPGLogical(t, &fixtureConfig{backfill: true, chaosProb: 0.0005})
+	t.Run("consistent", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{})
 	})
 	t.Run("consistent-chaos", func(t *testing.T) {
-		testPGLogical(t, &fixtureConfig{chaosProb: 0.0005})
+		testPGLogical(t, &fixtureConfig{chaos: true})
 	})
 	t.Run("consistent-script", func(t *testing.T) {
 		testPGLogical(t, &fixtureConfig{script: true})
 	})
-	t.Run("immediate", func(t *testing.T) {
-		testPGLogical(t, &fixtureConfig{immediate: true})
-	})
-	t.Run("immediate-chaos", func(t *testing.T) {
-		testPGLogical(t, &fixtureConfig{immediate: true, chaosProb: 0.0005})
-	})
-	t.Run("immediate-script", func(t *testing.T) {
-		testPGLogical(t, &fixtureConfig{immediate: true, script: true})
+	t.Run("consistent-script-chaos", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{chaos: true, script: true})
 	})
 }
 
@@ -199,34 +187,29 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	pubNameRaw := publicationName(dbName).Raw()
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
-		BaseConfig: logical.BaseConfig{
-			ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
-			ChaosProb:      fc.chaosProb,
-			Immediate:      fc.immediate,
-			RetryDelay:     time.Millisecond,
-			StagingSchema:  fixture.StagingDB.Schema(),
-			TargetConn:     crdbPool.ConnectionString,
-			StandbyTimeout: 100 * time.Millisecond,
+		Staging: sinkprod.StagingConfig{
+			Schema: fixture.StagingDB.Schema(),
 		},
-		LoopConfig: logical.LoopConfig{
-			LoopName:     "pglogicaltest",
-			TargetSchema: dbSchema,
+		Target: sinkprod.TargetConfig{
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Conn:         crdbPool.ConnectionString,
 		},
-		Publication: pubNameRaw,
-		Slot:        pubNameRaw,
-		SourceConn:  *pgConnString + dbName.Raw(),
+		Publication:    pubNameRaw,
+		Slot:           pubNameRaw,
+		SourceConn:     *pgConnString + dbName.Raw(),
+		StandbyTimeout: 100 * time.Millisecond,
+		TargetSchema:   dbSchema,
 	}
-	if fc.backfill {
-		cfg.BackfillWindow = time.Minute
-	} else {
-		cfg.BackfillWindow = 0
+	if fc.chaos {
+		cfg.Sequencer.Chaos = 0.001
 	}
 	if fc.script {
-		cfg.ScriptConfig = script.Config{
+		cfg.Script = script.Config{
 			FS:       scripttest.ScriptFSFor(tgts[0]),
 			MainPath: "/testdata/logical_test.ts",
 		}
 	}
+	r.NoError(cfg.Preflight())
 	repl, err := Start(ctx, cfg)
 	r.NoError(err)
 
@@ -439,20 +422,22 @@ func TestDataTypes(t *testing.T) {
 	log.Info(tgts)
 	pubNameRaw := publicationName(dbName).Raw()
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	repl, err := Start(fixture.Context, &Config{
-		BaseConfig: logical.BaseConfig{
-			RetryDelay:    time.Millisecond,
-			StagingSchema: fixture.StagingDB.Schema(),
-			TargetConn:    crdbPool.ConnectionString,
+	cfg := &Config{
+		Staging: sinkprod.StagingConfig{
+			Schema: fixture.StagingDB.Schema(),
 		},
-		LoopConfig: logical.LoopConfig{
-			LoopName:     "pglogicaltest",
-			TargetSchema: dbSchema,
+		Target: sinkprod.TargetConfig{
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Conn:         crdbPool.ConnectionString,
 		},
-		Publication: pubNameRaw,
-		Slot:        pubNameRaw,
-		SourceConn:  *pgConnString + dbName.Raw(),
-	})
+		Publication:    pubNameRaw,
+		Slot:           pubNameRaw,
+		SourceConn:     *pgConnString + dbName.Raw(),
+		StandbyTimeout: 100 * time.Millisecond,
+		TargetSchema:   dbSchema,
+	}
+	r.NoError(cfg.Preflight())
+	repl, err := Start(fixture.Context, cfg)
 	if !a.NoError(err) {
 		return
 	}
@@ -549,20 +534,22 @@ func TestEmptyTransactions(t *testing.T) {
 	pubNameRaw := publicationName(dbName).Raw()
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
-	repl, err := Start(fixture.Context, &Config{
-		BaseConfig: logical.BaseConfig{
-			RetryDelay:    time.Millisecond,
-			StagingSchema: fixture.StagingDB.Schema(),
-			TargetConn:    crdbPool.ConnectionString,
+	cfg := &Config{
+		Staging: sinkprod.StagingConfig{
+			Schema: fixture.StagingDB.Schema(),
 		},
-		LoopConfig: logical.LoopConfig{
-			LoopName:     "pglogicaltest",
-			TargetSchema: dbSchema,
+		Target: sinkprod.TargetConfig{
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Conn:         crdbPool.ConnectionString,
 		},
-		Publication: pubNameRaw,
-		Slot:        pubNameRaw,
-		SourceConn:  *pgConnString + dbName.Raw(),
-	})
+		Publication:    pubNameRaw,
+		Slot:           pubNameRaw,
+		SourceConn:     *pgConnString + dbName.Raw(),
+		StandbyTimeout: 100 * time.Millisecond,
+		TargetSchema:   dbSchema,
+	}
+	r.NoError(cfg.Preflight())
+	repl, err := Start(fixture.Context, cfg)
 	r.NoError(err)
 
 	// Insert a value in the replTable
@@ -679,21 +666,21 @@ func TestToast(t *testing.T) {
 	pubNameRaw := publicationName(dbName).Raw()
 
 	cfg := &Config{
-		BaseConfig: logical.BaseConfig{
-			RetryDelay:    time.Millisecond,
-			StagingSchema: fixture.StagingDB.Schema(),
-			TargetConn:    crdbPool.ConnectionString,
-			Immediate:     true,
+		Staging: sinkprod.StagingConfig{
+			Schema: fixture.StagingDB.Schema(),
 		},
-		LoopConfig: logical.LoopConfig{
-			LoopName:     "pglogicaltest",
-			TargetSchema: dbSchema,
+		Target: sinkprod.TargetConfig{
+			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
+			Conn:         crdbPool.ConnectionString,
 		},
 		Publication:    pubNameRaw,
 		Slot:           pubNameRaw,
 		SourceConn:     *pgConnString + dbName.Raw(),
+		StandbyTimeout: 100 * time.Millisecond,
+		TargetSchema:   dbSchema,
 		ToastedColumns: true,
 	}
+	r.NoError(cfg.Preflight())
 	repl, err := Start(fixture.Context, cfg)
 
 	if !a.NoError(err) {

@@ -73,7 +73,7 @@ jobs:
   tests:
     name: Integration Tests
     runs-on: ${{ matrix.runs-on || 'ubuntu-latest-8-core' }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       # Refer to the CRDB support policy when determining how many

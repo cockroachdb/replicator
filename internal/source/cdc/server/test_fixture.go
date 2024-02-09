@@ -23,11 +23,6 @@ import (
 	"context"
 	"net"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -48,20 +43,13 @@ type testFixture struct {
 	Watcher       types.Watchers
 }
 
-// We want this to be as close as possible to Start, it just exposes
+// We want this to be as close as possible to NewServer, it just exposes
 // additional plumbing details via the returned testFixture pointer.
 func newTestFixture(*stopper.Context, *Config) (*testFixture, func(), error) {
 	panic(wire.Build(
-		Set,
-		cdc.Set,
-		diag.New,
-		logical.Set,
-		script.Set,
-		staging.Set,
-		target.Set,
+		completeSet,
 		wire.Bind(new(context.Context), new(*stopper.Context)),
-		wire.Bind(new(logical.Config), new(*Config)),
-		wire.FieldsOf(new(*Config), "CDC"),
+		wire.FieldsOf(new(*Config), "CDC", "Staging", "Target"),
 		wire.Struct(new(testFixture), "*"),
 	))
 }

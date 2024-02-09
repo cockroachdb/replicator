@@ -34,6 +34,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -340,36 +341,40 @@ func TestUnstage(t *testing.T) {
 	// a specific number of mutations. The StartAfterKey field in the
 	// cursor will be cleared and the timestamp limit will be raised to
 	// a large value.
-	checkCount := func(a *assert.Assertions, tx types.StagingQuerier, q *types.UnstageCursor, expectCount int) {
+	checkCount := func(a *assert.Assertions, tx types.StagingQuerier, q *types.UnstageCursor, expectCount int) error {
 		q = q.Copy()
 		q.TimestampLimit = math.MaxInt32
 		q.StartAfterKey = ident.TableMap[json.RawMessage]{}
-		var ct int
+		var count int
 		for hasMore := true; hasMore; {
+			var err error
 			_, hasMore, err = fixture.Stagers.Unstage(ctx, tx, q,
 				func(context.Context, ident.Table, types.Mutation) error {
-					ct++
+					count++
 					return nil
 				})
-			if !a.NoError(err) {
-				return
+			if err != nil {
+				return err
 			}
 		}
-		a.Equal(expectCount, ct)
+		a.Equal(expectCount, count)
+		return nil
 	}
 
 	// checkEmpty is a helper function to verify that the cursor returns
 	// no data. The StartAfterKey field will be cleared.
-	checkEmpty := func(a *assert.Assertions, tx types.StagingQuerier, q *types.UnstageCursor) {
+	checkEmpty := func(a *assert.Assertions, tx types.StagingQuerier, q *types.UnstageCursor) error {
 		q = q.Copy()
 		q.StartAfterKey = ident.TableMap[json.RawMessage]{}
 		_, hasMore, err := fixture.Stagers.Unstage(ctx, tx, q,
 			func(context.Context, ident.Table, types.Mutation) error {
 				return errors.New("no mutations should be visible")
 			})
-		if a.NoError(err) {
-			a.False(hasMore, "should not have more mutations to return")
+		if err != nil {
+			return err
 		}
+		a.False(hasMore, "should not have more mutations to return")
+		return nil
 	}
 
 	// unstage reads from the given cursor until no more data is
@@ -400,26 +405,31 @@ func TestUnstage(t *testing.T) {
 
 		// Run the select in a discarded transaction to avoid
 		// contaminating future tests with side effects.
-		tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
-		r.NoError(err)
-		defer func() { _ = tx.Rollback(ctx) }()
-
-		entriesByTable, numSelections := unstage(r, tx, q)
-		// Refer to comment about the distribution of timestamps.
-		// There are two large batches, then each mutation has two
-		// unique timestamps, and then there's a final call that returns
-		// false.
-		a.Equal(distinctTimestamps+1, numSelections)
-
-		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-			if a.Len(seen, len(expectedMutOrder)) {
-				a.Equal(expectedMutOrder, seen)
+		r.NoError(retry.Retry(ctx, func(ctx context.Context) error {
+			tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return errors.WithStack(err)
 			}
+			defer func() { _ = tx.Rollback(ctx) }()
+
+			entriesByTable, numSelections := unstage(r, tx, q)
+			// Refer to comment about the distribution of timestamps.
+			// There are two large batches, then each mutation has two
+			// unique timestamps, and then there's a final call that returns
+			// false.
+			a.Equal(distinctTimestamps+1, numSelections)
+
+			r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+				if a.Len(seen, len(expectedMutOrder)) {
+					a.Equal(expectedMutOrder, seen)
+				}
+				return nil
+			}))
+
+			// Ensure a re-read returns no data.
+			checkEmpty(a, tx, q)
 			return nil
 		}))
-
-		// Ensure a re-read returns no data.
-		checkEmpty(a, tx, q)
 	})
 
 	// Read the middle two tranches of updates.
@@ -435,23 +445,27 @@ func TestUnstage(t *testing.T) {
 
 		// Run the select in a discarded transaction to avoid
 		// contaminating future tests with side effects.
-		tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
-		r.NoError(err)
-		defer func() { _ = tx.Rollback(ctx) }()
-
-		entriesByTable, numSelections := unstage(r, tx, q)
-		// We expect to see one large batch, a timestamp for each entry,
-		// and the final zero-results call.
-		a.Equal(1+entries+1, numSelections)
-		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-			if a.Len(seen, 2*entries) {
-				a.Equal(expectedMutOrder[entries:3*entries], seen)
+		r.NoError(retry.Retry(ctx, func(ctx context.Context) error {
+			tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return errors.WithStack(err)
 			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			entriesByTable, numSelections := unstage(r, tx, q)
+			// We expect to see one large batch, a timestamp for each entry,
+			// and the final zero-results call.
+			a.Equal(1+entries+1, numSelections)
+			r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+				if a.Len(seen, 2*entries) {
+					a.Equal(expectedMutOrder[entries:3*entries], seen)
+				}
+				return nil
+			}))
+
+			// Ensure a re-read returns no data.
+			checkEmpty(a, tx, q)
 			return nil
 		}))
-
-		// Ensure a re-read returns no data.
-		checkEmpty(a, tx, q)
 	})
 
 	// Read from the staging tables using the limit, to simulate
@@ -468,21 +482,26 @@ func TestUnstage(t *testing.T) {
 
 		// Run the select in a discarded transaction to avoid
 		// contaminating future tests with side effects.
-		tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
-		r.NoError(err)
-		defer func() { _ = tx.Rollback(ctx) }()
-
-		entriesByTable, numSelections := unstage(r, tx, q)
-		a.Equal(211, numSelections)
-		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-			if a.Len(seen, len(expectedMutOrder)) {
-				a.Equal(expectedMutOrder, seen)
+		r.NoError(retry.Retry(ctx, func(ctx context.Context) error {
+			tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return errors.WithStack(err)
 			}
+			defer func() { _ = tx.Rollback(ctx) }()
+
+			entriesByTable, numSelections := unstage(r, tx, q)
+			a.Equal(211, numSelections)
+			r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+				if a.Len(seen, len(expectedMutOrder)) {
+					a.Equal(expectedMutOrder, seen)
+				}
+				return nil
+			}))
+
+			// Ensure a re-read returns no data.
+			checkEmpty(a, tx, q)
 			return nil
 		}))
-
-		// Ensure a re-read returns no data.
-		checkEmpty(a, tx, q)
 	})
 
 	// Ensure that having a lease on a staged row prevents it from being

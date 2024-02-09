@@ -8,9 +8,11 @@ package pglogical
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
-	"github.com/cockroachdb/cdc-sink/internal/staging/version"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
@@ -23,71 +25,63 @@ import (
 
 // Start creates a PostgreSQL logical replication loop using the
 // provided configuration.
-func Start(ctx *stopper.Context, config *Config) (*PGLogical, error) {
-	diagnostics := diag.New(ctx)
+func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
+	diagnostics := diag.New(context)
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	scriptConfig, err := logical.ProvideUserScriptConfig(config)
-	if err != nil {
-		return nil, err
-	}
+	scriptConfig := &config.Script
 	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	dialect, err := ProvideDialect(ctx, config, loader)
+	eagerConfig := ProvideEagerConfig(config, loader)
+	targetConfig := &eagerConfig.Target
+	targetPool, err := sinkprod.ProvideTargetPool(context, targetConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	targetStatements, err := sinkprod.ProvideStatementCache(context, targetConfig, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	targetPool, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	targetStatements, err := logical.ProvideTargetStatements(ctx, baseConfig, targetPool, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	dlqConfig := logical.ProvideDLQConfig(baseConfig)
-	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
+	dlqConfig := &eagerConfig.DLQ
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
-	appliers := apply.ProvideFactory(acceptor)
-	stagingPool, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
+	sequencerConfig := &eagerConfig.Sequencer
+	chaosChaos := &chaos.Chaos{
+		Config: sequencerConfig,
+	}
+	bypassBypass := &bypass.Bypass{}
+	stagingConfig := &eagerConfig.Staging
+	stagingPool, err := sinkprod.ProvideStagingPool(context, stagingConfig, diagnostics, targetConfig)
 	if err != nil {
 		return nil, err
 	}
-	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
+	stagingSchema, err := sinkprod.ProvideStagingDB(stagingConfig)
 	if err != nil {
 		return nil, err
 	}
-	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
-	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
-	if err != nil {
-		return nil, err
-	}
-	loop, err := ProvideLoop(config, dialect, factory)
+	sequencer := script2.ProvideSequencer(loader, watchers)
+	conn, err := ProvideConn(context, acceptor, chaosChaos, config, bypassBypass, memoMemo, sequencer, stagingPool, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
 	pgLogical := &PGLogical{
+		Conn:        conn,
 		Diagnostics: diagnostics,
-		Loop:        loop,
 	}
 	return pgLogical, nil
 }

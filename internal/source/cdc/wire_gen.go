@@ -8,8 +8,16 @@ package cdc
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
@@ -23,30 +31,12 @@ import (
 func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) {
 	authenticator := trust.New()
 	baseFixture := fixture.Fixture
+	targetPool := baseFixture.TargetPool
 	context := baseFixture.Context
+	targetStatements := baseFixture.TargetCache
 	configs := fixture.Configs
-	scriptConfig, err := logical.ProvideUserScriptConfig(config)
-	if err != nil {
-		return nil, err
-	}
 	diagnostics := diag.New(context)
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	baseConfig, err := logical.ProvideBaseConfig(config, loader)
-	if err != nil {
-		return nil, err
-	}
-	targetPool, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	targetStatements, err := logical.ProvideTargetStatements(context, baseConfig, targetPool, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	dlqConfig := logical.ProvideDLQConfig(baseConfig)
+	dlqConfig := ProvideDLQConfig(config)
 	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
@@ -56,48 +46,47 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
-	appliers := apply.ProvideFactory(acceptor)
-	memo := fixture.Memo
-	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
+	stagingPool := baseFixture.StagingPool
+	stagingSchema := baseFixture.StagingDB
+	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
-	checker := fixture.VersionChecker
-	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memo, loader, stagingPool, targetPool, watchers, checker)
-	if err != nil {
-		return nil, err
-	}
-	immediate, err := ProvideImmediate(context, factory)
-	if err != nil {
-		return nil, err
-	}
-	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
-	if err != nil {
-		return nil, err
-	}
+	sequencerConfig := ProvideSequencerConfig(config)
+	stagers := fixture.Stagers
+	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
-	metaTable := ProvideMetaTable(config)
-	stagers := fixture.Stagers
-	resolvers, err := ProvideResolvers(context, config, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
+	bypassBypass := &bypass.Bypass{}
+	chaosChaos := &chaos.Chaos{
+		Config: sequencerConfig,
+	}
+	scriptConfig := ProvideScriptConfig(config)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	if err != nil {
+		return nil, err
+	}
+	sequencer := script2.ProvideSequencer(loader, watchers)
+	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
+	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	targets, err := ProvideTargets(context, acceptor, config, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err
 	}
 	handler := &Handler{
 		Authenticator: authenticator,
 		Config:        config,
-		Immediate:     immediate,
-		Resolvers:     resolvers,
-		StagingPool:   stagingPool,
-		Stores:        stagers,
 		TargetPool:    targetPool,
+		Targets:       targets,
 	}
 	cdcTestFixture := &testFixture{
-		Fixture:   fixture,
-		Handler:   handler,
-		Resolvers: resolvers,
+		Fixture: fixture,
+		Handler: handler,
+		Targets: targets,
 	}
 	return cdcTestFixture, nil
 }
@@ -106,6 +95,6 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 
 type testFixture struct {
 	*all.Fixture
-	Handler   *Handler
-	Resolvers *Resolvers
+	Handler *Handler
+	Targets *Targets
 }

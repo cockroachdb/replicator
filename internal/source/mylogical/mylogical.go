@@ -17,15 +17,14 @@
 package mylogical
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 )
 
 // MYLogical is a MySQL/MariaDB logical replication loop.
 type MYLogical struct {
+	Conn        *Conn
 	Diagnostics *diag.Diagnostics
-	Loop        *logical.Loop
 }
 
 var (

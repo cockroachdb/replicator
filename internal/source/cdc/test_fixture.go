@@ -23,9 +23,11 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/auth/trust"
@@ -36,24 +38,26 @@ import (
 
 type testFixture struct {
 	*all.Fixture
-	Handler   *Handler
-	Resolvers *Resolvers
+	Handler *Handler
+	Targets *Targets
 }
 
 func newTestFixture(*all.Fixture, *Config) (*testFixture, error) {
 	panic(wire.Build(
 		Set,
-		wire.FieldsOf(new(*base.Fixture), "Context"),
+		wire.FieldsOf(new(*base.Fixture),
+			"Context", "StagingDB", "StagingPool", "TargetCache", "TargetPool"),
 		wire.FieldsOf(new(*all.Fixture),
-			"Configs", "Fixture", "Memo", "Stagers", "VersionChecker"),
+			"Configs", "Fixture", "Stagers"),
 		diag.New,
 		leases.Set,
-		logical.Set,
+		checkpoint.Set,
+		retire.Set,
 		script.Set,
+		switcher.Set,
 		target.Set,
 		trust.New, // Is valid to use as a provider.
 		wire.Struct(new(testFixture), "*"),
 		wire.Bind(new(context.Context), new(*stopper.Context)),
-		wire.Bind(new(logical.Config), new(*Config)),
 	))
 }

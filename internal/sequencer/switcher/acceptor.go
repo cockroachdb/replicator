@@ -42,6 +42,9 @@ func (s *acceptor) AcceptMultiBatch(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.mu.acceptor == nil {
+		return errors.New("not yet started")
+	}
 	return s.mu.acceptor.AcceptMultiBatch(ctx, batch, opts)
 }
 
@@ -54,6 +57,9 @@ func (s *acceptor) AcceptTemporalBatch(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.mu.acceptor == nil {
+		return errors.New("not yet started")
+	}
 	return s.mu.acceptor.AcceptTemporalBatch(ctx, batch, opts)
 }
 
