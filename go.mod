@@ -3,7 +3,6 @@ module github.com/cockroachdb/cdc-sink
 go 1.20
 
 require (
-	cloud.google.com/go/firestore v1.14.0
 	github.com/bobvawter/latch v1.0.2
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20230505164321-461e8663b4b4
@@ -32,27 +31,15 @@ require (
 	golang.org/x/net v0.20.0
 	golang.org/x/sync v0.6.0
 	golang.org/x/tools v0.17.0
-	google.golang.org/api v0.157.0
-	google.golang.org/grpc v1.61.0
 	honnef.co/go/tools v0.4.6
 )
 
 require (
-	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
-	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.46.1 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.1 // indirect
-	go.opentelemetry.io/otel v1.21.0 // indirect
-	go.opentelemetry.io/otel/metric v1.21.0 // indirect
-	go.opentelemetry.io/otel/trace v1.21.0 // indirect
 )
 
 require (
-	cloud.google.com/go v0.111.0 // indirect
-	cloud.google.com/go/compute v1.23.3 // indirect
-	cloud.google.com/go/compute/metadata v0.2.3 // indirect
-	cloud.google.com/go/longrunning v0.5.4 // indirect
 	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.0.2 // indirect
@@ -68,10 +55,7 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148 // indirect
 	github.com/google/pprof v0.0.0-20230926050212-f7f687d19a98 // indirect
-	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/google/subcommands v1.2.0 // indirect
-	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
-	github.com/googleapis/gax-go/v2 v2.12.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -98,14 +82,9 @@ require (
 	golang.org/x/crypto v0.18.0 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20230522175609-2e198f4a06a1 // indirect
 	golang.org/x/mod v0.14.0 // indirect
-	golang.org/x/oauth2 v0.16.0 // indirect
 	golang.org/x/sys v0.16.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
-	golang.org/x/time v0.5.0 // indirect
-	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto v0.0.0-20240102182953-50ed04b92917 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240102182953-50ed04b92917 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240116215550-a9fa1716bcac // indirect
 	google.golang.org/protobuf v1.32.0 // indirect
 	gopkg.in/src-d/go-billy.v4 v4.3.2 // indirect
 	gopkg.in/src-d/go-git.v4 v4.13.1 // indirect

@@ -69,11 +69,6 @@ services:
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5401 --http-addr :8082
 
-  firestore:
-    image: ghcr.io/cockroachdb/cdc-sink/firestore-emulator:latest
-    # Expose the emulator on port 8181 to avoid conflict with CRDB admin UI.
-    ports:
-      - "8181:8080"
   mysql-v5.7:
     image: mysql:5.7
     platform: linux/x86_64
