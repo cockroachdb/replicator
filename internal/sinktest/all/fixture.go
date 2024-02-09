@@ -41,7 +41,6 @@ type Fixture struct {
 	*base.Fixture
 
 	ApplyAcceptor  *apply.Acceptor
-	Appliers       types.Appliers
 	Checkpoints    *checkpoint.Checkpoints
 	Configs        *applycfg.Configs
 	Diagnostics    *diag.Diagnostics

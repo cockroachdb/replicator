@@ -8,12 +8,21 @@ package server
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/staging"
+	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
-	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
 	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
-	"github.com/cockroachdb/cdc-sink/internal/staging/version"
+	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
@@ -23,6 +32,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/google/wire"
 	"net"
 )
 
@@ -34,23 +44,20 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	if err != nil {
 		return nil, err
 	}
-	scriptConfig, err := logical.ProvideUserScriptConfig(config)
-	if err != nil {
-		return nil, err
-	}
+	cdcConfig := &config.CDC
+	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
 	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	baseConfig, err := logical.ProvideBaseConfig(config, loader)
+	eagerConfig := ProvideEagerConfig(config, loader)
+	stagingConfig := &eagerConfig.Staging
+	targetConfig := &eagerConfig.Target
+	stagingPool, err := sinkprod.ProvideStagingPool(ctx, stagingConfig, diagnostics, targetConfig)
 	if err != nil {
 		return nil, err
 	}
-	stagingPool, err := logical.ProvideStagingPool(ctx, baseConfig, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
+	stagingSchema, err := sinkprod.ProvideStagingDB(stagingConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -62,16 +69,15 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	if err != nil {
 		return nil, err
 	}
-	cdcConfig := &config.CDC
-	targetPool, err := logical.ProvideTargetPool(ctx, baseConfig, diagnostics)
+	targetPool, err := sinkprod.ProvideTargetPool(ctx, targetConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	targetStatements, err := logical.ProvideTargetStatements(ctx, baseConfig, targetPool, diagnostics)
+	targetStatements, err := sinkprod.ProvideStatementCache(ctx, targetConfig, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	dlqConfig := logical.ProvideDLQConfig(baseConfig)
+	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
 	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
@@ -81,38 +87,35 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	if err != nil {
 		return nil, err
 	}
-	appliers := apply.ProvideFactory(acceptor)
-	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
+	checkpoints, err := checkpoint.ProvideCheckpoints(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
-	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, err := logical.ProvideFactory(ctx, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
-	if err != nil {
-		return nil, err
-	}
-	immediate, err := cdc.ProvideImmediate(ctx, factory)
-	if err != nil {
-		return nil, err
-	}
+	sequencerConfig := cdc.ProvideSequencerConfig(cdcConfig)
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
+	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	typesLeases, err := leases.ProvideLeases(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
-	metaTable := cdc.ProvideMetaTable(cdcConfig)
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
-	resolvers, err := cdc.ProvideResolvers(ctx, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
+	bypassBypass := &bypass.Bypass{}
+	chaosChaos := &chaos.Chaos{
+		Config: sequencerConfig,
+	}
+	sequencer := script2.ProvideSequencer(loader, watchers)
+	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
+	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	targets, err := cdc.ProvideTargets(ctx, acceptor, cdcConfig, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err
 	}
 	handler := &cdc.Handler{
 		Authenticator: authenticator,
 		Config:        cdcConfig,
-		Immediate:     immediate,
-		Resolvers:     resolvers,
-		StagingPool:   stagingPool,
-		Stores:        stagers,
 		TargetPool:    targetPool,
+		Targets:       targets,
 	}
 	serveMux := ProvideMux(handler, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
@@ -125,31 +128,17 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 
 // Injectors from test_fixture.go:
 
-// We want this to be as close as possible to Start, it just exposes
+// We want this to be as close as possible to NewServer, it just exposes
 // additional plumbing details via the returned testFixture pointer.
 func newTestFixture(context *stopper.Context, config *Config) (*testFixture, func(), error) {
 	diagnostics := diag.New(context)
-	configs, err := applycfg.ProvideConfigs(diagnostics)
+	stagingConfig := &config.Staging
+	targetConfig := &config.Target
+	stagingPool, err := sinkprod.ProvideStagingPool(context, stagingConfig, diagnostics, targetConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	scriptConfig, err := logical.ProvideUserScriptConfig(config)
-	if err != nil {
-		return nil, nil, err
-	}
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
-	if err != nil {
-		return nil, nil, err
-	}
-	baseConfig, err := logical.ProvideBaseConfig(config, loader)
-	if err != nil {
-		return nil, nil, err
-	}
-	stagingPool, err := logical.ProvideStagingPool(context, baseConfig, diagnostics)
-	if err != nil {
-		return nil, nil, err
-	}
-	stagingSchema, err := logical.ProvideStagingDB(baseConfig)
+	stagingSchema, err := sinkprod.ProvideStagingDB(stagingConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -162,15 +151,19 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		return nil, nil, err
 	}
 	cdcConfig := &config.CDC
-	targetPool, err := logical.ProvideTargetPool(context, baseConfig, diagnostics)
+	targetPool, err := sinkprod.ProvideTargetPool(context, targetConfig, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}
-	targetStatements, err := logical.ProvideTargetStatements(context, baseConfig, targetPool, diagnostics)
+	targetStatements, err := sinkprod.ProvideStatementCache(context, targetConfig, targetPool, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}
-	dlqConfig := logical.ProvideDLQConfig(baseConfig)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
+	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
 	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
 		return nil, nil, err
@@ -180,38 +173,40 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	appliers := apply.ProvideFactory(acceptor)
-	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
+	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, nil, err
 	}
-	checker := version.ProvideChecker(stagingPool, memoMemo)
-	factory, err := logical.ProvideFactory(context, appliers, configs, baseConfig, diagnostics, memoMemo, loader, stagingPool, targetPool, watchers, checker)
-	if err != nil {
-		return nil, nil, err
-	}
-	immediate, err := cdc.ProvideImmediate(context, factory)
-	if err != nil {
-		return nil, nil, err
-	}
+	sequencerConfig := cdc.ProvideSequencerConfig(cdcConfig)
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
+	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, nil, err
 	}
-	metaTable := cdc.ProvideMetaTable(cdcConfig)
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
-	resolvers, err := cdc.ProvideResolvers(context, cdcConfig, typesLeases, factory, metaTable, stagingPool, stagers, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
+	bypassBypass := &bypass.Bypass{}
+	chaosChaos := &chaos.Chaos{
+		Config: sequencerConfig,
+	}
+	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
+	sequencer := script2.ProvideSequencer(loader, watchers)
+	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
+	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	targets, err := cdc.ProvideTargets(context, acceptor, cdcConfig, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, nil, err
 	}
 	handler := &cdc.Handler{
 		Authenticator: authenticator,
 		Config:        cdcConfig,
-		Immediate:     immediate,
-		Resolvers:     resolvers,
-		StagingPool:   stagingPool,
-		Stores:        stagers,
 		TargetPool:    targetPool,
+		Targets:       targets,
 	}
 	serveMux := ProvideMux(handler, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
@@ -233,6 +228,12 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	return serverTestFixture, func() {
 	}, nil
 }
+
+// injector.go:
+
+var completeSet = wire.NewSet(
+	Set, cdc.Set, diag.New, retire.Set, script.Set, sinkprod.Set, staging.Set, switcher.Set, target.Set,
+)
 
 // test_fixture.go:
 

@@ -18,6 +18,7 @@ package cdc
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -26,11 +27,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/scripttest"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/auth/reject"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -86,14 +87,12 @@ func createFixture(
 	r.NoError(err)
 
 	cfg := &Config{
-		MetaTableName: ident.New("resolved_timestamps"),
-		BaseConfig: logical.BaseConfig{
-			Immediate:     htc.immediate,
-			StagingConn:   baseFixture.StagingPool.ConnectionString,
-			StagingSchema: baseFixture.StagingDB.Schema(),
-			TargetConn:    baseFixture.TargetPool.ConnectionString,
+		BackfillWindow: math.MaxInt64,
+		Immediate:      htc.immediate,
+		SequencerConfig: sequencer.Config{
+			RetireOffset:    time.Hour, // Enable post-hoc inspection.
+			QuiescentPeriod: time.Second,
 		},
-		RetireOffset: time.Hour, // Enable post-hoc inspection.
 	}
 
 	if htc.script {
@@ -120,22 +119,22 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		if htc.immediate {
 			return nil
 		}
-		loop, resolver, err := h.Resolvers.get(target.Schema())
+		tgt, err := h.Targets.getTarget(target.Schema())
 		if err != nil {
 			return err
 		}
-		waitFor := &resolvedStamp{CommittedTime: expect}
-		resolver.marked.Notify()
-		// Wait for the consistent point to advance.
-		for cp, updated := loop.GetConsistentPoint(); cp.Less(waitFor); {
+		// Wait for minimum timestamp to advance to desired.
+		for {
+			bounds, boundsChanged := tgt.resolvingRange.Get()
+			if hlc.Compare(bounds.Min(), expect) >= 0 {
+				return nil
+			}
 			select {
-			case <-updated:
-				cp, updated = loop.GetConsistentPoint()
+			case <-boundsChanged:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
-		return nil
 	}
 
 	// Validate the "classic" endpoints where files containing
@@ -318,21 +317,23 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 		if cfg.immediate {
 			return nil
 		}
-		loop, resolver, err := h.Resolvers.get(target.Schema())
+		tgt, err := h.Targets.getTarget(target.Schema())
 		if err != nil {
 			return err
 		}
-		waitFor := &resolvedStamp{CommittedTime: expect}
-		resolver.marked.Notify()
-		for cp, updated := loop.GetConsistentPoint(); cp.Less(waitFor); {
+		tgt.checkpoint.Refresh()
+		// Wait for minimum timestamp to advance to desired.
+		for {
+			bounds, boundsChanged := tgt.resolvingRange.Get()
+			if hlc.Compare(bounds.Min(), expect) >= 0 {
+				return nil
+			}
 			select {
-			case <-updated:
-				cp, updated = loop.GetConsistentPoint()
+			case <-boundsChanged:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
-		return nil
 	}
 
 	// Validate the "classic" endpoints where files containing
@@ -427,7 +428,6 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 		if !cfg.immediate {
 			muts, err := fixture.PeekStaged(ctx, tableInfo.Name(), hlc.Zero(), hlc.New(10, 1))
 			if a.NoError(err) {
-				a.Len(muts, 2)
 				// The order is stable since the underlying query
 				// orders by HLC and key.
 				a.Equal([]types.Mutation{
@@ -535,29 +535,23 @@ func TestRejectedAuth(t *testing.T) {
 func TestWithForeignKeys(t *testing.T) {
 	const handlers = 1
 	const rowCount = 10_000
-	t.Run("normal-backfill", func(t *testing.T) {
+	t.Run("normal-besteffort", func(t *testing.T) {
 		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
 			cfg.BackfillWindow = time.Minute
 		})
 	})
-	t.Run("normal-transactional", func(t *testing.T) {
+	t.Run("normal-serial", func(t *testing.T) {
 		testMassBackfillWithForeignKeys(t, rowCount, handlers)
+	})
+	t.Run("normal-shingle", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.Shingle = true
+		})
 	})
 	t.Run("normal-transactional-flush-every", func(t *testing.T) {
 		// Reduced row count since throughput is compromised.
 		testMassBackfillWithForeignKeys(t, rowCount/10, handlers, func(cfg *Config) {
-			cfg.FlushEveryTimestamp = true
-		})
-	})
-	t.Run("chaos-backfill", func(t *testing.T) {
-		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
-			cfg.BackfillWindow = time.Minute
-			cfg.ChaosProb = 0.01
-		})
-	})
-	t.Run("chaos-transactional", func(t *testing.T) {
-		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
-			cfg.ChaosProb = 0.01
+			cfg.SequencerConfig.TimestampLimit = 1
 		})
 	})
 }
@@ -568,29 +562,23 @@ func TestConcurrentHandlers(t *testing.T) {
 	const handlers = 3
 	const rowCount = 10_000
 
-	t.Run("normal-backfill", func(t *testing.T) {
+	t.Run("normal-besteffort", func(t *testing.T) {
 		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
 			cfg.BackfillWindow = time.Minute
 		})
 	})
-	t.Run("normal-transactional", func(t *testing.T) {
+	t.Run("normal-serial", func(t *testing.T) {
 		testMassBackfillWithForeignKeys(t, rowCount, handlers)
+	})
+	t.Run("normal-shingle", func(t *testing.T) {
+		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
+			cfg.Shingle = true
+		})
 	})
 	t.Run("normal-transactional-flush-every", func(t *testing.T) {
 		// Reduced row count since throughput is compromised.
 		testMassBackfillWithForeignKeys(t, rowCount/10, handlers, func(cfg *Config) {
-			cfg.FlushEveryTimestamp = true
-		})
-	})
-	t.Run("chaos-backfill", func(t *testing.T) {
-		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
-			cfg.BackfillWindow = time.Minute
-			cfg.ChaosProb = 0.01
-		})
-	})
-	t.Run("chaos-transactional", func(t *testing.T) {
-		testMassBackfillWithForeignKeys(t, rowCount, handlers, func(cfg *Config) {
-			cfg.ChaosProb = 0.01
+			cfg.SequencerConfig.TimestampLimit = 1
 		})
 	})
 }
@@ -598,7 +586,7 @@ func TestConcurrentHandlers(t *testing.T) {
 func testMassBackfillWithForeignKeys(
 	t *testing.T, rowCount, fixtureCount int, fns ...func(*Config),
 ) {
-	t.Parallel() // We spend most of our time waiting for a resolved timestamp.
+	t.Parallel()
 	r := require.New(t)
 
 	baseFixture, err := all.NewFixture(t)
@@ -609,17 +597,11 @@ func testMassBackfillWithForeignKeys(
 
 	for idx := range fixtures {
 		cfg := &Config{
-			LargeTransactionLimit: rowCount / 3, // Read the same timestamp more than once.
-			MetaTableName:         ident.New("resolved_timestamps"),
-			TimestampWindowSize:   100,
-			BaseConfig: logical.BaseConfig{
-				ApplyTimeout:       time.Second,
-				FanShards:          16,
-				ForeignKeysEnabled: true,
-				StagingConn:        baseFixture.StagingPool.ConnectionString,
-				StagingSchema:      baseFixture.StagingDB.Schema(),
-				RetryDelay:         time.Millisecond,
-				TargetConn:         baseFixture.TargetPool.ConnectionString,
+			SequencerConfig: sequencer.Config{
+				Parallelism:     2,
+				QuiescentPeriod: time.Second,
+				RetireOffset:    time.Hour,
+				SweepLimit:      rowCount / 3, // Read the same timestamp more than once.
 			},
 		}
 		for _, fn := range fns {
@@ -697,6 +679,24 @@ func testMassBackfillWithForeignKeys(
 			r.NoError(err)
 			log.Infof("saw %d of %d rows in %s", count, rowCount, tbl)
 			if count == rowCount {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+	}
+
+	// Ensure that there are no un-applied rows in the staging table.
+	// Because the staging tables may be a separate database from the
+	// target, there's a race condition between waiting for rows to
+	// appear above and waiting for the staging rows to be marked as
+	// applied.
+	for _, tbl := range []interface{ Name() ident.Table }{parent, child, grand} {
+		for {
+			found, err := fixtures[0].PeekStaged(ctx, tbl.Name(),
+				hlc.Zero(), hlc.New(int64(rowCount)+1, 0))
+			r.NoError(err)
+			log.Infof("saw %d unapplied staging entries in %s", len(found), tbl)
+			if len(found) == 0 {
 				break
 			}
 			time.Sleep(time.Second)

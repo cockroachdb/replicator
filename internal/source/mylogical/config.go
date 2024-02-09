@@ -23,21 +23,36 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )
 
+// EagerConfig is a hack to get Wire to move userscript evaluation to
+// the beginning of the injector. This allows CLI flags to be set by the
+// script.
+type EagerConfig Config
+
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
-	logical.BaseConfig
-	logical.LoopConfig
+	DLQ       dlq.Config
+	Script    script.Config
+	Sequencer sequencer.Config
+	Staging   sinkprod.StagingConfig
+	Target    sinkprod.TargetConfig
 
+	InitialGTID   string
 	FetchMetadata bool
-
-	SourceConn string // Connection string for the source db.
-	ProcessID  uint32 // A unique ID to identify this process to the master.
+	SourceConn    string // Connection string for the source db.
+	ProcessID     uint32 // A unique ID to identify this process to the master.
+	// The SQL schema in the target cluster to write into. This value is
+	// optional if a userscript dispatch function is present.
+	TargetSchema ident.Schema
 
 	// The fields below are extracted by Preflight.
 
@@ -50,14 +65,13 @@ type Config struct {
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
 func (c *Config) Bind(f *pflag.FlagSet) {
-	c.BaseConfig.Bind(f)
+	c.DLQ.Bind(f)
+	c.Script.Bind(f)
+	c.Sequencer.Bind(f)
+	c.Staging.Bind(f)
+	c.Target.Bind(f)
 
-	c.LoopConfig.LoopName = "mylogical"
-	c.LoopConfig.Bind(f)
-	// TODO(bob): Could DefaultConsistent point be used as the Dialect's
-	// ZeroStamp value, eliminating the need for this field to be in
-	// LoopConfig?
-	f.StringVar(&c.LoopConfig.DefaultConsistentPoint, "defaultGTIDSet", "",
+	f.StringVar(&c.InitialGTID, "defaultGTIDSet", "",
 		"default GTIDSet. Used if no state is persisted")
 
 	f.Uint32Var(&c.ProcessID, "replicationProcessID", 10,
@@ -66,6 +80,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"the source database's connection string")
 	f.BoolVar(&c.FetchMetadata, "fetchMetadata", false,
 		"fetch column metadata explicitly, for older version of MySQL that don't support binlog_row_metadata")
+	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
+		"the SQL database schema in the target cluster to update")
 }
 
 func newClientTLSConfig(
@@ -114,14 +130,23 @@ func newClientTLSConfig(
 // error if there are missing options for which a default cannot be
 // provided.
 func (c *Config) Preflight() error {
-	if err := c.BaseConfig.Preflight(); err != nil {
+	if err := c.DLQ.Preflight(); err != nil {
 		return err
 	}
-	if err := c.LoopConfig.Preflight(); err != nil {
+	if err := c.Script.Preflight(); err != nil {
 		return err
 	}
-	if c.LoopName == "" {
-		return errors.New("no LoopName was configured")
+	if err := c.Sequencer.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Staging.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Target.Preflight(); err != nil {
+		return err
+	}
+	if c.TargetSchema.Empty() {
+		return errors.New("no target schema specified")
 	}
 
 	if c.SourceConn == "" {

@@ -47,7 +47,6 @@ type Config struct {
 	Acceptor    types.TableAcceptor       // Inject user-defined apply behavior instead.
 	CASColumns  TargetColumns             // The columns for compare-and-set operations.
 	Deadlines   *ident.Map[time.Duration] // Deadline-based operation.
-	Delegate    types.Applier             // Inject user-defined apply behavior instead. TODO: DELETE
 	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.
 	Extras      TargetColumn              // JSONB column to store unmapped values in.
 	Ignore      *ident.Map[bool]          // Source column names to ignore.
@@ -68,10 +67,9 @@ func NewConfig() *Config {
 // Copy returns a copy of the Config.
 func (t *Config) Copy() *Config {
 	ret := NewConfig()
-
+	ret.Acceptor = t.Acceptor
 	ret.CASColumns = append(ret.CASColumns, t.CASColumns...)
 	t.Deadlines.CopyInto(ret.Deadlines)
-	ret.Delegate = t.Delegate
 	t.Exprs.CopyInto(ret.Exprs)
 	ret.Extras = t.Extras
 	t.Ignore.CopyInto(ret.Ignore)
@@ -84,14 +82,15 @@ func (t *Config) Copy() *Config {
 // Equal returns true if the other Config is equivalent to the receiver.
 //
 // This method is intended for testing only. It does not compare the
-// Merger field, since not all implementations of that interface are
-// guaranteed to have a defined comparison operation (e.g. merge.Func).
+// callback fields, since not all implementations of those interfaces
+// are guaranteed to have a defined comparison operation (e.g.
+// merge.Func).
 func (t *Config) Equal(o *Config) bool {
 	return t == o || // Identity or nil-nil.
 		(t != nil) && (o != nil) &&
+			// Not all implementations of Acceptor are comparable.
 			t.CASColumns.Equal(o.CASColumns) &&
 			t.Deadlines.Equal(o.Deadlines, cmap.Comparator[time.Duration]()) &&
-			// Not all implementations of Delegate are comparable: merge.Func or similar.
 			t.Exprs.Equal(o.Exprs, cmap.Comparator[string]()) &&
 			ident.Equal(t.Extras, o.Extras) &&
 			t.Ignore.Equal(o.Ignore, cmap.Comparator[bool]()) &&
@@ -102,9 +101,9 @@ func (t *Config) Equal(o *Config) bool {
 // IsZero returns true if the Config represents the absence of a
 // configuration.
 func (t *Config) IsZero() bool {
-	return len(t.CASColumns) == 0 &&
+	return t.Acceptor == nil &&
+		len(t.CASColumns) == 0 &&
 		t.Deadlines.Len() == 0 &&
-		t.Delegate == nil &&
 		t.Exprs.Len() == 0 &&
 		t.Extras.Empty() &&
 		t.Ignore.Len() == 0 &&
@@ -115,12 +114,12 @@ func (t *Config) IsZero() bool {
 // Patch applies any non-empty fields from another Config to the
 // receiver and returns the receiver.
 func (t *Config) Patch(other *Config) *Config {
+	if other.Acceptor != nil {
+		t.Acceptor = other.Acceptor
+	}
 	t.CASColumns = append(t.CASColumns, other.CASColumns...)
 	if other.Deadlines != nil {
 		other.Deadlines.CopyInto(t.Deadlines)
-	}
-	if other.Delegate != nil {
-		t.Delegate = other.Delegate
 	}
 	if other.Exprs != nil {
 		other.Exprs.CopyInto(t.Exprs)

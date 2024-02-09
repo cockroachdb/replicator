@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/pkg/errors"
@@ -33,8 +32,6 @@ type consistentPoint struct {
 	my *mysql.MysqlGTIDSet
 	ts time.Time // The approximate wall time of the consistent point.
 }
-
-var _ logical.TimeStamp = (*consistentPoint)(nil)
 
 // newConsistentPoint constructs an empty consistentPoint for the
 // specified flavor.
