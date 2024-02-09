@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -35,6 +36,7 @@ import (
 // Set is used by Wire.
 var Set = wire.NewSet(
 	ProvideAuthenticator,
+	ProvideEagerConfig,
 	ProvideListener,
 	ProvideMux,
 	ProvideServer,
@@ -52,6 +54,12 @@ func ProvideAuthenticator(
 	stagingDB ident.StagingSchema,
 ) (types.Authenticator, error) {
 	return stdserver.Authenticator(ctx, diags, &config.HTTP, pool, stagingDB)
+}
+
+// ProvideEagerConfig makes the configuration objects depend upon the
+// script loader.
+func ProvideEagerConfig(cfg *Config, _ *script.Loader) *EagerConfig {
+	return (*EagerConfig)(cfg)
 }
 
 // ProvideListener is called by Wire to construct the incoming network

@@ -35,10 +35,14 @@ type Shingle struct {
 
 var _ sequencer.Shim = (*Shingle)(nil)
 
-// Wrap implements [sequencer.Shim].
+// Wrap implements [sequencer.Shim]. If no parallelism is allowed by the
+// configuration, the delegate is returned.
 func (s *Shingle) Wrap(
 	_ *stopper.Context, delegate sequencer.Sequencer,
 ) (sequencer.Sequencer, error) {
+	if s.cfg.Parallelism <= 1 {
+		return delegate, nil
+	}
 	return &shingle{s, delegate}, nil
 }
 

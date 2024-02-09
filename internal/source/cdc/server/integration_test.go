@@ -26,10 +26,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	stagingProd "github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	jwtAuth "github.com/cockroachdb/cdc-sink/internal/util/auth/jwt"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -55,6 +56,7 @@ const (
 	testModeDiff = 1 << iota
 	testModeImmediate
 	testModeQueries
+	testModeShingle
 	testModeWebhook
 
 	testModeMax // Sentinel value
@@ -63,6 +65,7 @@ const (
 type testConfig struct {
 	diff      bool
 	immediate bool
+	shingle   bool
 	queries   bool
 	webhook   bool
 }
@@ -83,6 +86,11 @@ func (c *testConfig) String() string {
 		sb.WriteString(" queries")
 	} else {
 		sb.WriteString(" tables")
+	}
+	if c.shingle {
+		sb.WriteString(" shingle")
+	} else {
+		sb.WriteString(" serial")
 	}
 	if c.webhook {
 		sb.WriteString(" webhook")
@@ -105,6 +113,7 @@ func TestIntegration(t *testing.T) {
 			diff:      i&testModeDiff == testModeDiff,
 			immediate: i&testModeImmediate == testModeImmediate,
 			queries:   i&testModeQueries == testModeQueries,
+			shingle:   i&testModeShingle == testModeShingle,
 			webhook:   i&testModeWebhook == testModeWebhook,
 		}
 	}
@@ -117,7 +126,6 @@ func TestIntegration(t *testing.T) {
 }
 
 func testIntegration(t *testing.T, cfg testConfig) {
-	t.Parallel()
 	a := assert.New(t)
 	r := require.New(t)
 
@@ -150,23 +158,36 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	targetDB := destFixture.TargetSchema.Schema()
 	targetPool := destFixture.TargetPool
 
-	// The target fixture contains the cdc-sink server.
-	targetFixture, cancel, err := newTestFixture(stopper.WithContext(ctx), &Config{
+	serverCfg := &Config{
 		CDC: cdc.Config{
-			BaseConfig: logical.BaseConfig{
-				Immediate:     cfg.immediate,
-				StagingConn:   destFixture.StagingPool.ConnectionString,
-				StagingSchema: destFixture.StagingDB.Schema(),
-				TargetConn:    destFixture.TargetPool.ConnectionString,
+			SequencerConfig: sequencer.Config{
+				RetireOffset: time.Hour, // Allow post-hoc inspection of staged data.
 			},
-			MetaTableName: ident.New("resolved_timestamps"),
-			RetireOffset:  time.Hour, // Allow post-hoc inspection of staged data.
+			Immediate: cfg.immediate,
 		},
 		HTTP: stdserver.Config{
 			BindAddr:           "127.0.0.1:0",
 			GenerateSelfSigned: cfg.webhook && supportsWebhook, // Webhook implies self-signed TLS is ok.
 		},
-	})
+		Staging: stagingProd.StagingConfig{
+			Conn:     destFixture.StagingPool.ConnectionString,
+			Schema:   destFixture.StagingDB.Schema(),
+			PoolSize: 16,
+		},
+		Target: stagingProd.TargetConfig{
+			Conn:     targetPool.ConnectionString,
+			PoolSize: 16,
+		},
+	}
+	if cfg.shingle {
+		serverCfg.CDC.SequencerConfig.Parallelism = 4
+	} else {
+		serverCfg.CDC.SequencerConfig.Parallelism = 1
+	}
+	r.NoError(serverCfg.Preflight())
+
+	// The target fixture contains the cdc-sink server.
+	targetFixture, cancel, err := newTestFixture(stopper.WithContext(ctx), serverCfg)
 	r.NoError(err)
 	defer cancel()
 	// This is normally taken care of by stdlogical.Command.
@@ -333,8 +354,9 @@ func testIntegration(t *testing.T, cfg testConfig) {
 		if a.NoError(err) {
 			a.Equal(http.StatusOK, resp.StatusCode, u)
 			a.Equal("application/json", resp.Header.Get("content-type"))
-			buf, _ := io.ReadAll(resp.Body)
-			t.Log(string(buf))
+			buf, err := io.ReadAll(resp.Body)
+			a.NoError(err)
+			a.NotEmpty(buf)
 		}
 
 		// Remove auth info.

@@ -143,7 +143,10 @@ var caseTimout = flag.Duration(
 // singleton connection to a CockroachDB cluster.
 func ProvideContext(t testing.TB) *stopper.Context {
 	ctx := stopper.WithContext(context.Background())
-	t.Cleanup(func() { ctx.Stop(10 * time.Millisecond) })
+	t.Cleanup(func() {
+		ctx.Stop(10 * time.Millisecond)
+		_ = ctx.Wait()
+	})
 	ctx.Go(func() error {
 		select {
 		case <-ctx.Stopping():
@@ -227,6 +230,7 @@ func ProvideStagingPool(ctx *stopper.Context) (*types.StagingPool, error) {
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
+		stdpool.WithPoolSize(32),
 	)
 	if err != nil {
 		return nil, err
@@ -250,6 +254,7 @@ func ProvideTargetPool(
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
+		stdpool.WithPoolSize(32),
 	)
 	if err != nil {
 		return nil, err

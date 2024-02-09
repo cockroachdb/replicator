@@ -17,38 +17,67 @@
 package pglogical
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"time"
+
+	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )
+
+const (
+	defaultStandbyTimeout = 5 * time.Second
+)
+
+// EagerConfig is a hack to get Wire to move userscript evaluation to
+// the beginning of the injector. This allows CLI flags to be set by the
+// script.
+type EagerConfig Config
 
 // Config contains the configuration necessary for creating a
 // replication connection. All field, other than TestControls, are
 // mandatory unless explicitly indicated.
 type Config struct {
-	logical.BaseConfig
-	logical.LoopConfig
+	DLQ       dlq.Config
+	Script    script.Config
+	Sequencer sequencer.Config
+	Staging   sinkprod.StagingConfig
+	Target    sinkprod.TargetConfig
 
 	// The name of the publication to attach to.
 	Publication string
 	// The replication slot to attach to.
 	Slot string
+	// How ofter to report progress to the source database.
+	StandbyTimeout time.Duration
 	// Connection string for the source db.
 	SourceConn string
+	// The SQL schema in the target cluster to write into. This value is
+	// optional if a userscript dispatch function is present.
+	TargetSchema ident.Schema
 	// Enable support for toasted columns
 	ToastedColumns bool
 }
 
 // Bind adds flags to the set.
 func (c *Config) Bind(f *pflag.FlagSet) {
-	c.BaseConfig.Bind(f)
+	c.DLQ.Bind(f)
+	c.Script.Bind(f)
+	c.Sequencer.Bind(f)
+	c.Staging.Bind(f)
+	c.Target.Bind(f)
 
-	c.LoopConfig.LoopName = "pglogical"
-	c.LoopConfig.Bind(f)
-	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
-	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.StringVar(&c.Publication, "publicationName", "",
 		"the publication within the source database to replicate")
+	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
+	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
+	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
+		"how often to report WAL progress to the source server")
+	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
+		"the SQL database schema in the target cluster to update")
 	f.BoolVar(&c.ToastedColumns, "enableToastedColumns", false,
 		"Enable support for toasted columns")
 }
@@ -57,10 +86,19 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 // error if there are missing options for which a default cannot be
 // provided.
 func (c *Config) Preflight() error {
-	if err := c.BaseConfig.Preflight(); err != nil {
+	if err := c.DLQ.Preflight(); err != nil {
 		return err
 	}
-	if err := c.LoopConfig.Preflight(); err != nil {
+	if err := c.Script.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Sequencer.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Staging.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Target.Preflight(); err != nil {
 		return err
 	}
 	if c.Publication == "" {
@@ -71,6 +109,12 @@ func (c *Config) Preflight() error {
 	}
 	if c.SourceConn == "" {
 		return errors.New("no source connection was configured")
+	}
+	if c.StandbyTimeout == 0 {
+		c.StandbyTimeout = defaultStandbyTimeout
+	}
+	if c.TargetSchema.Empty() {
+		return errors.New("no target schema specified")
 	}
 	return nil
 }

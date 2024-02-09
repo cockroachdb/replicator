@@ -23,6 +23,7 @@ package mylogical
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,12 +32,14 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
@@ -46,20 +49,37 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Conn exports the package-internal type.
+type Conn conn
+
 // conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
 // status updates.
 type conn struct {
+	// The destination for writes.
+	acceptor types.MultiAcceptor
 	// Columns, as ordered by the source database.
 	columns *ident.TableMap[[]types.ColData]
 	// The connector configuration.
 	config *Config
+	// The consistent point of the transaction being accumulated.
+	nextConsistentPoint *consistentPoint
+	// Persistent storage for WAL data.
+	memo types.Memo
 	// Flavor is one of the mysql.MySQLFlavor or mysql.MariaDBFlavor constants
 	flavor string
 	// Map source ids to target tables.
 	relations map[uint64]ident.Table
 	// The configuration for opening replication connections.
 	sourceConfig replication.BinlogSyncerConfig
+	// Access to the staging cluster.
+	stagingDB *types.StagingPool
+	// The destination for writes.
+	target ident.Schema
+	// Access to the target database.
+	targetDB *types.TargetPool
+	// Managed by persistWALOffset.
+	walOffset notify.Var[*consistentPoint]
 }
 
 // mutationType is the type of mutation
@@ -74,12 +94,9 @@ const (
 
 //go:generate go run golang.org/x/tools/cmd/stringer -type=mutationType
 
-var (
-	_ diag.Diagnostic = (*conn)(nil)
-	_ logical.Dialect = (*conn)(nil)
-)
+var _ diag.Diagnostic = (*conn)(nil)
 
-// Diagnostics implements [diag.Diagnostic].
+// Diagnostic implements [diag.Diagnostic].
 func (c *conn) Diagnostic(_ context.Context) any {
 	return map[string]any{
 		"columns":   c.columns,
@@ -88,181 +105,173 @@ func (c *conn) Diagnostic(_ context.Context) any {
 	}
 }
 
-// Process implements logical.Dialect and receives a sequence of logical
-// replication messages, or possibly a rollbackMessage.
-func (c *conn) Process(
-	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
-) error {
-	var batch logical.Batch
-	defer func() {
-		if batch != nil {
-			_ = batch.OnRollback(ctx)
-		}
-	}()
-	// This is the expected consistent point (i.e. transaction id) that
-	// we expect to see, given all previous messages on the wire. It is
-	// set, and reset, any time the upstream producer (re-)starts a read
-	// from the transaction log.
-	var streamCP *consistentPoint
+func (c *conn) Start(ctx *stopper.Context) error {
+	// Initialize this field once.
+	c.nextConsistentPoint = newConsistentPoint(c.flavor)
 
-	for msg := range ch {
-		// Ensure that we resynchronize.
-		if logical.IsRollback(msg) {
-			if batch != nil {
-				if err := batch.OnRollback(ctx); err != nil {
-					return err
-				}
-				batch = nil
-			}
-			continue
-		}
-		// Resynchronize with the view of consumed transactions.
-		if nextStamp, ok := msg.(*consistentPoint); ok {
-			streamCP = nextStamp
-			continue
-		}
-		var ev, ok = msg.(replication.BinlogEvent)
-		if !ok {
-			return errors.Errorf("unexpected message %T", msg)
-		}
-		// See https://dev.mysql.com/doc/internals/en/binlog-event.html
-		// Assumptions:
-		// We will be handling Row Based Replication Events
-		//  https://dev.mysql.com/doc/internals/en/binlog-event.html#:~:text=Row%20Based%20Replication%20Events
-		//  Source settings:
-		//  binlog_row_image=full  (default setting)
-		//  https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_row_image
-		//  binlog_row_metadata = full (default = minimal)
-		//  https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_row_metadata
-		//
-		// MySQL:
-		// According to https://dev.mysql.com/blog-archive/taking-advantage-of-new-transaction-length-metadata/
-		// A DML will start with a GTID event, followed by a QUERY(BEGIN) event,
-		// followed by sets of either QUERY events (with their own pre-statement events) or TABLE_MAP and ROWS events,
-		// followed by a QUERY(COMMIT|ROLLBACK) or a XID event.
-		//
-		// MariaDB:
-		// we expect a MariadbGTIDEvent with the GTID to begin the transaction
-		log.Tracef("processing %T", ev.Event)
-
-		switch e := ev.Event.(type) {
-		case *replication.XIDEvent:
-			// On commit should preserve the GTIDs so we can verify consistency,
-			// and restart the process from the last committed transaction.
-			log.Tracef("Commit")
-			select {
-			case err := <-batch.OnCommit(ctx):
-				if err != nil {
-					return err
-				}
-				batch = nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-
-			if err := events.SetConsistentPoint(ctx, streamCP); err != nil {
-				return err
-			}
-
-		case *replication.GTIDEvent:
-			// A transaction is executed and committed on the source.
-			// This client transaction is assigned a GTID composed of the source's UUID
-			// and the smallest nonzero transaction sequence number not yet used on this server (GNO)
-			u, err := uuid.FromBytes(e.SID)
-			if err != nil {
-				return err
-			}
-			ns := fmt.Sprintf("%s:%d", u.String(), e.GNO)
-			toAdd, err := mysql.ParseUUIDSet(ns)
-			if err != nil {
-				return err
-			}
-			streamCP = streamCP.withMysqlGTIDSet(e.OriginalCommitTime(), toAdd)
-
-		case *replication.MariadbGTIDEvent:
-			// We ignore events that won't have a terminating COMMIT
-			// events, e.g. schema changes.
-			// See flags section: https://mariadb.com/kb/en/gtid_event/
-			if e.IsStandalone() {
-				continue
-			}
-			ts := time.Unix(int64(ev.Header.Timestamp), 0)
-			var err error
-			streamCP, err = streamCP.withMariaGTIDSet(ts, &e.GTID)
-			if err != nil {
-				return err
-			}
-			batch, err = events.OnBegin(ctx)
-			if err != nil {
-				return err
-			}
-
-		case *replication.QueryEvent:
-			// Only supporting BEGIN
-			// DDL statement would also sent here.
-			log.Tracef("Query:  %s %+v\n", e.Query, e.GSet)
-			if bytes.Equal(e.Query, []byte("BEGIN")) {
-				var err error
-				batch, err = events.OnBegin(ctx)
-				if err != nil {
-					return err
-				}
-			}
-
-		case *replication.TableMapEvent:
-			if err := c.onRelation(e); err != nil {
-				return err
-			}
-
-		case *replication.RowsEvent:
-			var operation mutationType
-			switch ev.Header.EventType {
-			case replication.DELETE_ROWS_EVENTv0, replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
-				operation = deleteMutation
-			case replication.UPDATE_ROWS_EVENTv0, replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
-				operation = updateMutation
-			case replication.WRITE_ROWS_EVENTv0, replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
-				operation = insertMutation
-			default:
-				return errors.Errorf("Operation not supported %s", ev.Header.EventType)
-			}
-			mutationCount.With(prometheus.Labels{"type": operation.String()}).Inc()
-			if err := c.onDataTuple(ctx, batch, events.GetTargetDB(), e, operation); err != nil {
-				return err
-			}
-
-		default:
-			return errors.Errorf("unimplemented logical replication message %+v", e)
-		}
+	// Call this first to load the previous offset. We want to reset our
+	// state before starting the main copier routine.
+	if err := c.persistWALOffset(ctx); err != nil {
+		return err
 	}
+
+	// Start a process to copy data to the target.
+	ctx.Go(func() error {
+		for !ctx.IsStopping() {
+			if err := c.copyMessages(ctx); err != nil {
+				log.WithError(err).Warn("error while copying messages; will retry")
+				select {
+				case <-ctx.Stopping():
+				case <-time.After(time.Second):
+				}
+			}
+		}
+		return nil
+	})
+
 	return nil
 }
 
-// ReadInto implements logical.Dialect, opens a replication connection,
-// and writes supported events into the provided channel.
-func (c *conn) ReadInto(
-	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
-) error {
+// Process implements logical.Dialect and receives a sequence of logical
+// replication messages, or possibly a rollbackMessage.
+func (c *conn) accumulateBatch(
+	ctx *stopper.Context, ev *replication.BinlogEvent, batch *types.MultiBatch,
+) (*types.MultiBatch, error) {
+	// See https://dev.mysql.com/doc/internals/en/binlog-event.html
+	// Assumptions:
+	// We will be handling Row Based Replication Events
+	//  https://dev.mysql.com/doc/internals/en/binlog-event.html#:~:text=Row%20Based%20Replication%20Events
+	//  Source settings:
+	//  binlog_row_image=full  (default setting)
+	//  https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_row_image
+	//  binlog_row_metadata = full (default = minimal)
+	//  https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_row_metadata
+	//
+	// MySQL:
+	// According to https://dev.mysql.com/blog-archive/taking-advantage-of-new-transaction-length-metadata/
+	// A DML will start with a GTID event, followed by a QUERY(BEGIN) event,
+	// followed by sets of either QUERY events (with their own pre-statement events) or TABLE_MAP and ROWS events,
+	// followed by a QUERY(COMMIT|ROLLBACK) or a XID event.
+	//
+	// MariaDB:
+	// we expect a MariadbGTIDEvent with the GTID to begin the transaction
+	log.Tracef("processing %T", ev.Event)
+
+	switch e := ev.Event.(type) {
+	case *replication.XIDEvent:
+		// On commit should preserve the GTIDs so we can verify consistency,
+		// and restart the process from the last committed transaction.
+		log.Tracef("Commit")
+		if batch.Count() == 0 {
+			log.Trace("skipping empty transaction")
+		} else {
+			tx, err := c.targetDB.BeginTx(ctx, &sql.TxOptions{})
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			defer tx.Rollback()
+
+			if err := c.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{
+				TargetQuerier: tx,
+			}); err != nil {
+				return nil, err
+			}
+			if err := tx.Commit(); err != nil {
+				return nil, errors.WithStack(err)
+			}
+		}
+
+		c.walOffset.Set(c.nextConsistentPoint)
+		return nil, nil
+
+	case *replication.GTIDEvent:
+		// A transaction is executed and committed on the source.
+		// This client transaction is assigned a GTID composed of the source's UUID
+		// and the smallest nonzero transaction sequence number not yet used on this server (GNO)
+		u, err := uuid.FromBytes(e.SID)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		ns := fmt.Sprintf("%s:%d", u.String(), e.GNO)
+		toAdd, err := mysql.ParseUUIDSet(ns)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		c.nextConsistentPoint = c.nextConsistentPoint.withMysqlGTIDSet(e.OriginalCommitTime(), toAdd)
+		// Expect to see a QueryEvent to create the batch.
+		return nil, nil
+
+	case *replication.MariadbGTIDEvent:
+		// We ignore events that won't have a terminating COMMIT
+		// events, e.g. schema changes.
+		// See flags section: https://mariadb.com/kb/en/gtid_event/
+		if e.IsStandalone() {
+			return nil, nil
+		}
+		ts := time.Unix(int64(ev.Header.Timestamp), 0)
+		var err error
+		c.nextConsistentPoint, err = c.nextConsistentPoint.withMariaGTIDSet(ts, &e.GTID)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		// Return a batch to accumulate data, since this event
+		// represents a transaction.
+		return &types.MultiBatch{}, nil
+
+	case *replication.QueryEvent:
+		// Only supporting BEGIN
+		// DDL statement would also sent here.
+		log.Tracef("Query:  %s %+v\n", e.Query, e.GSet)
+		if bytes.Equal(e.Query, []byte("BEGIN")) {
+			return &types.MultiBatch{}, nil
+		}
+
+	case *replication.TableMapEvent:
+		if err := c.onRelation(e); err != nil {
+			return batch, err
+		}
+
+	case *replication.RowsEvent:
+		var operation mutationType
+		switch ev.Header.EventType {
+		case replication.DELETE_ROWS_EVENTv0, replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
+			operation = deleteMutation
+		case replication.UPDATE_ROWS_EVENTv0, replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
+			operation = updateMutation
+		case replication.WRITE_ROWS_EVENTv0, replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
+			operation = insertMutation
+		default:
+			return nil, errors.Errorf("Operation not supported %s", ev.Header.EventType)
+		}
+		mutationCount.With(prometheus.Labels{"type": operation.String()}).Inc()
+		if err := c.onDataTuple(ctx, batch, e, operation); err != nil {
+			return nil, err
+		}
+
+	default:
+		return nil, errors.Errorf("unimplemented logical replication message %+v", e)
+	}
+	return batch, nil
+}
+
+// copyMessages is the main replication loop. It will open a connection
+// to the source, accumulate messages, and commit data to the target.
+func (c *conn) copyMessages(ctx *stopper.Context) error {
 	syncer := replication.NewBinlogSyncer(c.sourceConfig)
 	defer syncer.Close()
 
-	cp, _ := state.GetConsistentPoint()
+	cp, _ := c.walOffset.Get()
 	if cp == nil {
 		return errors.New("missing gtidset")
 	}
-	streamer, err := syncer.StartSyncGTID(cp.(*consistentPoint).AsGTIDSet())
+	streamer, err := syncer.StartSyncGTID(cp.AsGTIDSet())
 	if err != nil {
 		dialFailureCount.Inc()
 		return err
 	}
 	dialSuccessCount.Inc()
 
-	// Send the initial consistent point we're reading from.
-	select {
-	case ch <- cp.(*consistentPoint):
-	case <-ctx.Stopping():
-		return ctx.Err()
-	}
+	var batch *types.MultiBatch
 
 	for {
 		// Make GetEvent interruptable.
@@ -291,10 +300,9 @@ func (c *conn) ReadInto(
 			*replication.QueryEvent,
 			*replication.MariadbGTIDEvent,
 			*replication.MariadbAnnotateRowsEvent:
-			select {
-			case ch <- *ev:
-			case <-ctx.Stopping():
-				return nil
+			batch, err = c.accumulateBatch(ctx, ev, batch)
+			if err != nil {
+				return err
 			}
 		case *replication.GenericEvent,
 			*replication.RotateEvent,
@@ -326,8 +334,7 @@ func (c *conn) ZeroStamp() stamp.Stamp {
 
 func (c *conn) onDataTuple(
 	ctx context.Context,
-	batch logical.Batch,
-	filter ident.Schema,
+	batch *types.MultiBatch,
 	tuple *replication.RowsEvent,
 	operation mutationType,
 ) error {
@@ -335,8 +342,8 @@ func (c *conn) onDataTuple(
 	if !ok {
 		return errors.Errorf("unknown relation id %d", tuple.TableID)
 	}
-	if !filter.Contains(tbl) {
-		log.Tracef("Skipping update on %s because it is not in the target schema", tbl)
+	if !c.target.Contains(tbl) {
+		log.Tracef("Skipping update on %s because it is not in the target schema %s", tbl, c.target)
 		return nil
 	}
 	targetCols, ok := c.columns.Get(tbl)
@@ -388,9 +395,9 @@ func (c *conn) onDataTuple(
 				return err
 			}
 		}
+		mut.Time = hlc.New(c.nextConsistentPoint.AsTime().UnixNano(), 0)
 		script.AddMeta("mylogical", tbl, &mut)
-		err = batch.OnData(ctx, script.SourceName(tbl), tbl, []types.Mutation{mut})
-		if err != nil {
+		if err := batch.Accumulate(tbl, mut); err != nil {
 			return err
 		}
 	}
@@ -553,6 +560,46 @@ func getFlavor(config *Config) (string, string, error) {
 		}
 	}
 	return mysql.MySQLFlavor, version, nil
+}
+
+// persistWALOffset loads an existing value from memo into walOffset or
+// initializes to a user-provided value. It will also start a goroutine
+// in the stopper to occasionally write an updated value back to the
+// memo.
+func (c *conn) persistWALOffset(ctx *stopper.Context) error {
+	key := fmt.Sprintf("mysql-wal-offset-%s", c.target.Raw())
+	found, err := c.memo.Get(ctx, c.stagingDB, key)
+	if err != nil {
+		return err
+	}
+	cp := newConsistentPoint(c.flavor)
+	if len(found) > 0 {
+		if _, err := cp.parseFrom(string(found)); err != nil {
+			return err
+		}
+		c.walOffset.Set(cp)
+	} else if c.config.InitialGTID != "" {
+		// Set to a user-configured, default value.
+		cp, err = cp.parseFrom(c.config.InitialGTID)
+		if err != nil {
+			return err
+		}
+	}
+	c.walOffset.Set(cp)
+
+	ctx.Go(func() error {
+		_, err := stopvar.DoWhenChanged(ctx, cp, &c.walOffset,
+			func(ctx *stopper.Context, _, cp *consistentPoint) error {
+				if err := c.memo.Put(ctx, c.stagingDB, key, []byte(cp.String())); err == nil {
+					log.Tracef("stored WAL offset %s: %s", key, cp)
+				} else {
+					log.WithError(err).Warn("could not persist WAL offset")
+				}
+				return nil
+			})
+		return err
+	})
+	return nil
 }
 
 // checkSystemSetting verifies that the given system variable is set to one of
