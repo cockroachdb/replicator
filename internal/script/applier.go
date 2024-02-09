@@ -51,7 +51,7 @@ func notInTransaction() error {
 	return errors.New("no transaction is currently open")
 }
 
-// applier implements [types.Applier] to allow user-defined functions to
+// applier implements [types.TableAcceptor] to allow user-defined functions to
 // be used to interact with the database, rather than using cdc-sink's
 // built-in SQL.
 type applier struct {
@@ -60,7 +60,7 @@ type applier struct {
 	table  ident.Table
 }
 
-var _ types.Applier = (*applier)(nil)
+var _ types.TableAcceptor = (*applier)(nil)
 
 func newApplier(parent *UserScript, table ident.Table, apply applyJS) *applier {
 	return &applier{
@@ -70,8 +70,15 @@ func newApplier(parent *UserScript, table ident.Table, apply applyJS) *applier {
 	}
 }
 
-// Apply implements [types.Applier].
-func (a *applier) Apply(ctx context.Context, tq types.TargetQuerier, muts []types.Mutation) error {
+// AcceptTableBatch implements [types.TableAcceptor].
+func (a *applier) AcceptTableBatch(
+	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
+) error {
+	if opts == nil || opts.TargetQuerier == nil {
+		return errors.New("UserScript apply function cannot be called without an explicit transaction")
+	}
+
+	muts := batch.Data
 	ops := make([]*applyOp, len(muts))
 	pks := make([]*[]any, len(muts))
 	data := make([]*map[string]any, len(muts))
@@ -106,7 +113,7 @@ func (a *applier) Apply(ctx context.Context, tq types.TargetQuerier, muts []type
 	tx := &targetTX{
 		ctx:     ctx,
 		applier: a,
-		tq:      tq,
+		tq:      opts.TargetQuerier,
 	}
 
 	var promise *goja.Promise

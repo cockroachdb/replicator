@@ -21,11 +21,16 @@ import (
 // Injectors from injector.go:
 
 func NewFactoryForTests(ctx *stopper.Context, config Config) (*Factory, error) {
+	diagnostics := diag.New(ctx)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
+	if err != nil {
+		return nil, err
+	}
 	scriptConfig, err := ProvideUserScriptConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	loader, err := script.ProvideLoader(scriptConfig)
+	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -33,16 +38,11 @@ func NewFactoryForTests(ctx *stopper.Context, config Config) (*Factory, error) {
 	if err != nil {
 		return nil, err
 	}
-	diagnostics := diag.New(ctx)
 	targetPool, err := ProvideTargetPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
 	targetStatements, err := ProvideTargetStatements(ctx, baseConfig, targetPool, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -52,10 +52,11 @@ func NewFactoryForTests(ctx *stopper.Context, config Config) (*Factory, error) {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	appliers, err := apply.ProvideFactory(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
+	appliers := apply.ProvideFactory(acceptor)
 	stagingPool, err := ProvideStagingPool(ctx, baseConfig, diagnostics)
 	if err != nil {
 		return nil, err

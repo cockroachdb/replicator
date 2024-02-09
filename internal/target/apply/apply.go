@@ -64,8 +64,6 @@ type apply struct {
 	}
 }
 
-var _ types.Applier = (*apply)(nil)
-
 type applyMode bool
 
 const (

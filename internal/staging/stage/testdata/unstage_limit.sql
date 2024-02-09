@@ -43,43 +43,71 @@ SELECT n, l FROM hlc_1 UNION ALL
 SELECT n, l FROM hlc_2 UNION ALL
 SELECT n, l FROM hlc_3),
 hlc_min AS (SELECT n, l FROM hlc_all GROUP BY n, l ORDER BY n, l LIMIT 22),
+blocked_0 AS (
+SELECT key FROM "_cdc_sink"."public"."my_db_public_tbl0"
+JOIN hlc_min ON (nanos,logical) = (n,l)
+WHERE (lease IS NOT NULL AND lease > now())
+GROUP BY key
+),
+blocked_1 AS (
+SELECT key FROM "_cdc_sink"."public"."my_db_public_tbl1"
+JOIN hlc_min ON (nanos,logical) = (n,l)
+WHERE (lease IS NOT NULL AND lease > now())
+GROUP BY key
+),
+blocked_2 AS (
+SELECT key FROM "_cdc_sink"."public"."my_db_public_tbl2"
+JOIN hlc_min ON (nanos,logical) = (n,l)
+WHERE (lease IS NOT NULL AND lease > now())
+GROUP BY key
+),
+blocked_3 AS (
+SELECT key FROM "_cdc_sink"."public"."my_db_public_tbl3"
+JOIN hlc_min ON (nanos,logical) = (n,l)
+WHERE (lease IS NOT NULL AND lease > now())
+GROUP BY key
+),
 data_0 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl0"
-SET applied=true
+SET applied=true, lease=NULL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[1])
 AND NOT applied
+AND key NOT IN (SELECT key FROM blocked_0)
 ORDER BY nanos, logical, key
 LIMIT 10000
 RETURNING nanos, logical, key, mut, before),
 data_1 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl1"
-SET applied=true
+SET applied=true, lease=NULL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[2])
 AND NOT applied
+AND key NOT IN (SELECT key FROM blocked_1)
 ORDER BY nanos, logical, key
 LIMIT 10000
 RETURNING nanos, logical, key, mut, before),
 data_2 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl2"
-SET applied=true
+SET applied=true, lease=NULL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[3])
 AND NOT applied
+AND key NOT IN (SELECT key FROM blocked_2)
 ORDER BY nanos, logical, key
 LIMIT 10000
 RETURNING nanos, logical, key, mut, before),
 data_3 AS (
 UPDATE "_cdc_sink"."public"."my_db_public_tbl3"
-SET applied=true
+SET applied=true, lease=NULL
 FROM hlc_min
 WHERE (nanos,logical) = (n, l)
 AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[4])
 AND NOT applied
+AND key NOT IN (SELECT key FROM blocked_3)
 ORDER BY nanos, logical, key
 LIMIT 10000
 RETURNING nanos, logical, key, mut, before)
