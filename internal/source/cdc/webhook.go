@@ -21,11 +21,9 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/pkg/errors"
 )
 
@@ -53,7 +51,11 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 		}
 		return errors.Wrap(err, "could not decode payload")
 	}
-	target := req.target.(ident.Schema)
+	target, err := h.Targets.getTarget(req.target.Schema())
+	if err != nil {
+		return err
+	}
+
 	if payload.Resolved != "" {
 		timestamp, err := hlc.Parse(payload.Resolved)
 		if err != nil {
@@ -66,7 +68,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 
 	// Aggregate the mutations by target table. We know that the default
 	// batch size for webhooks is reasonable.
-	toProcess := &ident.TableMap[[]types.Mutation]{}
+	toProcess := &types.MultiBatch{}
 
 	for i := range payload.Payload {
 		timestamp, err := hlc.Parse(payload.Payload[i].Updated)
@@ -74,13 +76,13 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			return err
 		}
 
-		table, qual, err := ident.ParseTableRelative(payload.Payload[i].Topic, target)
+		table, qual, err := ident.ParseTableRelative(payload.Payload[i].Topic, req.target.Schema())
 		if err != nil {
 			return err
 		}
 		// Ensure the destination table is in the target schema.
 		if qual != ident.TableOnly {
-			table = ident.NewTable(target, table.Table())
+			table = ident.NewTable(req.target.Schema(), table.Table())
 		}
 
 		mut := types.Mutation{
@@ -89,79 +91,10 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			Key:    payload.Payload[i].Key,
 			Time:   timestamp,
 		}
-		toProcess.Put(table, append(toProcess.GetZero(table), mut))
-	}
-	if h.Config.Immediate {
-		return h.processMutationsImmediate(ctx, target, toProcess)
-	}
-	return h.processMutationsDeferred(ctx, toProcess)
-}
-
-func (h *Handler) processMutationsDeferred(
-	ctx context.Context, toProcess *ident.TableMap[[]types.Mutation],
-) error {
-	// Create Store instances up front. The first time a target table is
-	// used, the Stager must create the staging table. We want to ensure
-	// that this happens before we create the transaction below.
-	stores := &ident.TableMap[types.Stager]{}
-	if err := toProcess.Range(func(table ident.Table, _ []types.Mutation) error {
-		s, err := h.Stores.Get(ctx, table)
-		if err != nil {
+		if err := toProcess.Accumulate(table, mut); err != nil {
 			return err
 		}
-		stores.Put(table, s)
-		return nil
-	}); err != nil {
-		return err
 	}
 
-	return retry.Retry(ctx, func(ctx context.Context) error {
-		pool := h.StagingPool.Pool
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback(ctx)
-
-		// Stage or apply the per-target mutations.
-		if err := toProcess.Range(func(target ident.Table, muts []types.Mutation) error {
-			return stores.GetZero(target).Stage(ctx, tx, muts)
-		}); err != nil {
-			return err
-		}
-
-		return tx.Commit(ctx)
-	})
-}
-func (h *Handler) processMutationsImmediate(
-	ctx context.Context, target ident.Schema, toProcess *ident.TableMap[[]types.Mutation],
-) error {
-	batcher, err := h.Immediate.Get(target)
-	if err != nil {
-		return err
-	}
-
-	batch, err := batcher.OnBegin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = batch.OnRollback(ctx) }()
-
-	source := script.SourceName(target)
-	if err := toProcess.Range(func(tbl ident.Table, muts []types.Mutation) error {
-		for idx := range muts {
-			// Index needed since it's not a pointer type.
-			script.AddMeta("cdc", tbl, &muts[idx])
-		}
-		return batch.OnData(ctx, source, tbl, muts)
-	}); err != nil {
-		return err
-	}
-
-	select {
-	case err := <-batch.OnCommit(ctx):
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return target.acceptor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{})
 }

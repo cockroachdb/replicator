@@ -276,7 +276,15 @@ func isDeferrableError(err error) bool {
 		// Cannot add or update a child row: a foreign key constraint fails
 		return myErr.Number == 1452
 	} else if oraErr := (*network.OracleError)(nil); errors.As(err, &oraErr) {
-		return oraErr.ErrCode == 2291 // ORA-02291: integrity constraint
+		switch oraErr.ErrCode {
+		case 1: // ORA-0001 unique constraint violated
+			// The MERGE that we execute uses read-committed reads, so
+			// it's possible for two concurrent merges to attempt to
+			// insert the same row.
+			return true
+		case 2291: // ORA-02291: integrity constraint
+			return true
+		}
 	}
 	return false
 }

@@ -36,17 +36,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// An Applier accepts some number of Mutations and applies them to
-// a target table.
-type Applier interface {
-	Apply(context.Context, TargetQuerier, []Mutation) error
-}
-
-// Appliers is a factory for Applier instances.
-type Appliers interface {
-	Get(ctx context.Context, target ident.Table) (Applier, error)
-}
-
 // An Authenticator determines if an operation on some schema should be
 // allowed to proceed.
 type Authenticator interface {

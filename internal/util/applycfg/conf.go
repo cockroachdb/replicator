@@ -47,7 +47,6 @@ type Config struct {
 	Acceptor    types.TableAcceptor       // Inject user-defined apply behavior instead.
 	CASColumns  TargetColumns             // The columns for compare-and-set operations.
 	Deadlines   *ident.Map[time.Duration] // Deadline-based operation.
-	Delegate    types.Applier             // Inject user-defined apply behavior instead. TODO: DELETE
 	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.
 	Extras      TargetColumn              // JSONB column to store unmapped values in.
 	Ignore      *ident.Map[bool]          // Source column names to ignore.
@@ -66,17 +65,16 @@ func NewConfig() *Config {
 }
 
 // Copy returns a copy of the Config.
-func (t *Config) Copy() *Config {
+func (c *Config) Copy() *Config {
 	ret := NewConfig()
-
-	ret.CASColumns = append(ret.CASColumns, t.CASColumns...)
-	t.Deadlines.CopyInto(ret.Deadlines)
-	ret.Delegate = t.Delegate
-	t.Exprs.CopyInto(ret.Exprs)
-	ret.Extras = t.Extras
-	t.Ignore.CopyInto(ret.Ignore)
-	ret.Merger = t.Merger
-	t.SourceNames.CopyInto(ret.SourceNames)
+	ret.Acceptor = c.Acceptor
+	ret.CASColumns = append(ret.CASColumns, c.CASColumns...)
+	c.Deadlines.CopyInto(ret.Deadlines)
+	c.Exprs.CopyInto(ret.Exprs)
+	ret.Extras = c.Extras
+	c.Ignore.CopyInto(ret.Ignore)
+	ret.Merger = c.Merger
+	c.SourceNames.CopyInto(ret.SourceNames)
 
 	return ret
 }
@@ -84,58 +82,59 @@ func (t *Config) Copy() *Config {
 // Equal returns true if the other Config is equivalent to the receiver.
 //
 // This method is intended for testing only. It does not compare the
-// Merger field, since not all implementations of that interface are
-// guaranteed to have a defined comparison operation (e.g. merge.Func).
-func (t *Config) Equal(o *Config) bool {
-	return t == o || // Identity or nil-nil.
-		(t != nil) && (o != nil) &&
-			t.CASColumns.Equal(o.CASColumns) &&
-			t.Deadlines.Equal(o.Deadlines, cmap.Comparator[time.Duration]()) &&
-			// Not all implementations of Delegate are comparable: merge.Func or similar.
-			t.Exprs.Equal(o.Exprs, cmap.Comparator[string]()) &&
-			ident.Equal(t.Extras, o.Extras) &&
-			t.Ignore.Equal(o.Ignore, cmap.Comparator[bool]()) &&
+// callback fields, since not all implementations of those interfaces
+// are guaranteed to have a defined comparison operation (e.g.
+// merge.Func).
+func (c *Config) Equal(o *Config) bool {
+	return c == o || // Identity or nil-nil.
+		(c != nil) && (o != nil) &&
+			// Not all implementations of Acceptor are comparable.
+			c.CASColumns.Equal(o.CASColumns) &&
+			c.Deadlines.Equal(o.Deadlines, cmap.Comparator[time.Duration]()) &&
+			c.Exprs.Equal(o.Exprs, cmap.Comparator[string]()) &&
+			ident.Equal(c.Extras, o.Extras) &&
+			c.Ignore.Equal(o.Ignore, cmap.Comparator[bool]()) &&
 			// Not all implementations of Merger are comparable: merge.Func or similar.
-			t.SourceNames.Equal(o.SourceNames, ident.Comparator[ident.Ident]())
+			c.SourceNames.Equal(o.SourceNames, ident.Comparator[ident.Ident]())
 }
 
 // IsZero returns true if the Config represents the absence of a
 // configuration.
-func (t *Config) IsZero() bool {
-	return len(t.CASColumns) == 0 &&
-		t.Deadlines.Len() == 0 &&
-		t.Delegate == nil &&
-		t.Exprs.Len() == 0 &&
-		t.Extras.Empty() &&
-		t.Ignore.Len() == 0 &&
-		t.Merger == nil &&
-		t.SourceNames.Len() == 0
+func (c *Config) IsZero() bool {
+	return c.Acceptor == nil &&
+		len(c.CASColumns) == 0 &&
+		c.Deadlines.Len() == 0 &&
+		c.Exprs.Len() == 0 &&
+		c.Extras.Empty() &&
+		c.Ignore.Len() == 0 &&
+		c.Merger == nil &&
+		c.SourceNames.Len() == 0
 }
 
 // Patch applies any non-empty fields from another Config to the
 // receiver and returns the receiver.
-func (t *Config) Patch(other *Config) *Config {
-	t.CASColumns = append(t.CASColumns, other.CASColumns...)
-	if other.Deadlines != nil {
-		other.Deadlines.CopyInto(t.Deadlines)
+func (c *Config) Patch(other *Config) *Config {
+	if other.Acceptor != nil {
+		c.Acceptor = other.Acceptor
 	}
-	if other.Delegate != nil {
-		t.Delegate = other.Delegate
+	c.CASColumns = append(c.CASColumns, other.CASColumns...)
+	if other.Deadlines != nil {
+		other.Deadlines.CopyInto(c.Deadlines)
 	}
 	if other.Exprs != nil {
-		other.Exprs.CopyInto(t.Exprs)
+		other.Exprs.CopyInto(c.Exprs)
 	}
 	if !other.Extras.Empty() {
-		t.Extras = other.Extras
+		c.Extras = other.Extras
 	}
 	if other.Ignore != nil {
-		other.Ignore.CopyInto(t.Ignore)
+		other.Ignore.CopyInto(c.Ignore)
 	}
 	if other.Merger != nil {
-		t.Merger = other.Merger
+		c.Merger = other.Merger
 	}
 	if other.SourceNames != nil {
-		other.SourceNames.CopyInto(t.SourceNames)
+		other.SourceNames.CopyInto(c.SourceNames)
 	}
-	return t
+	return c
 }

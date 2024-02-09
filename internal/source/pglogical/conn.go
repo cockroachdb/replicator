@@ -20,16 +20,18 @@ package pglogical
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
 	"github.com/google/uuid"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -38,28 +40,18 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// lsnStamp adapts the LSN offset type to a comparable Stamp value.
-type lsnStamp struct {
-	LSN    pglogrepl.LSN `json:"lsn"` // The offset within the replication log.
-	TxTime time.Time     `json:"ts"`  // The wall time of the associated transaction.
-}
-
-var (
-	_ stamp.Stamp         = (*lsnStamp)(nil)
-	_ logical.OffsetStamp = (*lsnStamp)(nil)
-)
-
-func (s *lsnStamp) AsLSN() pglogrepl.LSN        { return s.LSN }
-func (s *lsnStamp) AsTime() time.Time           { return s.TxTime }
-func (s *lsnStamp) AsOffset() uint64            { return uint64(s.LSN) }
-func (s *lsnStamp) Less(other stamp.Stamp) bool { return s.LSN < other.(*lsnStamp).LSN }
-
-// A conn encapsulates all wire-connection behavior. It is
+// A Conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
 // status updates.
-type conn struct {
+type Conn struct {
+	// The destination for writes.
+	acceptor types.MultiAcceptor
 	// Columns, as ordered by the source database.
 	columns *ident.TableMap[[]types.ColData]
+	// The time of the transaction being received.
+	nextCommitTime time.Time
+	// Persistent storage for WAL data.
+	memo types.Memo
 	// The pg publication name to subscribe to.
 	publicationName string
 	// Map source ids to target tables.
@@ -70,148 +62,136 @@ type conn struct {
 	sourceConfig *pgconn.Config
 	// How ofter to commit the consistent point
 	standbyTimeout time.Duration
+	// Access to the staging cluster.
+	stagingDB *types.StagingPool
+	// The destination for writes.
+	target ident.Schema
+	// Access to the target database.
+	targetDB *types.TargetPool
 	// Support for toasted columns
 	toastedColumns bool
+	// Managed by persistWALOffset.
+	walOffset notify.Var[pglogrepl.LSN]
 }
 
-var _ logical.Dialect = (*conn)(nil)
-
-// Process implements logical.Dialect and receives a sequence of logical
-// replication messages, or possibly a rollbackMessage.
-func (c *conn) Process(
-	ctx *stopper.Context, ch <-chan logical.Message, events logical.Events,
-) error {
-	var batch logical.Batch
-	defer func() {
-		if batch != nil {
-			_ = batch.OnRollback(ctx)
-		}
-	}()
-	cpDeadline := time.Now().Add(c.standbyTimeout)
-
-	// We rely on the upstream database to replay events in the case of
-	// errors, so we may receive events that we've already processed.
-	// We use the COMMIT LSN offset as the consistent point, which is
-	// written in the WAL synchronously with the upstream transaction.
-	ignoreBefore, _ := events.GetConsistentPoint()
-	ignoreLSN := ignoreBefore.(*lsnStamp).AsLSN()
-	// On Postgres versions before v15, mutations that are not part of the publication slots
-	// still product transactions, but they have no content
-	// (see https://github.com/postgres/postgres/commit/d5a9d86d8f)
-	var emptyTransaction bool
-	for msg := range ch {
-		// Ensure that we resynchronize.
-		if logical.IsRollback(msg) {
-			if batch != nil {
-				if err := batch.OnRollback(ctx); err != nil {
-					return err
-				}
-				batch = nil
-			}
-			continue
-		}
-
-		log.Tracef("message %T", msg)
-		var err error
-		switch msg := msg.(type) {
-		case *pglogrepl.RelationMessage:
-			// The replication protocol says that we'll see these
-			// descriptors before any use of the relation id in the
-			// stream. We'll map the int value to our table identifiers.
-			c.onRelation(msg, events.GetTargetDB())
-
-		case *pglogrepl.BeginMessage:
-			if msg.FinalLSN <= ignoreLSN {
-				log.Tracef("ignoring BeginMessage at %s before %s",
-					msg.FinalLSN, ignoreLSN)
-				continue
-			}
-			batch, err = events.OnBegin(ctx)
-			if err != nil {
-				return err
-			}
-			// Resetting the emptyTransaction detector, and continuing.
-			emptyTransaction = true
-			continue
-		case *pglogrepl.CommitMessage:
-			if msg.CommitLSN <= ignoreLSN {
-				log.Tracef("ignoring CommitMessage at %s before %s",
-					msg.CommitLSN, ignoreLSN)
-				continue
-			}
-			select {
-			case err := <-batch.OnCommit(ctx):
-				batch = nil
-				if err != nil {
-					return err
-				}
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			ignoreLSN = msg.CommitLSN
-			// In Postgres version < v15, the stream might contain empty transactions.
-			// See https://github.com/postgres/postgres/commit/d5a9d86d8f
-			// We will skip them to avoid unnecessary writes to the memo table.
-			if emptyTransaction {
-				emptyTransactionCount.Inc()
-				log.Trace("skipping empty transaction")
-				continue
-			}
-			if time.Now().After(cpDeadline) {
-				cpDeadline = time.Now().Add(c.standbyTimeout)
-				// The COMMIT records are written in order, so they're a
-				// better marker to record.
-				if err := events.SetConsistentPoint(ctx, &lsnStamp{msg.CommitLSN, msg.CommitTime}); err != nil {
-					return err
-				}
-			}
-
-		case *pglogrepl.DeleteMessage:
-			err = c.onDataTuple(ctx, batch, msg.RelationID, msg.OldTuple, true /* isDelete */)
-
-		case *pglogrepl.InsertMessage:
-			err = c.onDataTuple(ctx, batch, msg.RelationID, msg.Tuple, false /* isDelete */)
-
-		case *pglogrepl.UpdateMessage:
-			err = c.onDataTuple(ctx, batch, msg.RelationID, msg.NewTuple, false /* isDelete */)
-
-		case *pglogrepl.TruncateMessage:
-			err = errors.Errorf("the TRUNCATE operation cannot be supported on table %d", msg.RelationNum)
-
-		case *pglogrepl.TypeMessage:
-			// This type is intentionally discarded. We interpret the
-			// type of the data based on the target table, not the
-			// source.
-
-		default:
-			err = errors.Errorf("unimplemented logical replication message %T", msg)
-		}
-		if err != nil {
-			return err
-		}
-		// If we see any message after a begin, then the transaction is not empty.
-		emptyTransaction = false
+// Start launches goroutines into the context.
+func (c *Conn) Start(ctx *stopper.Context) error {
+	// Call this first to load the previous offset. We want to reset our
+	// state before starting the main copier routine.
+	if err := c.persistWALOffset(ctx); err != nil {
+		return err
 	}
+
+	// Start a process to copy data to the target.
+	ctx.Go(func() error {
+		for !ctx.IsStopping() {
+			if err := c.copyMessages(ctx); err != nil {
+				log.WithError(err).Warn("error while copying messages; will retry")
+				select {
+				case <-ctx.Stopping():
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+		}
+		return nil
+	})
+
 	return nil
 }
 
-// ReadInto implements logical.Dialect, opens a replication connection,
-// and writes parsed messages into the provided channel. This method
-// also manages the keepalive protocol.
-func (c *conn) ReadInto(
-	ctx *stopper.Context, ch chan<- logical.Message, state logical.State,
-) error {
+// accumulateBatch folds replication messages into the batch and sends it to
+// the acceptor when a complete transaction has been read. The returned
+// batch should be passed to the next invocation of accumulateBatch.
+func (c *Conn) accumulateBatch(
+	ctx *stopper.Context, msg pglogrepl.Message, batch *types.MultiBatch,
+) (*types.MultiBatch, error) {
+	log.Tracef("message %T", msg)
+	switch msg := msg.(type) {
+	case *pglogrepl.RelationMessage:
+		// The replication protocol says that we'll see these
+		// descriptors before any use of the relation id in the
+		// stream. We'll map the int value to our table identifiers.
+		c.onRelation(msg)
+		return batch, nil
+
+	case *pglogrepl.BeginMessage:
+		c.nextCommitTime = msg.CommitTime
+		// Create a new batch to accumulate into. It may be discarded
+		// later if the timestamp precedes the latest commit.
+		return &types.MultiBatch{}, nil
+
+	case *pglogrepl.CommitMessage:
+		// We rely on the upstream database to replay events in the case of
+		// errors, so we may receive events that we've already processed.
+		// We use the COMMIT LSN offset as the consistent point, which is
+		// written in the WAL synchronously with the upstream transaction.
+		ignoreLSN, _ := c.walOffset.Get()
+
+		if msg.CommitLSN <= ignoreLSN {
+			// Just discard the entire batch in this case.
+			log.Tracef("ignoring CommitMessage at %s before %s",
+				msg.CommitLSN, ignoreLSN)
+			return nil, nil
+		}
+		// In Postgres version < v15, the stream might contain empty transactions.
+		// See https://github.com/postgres/postgres/commit/d5a9d86d8f
+		// We will skip them to avoid unnecessary writes to the memo table.
+		if batch.Count() == 0 {
+			emptyTransactionCount.Inc()
+			log.Trace("skipping empty transaction")
+		} else {
+			tx, err := c.targetDB.BeginTx(ctx, &sql.TxOptions{})
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			defer tx.Rollback()
+
+			if err := c.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{
+				TargetQuerier: tx,
+			}); err != nil {
+				return nil, err
+			}
+
+			if err := tx.Commit(); err != nil {
+				return nil, errors.WithStack(err)
+			}
+		}
+		c.walOffset.Set(msg.CommitLSN)
+		return nil, nil
+
+	case *pglogrepl.DeleteMessage:
+		return batch, c.onDataTuple(batch, msg.RelationID, msg.OldTuple, true /* isDelete */)
+
+	case *pglogrepl.InsertMessage:
+		return batch, c.onDataTuple(batch, msg.RelationID, msg.Tuple, false /* isDelete */)
+
+	case *pglogrepl.UpdateMessage:
+		return batch, c.onDataTuple(batch, msg.RelationID, msg.NewTuple, false /* isDelete */)
+
+	case *pglogrepl.TruncateMessage:
+		return nil, errors.Errorf("the TRUNCATE operation cannot be supported on table %d", msg.RelationNum)
+
+	case *pglogrepl.TypeMessage:
+		// This type is intentionally discarded. We interpret the
+		// type of the data based on the target table, not the
+		// source.
+		return batch, nil
+
+	default:
+		return nil, errors.Errorf("unimplemented logical replication message %T", msg)
+	}
+}
+
+// copyMessages is the main replication loop. It will open a connection
+// to the source, accumulate messages, and commit data to the target.
+func (c *Conn) copyMessages(ctx *stopper.Context) error {
 	replConn, err := pgconn.ConnectConfig(ctx, c.sourceConfig)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	defer replConn.Close(context.Background())
 
-	cp, _ := state.GetConsistentPoint()
-	var startLogPos pglogrepl.LSN
-	if x, ok := cp.(*lsnStamp); ok {
-		startLogPos = x.AsLSN()
-	}
+	startLogPos, _ := c.walOffset.Get()
 	if err := pglogrepl.StartReplication(ctx,
 		replConn, c.slotName, startLogPos,
 		pglogrepl.StartReplicationOptions{
@@ -225,27 +205,23 @@ func (c *conn) ReadInto(
 	}
 	dialSuccessCount.Inc()
 
+	var batch *types.MultiBatch
 	standbyDeadline := time.Now().Add(c.standbyTimeout)
 
-	for {
-		select {
-		case <-ctx.Stopping():
-			return nil
-		default:
-		}
+	for !ctx.IsStopping() {
+		// Occasionally send updates back to the server so it will
+		// remember our WAL offset.
 		if time.Now().After(standbyDeadline) {
 			standbyDeadline = time.Now().Add(c.standbyTimeout)
-			cp, _ := state.GetConsistentPoint()
-			if lsn, ok := cp.(*lsnStamp); ok {
-				if err := pglogrepl.SendStandbyStatusUpdate(ctx, replConn, pglogrepl.StandbyStatusUpdate{
-					WALWritePosition: lsn.AsLSN(),
-				}); err != nil {
-					return errors.WithStack(err)
-				}
-				log.WithField("WALWritePosition", lsn.AsLSN()).Trace("sent Standby status message")
-			} else {
-				log.Warn("have yet to reach any consistent point")
+			lsn, _ := c.walOffset.Get()
+			if err := pglogrepl.SendStandbyStatusUpdate(ctx, replConn,
+				pglogrepl.StandbyStatusUpdate{
+					WALWritePosition: lsn,
+				},
+			); err != nil {
+				return errors.WithStack(err)
 			}
+			log.WithField("WALWritePosition", lsn).Trace("sent Standby status message")
 		}
 
 		// Receive one message, with a timeout. In a low-traffic
@@ -309,12 +285,10 @@ func (c *conn) ReadInto(
 					"logicalMsg": logicalMsg.Type().String(),
 				}).Debug("xlog data")
 
-				select {
-				case ch <- logicalMsg:
-				case <-ctx.Stopping():
-					return nil
-				case <-ctx.Done():
-					return errors.WithStack(ctx.Err())
+				// Update our accumulator with the received message.
+				batch, err = c.accumulateBatch(ctx, logicalMsg, batch)
+				if err != nil {
+					return err
 				}
 			}
 		case *pgproto3.NotificationResponse:
@@ -323,15 +297,11 @@ func (c *conn) ReadInto(
 			log.Debugf("unexpected payload message: %T", msg)
 		}
 	}
-}
-
-// ZeroStamp implements Dialect.
-func (c *conn) ZeroStamp() stamp.Stamp {
-	return &lsnStamp{}
+	return nil
 }
 
 // decodeMutation converts the incoming tuple data into a Mutation.
-func (c *conn) decodeMutation(
+func (c *Conn) decodeMutation(
 	tbl ident.Table, data *pglogrepl.TupleData, isDelete bool,
 ) (types.Mutation, error) {
 	var mut types.Mutation
@@ -403,15 +373,11 @@ func (c *conn) decodeMutation(
 
 // onDataTuple will add an incoming row tuple to the in-memory slice,
 // possibly flushing it when the batch size limit is reached.
-func (c *conn) onDataTuple(
-	ctx context.Context,
-	batch logical.Batch,
-	relation uint32,
-	tuple *pglogrepl.TupleData,
-	isDelete bool,
+func (c *Conn) onDataTuple(
+	batch *types.MultiBatch, relation uint32, tuple *pglogrepl.TupleData, isDelete bool,
 ) error {
-	// Will be nil if we're ignoring replayed messages.
 	if batch == nil {
+		log.Trace("ignoring replayed message")
 		return nil
 	}
 	traceTuple(tuple)
@@ -423,17 +389,20 @@ func (c *conn) onDataTuple(
 	if err != nil {
 		return err
 	}
+	// Set an approximate timestamp.
+	mut.Time = hlc.New(c.nextCommitTime.UnixNano(), 0)
+	// Set script metadata, which will be acted on by the acceptor.
 	script.AddMeta("pglogical", tbl, &mut)
 
-	return batch.OnData(ctx, script.SourceName(tbl), tbl, []types.Mutation{mut})
+	return batch.Accumulate(tbl, mut)
 }
 
 // learn updates the source database namespace mappings.
-func (c *conn) onRelation(msg *pglogrepl.RelationMessage, targetDB ident.Schema) {
+func (c *Conn) onRelation(msg *pglogrepl.RelationMessage) {
 	// The replication protocol says that we'll see these
 	// descriptors before any use of the relation id in the
 	// stream. We'll map the int value to our table identifiers.
-	tbl := ident.NewTable(targetDB, ident.New(msg.RelationName))
+	tbl := ident.NewTable(c.target, ident.New(msg.RelationName))
 	c.relations[msg.RelationID] = tbl
 
 	colNames := make([]types.ColData, len(msg.Columns))
@@ -453,6 +422,37 @@ func (c *conn) onRelation(msg *pglogrepl.RelationMessage, targetDB ident.Schema)
 		"RelationID": msg.RelationID,
 		"Table":      tbl,
 	}).Trace("learned relation")
+}
+
+// persistWALOffset loads an existing value from memo into walOffset. It
+// will also start a goroutine in the stopper to occasionally write an
+// updated value back to the memo.
+func (c *Conn) persistWALOffset(ctx *stopper.Context) error {
+	key := fmt.Sprintf("pglogical-wal-offset-%s", c.target.Raw())
+	found, err := c.memo.Get(ctx, c.stagingDB, key)
+	if err != nil {
+		return err
+	}
+	var lsn pglogrepl.LSN
+	if len(found) > 0 {
+		if err := lsn.Scan(found); err != nil {
+			return errors.WithStack(err)
+		}
+		c.walOffset.Set(lsn)
+	}
+	ctx.Go(func() error {
+		_, err := stopvar.DoWhenChanged(ctx, lsn, &c.walOffset,
+			func(ctx *stopper.Context, _, lsn pglogrepl.LSN) error {
+				if err := c.memo.Put(ctx, c.stagingDB, key, []byte(lsn.String())); err == nil {
+					log.Tracef("stored WAL offset %s: %s", key, lsn)
+				} else {
+					log.WithError(err).Warn("could not persist LSN offset")
+				}
+				return nil
+			})
+		return err
+	})
+	return nil
 }
 
 // traceTuple emits log messages if tracing is enabled.

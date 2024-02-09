@@ -17,79 +17,78 @@
 package cdc
 
 import (
-	"fmt"
-
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
+	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
+	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
-	"github.com/pkg/errors"
 )
 
 // Set is used by Wire.
 var Set = wire.NewSet(
 	wire.Struct(new(Handler), "*"), // Handler is itself trivial.
-	ProvideImmediate,
-	ProvideMetaTable,
-	ProvideResolvers,
+	ProvideDLQConfig,
+	ProvideScriptConfig,
+	ProvideSequencerConfig,
+	ProvideTargets,
 )
 
-// MetaTable is an injectable configuration point.
-type MetaTable ident.Table
-
-// Table returns the underlying table identifier.
-func (t MetaTable) Table() ident.Table { return ident.Table(t) }
-
-// ProvideImmediate is called by wire.
-func ProvideImmediate(ctx *stopper.Context, loops *logical.Factory) (*Immediate, error) {
-	imm := &Immediate{loops: loops, stop: ctx}
-	return imm, nil
+// ProvideDLQConfig is called by Wire.
+func ProvideDLQConfig(cfg *Config) *dlq.Config {
+	return &cfg.DLQConfig
 }
 
-// ProvideMetaTable is called by wire. It returns the
-// "_cdc_sink.public.resolved_timestamps" table per the flags.
-func ProvideMetaTable(cfg *Config) MetaTable {
-	return MetaTable(ident.NewTable(cfg.StagingSchema, cfg.MetaTableName))
+// ProvideScriptConfig is called by Wire.
+func ProvideScriptConfig(cfg *Config) *script.Config {
+	return &cfg.ScriptConfig
 }
 
-// ProvideResolvers is called by Wire.
-func ProvideResolvers(
+// ProvideSequencerConfig is called by Wire.
+func ProvideSequencerConfig(cfg *Config) *sequencer.Config {
+	return &cfg.SequencerConfig
+}
+
+// ProvideTargets is called by Wire.
+func ProvideTargets(
 	ctx *stopper.Context,
+	acc *apply.Acceptor,
 	cfg *Config,
-	leases types.Leases,
-	loops *logical.Factory,
-	metaTable MetaTable,
-	pool *types.StagingPool,
-	stagers types.Stagers,
+	checkpoints *checkpoint.Checkpoints,
+	retire *retire.Retire,
+	staging *types.StagingPool,
+	sw *switcher.Switcher,
 	watchers types.Watchers,
-) (*Resolvers, error) {
-	if _, err := pool.Exec(ctx, fmt.Sprintf(schema, metaTable.Table())); err != nil {
-		return nil, errors.WithStack(err)
+) (*Targets, error) {
+	if err := cfg.Preflight(); err != nil {
+		return nil, err
+	}
+	targets := &Targets{
+		cfg:           cfg,
+		checkpoints:   checkpoints,
+		retire:        retire,
+		staging:       staging,
+		stopper:       ctx,
+		switcher:      sw,
+		tableAcceptor: acc,
+		watchers:      watchers,
 	}
 
-	ret := &Resolvers{
-		cfg:       cfg,
-		leases:    leases,
-		loops:     loops,
-		metaTable: metaTable.Table(),
-		pool:      pool,
-		stagers:   stagers,
-		stop:      ctx,
-		watchers:  watchers,
-	}
-	ret.mu.instances = &ident.SchemaMap[*logical.Loop]{}
-
-	// Resume from previous state.
-	schemas, err := ScanForTargetSchemas(ctx, pool, ret.metaTable)
+	// Bootstrap existing schemas for recovery cases.
+	schemas, err := checkpoints.ScanForTargetSchemas(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, schema := range schemas {
-		if _, _, err := ret.get(schema); err != nil {
-			return nil, errors.Wrapf(err, "could not bootstrap resolver for schema %s", schema)
+	for _, sch := range schemas {
+		_, err := targets.getTarget(sch)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	return ret, nil
+	return targets, nil
 }
