@@ -23,8 +23,10 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
+	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
 	"github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
@@ -33,17 +35,23 @@ import (
 	"github.com/google/wire"
 )
 
+var completeSet = wire.NewSet(
+	Set,
+	cdc.Set,
+	diag.New,
+	retire.Set,
+	script.Set,
+	sinkprod.Set,
+	staging.Set,
+	switcher.Set,
+	target.Set,
+)
+
 func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) {
 	panic(wire.Build(
-		Set,
-		cdc.Set,
-		diag.New,
-		logical.Set,
-		script.Set,
-		staging.Set,
-		target.Set,
+		completeSet,
 		wire.Bind(new(context.Context), new(*stopper.Context)),
-		wire.Bind(new(logical.Config), new(*Config)),
 		wire.FieldsOf(new(*Config), "CDC"),
+		wire.FieldsOf(new(*EagerConfig), "Staging", "Target"),
 	))
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 )
@@ -88,52 +89,63 @@ func (f *factory) Unstage(
 	for idx, tbl := range cursor.Targets {
 		keyOffsets[idx] = string(cursor.StartAfterKey.GetZero(tbl))
 	}
-	rows, err := tx.Query(ctx, q,
-		cursor.StartAt.Nanos(),
-		cursor.StartAt.Logical(),
-		cursor.EndBefore.Nanos(),
-		cursor.EndBefore.Logical(),
-		keyOffsets)
-	if err != nil {
-		return nil, false, errors.Wrap(err, q)
-	}
-	defer rows.Close()
-
 	hadRows := false
-	// We want to reset StartAfterKey whenever we read into a new region
-	// of timestamps.
-	epoch := cursor.StartAt
-	for rows.Next() {
-		var mut types.Mutation
-		var tableIdx int
-		var nanos int64
-		var logical int
-		if err := rows.Scan(&tableIdx, &nanos, &logical, &mut.Key, &mut.Data, &mut.Before); err != nil {
-			return nil, false, errors.WithStack(err)
-		}
-		mut.Before, err = maybeGunzip(mut.Before)
+	if err := retry.Loop(ctx, func(ctx context.Context, sideEffect *retry.Marker) error {
+		rows, err := tx.Query(ctx, q,
+			cursor.StartAt.Nanos(),
+			cursor.StartAt.Logical(),
+			cursor.EndBefore.Nanos(),
+			cursor.EndBefore.Logical(),
+			keyOffsets)
 		if err != nil {
-			return nil, false, err
+			return errors.Wrap(err, q)
 		}
-		mut.Data, err = maybeGunzip(mut.Data)
-		if err != nil {
-			return nil, false, err
-		}
-		mut.Time = hlc.New(nanos, logical)
-		if hlc.Compare(mut.Time, epoch) > 0 {
-			epoch = mut.Time
-			cursor.StartAt = epoch
-			cursor.StartAfterKey = ident.TableMap[json.RawMessage]{}
-		}
-		cursor.StartAfterKey.Put(cursor.Targets[tableIdx], mut.Key)
-		hadRows = true
+		defer rows.Close()
 
-		if err := fn(ctx, cursor.Targets[tableIdx], mut); err != nil {
-			return nil, false, err
+		// We want to reset StartAfterKey whenever we read into a new region
+		// of timestamps.
+		epoch := cursor.StartAt
+		for rows.Next() {
+			var mut types.Mutation
+			var tableIdx int
+			var nanos int64
+			var logical int
+			if err := rows.Scan(&tableIdx, &nanos, &logical, &mut.Key, &mut.Data, &mut.Before); err != nil {
+				return errors.WithStack(err)
+			}
+
+			// We generate observable side-effects below this point, so
+			// we don't want to automatically retry.
+			sideEffect.Mark()
+
+			mut.Before, err = maybeGunzip(mut.Before)
+			if err != nil {
+				return err
+			}
+			mut.Data, err = maybeGunzip(mut.Data)
+			if err != nil {
+				return err
+			}
+			mut.Time = hlc.New(nanos, logical)
+			if hlc.Compare(mut.Time, epoch) > 0 {
+				epoch = mut.Time
+				cursor.StartAt = epoch
+				cursor.StartAfterKey = ident.TableMap[json.RawMessage]{}
+			}
+			cursor.StartAfterKey.Put(cursor.Targets[tableIdx], mut.Key)
+			hadRows = true
+
+			// No going back.
+			if err := fn(ctx, cursor.Targets[tableIdx], mut); err != nil {
+				return err
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, errors.WithStack(err)
+		if err := rows.Err(); err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	}); err != nil {
+		return nil, false, err
 	}
 
 	return cursor, hadRows, nil

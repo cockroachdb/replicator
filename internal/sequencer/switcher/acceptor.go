@@ -42,7 +42,11 @@ func (s *acceptor) AcceptMultiBatch(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.mu.acceptor.AcceptMultiBatch(ctx, batch, opts)
+	acc := s.mu.acceptor
+	if acc == nil {
+		return errors.New("switcher has been stopped")
+	}
+	return acc.AcceptMultiBatch(ctx, batch, opts)
 }
 
 // AcceptTemporalBatch implements [types.MultiAcceptor].
@@ -54,7 +58,11 @@ func (s *acceptor) AcceptTemporalBatch(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.mu.acceptor.AcceptTemporalBatch(ctx, batch, opts)
+	acc := s.mu.acceptor
+	if acc == nil {
+		return errors.New("switcher has been stopped")
+	}
+	return acc.AcceptTemporalBatch(ctx, batch, opts)
 }
 
 // AcceptTableBatch implements [types.TableAcceptor].
@@ -66,10 +74,11 @@ func (s *acceptor) AcceptTableBatch(
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.mu.acceptor == nil {
-		return errors.New("not yet started")
+	acc := s.mu.acceptor
+	if acc == nil {
+		return errors.New("switcher has been stopped")
 	}
-	return s.mu.acceptor.AcceptTableBatch(ctx, batch, opts)
+	return acc.AcceptTableBatch(ctx, batch, opts)
 }
 
 // Unwrap is an informal protocol to return the delegate.

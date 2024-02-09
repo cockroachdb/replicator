@@ -17,15 +17,16 @@
 package pglogical
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/source/logical"
+	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
 )
 
 // PGLogical is a PostgreSQL logical replication loop.
 type PGLogical struct {
+	Conn        *Conn
 	Diagnostics *diag.Diagnostics
-	Loop        *logical.Loop
+	Memo        types.Memo // Support testing.
 }
 
 var (

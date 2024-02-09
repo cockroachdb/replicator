@@ -1,4 +1,4 @@
-// Copyright 2023 The Cockroach Authors
+// Copyright 2024 The Cockroach Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,29 +14,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build wireinject
-// +build wireinject
-
-package logical
+// Package sinkprod contains configuration and providers for connecting
+// to production database(s).
+package sinkprod
 
 import (
-	"context"
+	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
-func NewFactoryForTests(ctx *stopper.Context, config Config) (*Factory, error) {
-	panic(wire.Build(
-		Set,
-		diag.New,
-		script.Set,
-		staging.Set,
-		target.Set,
-		wire.Bind(new(context.Context), new(*stopper.Context)),
-	))
-}
+// Set is used by Wire.
+var Set = wire.NewSet(
+	ProvideStagingDB,
+	ProvideStagingPool,
+	ProvideTargetPool,
+	ProvideStatementCache,
+)
+
+const (
+	defaultApplyTimeout = 30 * time.Second
+	defaultLifetime     = 10 * time.Minute
+	defaultCacheSize    = 128
+	defaultPoolSize     = 128
+)

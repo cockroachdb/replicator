@@ -33,6 +33,11 @@ import (
 // SELECT *, event_op() as __event_op__
 func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	table := req.target.(ident.Table)
+	target, err := h.Targets.getTarget(table.Schema())
+	if err != nil {
+		return err
+	}
+
 	keys, err := h.getPrimaryKey(req)
 	if err != nil {
 		return err
@@ -63,7 +68,7 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	}
 	// Aggregate the mutations by target table. We know that the default
 	// batch size for webhooks is reasonable.
-	toProcess := &ident.TableMap[[]types.Mutation]{}
+	toProcess := &types.MultiBatch{}
 	for _, payload := range message.Payload {
 		qp := queryPayload{
 			keys: keys,
@@ -75,10 +80,9 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		if err != nil {
 			return err
 		}
-		toProcess.Put(table, append(toProcess.GetZero(table), mut))
+		if err := toProcess.Accumulate(table, mut); err != nil {
+			return err
+		}
 	}
-	if h.Config.Immediate {
-		return h.processMutationsImmediate(ctx, table.Schema(), toProcess)
-	}
-	return h.processMutationsDeferred(ctx, toProcess)
+	return target.acceptor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{})
 }

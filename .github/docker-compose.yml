@@ -158,6 +158,8 @@ services:
       - postgres
       - -c
       - wal_level=logical
+      - -c
+      - max_connections=512
   postgresql-v12:
     image: postgres:12
     environment:
@@ -168,6 +170,8 @@ services:
       - postgres
       - -c
       - wal_level=logical
+      - -c
+      - max_connections=512
   postgresql-v13:
     image: postgres:13
     environment:
@@ -178,6 +182,8 @@ services:
       - postgres
       - -c
       - wal_level=logical
+      - -c
+      - max_connections=512
   postgresql-v14:
     image: postgres:14
     environment:
@@ -188,6 +194,8 @@ services:
       - postgres
       - -c
       - wal_level=logical
+      - -c
+      - max_connections=512
   postgresql-v15:
     image: postgres:15
     environment:
@@ -198,4 +206,6 @@ services:
       - postgres
       - -c
       - wal_level=logical
+      - -c
+      - max_connections=512
 

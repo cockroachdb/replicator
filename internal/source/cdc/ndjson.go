@@ -24,13 +24,10 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
-	"golang.org/x/sync/errgroup"
 )
 
 // parseMutation takes a single line from an ndjson and extracts enough
@@ -75,57 +72,9 @@ func parseNdjsonMutation(_ *request, rawBytes []byte) (types.Mutation, error) {
 // Stager will store duplicate values in an idempotent manner,
 // should the request fail partway through.
 func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation) error {
-	target := req.target.(ident.Table)
+	table := req.target.(ident.Table)
+	batch := &types.MultiBatch{}
 
-	var commit func() error
-	var flush func(muts []types.Mutation) error
-
-	if h.Config.Immediate {
-		batcher, err := h.Immediate.Get(target.Schema())
-		if err != nil {
-			return err
-		}
-		batch, err := batcher.OnBegin(ctx)
-		if err != nil {
-			return err
-		}
-		source := script.SourceName(target)
-		// Push the data into the pipeline.
-		flush = func(muts []types.Mutation) error {
-			for idx := range muts {
-				// Index needed since it's not a pointer type. We don't
-				// create metadata in the scan phase, because this
-				// computation is only relevant to immediate mode. It's
-				// going to be re-computed in deferred mode.
-				script.AddMeta("cdc", target, &muts[idx])
-			}
-			return batch.OnData(ctx, source, target, muts)
-		}
-		commit = func() error {
-			select {
-			case err := <-batch.OnCommit(ctx):
-				return err
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-
-	} else {
-		eg, egCtx := errgroup.WithContext(ctx)
-
-		store, err := h.Stores.Get(ctx, target)
-		if err != nil {
-			return err
-		}
-		// Start a goroutine to stage the data so we can keep decoding.
-		flush = func(muts []types.Mutation) error {
-			eg.Go(func() error { return store.Stage(egCtx, h.StagingPool, muts) })
-			return nil
-		}
-		commit = eg.Wait
-	}
-
-	muts := make([]types.Mutation, 0, batches.Size())
 	scanner := bufio.NewScanner(req.body)
 	// Our config defaults to bufio.MaxScanTokenSize.
 	scanner.Buffer(make([]byte, 0, h.Config.NDJsonBuffer), h.Config.NDJsonBuffer)
@@ -138,22 +87,18 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		if err != nil {
 			return err
 		}
-		muts = append(muts, mut)
-		if len(muts) == cap(muts) {
-			if err := flush(muts); err != nil {
-				return err
-			}
-			muts = make([]types.Mutation, 0, batches.Size())
+		if err := batch.Accumulate(table, mut); err != nil {
+			return err
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	if len(muts) > 0 {
-		if err := flush(muts); err != nil {
-			return err
-		}
+
+	target, err := h.Targets.getTarget(table.Schema())
+	if err != nil {
+		return err
 	}
 
-	return commit()
+	return target.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{})
 }

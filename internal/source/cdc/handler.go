@@ -42,11 +42,8 @@ var sanitizer = strings.NewReplacer("\n", " ", "\r", " ")
 type Handler struct {
 	Authenticator types.Authenticator // Access checks.
 	Config        *Config             // Runtime options.
-	Immediate     *Immediate          // Non-transactional mutations.
-	Resolvers     *Resolvers          // Process resolved timestamps.
-	StagingPool   *types.StagingPool  // Access to the staging cluster.
-	Stores        types.Stagers       // Record incoming json blobs.
 	TargetPool    *types.TargetPool   // Access to the target cluster.
+	Targets       *Targets            // Access to target schemas.
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

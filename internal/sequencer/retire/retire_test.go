@@ -75,7 +75,7 @@ func TestRetire(t *testing.T) {
 
 	stager, err := fixture.Stagers.Get(ctx, tblInfo.Name())
 	r.NoError(err)
-	r.NoError(stager.Store(ctx, fixture.StagingPool, muts))
+	r.NoError(stager.Stage(ctx, fixture.StagingPool, muts))
 
 	// Unstage mutations, marking them as applied.
 	unstaged := 0

@@ -79,7 +79,6 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	appliers := apply.ProvideFactory(acceptor)
 	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
@@ -97,7 +96,6 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	allFixture := &Fixture{
 		Fixture:        fixture,
 		ApplyAcceptor:  acceptor,
-		Appliers:       appliers,
 		Checkpoints:    checkpoints,
 		Configs:        configs,
 		Diagnostics:    diagnostics,
