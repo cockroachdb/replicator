@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"time"
 
@@ -85,8 +86,9 @@ type lease struct {
 
 // leases coordinates global, singleton activities.
 type leases struct {
-	cfg Config
-	sql struct {
+	cfg      Config
+	hostname string // For operator convenience, not correctness.
+	sql      struct {
 		acquire string
 		release string
 		renew   string
@@ -118,7 +120,8 @@ const (
 CREATE TABLE IF NOT EXISTS %s (
   name STRING PRIMARY KEY,
   expires TIMESTAMP NOT NULL,
-  nonce UUID NOT NULL
+  nonce UUID NOT NULL,
+  hostname STRING NOT NULL
 )`
 )
 
@@ -132,10 +135,25 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 		return nil, errors.WithStack(err)
 	}
 
+	// Upgrade schema in place.
+	_, err = cfg.Pool.Exec(ctx, fmt.Sprintf(
+		"ALTER TABLE %s ADD COLUMN IF NOT EXISTS "+
+			"hostname STRING NOT NULL", cfg.Target))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	l := &leases{cfg: cfg}
 	l.sql.acquire = fmt.Sprintf(acquireTemplate, cfg.Target)
 	l.sql.release = fmt.Sprintf(releaseTemplate, cfg.Target)
 	l.sql.renew = fmt.Sprintf(renewTemplate, cfg.Target)
+
+	if l.hostname, err = os.Hostname(); err == nil {
+		log.Tracef("lease hostname: %s", l.hostname)
+	} else {
+		l.hostname = uuid.NewString()
+		log.Warnf("could not determine OS hostname, will use as %s instead", l.hostname)
+	}
 
 	return l, nil
 }
@@ -354,19 +372,19 @@ func (l *leases) acquire(
 // multiple names by making $1 an array and unnest().
 const acquireTemplate = `
 WITH
-  proposed (name, expires, nonce) AS (VALUES ($1::STRING, $2::TIMESTAMP, gen_random_uuid())),
+  proposed (name, expires, nonce, hostname) AS (
+    VALUES ($1::STRING, $2::TIMESTAMP, gen_random_uuid(), $3::STRING)),
   blocking AS (
     SELECT x.expires
     FROM %[1]s x
     JOIN proposed USING (name)
-    WHERE x.expires > $3::TIMESTAMP
-    FOR UPDATE
-    LIMIT 1),
+    WHERE x.expires > $4::TIMESTAMP
+    FOR UPDATE),
   acquired AS (
-    UPSERT INTO %[1]s
-    SELECT name, expires, nonce
+    UPSERT INTO %[1]s (name, expires, nonce, hostname)
+    SELECT name, expires, nonce, hostname
     FROM proposed
-    WHERE (SELECT count(*) FROM blocking) = 0
+    WHERE NOT EXISTS (SELECT * FROM blocking)
     RETURNING nonce)
 SELECT (SELECT expires FROM blocking), (SELECT nonce FROM acquired)
 `
@@ -382,12 +400,12 @@ func (l *leases) tryAcquire(
 	var blockedUntil *time.Time
 	var nonce uuid.UUID
 
-	// Explicit call to Format needed for compatibility with CRDB 20.2.
 	if err := l.cfg.Pool.QueryRow(ctx,
 		l.sql.acquire,
 		name,
-		expires.Format(time.RFC3339Nano),
-		now.Format(time.RFC3339Nano),
+		expires,
+		l.hostname,
+		now,
 	).Scan(&blockedUntil, &nonce); err != nil {
 		return lease{}, false, errors.WithStack(err)
 	}
