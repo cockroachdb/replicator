@@ -242,7 +242,7 @@ func (a *apply) deleteLocked(
 	if len(muts) == 0 {
 		return nil
 	}
-
+	pkCols := a.mu.templates.PKDelete
 	keyGroups := make([][]any, len(muts))
 	if err := pjson.Decode(ctx, keyGroups, func(i int) []byte {
 		return muts[i].Key
@@ -250,26 +250,25 @@ func (a *apply) deleteLocked(
 		return err
 	}
 
-	allArgs := make([]any, 0, len(a.mu.templates.PKDelete)*len(muts))
+	allArgs := make([]any, 0, len(pkCols)*len(muts))
 	for i, keyGroup := range keyGroups {
-		if len(keyGroup) != len(a.mu.templates.PKDelete) {
+		if len(keyGroup) != len(pkCols) {
 			return errors.Errorf(
 				"schema drift detected in %s: "+
 					"inconsistent number of key columns: "+
 					"received %d expect %d: "+
 					"key %s@%s",
 				a.target,
-				len(keyGroup), len(a.mu.templates.PKDelete),
+				len(keyGroup), len(pkCols),
 				string(muts[i].Key), muts[i].Time)
 		}
-		allArgs = append(allArgs, keyGroup...)
-	}
 
-	for idx, arg := range allArgs {
-		if num, ok := arg.(json.Number); ok {
-			// See comment in upsertLocked().
-			allArgs[idx] = removeExponent(num).String()
+		// See discussion in upsertArgsLocked.
+		if err := toDBTypes(pkCols, keyGroup); err != nil {
+			return err
 		}
+
+		allArgs = append(allArgs, keyGroup...)
 	}
 
 	// The statement and its cache key will vary if the target supports
@@ -360,21 +359,9 @@ func (a *apply) upsertArgsLocked(bags []*merge.Bag) ([]any, error) {
 			// fixes to reified values. That is, if the target database
 			// requires special formatting or other data encapsulation,
 			// this is the place to do it.
-			value := entry.Value
-			if num, ok := value.(json.Number); ok {
-				// The JSON parser is configured to parse numbers as though
-				// they were strings.  We'll keep the string encoding so
-				// that the target database can tell us if the string value
-				// exceeds the precision or scale for the target column.
-				value = removeExponent(num).String()
-			} else if value != nil && entry.Column.Parse != nil {
-				// Target-driver specific fixups.
-				v, err := entry.Column.Parse(value)
-				if err != nil {
-					return errors.Wrapf(err, "could not parse %v as a %s",
-						value, entry.Column.Type)
-				}
-				value = v
+			value, err := toDBType(entry.Column, entry.Value)
+			if err != nil {
+				return err
 			}
 
 			// Now that we know what value we're inserting, we need to
@@ -752,4 +739,43 @@ func toColumns(columns, rows int, data []any) ([]any, error) {
 		}
 	}
 	return colData, nil
+}
+
+// toDBType returns a replacement value if needed to pass the reified
+// type to the database.
+func toDBType(colData *types.ColData, value any) (any, error) {
+	if num, ok := value.(json.Number); ok {
+		// The JSON parser is configured to parse numbers as though
+		// they were strings.  We'll keep the string encoding so
+		// that the target database can tell us if the string value
+		// exceeds the precision or scale for the target column.
+		return removeExponent(num).String(), nil
+	}
+	if value != nil && colData.Parse != nil {
+		// Target-driver specific fixups.
+		var err error
+		value, err = colData.Parse(value)
+		if err != nil {
+			return nil, errors.Wrapf(err, "could not parse %v as a %s",
+				value, colData.Type)
+
+		}
+	}
+	return value, nil
+}
+
+// toDBTypes updates the values slice in place to convert our reified
+// value types into something the database is willing to accept.
+func toDBTypes(colData []types.ColData, values []any) error {
+	if len(colData) != len(values) {
+		return errors.Errorf("length mismatch %d vs %d", len(colData), len(values))
+	}
+	for idx, value := range values {
+		var err error
+		values[idx], err = toDBType(&colData[idx], value)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

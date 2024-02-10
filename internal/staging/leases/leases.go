@@ -152,8 +152,9 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 		log.Tracef("lease hostname: %s", l.hostname)
 	} else {
 		l.hostname = uuid.NewString()
-		log.Warnf("could not determine OS hostname, will use as %s instead", l.hostname)
+		log.Warnf("could not determine OS hostname, will use %s instead", l.hostname)
 	}
+	l.hostname = fmt.Sprintf("%s (pid: %d)", l.hostname, os.Getpid())
 
 	return l, nil
 }

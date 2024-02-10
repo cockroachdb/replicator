@@ -1132,9 +1132,18 @@ func TestAllDataTypes(t *testing.T) {
 
 			mut := types.Mutation{
 				Data: []byte(fmt.Sprintf(`{"k":1,"val":%s}`, jsonValue)),
-				Key:  []byte(`[1]`),
+			}
+			if tc.indexable {
+				mut.Key = []byte(fmt.Sprintf(`[%s]`, jsonValue))
+			} else {
+				mut.Key = []byte(`[1]`)
 			}
 			r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
+
+			// Cross-check for delete case below.
+			count, err := tbl.RowCount(ctx)
+			r.NoError(err)
+			r.Equal(1, count)
 
 			expectJSON := jsonValue
 			if tc.expectJSON != "" {
@@ -1163,6 +1172,17 @@ func TestAllDataTypes(t *testing.T) {
 			readBack, err = normalizeJSON(readBack)
 			r.NoError(err)
 			r.Equal(expectJSON, readBack)
+
+			// If the type can be part of a primary key, we also want to
+			// verify that we can delete instances of this type.
+			if tc.indexable {
+				// Turn the mutation into a deletion.
+				mut.Data = nil
+				r.NoError(app.Apply(ctx, fixture.TargetPool, []types.Mutation{mut}))
+				count, err := tbl.RowCount(ctx)
+				r.NoError(err)
+				r.Zero(count)
+			}
 		})
 	}
 }
