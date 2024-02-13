@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +39,7 @@ func TestBypass(t *testing.T) {
 	fixture, err := all.NewFixture(t)
 	r.NoError(err)
 	ctx := fixture.Context
+	fakeTable := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("bypass_table"))
 
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
 		&sequencer.Config{
@@ -48,10 +50,15 @@ func TestBypass(t *testing.T) {
 		&script.Config{})
 	r.NoError(err)
 	bypass := seqFixture.Bypass
-	acc, _, err := bypass.Start(ctx, &sequencer.StartOptions{
-		Bounds:   &notify.Var[hlc.Range]{}, // Unused fake.
+
+	bounds := &notify.Var[hlc.Range]{}
+	acc, stats, err := bypass.Start(ctx, &sequencer.StartOptions{
+		Bounds:   bounds,
 		Delegate: types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
-		Group:    &types.TableGroup{}, // Unused fake.
+		Group: &types.TableGroup{
+			Name:   ident.New("bypass_group"),
+			Tables: []ident.Table{fakeTable},
+		},
 	})
 	r.NoError(err)
 
@@ -72,4 +79,19 @@ func TestBypass(t *testing.T) {
 	ct, err := parentInfo.RowCount(ctx)
 	r.NoError(err)
 	r.Equal(1, ct)
+
+	// Ensure table progress tracks resolved timestamps.
+	resolved := hlc.New(100, 100)
+	bounds.Set(hlc.Range{hlc.Zero(), resolved})
+	for {
+		stat, changed := stats.Get()
+		if stat.Progress().GetZero(fakeTable) == resolved {
+			break
+		}
+		select {
+		case <-changed:
+		case <-ctx.Stopping():
+			r.Fail("timed out")
+		}
+	}
 }
