@@ -116,9 +116,6 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
 	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
-		if htc.immediate {
-			return nil
-		}
 		cdcTarget, err := h.Targets.getTarget(target.Schema())
 		if err != nil {
 			return err
@@ -314,9 +311,6 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
 	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
-		if cfg.immediate {
-			return nil
-		}
 		cdcTarget, err := h.Targets.getTarget(target.Schema())
 		if err != nil {
 			return err
