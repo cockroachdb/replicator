@@ -305,7 +305,7 @@ func ProvideTargetSchema(
 			return sinktest.TargetSchema{}, err
 		}
 
-		nextCache := ProvideTargetStatements(ctx, next)
+		nextCache := ProvideTargetStatements(next)
 		pool.ConnectionString = conn
 		pool.DB = next.DB
 		stmts.Cache = nextCache.Cache
@@ -316,9 +316,8 @@ func ProvideTargetSchema(
 // ProvideTargetStatements is called by Wire to construct a
 // prepared-statement cache. Anywhere the associated TargetPool is
 // reused should also reuse the cache.
-func ProvideTargetStatements(ctx *stopper.Context, pool *types.TargetPool) *types.TargetStatements {
+func ProvideTargetStatements(pool *types.TargetPool) *types.TargetStatements {
 	ret := stmtcache.New[string](pool.DB, statementCacheSize)
-	ctx.Defer(ret.Close)
 	return &types.TargetStatements{Cache: ret}
 }
 

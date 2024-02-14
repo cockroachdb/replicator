@@ -51,7 +51,13 @@ func OpenOracleAsTarget(
 			Product:          types.ProductOracle,
 		},
 	}
-	ctx.Defer(func() { _ = ret.Close() })
+	// Allow tests to cycle faster by moving database pool shutdown out
+	// of the critical path.
+	ctx.Defer(func() {
+		go func() {
+			_ = ret.Close()
+		}()
+	})
 
 ping:
 	if err := ret.Ping(); err != nil {

@@ -65,14 +65,6 @@ func New[T comparable](db *sql.DB, size int) *Cache[T] {
 	return ret
 }
 
-// Close is called to remove and close all existing statements.
-func (c *Cache[T]) Close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.mu.cache.Clear()
-}
-
 // Diagnostic implements [diag.Diagnostic]. It returns the capacity and
 // size of the cache.
 func (c *Cache[T]) Diagnostic(_ context.Context) any {
