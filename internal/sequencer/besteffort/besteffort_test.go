@@ -45,7 +45,7 @@ func TestAcceptAndSweep(t *testing.T) {
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
 		&sequencer.Config{
 			Parallelism:     2,
-			QuiescentPeriod: time.Second,
+			QuiescentPeriod: 100 * time.Millisecond,
 			SweepLimit:      1000,
 		},
 		&script.Config{})
@@ -216,13 +216,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	sweepProgress, swept := stats.Get()
 	for {
 		if sweepProgress.Progress().Len() == len(group.Tables) {
-			done := true
-			r.NoError(sweepProgress.Progress().Range(func(tbl ident.Table, upTo hlc.Time) error {
-				if upTo != hlc.New(100, 0) {
-					done = false
-				}
-				return nil
-			}))
+			done := hlc.Compare(sequencer.CommonMin(sweepProgress), hlc.New(100, 0)) >= 0
 			if done {
 				break
 			}
@@ -233,8 +227,12 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		case <-ctx.Done():
 		}
 	}
+	// This stat is a running total across potentially multiple
+	// iterations. It's safe to check Applied, but the number of
+	// attempts is unpredictable, although it will always be at least
+	// the number of potential records.
 	r.Equal(3, sweepProgress.(*besteffort.Stat).Applied)
-	r.Equal(5, sweepProgress.(*besteffort.Stat).Attempted)
+	r.GreaterOrEqual(sweepProgress.(*besteffort.Stat).Attempted, 5)
 
 	// Examine the remaining staged values. We should see the entries
 	// with parent:2.

@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -65,11 +66,11 @@ func (a *acceptor) Unwrap() types.TableAcceptor {
 // already exists. This ensures that per-key data flows in an ordered
 // fashion.
 //
-// If the attempt to write the remainder of the batch fails and
-// [isDeferrableError] returns true, this method will retry each
-// mutation individually. If an individual mutation cannot be written,
-// again due to a deferrable error, it will be written instead a staging
-// table.
+// If the attempt to write the remainder of the batch fails, this method
+// will retry each mutation individually. If an individual mutation
+// cannot be written to the target, it will be written instead a staging
+// table. This helps to prevent backpressure on the source if the target
+// is malfunctioning.
 //
 // The errgroup argument is used to control overall parallelism when
 // operating at the individual row level.
@@ -115,31 +116,39 @@ func (a *acceptor) applyOrStage(
 			appliedCount.Add(float64(len(attempt)))
 			duration.Observe(time.Since(start).Seconds())
 			return nil
-		} else if !isDeferrableError(err) {
-			// If the error isn't deferrable, we want to fail out now.
-			errCount.Inc()
-			return errors.WithStack(err)
 		}
 	}
 
-	// Apply or stage each mutation individually.
+	// We've encountered some error that may affect one or all of the
+	// mutations in the batch. We'll retry each mutation individually in
+	// the hope of making partial progress on the target. Any mutations
+	// that can't be written to the target can at least be written to
+	// the staging table and processed later. This ultimately allows
+	// BestEffort to insulate the source (changefeed) from target
+	// database malfunction, schema drift, etc. as long as the staging
+	// table can be written to.
 	for idx := range attempt {
 		singleBatch := batch.Empty()
 		singleBatch.Data = []types.Mutation{batch.Data[idx]}
 		eg.Go(func() error {
-			if err := acceptor.AcceptTableBatch(ctx, singleBatch, &types.AcceptOptions{}); err == nil {
+			err := acceptor.AcceptTableBatch(ctx, singleBatch, &types.AcceptOptions{
+				TargetQuerier: a.targetPool,
+			})
+			if err == nil {
 				// This mutation was applied, so continue onwards.
 				appliedCount.Inc()
 				return nil
-			} else if !isDeferrableError(err) {
-				errCount.Inc()
-				return errors.WithStack(err)
+			}
+			deferredCount.Inc()
+			// We'll suppress errors like FK constraint violations.
+			if !isNormalError(err) {
+				log.WithError(err).Warnf("staging mutation instead of target table %s key %s",
+					singleBatch.Table, string(singleBatch.Data[0].Key))
 			}
 			if err := stager.Stage(ctx, a.stagingPool, singleBatch.Data); err != nil {
 				errCount.Inc()
 				return errors.WithStack(err)
 			}
-			deferredCount.Inc()
 			return nil
 		})
 	}
