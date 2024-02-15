@@ -51,7 +51,16 @@ func OpenOracleAsTarget(
 			Product:          types.ProductOracle,
 		},
 	}
-	ctx.Defer(func() { _ = ret.Close() })
+	ctx.Defer(func() {
+		// It can take a non-trivial amount of time for this close to
+		// happen, since it waits for any in-flight requests to finish
+		// as opposed to terminating them early. This slowness
+		// complicates test cleanup, since the test can't finish until
+		// the pool has closed.
+		go func() {
+			_ = ret.Close()
+		}()
+	})
 
 ping:
 	if err := ret.Ping(); err != nil {
