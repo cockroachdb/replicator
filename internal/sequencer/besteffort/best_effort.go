@@ -184,6 +184,13 @@ func (s *BestEffort) sweepOnce(
 	}
 	stat := &Stat{LastTable: tbl}
 	q := &types.UnstageCursor{
+		// This is a hack until Unstage can tell us how many deferred
+		// mutations were skipped.
+		//
+		// TODO: We need a signal from Unstage to indicate that there
+		// are lease-filtered mutations so we know not to advance the
+		// minimum bound on the resolving window.
+		IgnoreLeases:   true,
 		StartAt:        bounds.Min(),
 		EndBefore:      bounds.Max(),
 		Targets:        []ident.Table{tbl},
@@ -191,9 +198,8 @@ func (s *BestEffort) sweepOnce(
 		UpdateLimit:    s.cfg.SweepLimit,
 	}
 	for hasMore := true; hasMore && !ctx.IsStopping(); {
-		// Reserve the mutation for a period of time. This will create
-		// an upper bound on the rate at which any given mutation is
-		// attempted.
+		// Set a lease to prevent the mutations from being marked as
+		// applied.
 		q.LeaseExpiry = time.Now().Add(s.cfg.QuiescentPeriod)
 
 		// Collect some number of mutations.
@@ -228,10 +234,10 @@ func (s *BestEffort) sweepOnce(
 				successIdx++
 				continue
 			}
-			// Ignore deferrable errors, we'll try again later. We'll
+			// Ignore expected errors, we'll try again later. We'll
 			// leave the lease intact so that we might skip the mutation
 			// until a later cycle.
-			if isDeferrableError(err) {
+			if isNormalError(err) {
 				deferrals.Inc()
 				continue
 			}
@@ -255,21 +261,28 @@ func (s *BestEffort) sweepOnce(
 		stat.Applied += successIdx
 	}
 
+	// We'll allow the resolving window to advance only if we applied
+	// all mutations that we saw.
+	if stat.Attempted == stat.Applied {
+		stat.LastTime = bounds.Max()
+	} else {
+		stat.LastTime = bounds.Min()
+	}
+
 	log.Tracef("BestEffort.sweepOnce: completed %s (%d applied of %d attempted)",
 		tbl, stat.Applied, stat.Attempted)
-	stat.LastTime = q.EndBefore
 	duration.Observe(time.Since(start).Seconds())
 	sweepAttempted.Add(float64(stat.Attempted))
 	sweepApplied.Add(float64(stat.Applied))
 	return stat, nil
 }
 
-// isDeferrableError returns true if the error represents a temporary
-// error which implies that the operation may succeed in the future
-// (e.g. FK constraints).
+// isNormalError returns true if the error represents an error that's
+// likely to go away on its own in the future (e.g. FK constraints).
+// These are errors that we're ok with reducing log levels for.
 //
 // https://github.com/cockroachdb/cdc-sink/issues/688
-func isDeferrableError(err error) bool {
+func isNormalError(err error) bool {
 	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
 		return pgErr.Code == "23503" // foreign_key_violation
 	} else if myErr := (*mysql.MySQLError)(nil); errors.As(err, &myErr) {
@@ -282,6 +295,11 @@ func isDeferrableError(err error) bool {
 			// it's possible for two concurrent merges to attempt to
 			// insert the same row.
 			return true
+		case 60: // ORA-00060: Deadlock detected
+		// Our attempt to insert ran into another transaction, possibly
+		// from a different cdc-sink instance. This can happen since a
+		// MERGE operation reads before it starts writing and the order
+		// in which locks are acquired may vary.
 		case 2291: // ORA-02291: integrity constraint
 			return true
 		}

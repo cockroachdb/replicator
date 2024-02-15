@@ -134,15 +134,9 @@ val INT DEFAULT 0 NOT NULL
 	// Wait until all tables have advanced to the "current" HLC time.
 	waitForCatchUp := func(r *require.Assertions) {
 		for {
-			nextStat, changed := stat.Get()
-			caughtUp := true
 			expected := hlc.New(hlcTime-1, 1) // The hlcTime is ++'ed at the end of sendBatches()
-			for _, tbl := range group.Tables {
-				if nextStat.Progress().GetZero(tbl) != expected {
-					caughtUp = false
-					break
-				}
-			}
+			nextStat, changed := stat.Get()
+			caughtUp := hlc.Compare(sequencer.CommonMin(nextStat), expected) >= 0
 			if !caughtUp {
 				select {
 				case <-changed:
