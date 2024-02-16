@@ -73,28 +73,15 @@ func (tx *targetTX) enter(script *UserScript) error {
 
 // Exec is exported to the userscript.
 func (tx *targetTX) Exec(q string, args ...any) *goja.Promise {
-	// Only called from JS, so we know that rtMu is locked.
-	promise, resolve, reject := tx.parent.rt.NewPromise()
-
-	// Execute the SQL in a (pooled) background goroutine.
-	tx.parent.execTask(func() {
+	return tx.parent.execTrackedPromise(tx, func(resolve func(result any)) error {
 		tx.mu.Lock()
-		_, err := tx.tq.ExecContext(tx.ctx, q, args...)
-		tx.mu.Unlock()
-		err = errors.Wrap(err, q)
-
-		// Ignoring error since closure never returns an error.
-		_ = tx.parent.execJS(func(rt *goja.Runtime) error {
-			if err == nil {
-				resolve(goja.Undefined())
-			} else {
-				reject(err)
-			}
-			return nil
-		})
+		defer tx.mu.Unlock()
+		if _, err := tx.tq.ExecContext(tx.ctx, q, args...); err != nil {
+			return errors.Wrap(err, q)
+		}
+		resolve(goja.Undefined())
+		return nil
 	})
-
-	return promise
 }
 
 // Exit implements [asyncTracker]. It will clean up the references set
@@ -105,49 +92,42 @@ func (tx *targetTX) exit(script *UserScript) error {
 
 // Query is exported to the userscript.
 func (tx *targetTX) Query(q string, args ...any) *goja.Promise {
-	// Only called from JS, so we know that rtMu is locked.
-	promise, resolve, reject := tx.parent.rt.NewPromise()
+	// Pre-construct the iterator JS object by setting
+	// Symbol.iterator to a function that returns a value which
+	// implements the iterator protocol (i.e. has a next()
+	// function). We want to do this while we're being called from JS.
+	obj := tx.parent.rt.NewObject()
+	iterator := &rowsIter{}
+	if err := obj.SetSymbol(goja.SymIterator, func() *rowsIter {
+		return iterator
+	}); err != nil {
+		failed, _, rejected := tx.parent.rt.NewPromise()
+		rejected(errors.WithStack(err))
+		return failed
+	}
 
 	// Execute the SQL in a (pooled) background goroutine.
-	tx.parent.execTask(func() {
+	return tx.parent.execTrackedPromise(tx, func(resolve func(any)) error {
 		tx.mu.Lock()
+		defer tx.mu.Unlock()
 		rows, err := tx.tq.QueryContext(tx.ctx, q, args...)
-		tx.mu.Unlock()
+		if err != nil {
+			return errors.Wrap(err, q)
+		}
+		defer func() { _ = rows.Close() }()
+
+		iterator.rows = rows
 
 		// Extract the number of columns for the result iterator.
-		var numCols int
-		if err == nil {
-			var names []string
-			names, err = rows.Columns()
-			numCols = len(names)
+		if names, err := rows.Columns(); err == nil {
+			iterator.colCount = len(names)
+		} else {
+			return errors.Wrap(err, q)
 		}
-		err = errors.Wrap(err, q)
 
-		// Once the results are ready, re-enter the JS runtime mutex to
-		// fulfil the promise. Ignoring error since closure never
-		// returns an error.
-		_ = tx.parent.execJS(func(rt *goja.Runtime) error {
-			if err != nil {
-				reject(err)
-				return nil
-			}
-
-			// Construct the iterator JS object by setting
-			// Symbol.iterator to a function that returns a value which
-			// implements the iterator protocol (i.e. has a next()
-			// function).
-			obj := rt.NewObject()
-			if err := obj.SetSymbol(goja.SymIterator, func() *rowsIter {
-				return &rowsIter{numCols, rows}
-			}); err != nil {
-				return errors.WithStack(err)
-			}
-			resolve(obj)
-			return nil
-		})
+		resolve(obj)
+		return nil
 	})
-
-	return promise
 }
 
 // Schema is exported to the userscript.
