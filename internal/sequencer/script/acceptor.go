@@ -99,7 +99,11 @@ func (a *acceptor) doDispatch(
 			return err
 		}
 	}
-
+	// Calls to source.Dispatch may remove mutations.
+	// If the replacement batch is empty, we are done.
+	if nextBatch.Count() == 0 {
+		return nil
+	}
 	// Drop the source so that we'll always call doMap.
 	cpy := *a
 	cpy.justMap = true
