@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
     lease TIMESTAMP NULL,
   %[2]s
   PRIMARY KEY (nanos, logical, key),
+    INDEX %[3]s (key, nanos, logical) WHERE NOT applied, -- Improve performance of StageIfExists
    FAMILY cold (mut, before),
    FAMILY hot (applied, lease)
 )`
@@ -102,17 +103,18 @@ func newStage(
 	ctx *stopper.Context, db *types.StagingPool, stagingDB ident.Schema, target ident.Table,
 ) (*stage, error) {
 	table := stagingTable(stagingDB, target)
-
+	keyIdx := ident.New(table.Table().Raw() + "_key_applied")
 	// Try to create the staging table with a helper virtual column. We
 	// never query for it, so it should have essentially no cost.
 	if err := retry.Execute(ctx, db, fmt.Sprintf(tableSchema, table,
-		`source_time TIMESTAMPTZ AS (to_timestamp(nanos::float/1e9)) VIRTUAL,`)); err != nil {
+		`source_time TIMESTAMPTZ AS (to_timestamp(nanos::float/1e9)) VIRTUAL,`,
+		keyIdx)); err != nil {
 
 		// Old versions of CRDB don't know about to_timestamp(). Try
 		// again without the helper column.
 		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
 			if pgErr.Code == "42883" /* unknown function */ {
-				err = retry.Execute(ctx, db, fmt.Sprintf(tableSchema, table, ""))
+				err = retry.Execute(ctx, db, fmt.Sprintf(tableSchema, table, "", keyIdx))
 			}
 		}
 		if err != nil {
@@ -122,6 +124,7 @@ func newStage(
 
 	// Transparently upgrade older staging tables. This avoids needing
 	// to add a breaking change to the Versions slice.
+	log.Tracef("upgrading schema for %s", table)
 	if err := retry.Execute(ctx, db, fmt.Sprintf(`
 ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
 `, table)); err != nil {
@@ -132,6 +135,12 @@ ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS lease TIMESTAMP NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
+	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key, nanos, logical) WHERE NOT applied
+`, keyIdx, table)); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	log.Tracef("completed schema upgrades for %s", table)
 
 	labels := metrics.TableValues(target)
 	s := &stage{
