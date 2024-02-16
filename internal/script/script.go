@@ -648,13 +648,41 @@ func (s *UserScript) execJS(fn func(rt *goja.Runtime) error) error {
 	return s.execTrackedJS(nil, fn)
 }
 
-// execTask runs a background goroutine, but limits the total number of
-// active tasks to a reasonable value.
-func (s *UserScript) execTask(fn func()) {
+// execTrackedPromise runs a background goroutine, but limits the total
+// number of active tasks to a reasonable value. The resolve callback is
+// safe to call from any goroutine. The use of a function callback, as
+// opposed to using a return value, allows the promise implementation to
+// clean up any resources that may be used by the continuation. If the
+// promise implementation returns an error, the promise will be
+// rejected. The tracker reference may be nil.
+func (s *UserScript) execTrackedPromise(
+	tracker asyncTracker,
+	fn func(resolve func(result any)) error) *goja.Promise {
+	promise, resolve, reject := s.rt.NewPromise()
+
+	safeResolve := func(result any) {
+		// Ignoring error since callback returns nil.
+		_ = s.execTrackedJS(tracker, func(rt *goja.Runtime) error {
+			resolve(result)
+			return nil
+		})
+	}
+	safeReject := func(result any) {
+		// Ignoring error since callback returns nil.
+		_ = s.execTrackedJS(tracker, func(rt *goja.Runtime) error {
+			reject(result)
+			return nil
+		})
+	}
+
 	s.tasks.Go(func() error {
-		fn()
+		if err := fn(safeResolve); err != nil {
+			safeReject(err)
+		}
 		return nil
 	})
+
+	return promise
 }
 
 // An asyncTracker receives entry and exit callbacks to configure the
