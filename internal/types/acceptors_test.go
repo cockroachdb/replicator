@@ -62,6 +62,9 @@ func TestOrderedAcceptor(t *testing.T) {
 
 	rec := &recorder.Recorder{}
 	acc := types.OrderedAcceptorFrom(rec, &fakeWatchers{schemaData})
+	// We check that an empty batch works
+	r.NoError(acc.AcceptMultiBatch(ctx, &types.MultiBatch{}, &types.AcceptOptions{}))
+	// We check that the batch created before works
 	r.NoError(acc.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{}))
 
 	// We expect to see exactly one call per table and the table order
@@ -95,7 +98,10 @@ type fakeWatchers struct {
 	data *types.SchemaData
 }
 
-func (w *fakeWatchers) Get(ident.Schema) (types.Watcher, error) {
+func (w *fakeWatchers) Get(sch ident.Schema) (types.Watcher, error) {
+	if sch.Empty() {
+		return nil, errors.New("empty schema")
+	}
 	return &fakeWatcher{w.data}, nil
 }
 

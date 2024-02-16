@@ -103,6 +103,9 @@ func (t *orderedAdapter) AcceptTemporalBatch(
 func (t *orderedAdapter) AcceptMultiBatch(
 	ctx context.Context, batch *MultiBatch, options *AcceptOptions,
 ) error {
+	if batch.Count() == 0 {
+		return nil
+	}
 	// Coalesce all data by destination table.
 	var commonSchema ident.Schema
 	var mutsByTable ident.TableMap[[]Mutation]
