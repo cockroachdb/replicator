@@ -60,6 +60,10 @@ func TestResolved(t *testing.T) {
 		r := require.New(t)
 		for i := minNanos; i <= maxNanos; i++ {
 			r.NoError(g1.Advance(ctx, hlc.New(i, 0)))
+
+			// Accept cases where a duplicate message is received, as
+			// long as it's the tail.
+			r.NoError(g1.Advance(ctx, hlc.New(i, 0)))
 		}
 
 		// Fast refresh of other group.

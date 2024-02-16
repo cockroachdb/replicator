@@ -91,8 +91,8 @@ type Group struct {
 }
 
 // This query conditionally inserts a new mark for a target schema if
-// there is no previous mark or if the proposed mark is after the
-// latest-known mark for the target schema.
+// there is no previous mark or if the proposed mark is equal to or
+// after the latest-known mark for the target schema.
 //
 // $1 = target_schema
 // $2 = source_nanos
@@ -108,8 +108,8 @@ not_before AS (
 to_insert AS (
   SELECT $1::STRING, $2::INT, $3::INT
   WHERE (SELECT count(*) FROM not_before) = 0
-     OR ($2::INT, $3::INT) > (SELECT (source_nanos, source_logical) FROM not_before))
-INSERT INTO %[1]s (target_schema, source_nanos, source_logical)
+     OR ($2::INT, $3::INT) >= (SELECT (source_nanos, source_logical) FROM not_before))
+UPSERT INTO %[1]s (target_schema, source_nanos, source_logical)
 SELECT * FROM to_insert`
 
 // Advance extends the proposed checkpoint timestamp associated with the
@@ -134,7 +134,7 @@ func (r *Group) Advance(ctx context.Context, ts hlc.Time) error {
 				r.metrics.backwards.Inc()
 				return old, errors.Errorf(
 					"proposed checkpoint timestamp for %s is going backwards %s; "+
-						"verify changefeed cursor or remove already-applied"+
+						"verify changefeed cursor or remove already-applied "+
 						"checkpoint timestamp entries",
 					r.target, ts)
 			}
