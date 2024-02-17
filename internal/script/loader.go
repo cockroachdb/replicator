@@ -155,9 +155,12 @@ type Loader struct {
 //
 // At present, each returned [UserScript] shares a common JS runtime.
 func (l *Loader) Bind(
-	ctx *stopper.Context, target ident.Schematic, watchers types.Watchers,
+	ctx *stopper.Context,
+	target ident.Schematic,
+	targetAcceptor types.TableAcceptor,
+	watchers types.Watchers,
 ) (*UserScript, error) {
-	// In the unconfigured case, we don't return an initialized Loader.
+	// In the unconfigured case, return an unconfigured script.
 	if l.fs == nil {
 		return &UserScript{
 			Sources: &ident.Map[*Source]{},
@@ -172,6 +175,7 @@ func (l *Loader) Bind(
 	}
 
 	ret := &UserScript{
+		Delegate:  targetAcceptor,
 		Sources:   &ident.Map[*Source]{},
 		Targets:   &ident.TableMap[*Target]{},
 		apiModule: l.apiModule,

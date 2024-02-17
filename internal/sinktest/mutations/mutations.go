@@ -18,10 +18,12 @@
 package mutations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -34,6 +36,31 @@ type Payload struct {
 	PK  uuid.UUID `json:"pk"`
 	Ver int       `json:"ver"`
 	TS  time.Time `json:"ts"`
+}
+
+// Equal compares mutations, but treats a nil slice and a slice
+// containing "null" as equivalent.
+func Equal(a types.Mutation, b types.Mutation) bool {
+	return equalish(a.Before, b.Before) &&
+		equalish(a.Data, b.Data) &&
+		equalish(a.Key, b.Key) &&
+		reflect.DeepEqual(a.Meta, b.Meta) &&
+		hlc.Compare(a.Time, b.Time) == 0
+}
+
+// equalish returns true if the messages are both nullish or both
+// contain the same data.
+func equalish(a, b json.RawMessage) bool {
+	if IsNullish(a) {
+		return IsNullish(b)
+	}
+	return bytes.Equal(a, b)
+}
+
+// IsNullish returns true if the message is empty or contains the JSON
+// null token.
+func IsNullish(raw json.RawMessage) bool {
+	return len(raw) == 0 || bytes.Equal(raw, []byte("null"))
 }
 
 // Generator returns a channel from which an infinite number of
@@ -57,10 +84,9 @@ func Generator(ctx context.Context, idCount int, deleteFraction float32) <-chan 
 		for {
 			now := time.Now().UTC()
 			mut := types.Mutation{Time: hlc.From(now)}
+			mut.Key = json.RawMessage(fmt.Sprintf(`["%s"]`, allPayloads[idx].PK))
 
-			if rand.Float32() < deleteFraction {
-				mut.Key = json.RawMessage(fmt.Sprintf(`["%s"]`, allPayloads[idx].PK))
-			} else {
+			if rand.Float32() >= deleteFraction {
 				allPayloads[idx].TS = now
 				allPayloads[idx].Ver++
 
@@ -69,6 +95,7 @@ func Generator(ctx context.Context, idCount int, deleteFraction float32) <-chan 
 				if err != nil {
 					panic(err)
 				}
+				mut.Before = mut.Data
 			}
 
 			select {

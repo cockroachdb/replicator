@@ -280,19 +280,6 @@ func TestApply(t *testing.T) {
 		a.NoError(fixture.Configs.Set(jumbleName, nil))
 	})
 
-	t.Run("delegate_apply", func(t *testing.T) {
-		r := require.New(t)
-		tbl := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("fake_table"))
-		fake := &fakeAcceptor{}
-
-		cfg := applycfg.NewConfig()
-		cfg.Acceptor = fake
-		a.NoError(fixture.Configs.Set(tbl, cfg))
-
-		found, _ := fixture.Configs.Get(tbl).Get()
-		r.Same(fake, found.Acceptor)
-	})
-
 	// This sub-test uses the apply from concurrent goroutines to allow
 	// the race checker to help us.
 	t.Run("concurrent_apply", func(t *testing.T) {
