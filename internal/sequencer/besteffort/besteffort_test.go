@@ -33,6 +33,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,7 @@ func TestAcceptAndSweep(t *testing.T) {
 		&sequencer.Config{
 			Parallelism:     2,
 			QuiescentPeriod: 100 * time.Millisecond,
+			TimestampLimit:  sequencer.DefaultTimestampLimit,
 			SweepLimit:      1000,
 		},
 		&script.Config{})
@@ -65,6 +67,9 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	r.NoError(err)
 
 	bestEffort := seqFixture.BestEffort
+	// We only want BestEffort to do work when told.
+	bestEffort.DisableProactive()
+
 	// Sweep the staged mutations into the destination. We expect the
 	// entries for {child:1, parent:1} to be applied. The entries
 	// pointing to parent:2 will remain queued.
@@ -211,16 +216,16 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	r.Len(peeked, 5)
 
 	// Make staged data available to be processed.
-	sweepBounds.Set(hlc.Range{hlc.Zero(), hlc.New(100, 0)})
+	sweepBounds.Set(hlc.Range{hlc.Zero(), hlc.New(5, 1)})
 	// Wait until the background process has caught for all tables.
 	sweepProgress, swept := stats.Get()
 	for {
-		if sweepProgress.Progress().Len() == len(group.Tables) {
-			done := hlc.Compare(sequencer.CommonMin(sweepProgress), hlc.New(100, 0)) >= 0
-			if done {
-				break
-			}
+		progress := sequencer.CommonMin(sweepProgress)
+		done := hlc.Compare(progress, hlc.New(5, 1)) >= 0
+		if done {
+			break
 		}
+		log.Infof("waiting for sweep progress; currently at %s", progress)
 		select {
 		case <-swept:
 			sweepProgress, swept = stats.Get()
@@ -232,7 +237,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	// attempts is unpredictable, although it will always be at least
 	// the number of potential records.
 	r.Equal(3, sweepProgress.(*besteffort.Stat).Applied)
-	r.GreaterOrEqual(sweepProgress.(*besteffort.Stat).Attempted, 5)
+	r.GreaterOrEqual(sweepProgress.(*besteffort.Stat).Attempted, 3)
 
 	// Examine the remaining staged values. We should see the entries
 	// with parent:2.

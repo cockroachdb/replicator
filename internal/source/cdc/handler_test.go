@@ -597,8 +597,9 @@ func testMassBackfillWithForeignKeys(
 		cfg := &Config{
 			SequencerConfig: sequencer.Config{
 				Parallelism:     2,
-				QuiescentPeriod: time.Second,
+				QuiescentPeriod: 100 * time.Millisecond,
 				RetireOffset:    time.Hour,
+				TimestampLimit:  sequencer.DefaultTimestampLimit,
 				SweepLimit:      rowCount / 3, // Read the same timestamp more than once.
 			},
 		}
@@ -665,9 +666,10 @@ func testMassBackfillWithForeignKeys(
 	log.Info("finished filling data in ", time.Since(loadStart).String())
 
 	// Send a resolved timestamp that needs to dequeue many rows.
+	endTime := hlc.New(int64(rowCount)+1, 0)
 	r.NoError(h().resolved(ctx, &request{
 		target:    parent.Name(),
-		timestamp: hlc.New(int64(rowCount)+1, 0),
+		timestamp: endTime,
 	}))
 
 	// Wait for rows to appear.
@@ -691,13 +693,34 @@ func testMassBackfillWithForeignKeys(
 	for _, tbl := range []interface{ Name() ident.Table }{parent, child, grand} {
 		for {
 			found, err := fixtures[0].PeekStaged(ctx, tbl.Name(),
-				hlc.Zero(), hlc.New(int64(rowCount)+1, 0))
+				hlc.Zero(), endTime)
 			r.NoError(err)
 			log.Infof("saw %d unapplied staging entries in %s", len(found), tbl)
 			if len(found) == 0 {
 				break
 			}
 			time.Sleep(time.Second)
+		}
+	}
+
+	// Ensure that the resolved timestamp is reflected in the target
+	// bounds. This is important for the concurrent use case, since we
+	// rely on occasional database queries for coordination.
+	for idx, fixture := range fixtures {
+		targetInfo, err := fixture.Targets.getTarget(fixture.TargetSchema.Schema())
+		r.NoError(err)
+		for {
+			resolving, changed := targetInfo.resolvingRange.Get()
+			if hlc.Compare(resolving.Min(), endTime) >= 0 {
+				break
+			}
+			log.Infof("waiting for resolved timestamp %d to catch up %s vs %s",
+				idx, resolving, endTime)
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				r.NoError(ctx.Err())
+			}
 		}
 	}
 }
