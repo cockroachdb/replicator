@@ -48,6 +48,12 @@ api.configureSource("recursive", {
 })
 
 api.configureTable("all_features", {
+    // apply may access the database transaction. It will receive
+    // mutations that have already been processed by the map function.
+    apply: (ops: ApplyOp[]): Promise<any> => {
+        // It can delegate to the standard apply pipeline.
+        return api.getTX().apply(ops)
+    },
     // Compare-and-set operations.
     cas: ["cas0", "cas1"],
     // Drop old data.
@@ -125,12 +131,38 @@ api.configureTable("merge_or_dlq", {
     merge: api.standardMerge(() => ({dlq: "dead"}))
 });
 
+// This demonstrates how a delete operation with the 'diff' option
+// can be transformed into a soft delete. The `before` field is
+// copied into a replacement upsert operation.
+//
+// The ergonomics of this could be improved by one or both of:
+// https://github.com/cockroachdb/cdc-sink/issues/704
+// https://github.com/cockroachdb/cdc-sink/issues/705
+api.configureTable("soft_deletes", {
+    apply: async (ops: ApplyOp[]): Promise<any> => {
+        ops = ops.map((op: ApplyOp) => {
+            if (op.action == "delete") {
+                op = {
+                    ...op,
+                    action: "upsert",
+                    data: {
+                        ...op.before,
+                        is_deleted: 1,
+                    }
+                };
+            }
+            return op;
+        })
+        return api.getTX().apply(ops);
+    }
+})
+
 // Demonstrate how upsert and delete SQL operations can be entirely
 // overridden by the userscript. In this test, we perform some basic
 // arithmetic on the keys and values to validate that this script is
 // actually running.
 api.configureTable("sql_test", {
-    apply: async (ops: Iterable<ApplyOp>): Promise<void> => {
+    apply: async (ops: ApplyOp[]): Promise<void> => {
         let tx = api.getTX();
 
         // We can perform arbitrary queries against the database. This

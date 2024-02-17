@@ -31,13 +31,35 @@ import (
 type targetTX struct {
 	*applier
 
-	ctx     context.Context     // Passed to database methods.
-	columns []map[string]any    // Lazily-constructed schema data.
-	tq      types.TargetQuerier // The database transaction.
-	mu      sync.Mutex          // Serializes access to methods on tq.
+	batchTemplate *types.TableBatch   // Used by Apply for metadata.
+	ctx           context.Context     // Passed to database methods.
+	columns       []map[string]any    // Lazily-constructed schema data.
+	tq            types.TargetQuerier // The database transaction.
+	mu            sync.Mutex          // Serializes access to methods on tq.
 }
 
 var _ asyncTracker = (*targetTX)(nil)
+
+// Apply may be called by the user script to use the default
+// [types.TableAcceptor] for continued processing. This enables uses
+// cases where the user script acts as an interceptor.
+func (tx *targetTX) Apply(ops []*applyOp) *goja.Promise {
+	return tx.parent.execTrackedPromise(tx, func(resolve func(result any)) error {
+		// Convert the operations back into standard mutations.
+		batch := tx.batchTemplate.Copy()
+		if err := opsIntoBatch(tx.ctx, ops, batch); err != nil {
+			return err
+		}
+		// Use the standard TableAcceptor to process the batch.
+		if err := tx.parent.Delegate.AcceptTableBatch(tx.ctx, batch, &types.AcceptOptions{
+			TargetQuerier: tx.tq,
+		}); err != nil {
+			return err
+		}
+		resolve(goja.Undefined())
+		return nil
+	})
+}
 
 // Columns is exported to the userscript. It will lazily populate the
 // columns field.

@@ -146,9 +146,10 @@ func (a *acceptor) doMap(
 		batch = mapped
 	}
 
-	// Delegate to user-provided logic.
-	if target.Acceptor != nil {
-		return target.Acceptor.AcceptTableBatch(ctx, batch, opts)
+	// Delegate to user-provided logic. This may wind up delegating to
+	// our delegate anyway.
+	if acc := target.UserAcceptor; acc != nil {
+		return acc.AcceptTableBatch(ctx, batch, opts)
 	}
 
 	// Otherwise, continue down the standard path.

@@ -144,14 +144,13 @@ declare module "cdc-sink@v1" {
      * function as an ApplyOp. It is a union type either representing
      * the deletion of some primary key or an upsert to be applied.
      */
-    type ApplyOp = {
+    type ApplyOp = ({
         action: "delete";
-
-        pk: DocumentValue[];
     } | {
         action: "upsert";
-
         data: Document;
+    }) & {
+        before?: Document;
         meta: Document;
         pk: DocumentValue[];
     }
@@ -169,14 +168,13 @@ declare module "cdc-sink@v1" {
     type ConfigureTableOptions = {
         /**
          * Override cdc-sink's default apply behavior. The userscript
-         * assumes all responsibility for interacting with the target
+         * assumes responsibility for interacting with the target
          * database. Access to the target database is provided via
          * {@link getTX}.
          *
          * @param ops - The operations to apply to the target database.
          */
-        apply(ops: Iterable<ApplyOp>): Promise<any>;
-    } | {
+        apply(ops: ApplyOp[]): Promise<any>;
         /**
          * A list of columns to enable compare-and-set behavior.
          */
@@ -320,6 +318,13 @@ declare module "cdc-sink@v1" {
      * statements against the target database.
      */
     type TargetTX = {
+        /**
+         * Apply the operations to the target table. This allows the
+         * userscript to invoke cdc-sink's default apply pipeline (with
+         * all data behaviors).
+         */
+        apply(ops: ApplyOp[]): Promise<void>;
+
         /**
          * Returns schema information about the destination table.
          * Columns are returned such that primary key columns will be

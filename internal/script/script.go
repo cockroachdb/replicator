@@ -96,6 +96,9 @@ type Target struct {
 	// A user-provided function to modify or filter mutations bound for
 	// the target table.
 	Map Map `json:"-"`
+	// A user-defined TableAcceptor that may execute arbitrary SQL or
+	// call [UserScript.Delegate].
+	UserAcceptor types.TableAcceptor `json:"-"`
 }
 
 // errUserExec is used to interrupt the JS runtime.
@@ -114,8 +117,9 @@ var errUseExec = errors.New("UserScript.execJS() must be used when calling JS co
 // evaluate a separate UserScript. The tradedoff here is that each
 // instance of the userscript would then have distinct global variables.
 type UserScript struct {
-	Sources *ident.Map[*Source]
-	Targets *ident.TableMap[*Target]
+	Delegate types.TableAcceptor
+	Sources  *ident.Map[*Source]
+	Targets  *ident.TableMap[*Target]
 
 	apiModule *goja.Object         // The cdc-sink JS module.
 	rt        *goja.Runtime        // The JavaScript VM. See execJS.
@@ -219,9 +223,8 @@ func (s *UserScript) bind(loader *Loader) error {
 		tgt := &Target{Config: *applycfg.NewConfig()}
 		s.Targets.Put(table, tgt)
 		if bag.Apply != nil {
-			tgt.Acceptor = newApplier(s, table, bag.Apply)
-			// If we're using a Delegate, no other options are valid.
-			continue
+			// Using a Delegate does not preclude other options.
+			tgt.UserAcceptor = newApplier(s, table, bag.Apply)
 		}
 		for _, cas := range bag.CASColumns {
 			tgt.CASColumns = append(tgt.CASColumns, ident.New(cas))
@@ -656,8 +659,8 @@ func (s *UserScript) execJS(fn func(rt *goja.Runtime) error) error {
 // promise implementation returns an error, the promise will be
 // rejected. The tracker reference may be nil.
 func (s *UserScript) execTrackedPromise(
-	tracker asyncTracker,
-	fn func(resolve func(result any)) error) *goja.Promise {
+	tracker asyncTracker, fn func(resolve func(result any)) error,
+) *goja.Promise {
 	promise, resolve, reject := s.rt.NewPromise()
 
 	safeResolve := func(result any) {

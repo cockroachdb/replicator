@@ -63,7 +63,7 @@ func (w *wrapper) Start(
 		return nil, nil, err
 	}
 
-	scr, err := w.loader.Bind(ctx, schema, w.watchers)
+	scr, err := w.loader.Bind(ctx, schema, opts.Delegate, w.watchers)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -55,7 +55,9 @@ func TestUserScriptSequencer(t *testing.T) {
 	}
 
 	for _, tgt := range tgts {
-		var schema = fmt.Sprintf(`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT)`, tgt)
+		var schema = fmt.Sprintf(
+			`CREATE TABLE %s (k INT PRIMARY KEY, v VARCHAR(2048), ref INT, extras VARCHAR(2048))`,
+			tgt)
 		_, err := pool.ExecContext(ctx, schema)
 		r.NoError(err)
 	}
@@ -80,10 +82,23 @@ api.configureTable("T_1", { // Upper-case table name.
   }
 });
 api.configureTable("t_2", {
-  map: (doc) => {
-    doc.v = "llebwoc";
-    return doc;
-  }
+  deleteKey: (key: api.DocumentValue[]): api.DocumentValue[] => {
+      console.trace("deleteKey() is called before apply()");
+      return key;
+  },
+  map: (doc: api.Document): api.Document => {
+      console.trace("map() is called before apply()");
+      doc["more_stuff"] = "more_better";
+      return doc;
+  },
+  extras: "extras", // Above property assignment will succeed.
+  apply: (ops) => { // Another way of mapping entire batches of data.
+    ops = ops.map((op) => {
+      op.data.v = "llebwoc";
+      return op;
+    })
+    return api.getTX().apply(ops);
+  },
 });
 `)}}}
 
