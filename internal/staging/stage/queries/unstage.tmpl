@@ -3,7 +3,7 @@
 WITH {{- sp -}}
 
 {{- /*
-Select the minimum unapplied timestamp(s) from the source table.
+Select timestamps with unapplied mutations from the source table.
 
 We start scanning at some timestamp, but after a starting key, which
 could be a zero-length string.
@@ -20,11 +20,12 @@ hlc_0 AS (
 
 */ -}}
 {{- range  $idx, $tgt := .Cursor.Targets -}}
+{{- $arrIdx := add $idx 1 -}}
 {{- if $idx -}}, {{- nl -}}{{- end -}}
 hlc_{{ $idx }} (n, l) AS (
 SELECT nanos, logical
 FROM {{ $top.StagingTable $tgt }}
-WHERE (nanos, logical, key) > ($1, $2, ($5::STRING[])[ {{- add $idx 1 -}} ])
+WHERE (nanos, logical, key) > (($1::INT8[])[ {{- $arrIdx -}} ], ($2::INT8[])[ {{- $arrIdx -}} ], ($5::STRING[])[ {{- $arrIdx -}} ])
 AND (nanos, logical) < ($3, $4)
 AND NOT applied
 GROUP BY nanos, logical
@@ -34,24 +35,32 @@ LIMIT {{ or $top.Cursor.TimestampLimit 1 }}
 {{- end -}}
 
 {{- /*
-Select the minimum timestamp(s) across all source tables.
+Select the earliest timestamps across all source tables.
 
 hlc_all AS (
+SELECT n, l FROM (
   SELECT n, l FROM hlc_0 UNION ALL
   SELECT n, l FROM hlc_1 UNION ALL ...
   SELECT n, l FROM hlc_N
+)
+GROUP BY n, l
+ORDER BY n, l
+LIMIT N
 ),
-hlc_min AS (SELECT n, l FROM hlc_all GROUY BY n, l ORDER BY n, l LIMIT N)
 
 */ -}}
 , {{- nl -}}
 hlc_all AS (
+SELECT n, l FROM (
 {{- range $idx, $tgt := .Cursor.Targets -}}
 {{- if $idx }} UNION ALL {{- nl -}}{{- end -}}
 SELECT n, l FROM hlc_{{ $idx }}
 {{- end -}}
-),
-hlc_min AS (SELECT n, l FROM hlc_all GROUP BY n, l ORDER BY n, l LIMIT {{ or .Cursor.TimestampLimit 1 }})
+)
+GROUP BY n, l
+ORDER BY n, l
+LIMIT {{ or $top.Cursor.TimestampLimit 1 }}
+)
 
 {{- /*
 Identify keys that should be blocked due to active leases. This prevents
@@ -61,7 +70,7 @@ time, T+1.
 
 blocked_0 AS (
   SELECT key FROM staging_table
-  JOIN hlc_min ON (nanos, logical) = (n, l)
+  JOIN hlc_all ON (nanos, logical) = (n, l)
   WHERE (lease IS NOT NULL AND lease > now())
 )
 */ -}}
@@ -70,7 +79,7 @@ blocked_0 AS (
 , {{- nl -}}
 blocked_{{ $idx }} AS (
 SELECT key FROM {{ $top.StagingTable $tgt }}
-JOIN hlc_min ON (nanos,logical) = (n,l)
+JOIN hlc_all ON (nanos,logical) = (n,l)
 WHERE (lease IS NOT NULL AND lease > now())
 GROUP BY key
 )
@@ -81,12 +90,12 @@ GROUP BY key
 Set the applied column and return the data.
 
 We want to update any non-applied mutations after the starting key
-and within the HLC timestamp that we're operating on.
+and within the HLC timestamp(s) that we're operating on.
 
 data_0 AS (
   UPDATE staging_table SET [ (applied=true, lease=NULL) | lease=deadline ]
-  FROM hlc_min
-  WHERE (nanos, logical) IN (hlc_min)
+  FROM hlc_all
+  WHERE (nanos, logical) IN (hlc_all)
     AND (nanos, logical, key) > (start_at_nanos, start_at_logical, start_after_key)
     AND NOT applied
     [ AND key NOT IN (SELECT key FROM blocked_0) ]
@@ -96,6 +105,7 @@ data_0 AS (
 )
 */ -}}
 {{- range $idx, $tgt := .Cursor.Targets -}}
+{{- $arrIdx := add $idx 1 -}}
 , {{- nl -}}
 data_{{ $idx }} AS (
 UPDATE {{ $top.StagingTable $tgt }} {{- nl -}}
@@ -105,9 +115,8 @@ SET applied=true, lease=NULL {{- nl -}}
 {{- /* https://www.cockroachlabs.com/docs/stable/timestamp#convert-an-int-microseconds-since-epoch-to-timestamp */ -}}
 SET lease=TIMESTAMP 'epoch' + ({{ $top.SetLeaseExpiry.UnixMilli }}::float / 1000)::INTERVAL {{- nl -}}
 {{- end -}}
-FROM hlc_min
-WHERE (nanos,logical) = (n, l)
-AND (nanos, logical, key) > ($1, $2, ($5::STRING[])[ {{- add $idx 1 -}} ])
+WHERE (nanos,logical) IN (SELECT n, l FROM hlc_all)
+AND (nanos, logical, key) > (($1::INT8[])[ {{- $arrIdx -}} ], ($2::INT8[])[ {{- $arrIdx -}} ], ($5::STRING[])[ {{- $arrIdx -}} ])
 AND NOT applied
 {{- if not $top.IgnoreLeases -}}
 {{- nl -}} AND key NOT IN (SELECT key FROM blocked_{{ $idx }})
@@ -123,9 +132,11 @@ LIMIT {{ $top.Cursor.UpdateLimit }}
 {{- /*
 Top-level query aggregates the updates in table order.
 
-SELECT 0 idx, * FROM data_0 UNION ALL
-SELECT 1 idx, * FROM data_1 UNION ALL ...
-SELECT N idx, * FROM data_N
+SELECT * FROM (
+  SELECT 0 idx, * FROM data_0 UNION ALL
+  SELECT 1 idx, * FROM data_1 UNION ALL ...
+  SELECT N idx, * FROM data_N
+)
 ORDER BY nanos, logical, idx, key
 
 */ -}}
