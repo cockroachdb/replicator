@@ -111,8 +111,9 @@ func TestPutAndDrain(t *testing.T) {
 	// Select all mutations to set the applied flag. This allows the
 	// mutations to be deleted.
 	cursor := &types.UnstageCursor{
-		EndBefore: hlc.New(math.MaxInt64, 0),
-		Targets:   []ident.Table{dummyTarget},
+		EndBefore:      hlc.New(math.MaxInt64, 0),
+		Targets:        []ident.Table{dummyTarget},
+		TimestampLimit: count / 10,
 	}
 	unstagedCount := 0
 	for unstaging := true; unstaging; {
@@ -343,7 +344,6 @@ func TestUnstage(t *testing.T) {
 	checkCount := func(a *assert.Assertions, tx types.StagingQuerier, q *types.UnstageCursor, expectCount int) error {
 		q = q.Copy()
 		q.TimestampLimit = math.MaxInt32
-		q.StartAfterKey = ident.TableMap[json.RawMessage]{}
 		var count int
 		for hasMore := true; hasMore; {
 			var err error
@@ -362,9 +362,8 @@ func TestUnstage(t *testing.T) {
 
 	// checkEmpty is a helper function to verify that the cursor returns
 	// no data. The StartAfterKey field will be cleared.
-	checkEmpty := func(a *assert.Assertions, tx types.StagingQuerier, q *types.UnstageCursor) error {
+	checkEmpty := func(ctx context.Context, tx types.StagingQuerier, q *types.UnstageCursor) error {
 		q = q.Copy()
-		q.StartAfterKey = ident.TableMap[json.RawMessage]{}
 		_, hasMore, err := fixture.Stagers.Unstage(ctx, tx, q,
 			func(context.Context, ident.Table, types.Mutation) error {
 				return errors.New("no mutations should be visible")
@@ -372,14 +371,16 @@ func TestUnstage(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		a.False(hasMore, "should not have more mutations to return")
+		if hasMore {
+			return errors.New("should not have more mutations to return")
+		}
 		return nil
 	}
 
 	// unstage reads from the given cursor until no more data is
 	// available. It returns the data for each table and the number of
 	// times the unstaging callback function was invoked.
-	unstage := func(r *require.Assertions, tx types.StagingQuerier, q *types.UnstageCursor) (data *ident.TableMap[[]types.Mutation], numSelections int) {
+	unstage := func(ctx context.Context, tx types.StagingQuerier, q *types.UnstageCursor) (data *ident.TableMap[[]types.Mutation], numSelections int, _ error) {
 		data = &ident.TableMap[[]types.Mutation]{}
 		for selecting := true; selecting; {
 			q, selecting, err = fixture.Stagers.Unstage(ctx, tx, q,
@@ -387,7 +388,9 @@ func TestUnstage(t *testing.T) {
 					data.Put(tbl, append(data.GetZero(tbl), mut))
 					return nil
 				})
-			r.NoError(err)
+			if err != nil {
+				return nil, 0, err
+			}
 			numSelections++
 		}
 		return
@@ -411,23 +414,27 @@ func TestUnstage(t *testing.T) {
 			}
 			defer func() { _ = tx.Rollback(ctx) }()
 
-			entriesByTable, numSelections := unstage(r, tx, q)
+			entriesByTable, numSelections, err := unstage(ctx, tx, q)
+			if err != nil {
+				return err
+			}
 			// Refer to comment about the distribution of timestamps.
 			// There are two large batches, then each mutation has two
 			// unique timestamps, and then there's a final call that returns
 			// false.
 			a.Equal(distinctTimestamps+1, numSelections)
 
-			r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 				if a.Len(seen, len(expectedMutOrder)) {
 					a.Equal(expectedMutOrder, seen)
 				}
 				return nil
-			}))
+			}); err != nil {
+				return err
+			}
 
 			// Ensure a re-read returns no data.
-			checkEmpty(a, tx, q)
-			return nil
+			return checkEmpty(ctx, tx, q)
 		}))
 	})
 
@@ -450,20 +457,24 @@ func TestUnstage(t *testing.T) {
 				return errors.WithStack(err)
 			}
 			defer func() { _ = tx.Rollback(ctx) }()
-			entriesByTable, numSelections := unstage(r, tx, q)
+			entriesByTable, numSelections, err := unstage(ctx, tx, q)
+			if err != nil {
+				return err
+			}
 			// We expect to see one large batch, a timestamp for each entry,
 			// and the final zero-results call.
 			a.Equal(1+entries+1, numSelections)
-			r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 				if a.Len(seen, 2*entries) {
 					a.Equal(expectedMutOrder[entries:3*entries], seen)
 				}
 				return nil
-			}))
+			}); err != nil {
+				return err
+			}
 
 			// Ensure a re-read returns no data.
-			checkEmpty(a, tx, q)
-			return nil
+			return checkEmpty(ctx, tx, q)
 		}))
 	})
 
@@ -488,18 +499,64 @@ func TestUnstage(t *testing.T) {
 			}
 			defer func() { _ = tx.Rollback(ctx) }()
 
-			entriesByTable, numSelections := unstage(r, tx, q)
+			entriesByTable, numSelections, err := unstage(ctx, tx, q)
+			if err != nil {
+				return err
+			}
 			a.Equal(211, numSelections)
-			r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 				if a.Len(seen, len(expectedMutOrder)) {
 					a.Equal(expectedMutOrder, seen)
 				}
 				return nil
-			}))
+			}); err != nil {
+				return err
+			}
 
 			// Ensure a re-read returns no data.
-			checkEmpty(a, tx, q)
-			return nil
+			return checkEmpty(ctx, tx, q)
+		}))
+	})
+
+	t.Run("all-limits", func(t *testing.T) {
+		a := assert.New(t)
+		r := require.New(t)
+
+		q := &types.UnstageCursor{
+			StartAt:        hlc.New(2, 0),          // Skip the initial transaction
+			EndBefore:      hlc.New(10*entries, 1), // Read the second large batch
+			Targets:        tables,
+			TimestampLimit: 10,
+			UpdateLimit:    20,
+		}
+
+		// Run the select in a discarded transaction to avoid
+		// contaminating future tests with side effects.
+		r.NoError(retry.Retry(ctx, func(ctx context.Context) error {
+			tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			entriesByTable, numSelections, err := unstage(ctx, tx, q)
+			if err != nil {
+				return err
+			}
+			// We expect to see groups of 10 timestamps for the
+			// individually-queued batches, then groups of mutations
+			// within the large batch, and then a final empty update.
+			a.Equal(entries/10+entries/20+1, numSelections)
+			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+				if a.Len(seen, 2*entries) {
+					a.Equal(expectedMutOrder[entries:3*entries], seen)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+
+			// Ensure a re-read returns no data.
+			return checkEmpty(ctx, tx, q)
 		}))
 	})
 
@@ -518,78 +575,105 @@ func TestUnstage(t *testing.T) {
 
 		// Run the select in a discarded transaction to avoid
 		// contaminating future tests with side effects.
-		tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
-		r.NoError(err)
-		defer func() { _ = tx.Rollback(ctx) }()
-
-		entriesByTable, numSelections := unstage(r, tx, q)
-
-		// +1 each for non-divisible timestamp limit and the final, no-data callback.
-		a.Equal(distinctTimestamps/q.TimestampLimit+2, numSelections)
-		r.NoError(entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-			if a.Len(seen, len(expectedMutOrder)) {
-				a.Equal(expectedMutOrder, seen)
+		r.NoError(retry.Retry(ctx, func(ctx context.Context) error {
+			tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return errors.WithStack(err)
 			}
-			return nil
+			defer func() { _ = tx.Rollback(ctx) }()
+
+			entriesByTable, numSelections, err := unstage(ctx, tx, q)
+			if err != nil {
+				return err
+			}
+
+			// +1 each for non-divisible timestamp limit and the final, no-data callback.
+			a.Equal(distinctTimestamps/q.TimestampLimit+2, numSelections)
+			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
+				if a.Len(seen, len(expectedMutOrder)) {
+					a.Equal(expectedMutOrder, seen)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+
+			// Ensure that a re-read returns no data.
+			if err := checkEmpty(ctx, tx, q); err != nil {
+				return err
+			}
+
+			// Peek at the table structure directly to ensure that we set
+			// the lease column, but not the applied column.
+			for _, table := range tables {
+				var ct int
+				q := fmt.Sprintf(
+					`SELECT count(*) FROM %s WHERE NOT applied AND lease IS NOT NULL`,
+					stagingTables.GetZero(table))
+				if err := tx.QueryRow(ctx, q).Scan(&ct); err != nil {
+					return errors.WithStack(err)
+				}
+				a.Equal(len(muts), ct, q)
+			}
+
+			// Sanity check the case where we deferred a mutation at
+			// timestamp T, but where we might also have a staged mutation
+			// at T+1. The presence of a lease at timestamp T should prevent
+			// the update at T+1 from being returned. We'll manipulate the
+			// table directly to set this case up.
+			for _, table := range tables {
+				q := fmt.Sprintf(`UPDATE %s SET lease = NULL WHERE nanos > 1`, stagingTables.GetZero(table))
+				tag, err := tx.Exec(ctx, q)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				a.Equal(int64(3*entries), tag.RowsAffected())
+			}
+			if err := checkEmpty(ctx, tx, q); err != nil {
+				return err
+			}
+
+			// Verify that setting the applied column on those T=1 mutations
+			// will make the remainder visible.
+			for _, table := range tables {
+				q := fmt.Sprintf(`UPDATE %s SET applied=TRUE, lease=NULL WHERE nanos = 1`, stagingTables.GetZero(table))
+				tag, err := tx.Exec(ctx, q)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				a.Equal(int64(entries), tag.RowsAffected())
+			}
+			if err := checkCount(a, tx, q, 3*entries*tableCount); err != nil {
+				return err
+			}
+
+			// Mark all mutations as having been applied.
+			if err := entriesByTable.Range(func(tbl ident.Table, muts []types.Mutation) error {
+				stage, err := fixture.Stagers.Get(ctx, tbl)
+				if err != nil {
+					return err
+				}
+				return stage.MarkApplied(ctx, tx, muts)
+
+			}); err != nil {
+				return err
+			}
+			// Peek at the table structure directly to ensure that we
+			// cleared and set the applied column.
+			for _, table := range tables {
+				var ct int
+				q := fmt.Sprintf(
+					`SELECT count(*) FROM %s WHERE applied AND lease IS NULL`,
+					stagingTables.GetZero(table))
+				if err := tx.QueryRow(ctx, q).Scan(&ct); err != nil {
+					return errors.WithStack(err)
+				}
+				a.Equal(len(muts), ct, q)
+			}
+
+			// Ensure that a re-read returns no data.
+			return checkEmpty(ctx, tx, q)
 		}))
-
-		// Ensure that a re-read returns no data.
-		checkEmpty(a, tx, q)
-
-		// Peek at the table structure directly to ensure that we set
-		// the lease column, but not the applied column.
-		for _, table := range tables {
-			var ct int
-			q := fmt.Sprintf(
-				`SELECT count(*) FROM %s WHERE NOT applied AND lease IS NOT NULL`,
-				stagingTables.GetZero(table))
-			r.NoError(tx.QueryRow(ctx, q).Scan(&ct))
-			a.Equal(len(muts), ct, q)
-		}
-
-		// Sanity check the case where we deferred a mutation at
-		// timestamp T, but where we might also have a staged mutation
-		// at T+1. The presence of a lease at timestamp T should prevent
-		// the update at T+1 from being returned. We'll manipulate the
-		// table directly to set this case up.
-		for _, table := range tables {
-			q := fmt.Sprintf(`UPDATE %s SET lease = NULL WHERE nanos > 1`, stagingTables.GetZero(table))
-			tag, err := tx.Exec(ctx, q)
-			r.NoError(err)
-			a.Equal(int64(3*entries), tag.RowsAffected())
-		}
-		checkEmpty(a, tx, q)
-
-		// Verify that setting the applied column on those T=1 mutations
-		// will make the remainder visible.
-		for _, table := range tables {
-			q := fmt.Sprintf(`UPDATE %s SET applied=TRUE, lease=NULL WHERE nanos = 1`, stagingTables.GetZero(table))
-			tag, err := tx.Exec(ctx, q)
-			r.NoError(err)
-			a.Equal(int64(entries), tag.RowsAffected())
-		}
-		checkCount(a, tx, q, 3*entries*tableCount)
-
-		// Mark all mutations as having been applied.
-		r.NoError(entriesByTable.Range(func(tbl ident.Table, muts []types.Mutation) error {
-			stage, err := fixture.Stagers.Get(ctx, tbl)
-			r.NoError(err)
-			return stage.MarkApplied(ctx, tx, muts)
-
-		}))
-		// Peek at the table structure directly to ensure that we
-		// cleared and set the applied column.
-		for _, table := range tables {
-			var ct int
-			q := fmt.Sprintf(
-				`SELECT count(*) FROM %s WHERE applied AND lease IS NULL`,
-				stagingTables.GetZero(table))
-			r.NoError(tx.QueryRow(ctx, q).Scan(&ct))
-			a.Equal(len(muts), ct, q)
-		}
-
-		// Ensure that a re-read returns no data.
-		checkEmpty(a, tx, q)
 	})
 }
 

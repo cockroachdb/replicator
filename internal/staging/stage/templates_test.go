@@ -28,10 +28,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const rewriteExpcted = false
+const rewriteExpected = false
 
 func TestRewriteIsFalse(t *testing.T) {
-	require.False(t, rewriteExpcted)
+	require.False(t, rewriteExpected)
 }
 
 func TestTimeOrderTemplate(t *testing.T) {
@@ -96,7 +96,7 @@ func TestTimeOrderTemplate(t *testing.T) {
 			r.NoError(err)
 
 			filename := fmt.Sprintf("./testdata/%s.sql", tc.name)
-			if rewriteExpcted {
+			if rewriteExpected {
 				r.NoError(os.WriteFile(filename, []byte(out), 0644))
 			} else {
 				data, err := os.ReadFile(filename)

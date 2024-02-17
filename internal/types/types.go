@@ -25,6 +25,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -188,11 +189,11 @@ type UnstageCursor struct {
 	// A half-open interval: [ StartAt, EndBefore )
 	StartAt, EndBefore hlc.Time
 
-	// StartAfterKey is used when processing very large batches that
+	// TableOffsets is used when processing very large batches that
 	// occur within a single timestamp, to provide an additional offset
 	// for skipping already-processed rows. The implementation of
 	// [Stagers.Unstage] will automatically populate this field.
-	StartAfterKey ident.TableMap[json.RawMessage]
+	TableOffsets ident.TableMap[UnstageOffset]
 
 	// Targets defines the order in which data for the selected tables
 	// will be passed to the results callback.
@@ -209,6 +210,17 @@ type UnstageCursor struct {
 	UpdateLimit int
 }
 
+// UnstageOffset is used within an [UnstageCursor] to provide
+// fine-grained pagination within the records for a single table.
+type UnstageOffset struct {
+	Key  json.RawMessage
+	Time hlc.Time
+}
+
+func (o *UnstageOffset) String() string {
+	return fmt.Sprintf("%s @ %s", o.Key, o.Time)
+}
+
 // Copy returns a copy of the cursor so that it may be updated.
 func (c *UnstageCursor) Copy() *UnstageCursor {
 	cpy := &UnstageCursor{
@@ -220,7 +232,7 @@ func (c *UnstageCursor) Copy() *UnstageCursor {
 		TimestampLimit: c.TimestampLimit,
 		UpdateLimit:    c.UpdateLimit,
 	}
-	c.StartAfterKey.CopyInto(&cpy.StartAfterKey)
+	c.TableOffsets.CopyInto(&cpy.TableOffsets)
 	copy(cpy.Targets, c.Targets)
 	return cpy
 }
