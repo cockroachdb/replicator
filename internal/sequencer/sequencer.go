@@ -19,6 +19,8 @@
 package sequencer
 
 import (
+	"math"
+
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -81,22 +83,26 @@ func NewStat(group *types.TableGroup, progress *ident.TableMap[hlc.Time]) Stat {
 	return &stat{group, progress}
 }
 
-// CommonMin is a utility function to return the minimum [hlc.Time]
-// across the table progress.
+// CommonMin is a returns the minimum [hlc.Time] across all tables
+// within the [Stat.Group]. If no progress has been made for one or more
+// tables in the group, [hlc.Zero] will be returned.
 func CommonMin(s Stat) hlc.Time {
 	if s == nil {
 		return hlc.Zero()
 	}
-	var commonMin hlc.Time
-	// No error returned from callback.
-	_ = s.Progress().Range(func(tbl ident.Table, ts hlc.Time) error {
-		if commonMin == hlc.Zero() {
-			commonMin = ts
-		} else if hlc.Compare(ts, commonMin) < 0 {
+	group := s.Group()
+	progress := s.Progress()
+
+	commonMin := hlc.New(math.MaxInt64, math.MaxInt)
+	for _, table := range group.Tables {
+		ts, ok := progress.Get(table)
+		if !ok {
+			return hlc.Zero()
+		}
+		if hlc.Compare(ts, commonMin) < 0 {
 			commonMin = ts
 		}
-		return nil
-	})
+	}
 	return commonMin
 }
 
