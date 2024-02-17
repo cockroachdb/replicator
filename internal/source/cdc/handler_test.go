@@ -597,8 +597,9 @@ func testMassBackfillWithForeignKeys(
 		cfg := &Config{
 			SequencerConfig: sequencer.Config{
 				Parallelism:     2,
-				QuiescentPeriod: time.Second,
+				QuiescentPeriod: 100 * time.Millisecond,
 				RetireOffset:    time.Hour,
+				TimestampLimit:  sequencer.DefaultTimestampLimit,
 				SweepLimit:      rowCount / 3, // Read the same timestamp more than once.
 			},
 		}

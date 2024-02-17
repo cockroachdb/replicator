@@ -19,7 +19,6 @@ package besteffort
 
 import (
 	"context"
-	"math"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
@@ -43,15 +42,24 @@ import (
 // best-effort basis. Mutations to apply are marked with a lease to
 // ensure an at-least-once behavior.
 type BestEffort struct {
-	cfg         *sequencer.Config
-	leases      types.Leases
-	stagingPool *types.StagingPool
-	stagers     types.Stagers
-	targetPool  *types.TargetPool
-	watchers    types.Watchers
+	cfg              *sequencer.Config
+	disableProactive bool
+	leases           types.Leases
+	stagingPool      *types.StagingPool
+	stagers          types.Stagers
+	targetPool       *types.TargetPool
+	watchers         types.Watchers
 }
 
 var _ sequencer.Sequencer = (*BestEffort)(nil)
+
+// DisableProactive is called by tests that need to ensure lock-step
+// behaviors in sweepTable. If set to false, the sweeper will not
+// synthesize fake timestamps in the initial-backfill case. This must be
+// called before Start.
+func (s *BestEffort) DisableProactive() {
+	s.disableProactive = true
+}
 
 // Start implements [sequencer.Starter]. It will launch a background
 // goroutine to attempt to apply staged mutations for each table within
@@ -113,22 +121,45 @@ func (s *BestEffort) sweepTable(
 ) {
 	_, _ = stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, bounds, s.cfg.QuiescentPeriod,
 		func(ctx *stopper.Context, _, bound hlc.Range) error {
-			// The bounds will be empty in the idle condition.
+			// The bounds will be empty in the idle on initial-backfill
+			// condition. We still want to be able to proactively sweep
+			// for mutations, so we'll invent a fake bound timestamp
+			// that won't be reported. This allows us to continue to
+			// make partial progress on staged mutations within an
+			// initial-backfill.
+			updateProgress := true
 			if bound.Empty() {
-				return nil
+				// Set by testing to disable this behavior.
+				if s.disableProactive {
+					return nil
+				}
+				bound = hlc.Range{bound.Min(), hlc.New(time.Now().UnixNano(), 1)}
+				updateProgress = false
+				if bound.Empty() {
+					log.Warnf("minimum bound appears to be in the future: %s", bound)
+					return nil
+				}
 			}
 			tableStat, err := s.sweepOnce(ctx, table, bound, acceptor)
 			if err != nil {
-				// We'll sleep below and then retry with the same or similar bounds.
+				// We'll sleep and then retry with the same or similar bounds.
 				log.WithError(err).Warnf("BestEffort: error while sweeping table %s; will continue", table)
+				return nil
+			}
+			// Don't update the stat if we're shutting down, since not
+			// all work will have been performed.
+			if ctx.IsStopping() {
 				return nil
 			}
 			// Ignoring error since callback returns nil.
 			_, _, _ = stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
 				nextImpl := old.(*Stat).copy()
+				// We want to export stats for testing.
 				nextImpl.Attempted += tableStat.Attempted
 				nextImpl.Applied += tableStat.Applied
-				nextImpl.Progress().Put(tableStat.LastTable, tableStat.LastTime)
+				if updateProgress {
+					nextImpl.Progress().Put(table, tableStat.LastTime)
+				}
 				return nextImpl, nil
 			})
 			return nil
@@ -140,10 +171,9 @@ func (s *BestEffort) sweepTable(
 type Stat struct {
 	sequencer.Stat
 
-	Applied   int         // The number of mutations that were actually applied.
-	Attempted int         // The number of mutations that were seen.
-	LastTable ident.Table // The table most recently processed.
-	LastTime  hlc.Time    // The time that the table arrived at.
+	Applied   int      // The number of mutations that were actually applied.
+	Attempted int      // The number of mutations that were seen.
+	LastTime  hlc.Time // The time that the table arrived at.
 }
 
 // newStat returns an initialized Stat.
@@ -164,7 +194,8 @@ func (s *Stat) copy() *Stat {
 }
 
 // sweepOnce will execute a single pass for deferred, un-leased
-// mutations within the time range.
+// mutations within the time range. The returned Stat will be nil if the
+// context is stopped.
 func (s *BestEffort) sweepOnce(
 	ctx *stopper.Context, tbl ident.Table, bounds hlc.Range, acceptor types.TableAcceptor,
 ) (*Stat, error) {
@@ -177,12 +208,12 @@ func (s *BestEffort) sweepOnce(
 	sweepApplied := sweepAppliedCount.WithLabelValues(tblValues...)
 	sweepLastAttempt.WithLabelValues(tblValues...).SetToCurrentTime()
 
-	log.Tracef("BestEffort.sweepOnce: starting %s", tbl)
+	log.Tracef("BestEffort.sweepOnce: starting %s in %s", tbl, bounds)
 	marker, err := s.stagers.Get(ctx, tbl)
 	if err != nil {
 		return nil, err
 	}
-	stat := &Stat{LastTable: tbl}
+	stat := &Stat{}
 	q := &types.UnstageCursor{
 		// This is a hack until Unstage can tell us how many deferred
 		// mutations were skipped.
@@ -194,10 +225,14 @@ func (s *BestEffort) sweepOnce(
 		StartAt:        bounds.Min(),
 		EndBefore:      bounds.Max(),
 		Targets:        []ident.Table{tbl},
-		TimestampLimit: math.MaxInt32,
+		TimestampLimit: s.cfg.TimestampLimit,
 		UpdateLimit:    s.cfg.SweepLimit,
 	}
-	for hasMore := true; hasMore && !ctx.IsStopping(); {
+	for hasMore := true; hasMore; {
+		// Exit with no result if we're shutting down.
+		if ctx.IsStopping() {
+			return nil, nil
+		}
 		// Set a lease to prevent the mutations from being marked as
 		// applied.
 		q.LeaseExpiry = time.Now().Add(s.cfg.QuiescentPeriod)
@@ -250,15 +285,14 @@ func (s *BestEffort) sweepOnce(
 			errCount.Inc()
 			continue
 		}
-		// Nothing changed, just return.
-		if successIdx == 0 {
-			break
+
+		// Mark successful mutations and keep reading.
+		if successIdx > 0 {
+			if err := marker.MarkApplied(ctx, s.stagingPool, pending[:successIdx]); err != nil {
+				return nil, err
+			}
+			stat.Applied += successIdx
 		}
-		// Mark the mutations as having been applied.
-		if err := marker.MarkApplied(ctx, s.stagingPool, pending[:successIdx]); err != nil {
-			return nil, err
-		}
-		stat.Applied += successIdx
 	}
 
 	// We'll allow the resolving window to advance only if we applied
@@ -269,8 +303,8 @@ func (s *BestEffort) sweepOnce(
 		stat.LastTime = bounds.Min()
 	}
 
-	log.Tracef("BestEffort.sweepOnce: completed %s (%d applied of %d attempted)",
-		tbl, stat.Applied, stat.Attempted)
+	log.Tracef("BestEffort.sweepOnce: completed %s (%d applied of %d attempted) to %s",
+		tbl, stat.Applied, stat.Attempted, stat.LastTime)
 	duration.Observe(time.Since(start).Seconds())
 	sweepAttempted.Add(float64(stat.Attempted))
 	sweepApplied.Add(float64(stat.Applied))
