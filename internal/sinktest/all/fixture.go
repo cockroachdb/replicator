@@ -31,6 +31,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 )
@@ -98,28 +99,34 @@ func (f *Fixture) CreateTargetTable(
 func (f *Fixture) PeekStaged(
 	ctx context.Context, tbl ident.Table, startAt, endBefore hlc.Time,
 ) ([]types.Mutation, error) {
-	tx, err := f.StagingPool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	q := &types.UnstageCursor{
-		EndBefore:    endBefore,
-		IgnoreLeases: true,
-		StartAt:      startAt,
-		Targets:      []ident.Table{tbl},
-	}
 	var ret []types.Mutation
-	for selecting := true; selecting; {
-		q, selecting, err = f.Stagers.Unstage(ctx, tx, q,
-			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				ret = append(ret, mut)
-				return nil
-			})
+	if err := retry.Retry(ctx, func(ctx context.Context) error {
+		ret = ret[:0] // Reset if looping.
+		tx, err := f.StagingPool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
-			return nil, err
+			return errors.WithStack(err)
 		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		q := &types.UnstageCursor{
+			EndBefore:    endBefore,
+			IgnoreLeases: true,
+			StartAt:      startAt,
+			Targets:      []ident.Table{tbl},
+		}
+		for selecting := true; selecting; {
+			q, selecting, err = f.Stagers.Unstage(ctx, tx, q,
+				func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
+					ret = append(ret, mut)
+					return nil
+				})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return ret, nil
 }
