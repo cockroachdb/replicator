@@ -19,7 +19,6 @@ package applycfg
 import (
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
@@ -44,7 +43,6 @@ type (
 // A Config contains per-target-table configuration.
 type Config struct {
 	// NB: Update TestCopyEquals if adding new fields.
-	Acceptor    types.TableAcceptor       // Inject user-defined apply behavior instead.
 	CASColumns  TargetColumns             // The columns for compare-and-set operations.
 	Deadlines   *ident.Map[time.Duration] // Deadline-based operation.
 	Exprs       *ident.Map[string]        // Synthetic or replacement SQL expressions.
@@ -67,7 +65,6 @@ func NewConfig() *Config {
 // Copy returns a copy of the Config.
 func (c *Config) Copy() *Config {
 	ret := NewConfig()
-	ret.Acceptor = c.Acceptor
 	ret.CASColumns = append(ret.CASColumns, c.CASColumns...)
 	c.Deadlines.CopyInto(ret.Deadlines)
 	c.Exprs.CopyInto(ret.Exprs)
@@ -101,8 +98,7 @@ func (c *Config) Equal(o *Config) bool {
 // IsZero returns true if the Config represents the absence of a
 // configuration.
 func (c *Config) IsZero() bool {
-	return c.Acceptor == nil &&
-		len(c.CASColumns) == 0 &&
+	return len(c.CASColumns) == 0 &&
 		c.Deadlines.Len() == 0 &&
 		c.Exprs.Len() == 0 &&
 		c.Extras.Empty() &&
@@ -114,9 +110,6 @@ func (c *Config) IsZero() bool {
 // Patch applies any non-empty fields from another Config to the
 // receiver and returns the receiver.
 func (c *Config) Patch(other *Config) *Config {
-	if other.Acceptor != nil {
-		c.Acceptor = other.Acceptor
-	}
 	c.CASColumns = append(c.CASColumns, other.CASColumns...)
 	if other.Deadlines != nil {
 		other.Deadlines.CopyInto(c.Deadlines)

@@ -71,22 +71,25 @@ func TestScript(t *testing.T) {
 
 	// Create tables that will be referenced by the user-script.
 	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.all_features(msg VARCHAR(%d) PRIMARY KEY)", schema, size))
+	r.NoError(err)
+	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.delete_swap(pk0 INT, pk1 INT, PRIMARY KEY (pk0, pk1))", schema))
+	r.NoError(err)
+	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.soft_deletes(pk INT PRIMARY KEY, val INT NOT NULL, is_deleted INT DEFAULT 0 NOT NULL)", schema))
+	r.NoError(err)
+	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.sql_test(pk INT PRIMARY KEY, val INT NOT NULL)", schema))
+	r.NoError(err)
+	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("CREATE TABLE %s.table1(msg VARCHAR(%d) PRIMARY KEY)", schema, size))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("CREATE TABLE %s.table2(idx INT PRIMARY KEY)", schema))
 	r.NoError(err)
-	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.all_features(msg VARCHAR(%d) PRIMARY KEY)", schema, size))
-	r.NoError(err)
-	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
-	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.sql_test(pk INT PRIMARY KEY, val INT NOT NULL)", schema))
-	r.NoError(err)
-	_, err = fixture.TargetPool.ExecContext(ctx,
-		fmt.Sprintf("CREATE TABLE %s.delete_swap(pk0 INT, pk1 INT, PRIMARY KEY (pk0, pk1))", schema))
-	r.NoError(err)
 
+	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
 	var opts mapOptions
 
 	loader, err := ProvideLoader(fixture.Configs, &Config{
@@ -96,12 +99,12 @@ func TestScript(t *testing.T) {
 	}, fixture.Diagnostics)
 	r.NoError(err)
 
-	s, err := loader.Bind(ctx, fixture.TargetSchema, fixture.Watchers)
+	s, err := loader.Bind(ctx, fixture.TargetSchema, fixture.ApplyAcceptor, fixture.Watchers)
 	r.NoError(err)
 
 	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
 	a.Equal(3, s.Sources.Len())
-	a.Equal(8, s.Targets.Len())
+	a.Equal(9, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -148,8 +151,8 @@ func TestScript(t *testing.T) {
 		a.True(cfg.Recurse)
 	}
 
-	tbl := ident.NewTable(schema, ident.New("all_features"))
-	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+	table := ident.NewTable(schema, ident.New("all_features"))
+	if cfg := s.Targets.GetZero(table); a.NotNil(cfg) {
 		expectedApply := applycfg.Config{
 			CASColumns: []ident.Ident{ident.New("cas0"), ident.New("cas1")},
 			Deadlines: ident.MapOf[time.Duration](
@@ -194,8 +197,8 @@ func TestScript(t *testing.T) {
 	}
 
 	// Unconditionally ignore deletions.
-	tbl = ident.NewTable(schema, ident.New("delete_elide"))
-	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+	table = ident.NewTable(schema, ident.New("delete_elide"))
+	if cfg := s.Targets.GetZero(table); a.NotNil(cfg) {
 		if filter := cfg.DeleteKey; a.NotNil(filter) {
 			_, keep, err := filter(context.Background(), types.Mutation{Key: []byte(`[ 1, 2 ]`)})
 			a.NoError(err)
@@ -203,8 +206,8 @@ func TestScript(t *testing.T) {
 		}
 	}
 
-	tbl = ident.NewTable(schema, ident.New("delete_swap"))
-	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+	table = ident.NewTable(schema, ident.New("delete_swap"))
+	if cfg := s.Targets.GetZero(table); a.NotNil(cfg) {
 		if filter := cfg.DeleteKey; a.NotNil(filter) {
 			mut, keep, err := filter(context.Background(), types.Mutation{Key: []byte(`[ 1, 2 ]`)})
 			a.NoError(err)
@@ -214,8 +217,8 @@ func TestScript(t *testing.T) {
 	}
 
 	// A map function that unconditionally filters all mutations.
-	tbl = ident.NewTable(schema, ident.New("drop_all"))
-	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+	table = ident.NewTable(schema, ident.New("drop_all"))
+	if cfg := s.Targets.GetZero(table); a.NotNil(cfg) {
 		if filter := cfg.Map; a.NotNil(filter) {
 			_, keep, err := filter(context.Background(), types.Mutation{Data: []byte(`{"hello":"world!"}`)})
 			a.NoError(err)
@@ -224,8 +227,8 @@ func TestScript(t *testing.T) {
 	}
 
 	// A merge function that sends all conflicts to a DLQ.
-	tbl = ident.NewTable(schema, ident.New("merge_dlq_all"))
-	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+	table = ident.NewTable(schema, ident.New("merge_dlq_all"))
+	if cfg := s.Targets.GetZero(table); a.NotNil(cfg) {
 		if merger := cfg.Merger; a.NotNil(merger) {
 			result, err := merger.Merge(context.Background(), &merge.Conflict{
 				Before:   merge.NewBagOf(nil, nil, "val", 1),
@@ -238,8 +241,8 @@ func TestScript(t *testing.T) {
 	}
 
 	// A merge function that drops all conflicts.
-	tbl = ident.NewTable(schema, ident.New("merge_drop_all"))
-	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+	table = ident.NewTable(schema, ident.New("merge_drop_all"))
+	if cfg := s.Targets.GetZero(table); a.NotNil(cfg) {
 		if merger := cfg.Merger; a.NotNil(merger) {
 			result, err := merger.Merge(context.Background(), &merge.Conflict{
 				Before:   merge.NewBagOf(nil, nil, "val", 1),
@@ -252,8 +255,8 @@ func TestScript(t *testing.T) {
 	}
 
 	// A merge function that sends to a DLQ on conflict.
-	tbl = ident.NewTable(schema, ident.New("merge_or_dlq"))
-	if cfg := s.Targets.GetZero(tbl); a.NotNil(cfg) {
+	table = ident.NewTable(schema, ident.New("merge_or_dlq"))
+	if cfg := s.Targets.GetZero(table); a.NotNil(cfg) {
 		if merger := cfg.Merger; a.NotNil(merger) {
 			result, err := merger.Merge(context.Background(), &merge.Conflict{
 				Before:   merge.NewBagOf(nil, nil, "val", 1),
@@ -265,18 +268,75 @@ func TestScript(t *testing.T) {
 		}
 	}
 
+	t.Run("soft_delete", func(t *testing.T) {
+		r := require.New(t)
+		table = ident.NewTable(schema, ident.New("soft_deletes"))
+
+		// Seed the table with a row we want to soft-delete
+		r.NoError(fixture.ApplyAcceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table, hlc.New(100, 1), []types.Mutation{
+				{
+					Data: json.RawMessage(`{"pk":1,"val":2}`),
+					Key:  json.RawMessage(`[1]`),
+				},
+				{
+					Data: json.RawMessage(`{"pk":3,"val":4}`),
+					Key:  json.RawMessage(`[3]`),
+				},
+			},
+		), &types.AcceptOptions{}))
+
+		cfg := s.Targets.GetZero(table)
+		r.NotNil(cfg)
+		acceptor := cfg.UserAcceptor
+		r.IsType(new(applier), acceptor)
+
+		// Send some deletes using a diff style. This lets us provide
+		// the script with the previous values to copy forward. Allowing
+		// the script to be able to load individual records using only
+		// the PK would improve the ergonomics.
+		//
+		// https://github.com/cockroachdb/cdc-sink/issues/705
+		tx, err := fixture.TargetPool.BeginTx(ctx, nil)
+		r.NoError(err)
+		defer func() { _ = tx.Rollback() }()
+
+		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table, hlc.New(100, 1), []types.Mutation{
+				{
+					Before: json.RawMessage(`{"pk":1,"val":2}`),
+					Key:    json.RawMessage(`[1]`),
+				},
+				{
+					Before: json.RawMessage(`{"pk":3,"val":4}`),
+					Key:    json.RawMessage(`[3]`),
+				},
+			},
+		), &types.AcceptOptions{TargetQuerier: tx}))
+		r.NoError(tx.Commit())
+
+		// Fix case for e.g. Oracle.
+		table, _ = fixture.Watcher.Get().OriginalName(table)
+		// Verify execution.
+		var count int
+		r.NoError(fixture.TargetPool.QueryRow(
+			fmt.Sprintf("SELECT count(*) FROM %s WHERE is_deleted = 1", table),
+		).Scan(&count))
+		r.Equal(2, count)
+	})
+
 	// The SQL in the test script is opinionated.
 	t.Run("sql_test", func(t *testing.T) {
 		if fixture.TargetPool.Product != types.ProductCockroachDB {
 			t.Skip("user script has opinionated SQL")
 		}
 		r := require.New(t)
-		tbl = ident.NewTable(schema, ident.New("sql_test"))
-		cfg := s.Targets.GetZero(tbl)
+		table = ident.NewTable(schema, ident.New("sql_test"))
+		cfg := s.Targets.GetZero(table)
 		r.NotNil(cfg)
-		acceptor := cfg.Acceptor
+		acceptor := cfg.UserAcceptor
 		r.IsType(new(applier), acceptor)
-		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(tbl, hlc.Zero(), []types.Mutation{
+		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(table, hlc.Zero(), []types.Mutation{
 			{
 				Data: json.RawMessage(`{"pk":0,"val":0}`),
 				Key:  json.RawMessage(`[0]`),
@@ -292,7 +352,7 @@ func TestScript(t *testing.T) {
 			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
 		))
 		rows, err := fixture.TargetPool.QueryContext(ctx,
-			fmt.Sprintf("SELECT pk, val FROM %s ORDER BY pk", tbl))
+			fmt.Sprintf("SELECT pk, val FROM %s ORDER BY pk", table))
 		r.NoError(err)
 		ct := 0
 		for rows.Next() {
@@ -305,7 +365,7 @@ func TestScript(t *testing.T) {
 		r.Equal(3, ct)
 
 		// Check deletion
-		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(tbl, hlc.Zero(), []types.Mutation{
+		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(table, hlc.Zero(), []types.Mutation{
 			{
 				Key: json.RawMessage(`[0]`),
 			},
@@ -318,7 +378,7 @@ func TestScript(t *testing.T) {
 			&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
 		))
 		r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
-			"SELECT count(*) FROM %s", tbl)).Scan(&ct))
+			"SELECT count(*) FROM %s", table)).Scan(&ct))
 		r.Equal(0, ct)
 	})
 }
