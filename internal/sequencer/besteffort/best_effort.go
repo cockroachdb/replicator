@@ -19,6 +19,7 @@ package besteffort
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
@@ -36,6 +37,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 // BestEffort looks for deferred mutations and attempts to apply them on a
@@ -249,49 +251,67 @@ func (s *BestEffort) sweepOnce(
 		}
 		stat.Attempted += len(pending)
 
+		// Just as in the acceptor, we want to try applying each
+		// mutation individually. We know that any mutation we're
+		// operating on has been deferred at least once, so using larger
+		// batches is unlikely to yield any real improvement here.
+		// We can, at least, apply the mutations in parallel.
+		eg, egCtx := errgroup.WithContext(ctx)
+		eg.SetLimit(s.cfg.Parallelism)
+
 		// This is a filter-in-place operation to retain only those
 		// mutations that were successfully applied and which we can
-		// subsequently mark as applied.
-		successIdx := 0
+		// subsequently mark as applied. Even though multiple goroutines
+		// are rewriting the slice, they never access the same index,
+		// and they're always behind the index of the initiating loop.
+		var successIdx atomic.Int32
 		for _, mut := range pending {
-			// We know that any mutation we're operating on has been
-			// deferred at least once, so using larger batches is
-			// unlikely to yield any real improvement here.
-			batch := &types.TableBatch{
-				Data:  []types.Mutation{mut},
-				Table: tbl,
-				Time:  mut.Time,
-			}
-			err := acceptor.AcceptTableBatch(ctx, batch, &types.AcceptOptions{})
-			if err == nil {
-				// Save applied mutations.
-				pending[successIdx] = mut
-				successIdx++
-				continue
-			}
-			// Ignore expected errors, we'll try again later. We'll
-			// leave the lease intact so that we might skip the mutation
-			// until a later cycle.
-			if isNormalError(err) {
-				deferrals.Inc()
-				continue
-			}
-			// Log any other errors, they're not going to block us and
-			// we can retry later. We'll leave the lease expiration
-			// intact so that we can skip this row for a period of time.
-			log.WithError(err).Warnf(
-				"sweep: table %s; key %s; will retry mutation later",
-				tbl, string(mut.Key))
-			errCount.Inc()
-			continue
+			mut := mut // Capture.
+			eg.Go(func() error {
+				batch := &types.TableBatch{
+					Data:  []types.Mutation{mut},
+					Table: tbl,
+					Time:  mut.Time,
+				}
+				err := acceptor.AcceptTableBatch(egCtx, batch, &types.AcceptOptions{})
+				// Save applied mutations to mark later.
+				if err == nil {
+					idx := successIdx.Add(1) - 1
+					pending[idx] = mut
+					return nil
+				}
+				// Ignore expected errors, we'll try again later. We'll
+				// leave the lease intact so that we might skip the
+				// mutation until a later cycle.
+				if isNormalError(err) {
+					deferrals.Inc()
+					return nil
+				}
+				// Log any other errors, they're not going to block us
+				// and we can retry later. We'll leave the lease
+				// expiration intact so that we can skip this row for a
+				// period of time.
+				log.WithError(err).Warnf(
+					"sweep: table %s; key %s; will retry mutation later",
+					tbl, string(mut.Key))
+				errCount.Inc()
+				return nil
+			})
+		}
+
+		// Wait for all apply tasks to complete. The only expected error
+		// here would be context cancellation; the worker always returns
+		// a nil error.
+		if err := eg.Wait(); err != nil {
+			return nil, err
 		}
 
 		// Mark successful mutations and keep reading.
-		if successIdx > 0 {
-			if err := marker.MarkApplied(ctx, s.stagingPool, pending[:successIdx]); err != nil {
+		if idx := successIdx.Load(); idx > 0 {
+			if err := marker.MarkApplied(ctx, s.stagingPool, pending[:idx]); err != nil {
 				return nil, err
 			}
-			stat.Applied += successIdx
+			stat.Applied += int(idx)
 		}
 	}
 
