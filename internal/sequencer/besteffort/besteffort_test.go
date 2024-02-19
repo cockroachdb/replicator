@@ -68,7 +68,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 
 	bestEffort := seqFixture.BestEffort
 	// We only want BestEffort to do work when told.
-	bestEffort.DisableProactive()
+	bestEffort.SetTimeSource(hlc.Zero)
 
 	// Sweep the staged mutations into the destination. We expect the
 	// entries for {child:1, parent:1} to be applied. The entries
@@ -315,8 +315,8 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		&sequencer.Config{
 			Parallelism:     8,
 			QuiescentPeriod: 100 * time.Millisecond,
-			TimestampLimit:  sequencer.DefaultTimestampLimit,
-			SweepLimit:      sequencer.DefaultSweepLimit,
+			TimestampLimit:  batches/10 + 1,
+			SweepLimit:      batches/10 + 1,
 		},
 		&script.Config{})
 	r.NoError(err)

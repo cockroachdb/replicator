@@ -608,6 +608,10 @@ func testMassBackfillWithForeignKeys(
 		}
 		fixtures[idx], err = newTestFixture(baseFixture, cfg)
 		r.NoError(err)
+
+		// We're using fake timestamps in this test, so we want
+		// to avoid
+		fixtures[idx].BestEffort.SetTimeSource(hlc.Zero)
 	}
 
 	loadStart := time.Now()

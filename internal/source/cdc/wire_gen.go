@@ -29,37 +29,37 @@ import (
 // Injectors from test_fixture.go:
 
 func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) {
-	authenticator := trust.New()
+	sequencerConfig := ProvideSequencerConfig(config)
 	baseFixture := fixture.Fixture
-	targetPool := baseFixture.TargetPool
 	context := baseFixture.Context
-	targetStatements := baseFixture.TargetCache
-	configs := fixture.Configs
+	stagingPool := baseFixture.StagingPool
+	stagingSchema := baseFixture.StagingDB
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	stagers := fixture.Stagers
+	targetPool := baseFixture.TargetPool
 	diagnostics := diag.New(context)
-	dlqConfig := ProvideDLQConfig(config)
 	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
+	authenticator := trust.New()
+	targetStatements := baseFixture.TargetCache
+	configs := fixture.Configs
+	dlqConfig := ProvideDLQConfig(config)
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
 	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
-	stagingPool := baseFixture.StagingPool
-	stagingSchema := baseFixture.StagingDB
 	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
-	sequencerConfig := ProvideSequencerConfig(config)
-	stagers := fixture.Stagers
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
-	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
-	if err != nil {
-		return nil, err
-	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
 	bypassBypass := &bypass.Bypass{}
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
@@ -84,9 +84,10 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 		Targets:       targets,
 	}
 	cdcTestFixture := &testFixture{
-		Fixture: fixture,
-		Handler: handler,
-		Targets: targets,
+		Fixture:    fixture,
+		BestEffort: bestEffort,
+		Handler:    handler,
+		Targets:    targets,
 	}
 	return cdcTestFixture, nil
 }
@@ -95,6 +96,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 
 type testFixture struct {
 	*all.Fixture
-	Handler *Handler
-	Targets *Targets
+	BestEffort *besteffort.BestEffort
+	Handler    *Handler
+	Targets    *Targets
 }
