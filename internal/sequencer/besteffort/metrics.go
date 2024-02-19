@@ -44,6 +44,10 @@ var (
 		Name: "best_effort_sweep_active_bool",
 		Help: "non-zero if this instance of cdc-sink is processing the table",
 	}, metrics.TableLabels)
+	sweepAbandonedCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "best_effort_sweep_abandoned_count",
+		Help: "number of sweep attempts that were abandoned early due to too many un-appliable mutations",
+	}, metrics.TableLabels)
 	sweepAttemptedCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "best_effort_sweep_attempt_count",
 		Help: "number of mutations found during cleanup sweep",
