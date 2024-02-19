@@ -115,7 +115,8 @@ api.configureTable("t_2", {
 		&sequencer.Config{
 			Parallelism:     2,
 			QuiescentPeriod: time.Second,
-			SweepLimit:      1000,
+			SweepLimit:      sequencer.DefaultSweepLimit,
+			TimestampLimit:  sequencer.DefaultTimestampLimit,
 		},
 		scriptCfg)
 	r.NoError(err)

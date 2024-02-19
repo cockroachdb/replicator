@@ -586,7 +586,6 @@ func TestConcurrentHandlers(t *testing.T) {
 func testMassBackfillWithForeignKeys(
 	t *testing.T, rowCount, fixtureCount int, fns ...func(*Config),
 ) {
-	t.Parallel()
 	r := require.New(t)
 
 	baseFixture, err := all.NewFixture(t)

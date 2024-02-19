@@ -44,7 +44,8 @@ func TestSerial(t *testing.T) {
 		&sequencer.Config{
 			Parallelism:     2, // Has no particular effect on serial.
 			QuiescentPeriod: time.Second,
-			SweepLimit:      1000,
+			SweepLimit:      sequencer.DefaultSweepLimit,
+			TimestampLimit:  sequencer.DefaultTimestampLimit,
 		},
 		&script.Config{})
 	r.NoError(err)
