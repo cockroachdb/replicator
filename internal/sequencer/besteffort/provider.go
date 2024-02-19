@@ -17,8 +17,11 @@
 package besteffort
 
 import (
+	"time"
+
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/google/wire"
 )
 
@@ -42,6 +45,7 @@ func ProvideBestEffort(
 		stagingPool: stagingPool,
 		stagers:     stagers,
 		targetPool:  targetPool,
+		timeSource:  func() hlc.Time { return hlc.New(time.Now().UnixNano(), 0) },
 		watchers:    watchers,
 	}
 }

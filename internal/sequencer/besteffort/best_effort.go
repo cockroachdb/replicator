@@ -19,6 +19,7 @@ package besteffort
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -44,23 +45,22 @@ import (
 // best-effort basis. Mutations to apply are marked with a lease to
 // ensure an at-least-once behavior.
 type BestEffort struct {
-	cfg              *sequencer.Config
-	disableProactive bool
-	leases           types.Leases
-	stagingPool      *types.StagingPool
-	stagers          types.Stagers
-	targetPool       *types.TargetPool
-	watchers         types.Watchers
+	cfg         *sequencer.Config
+	leases      types.Leases
+	stagingPool *types.StagingPool
+	stagers     types.Stagers
+	targetPool  *types.TargetPool
+	timeSource  func() hlc.Time
+	watchers    types.Watchers
 }
 
 var _ sequencer.Sequencer = (*BestEffort)(nil)
 
-// DisableProactive is called by tests that need to ensure lock-step
-// behaviors in sweepTable. If set to false, the sweeper will not
-// synthesize fake timestamps in the initial-backfill case. This must be
-// called before Start.
-func (s *BestEffort) DisableProactive() {
-	s.disableProactive = true
+// SetTimeSource is called by tests that need to ensure lock-step
+// behaviors in sweepTable or when testing the proactive timestamp
+// behavior.
+func (s *BestEffort) SetTimeSource(source func() hlc.Time) {
+	s.timeSource = source
 }
 
 // Start implements [sequencer.Starter]. It will launch a background
@@ -87,22 +87,16 @@ func (s *BestEffort) Start(
 	//
 	// https://github.com/cockroachdb/cdc-sink/issues/687
 	sequtil.LeaseGroup(ctx, s.leases, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
-		// Launch a goroutine to handle sweeping for each table in the group.
+		// Launch goroutine(s) to handle sweeping for each table in the group.
 		for idx, table := range group.Tables {
-			idx, table := idx, table // Capture.
-			ctx.Go(func() error {
-				log.Tracef("BestEffort starting on %s", table)
-
-				gauges[idx].Set(1)
-				defer gauges[idx].Set(0)
-
-				s.sweepTable(ctx, table, opts.Bounds, stats, delegate)
-				log.Tracef("BestEffort stopping on %s", table)
-				return nil
-			})
+			gauges[idx].Set(1)
+			s.sweepTable(ctx, table, opts.Bounds, stats, delegate)
 		}
 		// We want to hold the lease until we're shut down.
 		<-ctx.Stopping()
+		for _, gauge := range gauges {
+			gauge.Set(0)
+		}
 	})
 
 	// Respect table-dependency ordering.
@@ -112,8 +106,8 @@ func (s *BestEffort) Start(
 }
 
 // sweepTable implements the per-table loop behavior and communicates
-// progress via the stats argument. It is blocking and should be called
-// from a stoppered goroutine.
+// progress via the stats argument. It is non-blocking and will start
+// background goroutines to process the table.
 func (s *BestEffort) sweepTable(
 	ctx *stopper.Context,
 	table ident.Table,
@@ -121,51 +115,59 @@ func (s *BestEffort) sweepTable(
 	stats *notify.Var[sequencer.Stat],
 	acceptor types.TableAcceptor,
 ) {
-	_, _ = stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, bounds, s.cfg.QuiescentPeriod,
-		func(ctx *stopper.Context, _, bound hlc.Range) error {
-			// The bounds will be empty in the idle on initial-backfill
-			// condition. We still want to be able to proactively sweep
-			// for mutations, so we'll invent a fake bound timestamp
-			// that won't be reported. This allows us to continue to
-			// make partial progress on staged mutations within an
-			// initial-backfill.
-			updateProgress := true
-			if bound.Empty() {
-				// Set by testing to disable this behavior.
-				if s.disableProactive {
-					return nil
-				}
-				bound = hlc.Range{bound.Min(), hlc.New(time.Now().UnixNano(), 1)}
-				updateProgress = false
-				if bound.Empty() {
-					log.Warnf("minimum bound appears to be in the future: %s", bound)
-					return nil
-				}
-			}
-			tableStat, err := s.sweepOnce(ctx, table, bound, acceptor)
-			if err != nil {
-				// We'll sleep and then retry with the same or similar bounds.
-				log.WithError(err).Warnf("BestEffort: error while sweeping table %s; will continue", table)
-				return nil
-			}
-			// Don't update the stat if we're shutting down, since not
-			// all work will have been performed.
-			if ctx.IsStopping() {
-				return nil
-			}
-			// Ignoring error since callback returns nil.
-			_, _, _ = stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
+	// The BestEffort sweeper may have an extremely large amount of work
+	// to perform when operating on an initial backfill that contains FK
+	// references. We want to ensure that the call to sweepOnce is able
+	// to communicate partial progress on a regular basis, since the
+	// overall sweep process may take an unbounded amount of time.
+	partialProgress := &notify.Var[*Stat]{}
+	ctx.Go(func() error {
+		_, err := stopvar.DoWhenChanged(ctx, nil, partialProgress, func(ctx *stopper.Context, _, partial *Stat) error {
+			_, _, err := stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
 				nextImpl := old.(*Stat).copy()
-				// We want to export stats for testing.
-				nextImpl.Attempted += tableStat.Attempted
-				nextImpl.Applied += tableStat.Applied
-				if updateProgress {
-					nextImpl.Progress().Put(table, tableStat.LastTime)
-				}
+				// We want to export counters and last-state for testing.
+				nextImpl.Attempted += partial.Attempted
+				nextImpl.Applied += partial.Applied
+				nextImpl.Progress().Put(table, partial.LastProgress)
 				return nextImpl, nil
 			})
-			return nil
+			return err
 		})
+		return err
+	})
+
+	// This goroutine will sweep for mutations in the staging table.
+	ctx.Go(func() error {
+		log.Tracef("BestEffort starting on %s", table)
+
+		_, err := stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, bounds, s.cfg.QuiescentPeriod,
+			func(ctx *stopper.Context, _, bound hlc.Range) error {
+				// The bounds will be empty in the idle on initial-backfill
+				// condition. We still want to be able to proactively sweep
+				// for mutations, so we'll invent a fake bound timestamp
+				// that won't be reported. This allows us to continue to
+				// make partial progress on staged mutations within an
+				// initial-backfill.
+				report := partialProgress
+				if bound.Empty() {
+					bound = hlc.Range{bound.Min(), s.timeSource()}
+					if bound.Empty() {
+						return nil
+					}
+					report = nil
+				}
+				if err := s.sweepOnce(ctx, table, bound, acceptor, report); err != nil {
+					// We'll sleep and then retry with the same or similar bounds.
+					log.WithError(err).Warnf(
+						"BestEffort: error while sweeping table %s; will continue in %s",
+						table, s.cfg.QuiescentPeriod)
+					return nil
+				}
+				return nil
+			})
+		log.Tracef("BestEffort stopping on %s", table)
+		return err
+	})
 }
 
 // Stat is emitted by [BestEffort]. This is used by test code to inspect
@@ -173,9 +175,9 @@ func (s *BestEffort) sweepTable(
 type Stat struct {
 	sequencer.Stat
 
-	Applied   int      // The number of mutations that were actually applied.
-	Attempted int      // The number of mutations that were seen.
-	LastTime  hlc.Time // The time that the table arrived at.
+	Applied      int      // The number of mutations that were actually applied.
+	Attempted    int      // The number of mutations that were seen.
+	LastProgress hlc.Time // The time that the table arrived at.
 }
 
 // newStat returns an initialized Stat.
@@ -199,23 +201,41 @@ func (s *Stat) copy() *Stat {
 // mutations within the time range. The returned Stat will be nil if the
 // context is stopped.
 func (s *BestEffort) sweepOnce(
-	ctx *stopper.Context, tbl ident.Table, bounds hlc.Range, acceptor types.TableAcceptor,
-) (*Stat, error) {
+	ctx *stopper.Context,
+	tbl ident.Table,
+	bounds hlc.Range,
+	acceptor types.TableAcceptor,
+	partialProgress *notify.Var[*Stat],
+) error {
 	start := time.Now()
 	tblValues := metrics.TableValues(tbl)
 	deferrals := sweepDeferrals.WithLabelValues(tblValues...)
 	duration := sweepDuration.WithLabelValues(tblValues...)
 	errCount := sweepErrors.WithLabelValues(tblValues...)
+	sweepAbandoned := sweepAbandonedCount.WithLabelValues(tblValues...)
 	sweepAttempted := sweepAttemptedCount.WithLabelValues(tblValues...)
 	sweepApplied := sweepAppliedCount.WithLabelValues(tblValues...)
 	sweepLastAttempt.WithLabelValues(tblValues...).SetToCurrentTime()
 
+	// We expect to see an unbounded number of mutations that can't be
+	// applied. We want to record the earliest time of the failed
+	// mutation and the total number of failed mutations that we've
+	// seen. When we exceed a threshold of failed mutations we'll give
+	// up in this iteration. The assumption here is that failed
+	// mutations will succeed after some other tables make progress. By
+	// choosing to restart, we'll retry those oldest mutations sooner.
+	// Being able to move our starting scan time forward reduces the
+	// number of applied mutations that must be filtered by the unstage
+	// query. Ideally, the workers started in this method will be in a
+	// position to "run behind" the worker(s) for the parent tables.
+	earliestFailed := hlc.New(math.MaxInt64, math.MaxInt)
+	failedCount := 0
+
 	log.Tracef("BestEffort.sweepOnce: starting %s in %s", tbl, bounds)
 	marker, err := s.stagers.Get(ctx, tbl)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	stat := &Stat{}
 	q := &types.UnstageCursor{
 		// This is a hack until Unstage can tell us how many deferred
 		// mutations were skipped.
@@ -230,11 +250,7 @@ func (s *BestEffort) sweepOnce(
 		TimestampLimit: s.cfg.TimestampLimit,
 		UpdateLimit:    s.cfg.SweepLimit,
 	}
-	for hasMore := true; hasMore; {
-		// Exit with no result if we're shutting down.
-		if ctx.IsStopping() {
-			return nil, nil
-		}
+	for hasMore := true; hasMore && !ctx.IsStopping(); {
 		// Set a lease to prevent the mutations from being marked as
 		// applied.
 		q.LeaseExpiry = time.Now().Add(s.cfg.QuiescentPeriod)
@@ -247,8 +263,10 @@ func (s *BestEffort) sweepOnce(
 				return nil
 			})
 		if err != nil {
-			return nil, err
+			return err
 		}
+
+		stat := &Stat{}
 		stat.Attempted += len(pending)
 
 		// Just as in the acceptor, we want to try applying each
@@ -258,6 +276,13 @@ func (s *BestEffort) sweepOnce(
 		// We can, at least, apply the mutations in parallel.
 		eg, egCtx := errgroup.WithContext(ctx)
 		eg.SetLimit(s.cfg.Parallelism)
+
+		// These accumulate the timestamps of any failed mutations.
+		// They're accessed from within the goroutines launched below.
+		// We use an atomic counter to allow non-conflicting writes into
+		// the slice of failed timestamps.
+		failedTimes := make([]hlc.Time, len(pending))
+		var failedIdx atomic.Int32
 
 		// This is a filter-in-place operation to retain only those
 		// mutations that were successfully applied and which we can
@@ -280,6 +305,11 @@ func (s *BestEffort) sweepOnce(
 					pending[idx] = mut
 					return nil
 				}
+
+				// Record failed timestamps.
+				idx := failedIdx.Add(1) - 1
+				failedTimes[idx] = mut.Time
+
 				// Ignore expected errors, we'll try again later. We'll
 				// leave the lease intact so that we might skip the
 				// mutation until a later cycle.
@@ -303,32 +333,73 @@ func (s *BestEffort) sweepOnce(
 		// here would be context cancellation; the worker always returns
 		// a nil error.
 		if err := eg.Wait(); err != nil {
-			return nil, err
+			return err
 		}
 
 		// Mark successful mutations and keep reading.
 		if idx := successIdx.Load(); idx > 0 {
 			if err := marker.MarkApplied(ctx, s.stagingPool, pending[:idx]); err != nil {
-				return nil, err
+				return err
 			}
 			stat.Applied += int(idx)
 		}
-	}
 
-	// We'll allow the resolving window to advance only if we applied
-	// all mutations that we saw.
-	if stat.Attempted == stat.Applied {
-		stat.LastTime = bounds.Max()
-	} else {
-		stat.LastTime = bounds.Min()
-	}
+		// Locate earliest failed timestamp.
+		failedTimes = failedTimes[:failedIdx.Load()]
+		for _, failed := range failedTimes {
+			if hlc.Compare(failed, earliestFailed) < 0 {
+				earliestFailed = failed
+			}
+		}
 
-	log.Tracef("BestEffort.sweepOnce: completed %s (%d applied of %d attempted) to %s",
-		tbl, stat.Applied, stat.Attempted, stat.LastTime)
-	duration.Observe(time.Since(start).Seconds())
-	sweepAttempted.Add(float64(stat.Attempted))
-	sweepApplied.Add(float64(stat.Applied))
-	return stat, nil
+		if earliestFailed.Nanos() != math.MaxInt64 {
+			// We failed a mutation, so we can't advance beyond the time
+			// of that mutation. Reporting this time will allow us to
+			// retry the failed mutation later.
+			stat.LastProgress = earliestFailed
+		} else if hasMore {
+			// We did not see any failed mutations within this
+			// iteration, but there may be additional mutations to
+			// unstage later.
+			stat.LastProgress = q.TableOffsets.GetZero(tbl).Time
+		} else if earliestFailed.Nanos() == math.MaxInt64 {
+			// There are no more mutations that can be unstaged within
+			// the requested bounds. Since we've completed all possible
+			// work to perform, we can advance our progress report to
+			// the end of the requested range. In this case, we can
+			// report the end time used in the sweep
+			stat.LastProgress = bounds.Max()
+		}
+
+		// Report progress to observer so that we may mark checkpoints
+		// as having been completed. We won't report partial progress if
+		// we've invented a fake timestamp to use during an initial
+		// backfill. This ensures that we can handle data arriving into
+		// the staging tables in arbitrary order; we keep reading from
+		// timestamp zero until the first checkpoint timestamp has been
+		// received and fully processed.
+		if partialProgress != nil {
+			partialProgress.Set(stat)
+		}
+
+		log.Tracef("BestEffort.sweepOnce: completed %s (%d applied of %d attempted) to %s",
+			tbl, stat.Applied, stat.Attempted, stat.LastProgress)
+		duration.Observe(time.Since(start).Seconds())
+		sweepAttempted.Add(float64(stat.Attempted))
+		sweepApplied.Add(float64(stat.Applied))
+
+		// We may have failed out too many mutations, so we'll exit
+		// early in the hopes that a short delay will allow this table
+		// to run behind its ancestor table(s).
+		failedCount += len(failedTimes)
+		if failedCount >= s.cfg.SweepLimit {
+			sweepAbandoned.Inc()
+			log.Infof("BestEffort.sweepOnce: encountered %d failed mutations in %s; backing off",
+				failedCount, tbl)
+			break
+		}
+	}
+	return nil
 }
 
 // isNormalError returns true if the error represents an error that's
