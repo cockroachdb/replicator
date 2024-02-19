@@ -3,11 +3,10 @@ module github.com/cockroachdb/cdc-sink
 go 1.20
 
 require (
-	github.com/bobvawter/latch v1.0.2
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20230505164321-461e8663b4b4
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
-	github.com/evanw/esbuild v0.20.0
+	github.com/evanw/esbuild v0.20.1
 	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.5.0
