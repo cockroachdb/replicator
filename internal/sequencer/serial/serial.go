@@ -152,6 +152,7 @@ func (s *Serial) sweepOnce(
 		IgnoreLeases:   true, // Ignore any markers left by the best-effort sequencer.
 		Targets:        group.Tables,
 		TimestampLimit: s.cfg.TimestampLimit,
+		// Not setting an UpdateLimit since we need to read complete transactions.
 	}
 
 	// Open a staging database transaction to retrieve unstaged mutations.

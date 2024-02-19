@@ -46,7 +46,8 @@ func TestShingle(t *testing.T) {
 		&sequencer.Config{
 			Parallelism:     2,
 			QuiescentPeriod: time.Second,
-			SweepLimit:      1000,
+			SweepLimit:      sequencer.DefaultSweepLimit,
+			TimestampLimit:  1,
 		},
 		&script.Config{})
 	r.NoError(err)
