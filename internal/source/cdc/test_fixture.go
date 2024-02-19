@@ -23,6 +23,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
@@ -38,8 +39,9 @@ import (
 
 type testFixture struct {
 	*all.Fixture
-	Handler *Handler
-	Targets *Targets
+	BestEffort *besteffort.BestEffort
+	Handler    *Handler
+	Targets    *Targets
 }
 
 func newTestFixture(*all.Fixture, *Config) (*testFixture, error) {

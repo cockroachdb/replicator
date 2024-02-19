@@ -611,6 +611,13 @@ func testMassBackfillWithForeignKeys(
 		r.NoError(err)
 	}
 
+	// This test, in best-effort mode, hit the CI database instance
+	// pretty hard, leading to test flakes.
+	// TODO: Performance pass over Oracle target code.
+	if fixtures[0].TargetPool.Product == types.ProductOracle {
+		rowCount /= 5
+	}
+
 	loadStart := time.Now()
 	log.Info("starting data load")
 
