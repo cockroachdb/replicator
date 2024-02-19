@@ -3,58 +3,34 @@
 WITH {{- sp -}}
 
 {{- /*
-Select timestamps with unapplied mutations from the source table.
-
-We start scanning at some timestamp, but after a starting key, which
-could be a zero-length string.
-
-hlc_0 AS (
-  SELECT nanos, logical FROM staging_table
-  WHERE (nanos, logical, key) > (start_at_nanos, start_at_logical, start_after_key)
-  AND (nanos, locical) < (end_before_nanos, end_before_logical)
-  AND NOT applied
-  GROUP BY nanos, logical -- We want multi-column distinct behavior
-  ORDER BY nanos, logical
-  LIMIT N
-)
-
+Start by identifying candidate rows to update.
 */ -}}
 {{- range  $idx, $tgt := .Cursor.Targets -}}
 {{- $arrIdx := add $idx 1 -}}
 {{- if $idx -}}, {{- nl -}}{{- end -}}
-hlc_{{ $idx }} (n, l) AS (
-SELECT nanos, logical
+candidates_{{ $idx }} AS (
+SELECT nanos, logical, key, lease
 FROM {{ $top.StagingTable $tgt }}
 WHERE (nanos, logical, key) > (($1::INT8[])[ {{- $arrIdx -}} ], ($2::INT8[])[ {{- $arrIdx -}} ], ($5::STRING[])[ {{- $arrIdx -}} ])
 AND (nanos, logical) < ($3, $4)
 AND NOT applied
-GROUP BY nanos, logical
-ORDER BY nanos, logical
-LIMIT {{ or $top.Cursor.TimestampLimit 1 }}
+{{- if $top.Cursor.UpdateLimit -}} {{- nl -}}
+ORDER BY nanos, logical, key
+LIMIT {{ $top.Cursor.UpdateLimit }}
+{{- end -}}{{- nl -}}
+FOR UPDATE
 )
 {{- end -}}
 
 {{- /*
-Select the earliest timestamps across all source tables.
-
-hlc_all AS (
-SELECT n, l FROM (
-  SELECT n, l FROM hlc_0 UNION ALL
-  SELECT n, l FROM hlc_1 UNION ALL ...
-  SELECT n, l FROM hlc_N
-)
-GROUP BY n, l
-ORDER BY n, l
-LIMIT N
-),
-
+Pick the N earliest distinct timestamps.
 */ -}}
 , {{- nl -}}
 hlc_all AS (
-SELECT n, l FROM (
+SELECT nanos n, logical l FROM (
 {{- range $idx, $tgt := .Cursor.Targets -}}
 {{- if $idx }} UNION ALL {{- nl -}}{{- end -}}
-SELECT n, l FROM hlc_{{ $idx }}
+SELECT nanos, logical FROM candidates_{{ $idx }}
 {{- end -}}
 )
 GROUP BY n, l
@@ -63,27 +39,33 @@ LIMIT {{ or $top.Cursor.TimestampLimit 1 }}
 )
 
 {{- /*
-Identify keys that should be blocked due to active leases. This prevents
-a key from rolling backwards if an update at an earlier time, T+0, is
-deferred and a subsequent update to that key could be applied at a later
-time, T+1.
-
-blocked_0 AS (
-  SELECT key FROM staging_table
-  JOIN hlc_all ON (nanos, logical) = (n, l)
-  WHERE (lease IS NOT NULL AND lease > now())
-)
+Identify keys with an active lease that should be ignored. This ensures
+that if a key at T1 has a lease, then that key at T2 should not be
+returned.
 */ -}}
 {{- if not $.IgnoreLeases -}}
 {{- range $idx, $tgt := .Cursor.Targets -}}
 , {{- nl -}}
 blocked_{{ $idx }} AS (
-SELECT key FROM {{ $top.StagingTable $tgt }}
-JOIN hlc_all ON (nanos,logical) = (n,l)
+SELECT key FROM candidates_{{ $idx }}
 WHERE (lease IS NOT NULL AND lease > now())
 GROUP BY key
 )
 {{- end -}}
+{{- end -}}
+
+{{- /*
+Thin the candidate rows using the target timestamp(s) and blocked key(s).
+*/ -}}
+{{- range  $idx, $tgt := .Cursor.Targets -}}
+, {{- nl -}}
+target_{{ $idx }} AS (
+SELECT * FROM candidates_{{ $idx }} c
+JOIN hlc_all ON (nanos, logical) = (n, l)
+{{- if not $.IgnoreLeases -}}{{- nl -}}
+WHERE NOT EXISTS (SELECT 1 FROM blocked_{{ $idx }} b WHERE c.key = b.key)
+{{- end -}}
+)
 {{- end -}}
 
 {{- /*
@@ -108,24 +90,20 @@ data_0 AS (
 {{- $arrIdx := add $idx 1 -}}
 , {{- nl -}}
 data_{{ $idx }} AS (
-UPDATE {{ $top.StagingTable $tgt }} {{- nl -}}
+UPDATE {{ $top.StagingTable $tgt }} s {{- nl -}}
 {{- if $top.SetApplied -}}
 SET applied=true, lease=NULL {{- nl -}}
 {{- else if $top.SetLeaseExpiry -}}
 {{- /* https://www.cockroachlabs.com/docs/stable/timestamp#convert-an-int-microseconds-since-epoch-to-timestamp */ -}}
 SET lease=TIMESTAMP 'epoch' + ({{ $top.SetLeaseExpiry.UnixMilli }}::float / 1000)::INTERVAL {{- nl -}}
 {{- end -}}
-WHERE (nanos,logical) IN (SELECT n, l FROM hlc_all)
-AND (nanos, logical, key) > (($1::INT8[])[ {{- $arrIdx -}} ], ($2::INT8[])[ {{- $arrIdx -}} ], ($5::STRING[])[ {{- $arrIdx -}} ])
-AND NOT applied
-{{- if not $top.IgnoreLeases -}}
-{{- nl -}} AND key NOT IN (SELECT key FROM blocked_{{ $idx }})
-{{- end -}}
+FROM target_{{ $idx }} t
+WHERE (s.nanos, s.logical, s.key) = (t.nanos, t.logical, t.key)
 {{- if $top.Cursor.UpdateLimit -}} {{- nl -}}
-ORDER BY nanos, logical, key
+ORDER BY s.nanos, s.logical, s.key
 LIMIT {{ $top.Cursor.UpdateLimit }}
 {{- end -}}
-{{- nl -}} RETURNING nanos, logical, key, mut, before)
+{{- nl -}} RETURNING s.nanos, s.logical, s.key, s.mut, s.before)
 {{- end -}}
 {{- nl -}}
 
@@ -133,9 +111,9 @@ LIMIT {{ $top.Cursor.UpdateLimit }}
 Top-level query aggregates the updates in table order.
 
 SELECT * FROM (
-  SELECT 0 idx, * FROM data_0 UNION ALL
-  SELECT 1 idx, * FROM data_1 UNION ALL ...
-  SELECT N idx, * FROM data_N
+  SELECT 0 idx, ... FROM data_0 UNION ALL
+  SELECT 1 idx, ... FROM data_1 UNION ALL ...
+  SELECT N idx, ... FROM data_N
 )
 ORDER BY nanos, logical, idx, key
 
