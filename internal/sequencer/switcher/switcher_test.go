@@ -56,8 +56,9 @@ func testSwitcherSmoke(t *testing.T, addChaos bool) {
 
 	cfg := &sequencer.Config{
 		Parallelism:     2,
-		QuiescentPeriod: time.Second,
-		SweepLimit:      1000,
+		QuiescentPeriod: 100 * time.Millisecond,
+		SweepLimit:      sequencer.DefaultSweepLimit,
+		TimestampLimit:  1,
 	}
 	if addChaos {
 		cfg.Chaos = 0.01
