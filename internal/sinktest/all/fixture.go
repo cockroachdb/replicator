@@ -113,6 +113,7 @@ func (f *Fixture) PeekStaged(
 			IgnoreLeases: true,
 			StartAt:      startAt,
 			Targets:      []ident.Table{tbl},
+			UpdateLimit:  10_000, // Sanity limit to let DB "breathe".
 		}
 		for selecting := true; selecting; {
 			q, selecting, err = f.Stagers.Unstage(ctx, tx, q,

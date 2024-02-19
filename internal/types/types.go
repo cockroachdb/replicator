@@ -26,6 +26,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -208,6 +209,17 @@ type UnstageCursor struct {
 	// multiplied by the number of tables listed in Targets. This will
 	// return all rows within the selected timestamp(s) if unset.
 	UpdateLimit int
+}
+
+// String is for debugging use only.
+func (c *UnstageCursor) String() string {
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetIndent("", " ")
+	if err := enc.Encode(c); err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	return buf.String()
 }
 
 // UnstageOffset is used within an [UnstageCursor] to provide

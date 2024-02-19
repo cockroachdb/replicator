@@ -37,6 +37,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -116,15 +117,18 @@ func TestPutAndDrain(t *testing.T) {
 		TimestampLimit: count / 10,
 	}
 	unstagedCount := 0
+	readBack := make([]types.Mutation, 0, len(muts))
 	for unstaging := true; unstaging; {
 		cursor, unstaging, err = fixture.Stagers.Unstage(ctx, pool, cursor,
-			func(context.Context, ident.Table, types.Mutation) error {
+			func(_ context.Context, _ ident.Table, mut types.Mutation) error {
 				unstagedCount++
+				readBack = append(readBack, mut)
 				return nil
 			})
 		r.NoError(err)
 	}
 	a.Equal(total, unstagedCount)
+	a.Equal(muts, readBack)
 
 	// Verify metrics query.
 	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0))
@@ -244,7 +248,7 @@ func TestStoreIfExists(t *testing.T) {
 }
 
 func TestUnstage(t *testing.T) {
-	const entries = 100
+	const entries = 1_000 // Increase for ersatz perf testing.
 	const tableCount = 10
 	a := assert.New(t)
 	r := require.New(t)
@@ -337,6 +341,8 @@ func TestUnstage(t *testing.T) {
 		stagingTables.Put(table, stager.(interface{ GetTable() ident.Table }).GetTable())
 	}
 
+	log.Info("finished filling data")
+
 	// checkCount is a helper function to verify that the cursor returns
 	// a specific number of mutations. The StartAfterKey field in the
 	// cursor will be cleared and the timestamp limit will be raised to
@@ -364,6 +370,7 @@ func TestUnstage(t *testing.T) {
 	// no data. The StartAfterKey field will be cleared.
 	checkEmpty := func(ctx context.Context, tx types.StagingQuerier, q *types.UnstageCursor) error {
 		q = q.Copy()
+		q.TableOffsets = ident.TableMap[types.UnstageOffset]{}
 		_, hasMore, err := fixture.Stagers.Unstage(ctx, tx, q,
 			func(context.Context, ident.Table, types.Mutation) error {
 				return errors.New("no mutations should be visible")
@@ -383,6 +390,7 @@ func TestUnstage(t *testing.T) {
 	unstage := func(ctx context.Context, tx types.StagingQuerier, q *types.UnstageCursor) (data *ident.TableMap[[]types.Mutation], numSelections int, _ error) {
 		data = &ident.TableMap[[]types.Mutation]{}
 		for selecting := true; selecting; {
+			log.Infof("cursor: %s", q)
 			q, selecting, err = fixture.Stagers.Unstage(ctx, tx, q,
 				func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
 					data.Put(tbl, append(data.GetZero(tbl), mut))
@@ -396,98 +404,17 @@ func TestUnstage(t *testing.T) {
 		return
 	}
 
-	t.Run("transactional", func(t *testing.T) {
-		a := assert.New(t)
-		r := require.New(t)
-
-		q := &types.UnstageCursor{
-			EndBefore: hlc.New(100*entries, 0), // Past any existing time.
-			Targets:   tables,
-		}
-
-		// Run the select in a discarded transaction to avoid
-		// contaminating future tests with side effects.
-		r.NoError(retry.Retry(ctx, func(ctx context.Context) error {
-			tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer func() { _ = tx.Rollback(ctx) }()
-
-			entriesByTable, numSelections, err := unstage(ctx, tx, q)
-			if err != nil {
-				return err
-			}
-			// Refer to comment about the distribution of timestamps.
-			// There are two large batches, then each mutation has two
-			// unique timestamps, and then there's a final call that returns
-			// false.
-			a.Equal(distinctTimestamps+1, numSelections)
-
-			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-				if a.Len(seen, len(expectedMutOrder)) {
-					a.Equal(expectedMutOrder, seen)
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-
-			// Ensure a re-read returns no data.
-			return checkEmpty(ctx, tx, q)
-		}))
-	})
-
-	// Read the middle two tranches of updates.
-	t.Run("transactional-bounded", func(t *testing.T) {
-		a := assert.New(t)
-		r := require.New(t)
-
-		q := &types.UnstageCursor{
-			StartAt:   hlc.New(2, 0),          // Skip the initial transaction
-			EndBefore: hlc.New(10*entries, 1), // Read the second large batch
-			Targets:   tables,
-		}
-
-		// Run the select in a discarded transaction to avoid
-		// contaminating future tests with side effects.
-		r.NoError(retry.Retry(ctx, func(ctx context.Context) error {
-			tx, err := fixture.StagingPool.BeginTx(ctx, pgx.TxOptions{})
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer func() { _ = tx.Rollback(ctx) }()
-			entriesByTable, numSelections, err := unstage(ctx, tx, q)
-			if err != nil {
-				return err
-			}
-			// We expect to see one large batch, a timestamp for each entry,
-			// and the final zero-results call.
-			a.Equal(1+entries+1, numSelections)
-			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-				if a.Len(seen, 2*entries) {
-					a.Equal(expectedMutOrder[entries:3*entries], seen)
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-
-			// Ensure a re-read returns no data.
-			return checkEmpty(ctx, tx, q)
-		}))
-	})
-
-	// Read from the staging tables using the limit, to simulate
-	// very large batches.
+	// Read the big batch at T=1 in small chunks. This verifies that
+	// we can paginate correctly within a single timestamp.
 	t.Run("transactional-incremental", func(t *testing.T) {
 		a := assert.New(t)
 		r := require.New(t)
 
 		q := &types.UnstageCursor{
-			EndBefore:   hlc.New(100*entries, 0), // Past any existing time.
+			StartAt:     hlc.New(1, 0),
+			EndBefore:   hlc.New(2, 0),
 			Targets:     tables,
-			UpdateLimit: 20,
+			UpdateLimit: entries / 100,
 		}
 
 		// Run the select in a discarded transaction to avoid
@@ -503,10 +430,15 @@ func TestUnstage(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			a.Equal(211, numSelections)
+			// Expect the big batch to be carved up, then one extra for
+			// the empty read.
+			a.Equal(100+1, numSelections)
+
+			// We're going to look for each table to have read back
+			// the etries at T=1.
 			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
-				if a.Len(seen, len(expectedMutOrder)) {
-					a.Equal(expectedMutOrder, seen)
+				if a.Len(seen, entries) {
+					a.Equal(expectedMutOrder[:entries], seen)
 				}
 				return nil
 			}); err != nil {
@@ -526,8 +458,8 @@ func TestUnstage(t *testing.T) {
 			StartAt:        hlc.New(2, 0),          // Skip the initial transaction
 			EndBefore:      hlc.New(10*entries, 1), // Read the second large batch
 			Targets:        tables,
-			TimestampLimit: 10,
-			UpdateLimit:    20,
+			TimestampLimit: entries / 10,
+			UpdateLimit:    entries / 20,
 		}
 
 		// Run the select in a discarded transaction to avoid
@@ -542,10 +474,10 @@ func TestUnstage(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			// We expect to see groups of 10 timestamps for the
-			// individually-queued batches, then groups of mutations
+			// We expect to see groups of 1/10th of the timestamps for
+			// the individually-queued batches, then groups of mutations
 			// within the large batch, and then a final empty update.
-			a.Equal(entries/10+entries/20+1, numSelections)
+			a.Equal(2*10+20+1, numSelections)
 			if err := entriesByTable.Range(func(_ ident.Table, seen []types.Mutation) error {
 				if a.Len(seen, 2*entries) {
 					a.Equal(expectedMutOrder[entries:3*entries], seen)
@@ -570,7 +502,7 @@ func TestUnstage(t *testing.T) {
 			EndBefore:      hlc.New(100*entries, 0), // Past any existing time.
 			Targets:        tables,
 			LeaseExpiry:    time.Now().Add(time.Hour),
-			TimestampLimit: 99,
+			TimestampLimit: entries/10 - 1,
 		}
 
 		// Run the select in a discarded transaction to avoid

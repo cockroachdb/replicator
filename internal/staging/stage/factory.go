@@ -76,6 +76,14 @@ func (f *factory) Unstage(
 	cursor *types.UnstageCursor,
 	fn types.UnstageCallback,
 ) (*types.UnstageCursor, bool, error) {
+	// Without being able to set scan bounds, it would be possible to
+	// create an arbitrarily large number of row locks. An unbounded
+	// scan isn't used anywhere today, so this exists as a guard-rail
+	// against future mis-use of the API.
+	if cursor.UpdateLimit+cursor.TimestampLimit == 0 {
+		return nil, false, errors.New("a timestamp and/or update limit must be set")
+	}
+
 	// Duplicate the cursor so callers can choose to advance.
 	cursor = cursor.Copy()
 
