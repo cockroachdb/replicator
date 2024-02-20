@@ -495,12 +495,14 @@ func TestRejectedAuth(t *testing.T) {
 	// Verify that auth checks don't require other services.
 	h := &Handler{
 		Authenticator: reject.New(),
+		Config:        &Config{},
 		TargetPool: &types.TargetPool{
 			PoolInfo: types.PoolInfo{
 				Product: types.ProductCockroachDB,
 			},
 		},
 	}
+	require.NoError(t, h.Config.Preflight())
 
 	tcs := []struct {
 		path string
