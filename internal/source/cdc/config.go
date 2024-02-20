@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	defaultBackfillWindow = time.Hour
-	defaultNDJsonBuffer   = bufio.MaxScanTokenSize // 64k
+	defaultBackfillWindow  = time.Hour
+	defaultNDJsonBuffer    = bufio.MaxScanTokenSize // 64k
+	defaultResponseTimeout = 2 * time.Minute
 )
 
 // Config adds CDC-specific configuration to the core logical loop.
@@ -53,6 +54,10 @@ type Config struct {
 	// of ndjson input. This can be increased if the source cluster
 	// has large blob values.
 	NDJsonBuffer int
+
+	// The maximum amount of time that we want to allow an HTTP handler
+	// to run for.
+	ResponseTimeout time.Duration
 }
 
 // Bind adds configuration flags to the set.
@@ -72,6 +77,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.IntVar(&c.NDJsonBuffer, "ndjsonBufferSize", defaultNDJsonBuffer,
 		"the maximum amount of data to buffer while reading a single line of ndjson input; "+
 			"increase when source cluster has large blob values")
+	f.DurationVar(&c.ResponseTimeout, "httpResponseTimeout", defaultResponseTimeout,
+		"the maximum amount of time to allow an HTTP handler to execute for")
 }
 
 // Preflight implements logical.Config.
@@ -90,6 +97,9 @@ func (c *Config) Preflight() error {
 
 	if c.NDJsonBuffer == 0 {
 		c.NDJsonBuffer = defaultNDJsonBuffer
+	}
+	if c.ResponseTimeout == 0 {
+		c.ResponseTimeout = defaultResponseTimeout
 	}
 
 	return nil

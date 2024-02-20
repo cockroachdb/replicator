@@ -47,7 +47,13 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// We're going to decouple our HTTP processing from the request
+	// context. Once we've received a complete payload, we don't really
+	// care if the client goes away. At worst, we'll re-stage or
+	// re-apply the same data if CockroachDB retransmits later on.
+	ctx, cancel := context.WithTimeout(
+		context.Background(), h.Config.ResponseTimeout)
+	defer cancel()
 
 	sendErr := func(err error) {
 		if err == nil {
