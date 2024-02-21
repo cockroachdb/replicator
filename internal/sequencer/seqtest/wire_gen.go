@@ -44,7 +44,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	if err != nil {
 		return nil, err
 	}
-	scriptSequencer := script2.ProvideSequencer(loader, watchers)
+	scriptSequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	shingleShingle := shingle.ProvideShingle(config, targetPool)
 	chaosChaos := &chaos.Chaos{
 		Config: config,

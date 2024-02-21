@@ -47,6 +47,9 @@ const (
 	ModeBypass
 	ModeSerial
 	ModeShingle
+
+	MinMode = Mode(1)     // Used for testing all modes.
+	MaxMode = ModeShingle // Used for testing all modes.
 )
 
 // Switcher switches between delegate sequencers. It also adds script

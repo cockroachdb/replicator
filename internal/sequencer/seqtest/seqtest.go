@@ -21,6 +21,7 @@ package seqtest
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
@@ -32,6 +33,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/pkg/errors"
 )
 
 // Fixture provides ready-to-use instances of sequencer types.
@@ -45,6 +48,25 @@ type Fixture struct {
 	Script     *script.Sequencer
 	Shingle    *shingle.Shingle
 	Switcher   *switcher.Switcher
+}
+
+// SequencerFor returns a Sequencer instance that corresponds to the
+// given mode enum.
+func (f *Fixture) SequencerFor(
+	ctx *stopper.Context, mode switcher.Mode,
+) (sequencer.Sequencer, error) {
+	switch mode {
+	case switcher.ModeBestEffort:
+		return f.BestEffort, nil
+	case switcher.ModeBypass:
+		return f.Bypass, nil
+	case switcher.ModeSerial:
+		return f.Serial, nil
+	case switcher.ModeShingle:
+		return f.Shingle.Wrap(ctx, f.Serial)
+	default:
+		return nil, errors.Errorf("unimplemented, %s", mode)
+	}
 }
 
 func provideLeases(

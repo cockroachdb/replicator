@@ -74,7 +74,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	sequencer := script2.ProvideSequencer(loader, watchers)
+	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	conn, err := ProvideConn(context, acceptor, chaosChaos, config, bypassBypass, memoMemo, sequencer, stagingPool, targetPool, watchers)
 	if err != nil {
 		return nil, err

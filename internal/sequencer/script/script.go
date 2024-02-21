@@ -19,9 +19,12 @@
 package script
 
 import (
+	"context"
+
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 )
@@ -29,8 +32,9 @@ import (
 // Sequencer injects the userscript shim into a [sequencer.Sequencer]
 // stack.
 type Sequencer struct {
-	loader   *script.Loader
-	watchers types.Watchers
+	loader     *script.Loader
+	targetPool *types.TargetPool
+	watchers   types.Watchers
 }
 
 var _ sequencer.Shim = (*Sequencer)(nil)
@@ -79,10 +83,27 @@ func (w *wrapper) Start(
 		}
 	}
 	if inject {
+		// If the userscript has defined any apply functions, we will
+		// need to ensure that a database transaction will be available
+		// to support the api.getTX() function. This is mainly relevant
+		// to immediate mode, in which the sequencer caller won't
+		// necessarily have created a transaction.
+		ensureTX := false
+		// No interesting error returned from Range.
+		_ = scr.Targets.Range(func(_ ident.Table, target *script.Target) error {
+			if target.UserAcceptor != nil {
+				ensureTX = true
+				return context.Canceled // Arbitrary error to stop early.
+			}
+			return nil
+		})
+
 		opts = opts.Copy()
 		opts.Delegate = types.OrderedAcceptorFrom(&acceptor{
 			delegate:   opts.Delegate,
+			ensureTX:   ensureTX,
 			group:      opts.Group,
+			targetPool: w.targetPool,
 			userScript: scr,
 			watchers:   w.watchers,
 		}, w.watchers)
