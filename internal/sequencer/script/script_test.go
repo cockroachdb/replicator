@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/seqtest"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -38,6 +39,14 @@ import (
 )
 
 func TestUserScriptSequencer(t *testing.T) {
+	for mode := switcher.MinMode; mode <= switcher.MaxMode; mode++ {
+		t.Run(mode.String(), func(t *testing.T) {
+			testUserScriptSequencer(t, mode)
+		})
+	}
+}
+
+func testUserScriptSequencer(t *testing.T, baseMode switcher.Mode) {
 	r := require.New(t)
 
 	// Create a basic test fixture.
@@ -111,10 +120,11 @@ api.configureTable("t_2", {
 		scriptCfg)
 	r.NoError(err)
 
-	scriptSeq := seqFixture.Script
+	base, err := seqFixture.SequencerFor(ctx, baseMode)
+	r.NoError(err)
 
 	bounds := &notify.Var[hlc.Range]{}
-	wrapped, err := scriptSeq.Wrap(ctx, seqFixture.Serial)
+	wrapped, err := seqFixture.Script.Wrap(ctx, base)
 	r.NoError(err)
 	acc, stats, err := wrapped.Start(ctx, &sequencer.StartOptions{
 		Bounds:   bounds,

@@ -18,18 +18,23 @@ package script
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // acceptor implements [types.TableAcceptor] and intercepts mutations
 // for dispatch, mapping, or user-defined apply functions.
 type acceptor struct {
 	delegate   types.TableAcceptor
+	ensureTX   bool
 	group      *types.TableGroup
 	justMap    bool
+	targetPool *types.TargetPool
 	userScript *script.UserScript
 	watchers   types.Watchers
 }
@@ -41,6 +46,10 @@ var _ types.TableAcceptor = (*acceptor)(nil)
 func (a *acceptor) AcceptTableBatch(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
+	if _, isTX := opts.TargetQuerier.(*sql.Tx); a.ensureTX && !isTX {
+		return a.acceptWithTransaction(ctx, batch, opts)
+	}
+
 	// We're looping around from the bottom of this method.
 	if a.justMap {
 		return a.doMap(ctx, batch, opts)
@@ -53,6 +62,30 @@ func (a *acceptor) AcceptTableBatch(
 	}
 
 	return a.doDispatch(ctx, source, batch, opts)
+}
+
+// acceptWithTransaction creates a database transaction and calls
+// AcceptTableBatch. This code path is used in immediate mode when the
+// userscript has a user-defined accept function callback.
+func (a *acceptor) acceptWithTransaction(
+	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
+) error {
+	log.Trace("creating target transaction for user-defined apply function")
+	tx, err := a.targetPool.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	opts = opts.Copy()
+	opts.TargetQuerier = tx
+
+	// Return to our usual dispatch.
+	if err := a.AcceptTableBatch(ctx, batch, opts); err != nil {
+		return err
+	}
+
+	return errors.WithStack(tx.Commit())
 }
 
 // Unwrap is an informal protocol to return the delegate.

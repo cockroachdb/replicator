@@ -103,7 +103,7 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
-	sequencer := script2.ProvideSequencer(loader, watchers)
+	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
 	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
@@ -194,7 +194,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	sequencer := script2.ProvideSequencer(loader, watchers)
+	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
 	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)

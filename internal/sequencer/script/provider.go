@@ -26,9 +26,12 @@ import (
 var Set = wire.NewSet(ProvideSequencer)
 
 // ProvideSequencer is called by Wire.
-func ProvideSequencer(loader *script.Loader, watchers types.Watchers) *Sequencer {
+func ProvideSequencer(
+	loader *script.Loader, targetPool *types.TargetPool, watchers types.Watchers,
+) *Sequencer {
 	return &Sequencer{
-		loader:   loader,
-		watchers: watchers,
+		loader:     loader,
+		targetPool: targetPool,
+		watchers:   watchers,
 	}
 }

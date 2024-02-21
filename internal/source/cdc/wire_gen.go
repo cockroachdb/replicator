@@ -69,7 +69,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
-	sequencer := script2.ProvideSequencer(loader, watchers)
+	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
 	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)

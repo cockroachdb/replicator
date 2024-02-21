@@ -74,7 +74,7 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	sequencer := script2.ProvideSequencer(loader, watchers)
+	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	mylogicalConn, err := ProvideConn(ctx, acceptor, bypassBypass, chaosChaos, config, memoMemo, sequencer, stagingPool, targetPool, watchers)
 	if err != nil {
 		return nil, err
