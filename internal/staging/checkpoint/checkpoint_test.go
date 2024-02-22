@@ -18,6 +18,7 @@ package checkpoint_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -25,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,10 +56,11 @@ func TestResolved(t *testing.T) {
 	r.NotSame(g1, g2)
 
 	const minNanos = int64(1)
-	const maxNanos = int64(10)
+	const maxNanos = int64(1_000)
 
-	t.Run("mark-and-refresh", func(t *testing.T) {
+	t.Run("advance-and-bootstrap", func(t *testing.T) {
 		r := require.New(t)
+		start := time.Now()
 		for i := minNanos; i <= maxNanos; i++ {
 			r.NoError(g1.Advance(ctx, hlc.New(i, 0)))
 
@@ -65,18 +68,19 @@ func TestResolved(t *testing.T) {
 			// long as it's the tail.
 			r.NoError(g1.Advance(ctx, hlc.New(i, 0)))
 		}
+		log.Infof("inserted rows in %s", time.Since(start))
 
 		// Fast refresh of other group.
 		g2.Refresh()
 
 		r.NoError(stopvar.WaitForValue(ctx,
 			// 1 because end is exclusive.
-			hlc.Range{hlc.New(0, 0), hlc.New(maxNanos, 1)},
+			hlc.Range{hlc.New(0, 0), hlc.New(minNanos, 1)},
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
 			// 1 because end is exclusive.
-			hlc.Range{hlc.New(0, 0), hlc.New(maxNanos, 1)},
+			hlc.Range{hlc.New(0, 0), hlc.New(minNanos, 1)},
 			bounds2,
 		))
 	})
@@ -99,12 +103,12 @@ func TestResolved(t *testing.T) {
 
 		r.NoError(stopvar.WaitForValue(ctx,
 			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos/2, 0), hlc.New(maxNanos, 1)},
+			hlc.Range{hlc.New(maxNanos/2, 1), hlc.New(maxNanos/2+1, 1)},
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
 			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos/2, 0), hlc.New(maxNanos, 1)},
+			hlc.Range{hlc.New(maxNanos/2, 1), hlc.New(maxNanos/2+1, 1)},
 			bounds2))
 	})
 
@@ -119,12 +123,12 @@ func TestResolved(t *testing.T) {
 
 		r.NoError(stopvar.WaitForValue(ctx,
 			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos, 0), hlc.New(maxNanos, 1)},
+			hlc.Range{hlc.New(maxNanos, 1), hlc.New(maxNanos, 1)},
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
 			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos, 0), hlc.New(maxNanos, 1)},
+			hlc.Range{hlc.New(maxNanos, 1), hlc.New(maxNanos, 1)},
 			bounds2))
 	})
 
@@ -139,4 +143,91 @@ func TestResolved(t *testing.T) {
 		r := require.New(t)
 		r.ErrorContains(g1.Advance(ctx, hlc.New(1, 1)), "is going backwards")
 	})
+}
+
+func TestTransitions(t *testing.T) {
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+
+	bounds := &notify.Var[hlc.Range]{}
+	expect := func(low, high int) {
+		var lo, hi hlc.Time
+		if low > 0 {
+			lo = hlc.New(int64(low), low+1)
+		}
+		if high > 0 {
+			hi = hlc.New(int64(high), high+1)
+		}
+		rng := hlc.Range{lo, hi}
+		log.Infof("waiting for %s", rng)
+		r.NoError(stopvar.WaitForValue(ctx, rng, bounds))
+	}
+
+	group, err := fixture.Checkpoints.Start(ctx,
+		&types.TableGroup{Name: ident.New("fake")},
+		bounds,
+	)
+	r.NoError(err)
+	advance := func(ts int) {
+		r.NoError(group.Advance(ctx, hlc.New(int64(ts), ts)))
+	}
+	commit := func(ts int) {
+		h := hlc.New(int64(ts), ts)
+		r.NoError(group.Commit(ctx, hlc.Range{h, h.Next()}))
+	}
+
+	expect(0, 0)
+
+	// Add a timestamp and expect the exclusive end point to advance
+	// beyond the end time.
+	advance(2)
+	expect(0, 2)
+
+	// Commit the timestamp and expect an empty range that does not
+	// overlap the committed time.
+	commit(2)
+	expect(2, 2)
+
+	// Extend the end time, the min bound should not change.
+	advance(5)
+	expect(2, 5)
+
+	// Same test as committing 2 above.
+	commit(5)
+	expect(5, 5)
+
+	// Stack up additional timestamps that we'll incrementally commit.
+	// We expect to advance incrementally as the timestamps are
+	// committed.
+	advance(10)
+	advance(15)
+	advance(20)
+	advance(25)
+
+	expect(5, 10)
+	commit(10)
+	expect(10, 15)
+	commit(15)
+	expect(15, 20)
+
+	// Commit several and wait for catch up.
+	commit(20)
+	commit(25)
+	expect(25, 25)
+
+	// We do have guards for ensuring that a resolved timestamp always
+	// goes forward, however we do want to verify that we get reasonable
+	// answers if there's a gap in the history.
+	advance(100)
+	advance(105)
+	advance(110)
+	commit(100)
+	commit(110)
+	expect(100, 105)
+	commit(105)
+	expect(110, 110)
 }

@@ -118,47 +118,39 @@ SELECT * FROM to_insert`
 // invariants. If successful, this method will asynchronously refresh
 // the Group.
 func (r *Group) Advance(ctx context.Context, ts hlc.Time) error {
-	err := retry.Retry(ctx, func(ctx context.Context) error {
-		_, _, err := r.bounds.Update(func(old hlc.Range) (hlc.Range, error) {
-			start := time.Now()
-			tag, err := r.pool.Exec(ctx,
-				r.sql.mark,
-				r.target.Name.Canonical().Raw(),
-				ts.Nanos(),
-				ts.Logical(),
-			)
-			if err != nil {
-				return old, errors.WithStack(err)
-			}
-			if tag.RowsAffected() == 0 {
-				r.metrics.backwards.Inc()
-				return old, errors.Errorf(
-					"proposed checkpoint timestamp for %s is going backwards %s; "+
-						"verify changefeed cursor or remove already-applied "+
-						"checkpoint timestamp entries",
-					r.target, ts)
-			}
-			r.metrics.advanceDuration.Observe(time.Since(start).Seconds())
-			log.WithFields(log.Fields{
-				"checkpoint": ts,
-				"group":      r.target,
-			}).Trace("advanced checkpoint timestamp")
-			// +1 since range end is exclusive
-			return hlc.Range{old.Min(), ts.Next()}, nil
-		})
-		return err
-	})
-	if err == nil {
-		r.Refresh()
+	start := time.Now()
+	tag, err := r.pool.Exec(ctx,
+		r.sql.mark,
+		r.target.Name.Canonical().Raw(),
+		ts.Nanos(),
+		ts.Logical(),
+	)
+	if err != nil {
+		return errors.WithStack(err)
 	}
-	return err
+	if tag.RowsAffected() == 0 {
+		r.metrics.backwards.Inc()
+		return errors.Errorf(
+			"proposed checkpoint timestamp for %s is going backwards %s; "+
+				"verify changefeed cursor or remove already-applied "+
+				"checkpoint timestamp entries",
+			r.target, ts)
+	}
+	r.Refresh()
+
+	r.metrics.advanceDuration.Observe(time.Since(start).Seconds())
+	log.WithFields(log.Fields{
+		"checkpoint": ts,
+		"group":      r.target,
+	}).Trace("advanced checkpoint timestamp")
+	return nil
 }
 
 const applyTemplate = `
 UPDATE %s 
 SET target_applied_at = now()
 WHERE target_schema = $1
-AND (source_nanos, source_logical) BETWEEN ($2, $3) AND ($4, $5)
+AND (source_nanos, source_logical) >= ($2, $3) AND (source_nanos, source_logical) < ($4, $5)
 AND target_applied_at IS NULL
 `
 
@@ -174,7 +166,7 @@ func (r *Group) Commit(ctx context.Context, rng hlc.Range) error {
 			rng.Min().Nanos(),
 			rng.Min().Logical(),
 			rng.Max().Nanos(),
-			rng.Max().Logical()-1, // -1 since range end is exclusive
+			rng.Max().Logical(),
 		)
 		if err == nil {
 			r.metrics.commitDuration.Observe(time.Since(start).Seconds())
@@ -199,27 +191,55 @@ func (r *Group) TableGroup() *types.TableGroup {
 	return r.target
 }
 
-// This query finds the newest applied timestamp (case A) and the newest
-// unapplied timestamp (case B). An existing timestamp is used to help
-// with time-based index scans. If there are no unapplied mutations, a
-// closed range will be returned.
+// This query locates the newest applied timestamp and returns the next
+// unapplied timestamp
+//
+// CTE components:
+//   - pairs: Generates pairs of candidate start/end rows. The coalesce
+//     functions allow us to handle the case where there is exactly one
+//     unapplied row. The extra +1 in the start_l and end_l projection
+//     ensure that the returned range does not include (i.e.
+//     inclusive-starts after) the last applied timestamp and does include
+//     (i.e. exclusive-ends after) the timestamp that we want to process
+//     up to.
+//   - ideal: Selects the first pair that has an applied start time and
+//     an unapplied end time. This should be the general case when we're
+//     processing data.
+//   - complete: Handles the case where there are no unresolved
+//     timestamps remaining. This query returns an empty range
+//     beyond the final applied checkpoint.
 const refreshTemplate = `
 WITH
-a AS (
-  SELECT target_schema s, source_nanos n, source_logical l
-  FROM %[1]s
-  WHERE target_schema = $1 AND target_applied_at IS NOT NULL 
-  ORDER BY source_nanos DESC, source_logical DESC
-  LIMIT 1),
-b AS (
-  SELECT target_schema s, source_nanos n, source_logical l
-  FROM %[1]s
-  WHERE target_schema = $1 AND (source_nanos, source_logical) >= ($2, $3) AND target_applied_at IS NULL
-  ORDER BY source_nanos DESC, source_logical DESC
-  LIMIT 1)
-SELECT coalesce(a.n, 0), coalesce(a.l, 0), coalesce(b.n, a.n), coalesce(b.l, a.l)
-FROM a FULL JOIN b USING (s)
-LIMIT 1
+pairs AS (
+SELECT
+  COALESCE(lag(source_nanos) OVER (), 0) start_n,
+  COALESCE(lag(source_logical) OVER ()+1, 0) start_l,
+  COALESCE(lag(target_applied_at IS NOT NULL) OVER (), true) start_ok,
+  source_nanos end_n,
+  source_logical + 1 end_l,
+  target_applied_at IS NULL end_ok
+ FROM %[1]s
+WHERE target_schema = $1 AND (source_nanos, source_logical) >= ($2-1, $3-1)
+ORDER BY source_nanos, source_logical
+),
+ideal AS (
+ SELECT start_n, start_l, end_n, end_l
+  FROM pairs
+ WHERE start_ok AND end_ok
+ LIMIT 1
+),
+complete AS (
+SELECT
+  last_value(end_n) OVER w,
+  last_value(end_l) OVER w,
+  last_value(end_n) OVER w,
+  last_value(end_l) OVER w
+  FROM pairs
+  WHERE NOT EXISTS (SELECT * FROM ideal) AND NOT end_ok
+  WINDOW w AS (ORDER BY end_n, end_l ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+)
+SELECT * FROM ideal UNION ALL
+SELECT * FROM complete
 `
 
 // refreshBounds synchronizes the in-memory bounds with the database.
@@ -233,11 +253,11 @@ func (r *Group) refreshBounds(ctx context.Context) error {
 			if err := r.pool.QueryRow(ctx, r.sql.refresh,
 				r.target.Name.Canonical().Raw(),
 				old.Min().Nanos(),
-				old.Min().Logical()-1,
+				old.Min().Logical(),
 			).Scan(&minNanos, &minLogical, &maxNanos, &maxLogical); err == nil {
 				next = hlc.Range{
 					hlc.New(minNanos, minLogical),
-					hlc.New(maxNanos, maxLogical+1), // +1 since end is exclusive
+					hlc.New(maxNanos, maxLogical),
 				}
 			} else if errors.Is(err, pgx.ErrNoRows) {
 				// If there's no data for this group, do nothing.
