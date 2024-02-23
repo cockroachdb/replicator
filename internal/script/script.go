@@ -272,7 +272,7 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 	return func(ctx context.Context, mut types.Mutation) (types.Mutation, bool, error) {
 		// Unpack key into slice.
 		var key []any
-		if err := json.Unmarshal(mut.Key, &key); err != nil {
+		if err := unmarshal(mut.Key, &key); err != nil {
 			return mut, false, errors.WithStack(err)
 		}
 		meta := mut.Meta
@@ -337,7 +337,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 	return func(ctx context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
 		// Unmarshal the mutation's data as a generic map.
 		data := make(map[string]any)
-		if err := json.Unmarshal(mut.Data, &data); err != nil {
+		if err := unmarshal(mut.Data, &data); err != nil {
 			return nil, errors.WithStack(err)
 		}
 
@@ -424,7 +424,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 	return func(ctx context.Context, mut types.Mutation) (types.Mutation, bool, error) {
 		// Unpack data into generic map.
 		data := make(map[string]any)
-		if err := json.Unmarshal(mut.Data, &data); err != nil {
+		if err := unmarshal(mut.Data, &data); err != nil {
 			return mut, false, errors.WithStack(err)
 		}
 
