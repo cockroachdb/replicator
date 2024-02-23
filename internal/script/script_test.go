@@ -26,6 +26,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -88,6 +89,14 @@ func TestScript(t *testing.T) {
 	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("CREATE TABLE %s.table2(idx INT PRIMARY KEY)", schema))
 	r.NoError(err)
+	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf(`
+CREATE TABLE %s.skewed_merge_times(
+ pk INT PRIMARY KEY,
+ epoch INT DEFAULT 0 NOT NULL,
+ updated_at TIMESTAMP NOT NULL
+)`, schema))
+	r.NoError(err)
 
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
 	var opts mapOptions
@@ -104,7 +113,7 @@ func TestScript(t *testing.T) {
 
 	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
 	a.Equal(3, s.Sources.Len())
-	a.Equal(9, s.Targets.Len())
+	a.Equal(10, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -380,5 +389,33 @@ func TestScript(t *testing.T) {
 		r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
 			"SELECT count(*) FROM %s", table)).Scan(&ct))
 		r.Equal(0, ct)
+	})
+
+	t.Run("skewed_merge_times", func(t *testing.T) {
+		if !apply.IsMergeSupported(fixture.TargetPool.Product) {
+			t.Skipf("merge operation not implemented for product %s", fixture.TargetPool.Product)
+		}
+		r := require.New(t)
+		table = ident.NewTable(schema, ident.New("skewed_merge_times"))
+		cfg := s.Targets.GetZero(table)
+		r.NotNil(cfg)
+		acceptor := cfg.UserAcceptor
+		r.IsType(new(applier), acceptor)
+		r.NotNil(cfg.Merger)
+
+		// We're going to make the updated_at column count backwards.
+		now := time.Now().UTC()
+		for i := 10; i > 0; i-- {
+			r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(table, hlc.Zero(), []types.Mutation{
+				{
+					Data: json.RawMessage(fmt.Sprintf(
+						`{"pk":0, "updated_at":%q}`,
+						now.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano))),
+					Key: json.RawMessage(`[0]`),
+				},
+			}),
+				&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
+			))
+		}
 	})
 }

@@ -43,7 +43,12 @@ func (m *bagWrapper) Get(key string) goja.Value {
 	if !ok {
 		return goja.Undefined()
 	}
-	return m.rt.ToValue(v)
+	ret, err := safeValue(m.rt, v)
+	if err != nil {
+		// This will be presented as an exception.
+		panic(m.rt.NewGoError(err))
+	}
+	return ret
 }
 
 // Has implements goja.DynamicObject.

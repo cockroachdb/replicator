@@ -119,7 +119,7 @@ func (tx *targetTX) Query(q string, args ...any) *goja.Promise {
 	// implements the iterator protocol (i.e. has a next()
 	// function). We want to do this while we're being called from JS.
 	obj := tx.parent.rt.NewObject()
-	iterator := &rowsIter{}
+	iterator := &rowsIter{rt: tx.parent.rt}
 	if err := obj.SetSymbol(goja.SymIterator, func() *rowsIter {
 		return iterator
 	}); err != nil {
@@ -171,6 +171,7 @@ func (tx *targetTX) Table() string {
 type rowsIter struct {
 	colCount int
 	rows     *sql.Rows
+	rt       *goja.Runtime
 }
 
 // Next implements the JS iterator protocol.
@@ -185,15 +186,24 @@ func (it *rowsIter) Next() (*rowsIterResult, error) {
 		return &rowsIterResult{Done: true}, nil
 	}
 
-	data := make([]any, it.colCount)
-	ptrs := make([]any, len(data))
+	rawValues := make([]any, it.colCount)
+	ptrs := make([]any, len(rawValues))
 	for idx := range ptrs {
-		ptrs[idx] = &data[idx]
+		ptrs[idx] = &rawValues[idx]
 	}
 	if err := it.rows.Scan(ptrs...); err != nil {
 		return nil, errors.WithStack(err)
 	}
-	return &rowsIterResult{Value: data}, nil
+	// We want to present database types in a manner consistent with how
+	// they would be seen if received from a changefeed.
+	values := make([]goja.Value, len(rawValues))
+	for idx, rawValue := range rawValues {
+		values[idx], err = safeValue(it.rt, rawValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &rowsIterResult{Value: values}, nil
 }
 
 // Return implements the JS iterator protocol and will be called
@@ -206,6 +216,6 @@ func (it *rowsIter) Return() *rowsIterResult {
 
 // Implements the JS iteration result protocol.
 type rowsIterResult struct {
-	Done  bool  `goja:"done"`
-	Value []any `goja:"value"`
+	Done  bool         `goja:"done"`
+	Value []goja.Value `goja:"value"`
 }
