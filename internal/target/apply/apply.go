@@ -105,14 +105,8 @@ func (f *factory) newApply(
 	configHandle := f.configs.Get(target)
 	configData, configChanged := configHandle.Get()
 
-	if configData.Merger != nil {
-		switch a.product {
-		case types.ProductCockroachDB:
-		case types.ProductPostgreSQL:
-		default:
-			// Work items in https://github.com/cockroachdb/cdc-sink/issues/487
-			return nil, errors.Errorf("merge operation not implemented for %s", a.product)
-		}
+	if configData.Merger != nil && !IsMergeSupported(a.product) {
+		return nil, errors.Errorf("merge operation not implemented for %s", a.product)
 	}
 
 	var initialErr notify.Var[error]
@@ -776,4 +770,17 @@ func toDBTypes(colData []types.ColData, values []any) error {
 		}
 	}
 	return nil
+}
+
+// IsMergeSupported returns true if the applier supports three-way
+// merges for the given product.
+//
+// Work items in https://github.com/cockroachdb/cdc-sink/issues/487
+func IsMergeSupported(product types.Product) bool {
+	switch product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		return true
+	default:
+		return false
+	}
 }

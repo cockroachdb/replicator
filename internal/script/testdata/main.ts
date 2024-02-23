@@ -131,6 +131,37 @@ api.configureTable("merge_or_dlq", {
     merge: api.standardMerge(() => ({dlq: "dead"}))
 });
 
+// This demonstrates how, when using a time-based CAS field, one can
+// account for clock skew. In this case, we'll allow merges to be
+// applied only if they are within one minute.
+const updatedAt = 'updated_at';
+api.configureTable("skewed_merge_times", {
+    apply: async (ops: ApplyOp[]): Promise<any> => {
+        ops = ops.map(op => {
+            if (op.action === "upsert") {
+                op.data['epoch'] = 42;
+            }
+            return op;
+        })
+        return api.getTX().apply(ops)
+    },
+    cas: [updatedAt],
+    merge: api.standardMerge((op: api.MergeOperation) => {
+        console.log(JSON.stringify(op));
+        // The updatedAt symbol is a string constant defined above.
+        if (op.unmerged.length === 1 && op.unmerged[0] === updatedAt) {
+            let then = Date.parse(op.proposed[updatedAt] + "");
+            let now = Date.parse(op.target[updatedAt] + "");
+            // Accept if the delta is less than one minute.
+            if (Math.abs(now - then) <= 60000 /* 1 minute */) {
+                op.proposed[updatedAt] = op.target[updatedAt];
+                return {apply: op.proposed};
+            }
+        }
+        return {dlq: "dead"}
+    }),
+});
+
 // This demonstrates how a delete operation with the 'diff' option
 // can be transformed into a soft delete. The `before` field is
 // copied into a replacement upsert operation.
@@ -173,6 +204,26 @@ api.configureTable("sql_test", {
              FROM (VALUES (1, 2), (3, 4))`);
         for (let row of await rows) {
             console.log("rows query", JSON.stringify(row));
+
+            if (typeof row[0] !== "string") {
+                throw new Error("numbers are presented as strings to prevent loss of precision");
+            }
+        }
+
+        // Demonstrate date parsing.
+        for (let row of await tx.query("SELECT now()")) {
+            let d = new Date(row[0]);
+            console.log("the database time is", row[0], "=>", d);
+        }
+
+        // Demonstrate INT8 can be queried.
+        for (let row of await tx.query("SELECT (1<<60)::INT8")) {
+            if (typeof row[0] !== "string") {
+                throw new Error("numbers are presented as strings to prevent loss of precision");
+            }
+            if (row[0] !== "1152921504606846976") {
+                throw new Error(`found ${row[0]}`);
+            }
         }
 
         // This is a not-entirely-contrived example where one might
