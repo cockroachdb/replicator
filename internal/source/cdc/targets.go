@@ -187,7 +187,7 @@ func (t *Targets) metrics(info *targetInfo) {
 
 func (t *Targets) modeSelector(info *targetInfo) {
 	if t.cfg.Immediate {
-		info.mode.Set(switcher.ModeBypass)
+		info.mode.Set(switcher.ModeImmediate)
 		return
 	} else if t.cfg.BestEffortOnly {
 		info.mode.Set(switcher.ModeBestEffort)

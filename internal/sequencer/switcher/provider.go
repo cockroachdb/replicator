@@ -18,8 +18,8 @@ package switcher
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
@@ -31,7 +31,7 @@ import (
 // Set is used by Wire.
 var Set = wire.NewSet(
 	besteffort.Set,
-	bypass.Set,
+	immediate.Set,
 	chaos.Set,
 	script.Set,
 	serial.Set,
@@ -43,9 +43,9 @@ var Set = wire.NewSet(
 // ProvideSequencer is called by Wire.
 func ProvideSequencer(
 	best *besteffort.BestEffort,
-	bypass *bypass.Bypass,
 	chaos *chaos.Chaos,
 	diags *diag.Diagnostics,
+	imm *immediate.Immediate,
 	script *script.Sequencer,
 	serial *serial.Serial,
 	shingle *shingle.Shingle,
@@ -54,7 +54,7 @@ func ProvideSequencer(
 ) *Switcher {
 	return &Switcher{
 		bestEffort:  best,
-		bypass:      bypass,
+		immediate:   imm,
 		chaos:       chaos,
 		diags:       diags,
 		script:      script,

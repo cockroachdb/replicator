@@ -23,8 +23,8 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
@@ -44,7 +44,7 @@ type Mode int
 const (
 	ModeUnknown Mode = iota
 	ModeBestEffort
-	ModeBypass
+	ModeImmediate
 	ModeSerial
 	ModeShingle
 
@@ -56,9 +56,9 @@ const (
 // bindings into the sequencer stack.
 type Switcher struct {
 	bestEffort  *besteffort.BestEffort
-	bypass      *bypass.Bypass
 	chaos       *chaos.Chaos
 	diags       *diag.Diagnostics
+	immediate   *immediate.Immediate
 	serial      *serial.Serial
 	script      *script.Sequencer
 	shingle     *shingle.Shingle

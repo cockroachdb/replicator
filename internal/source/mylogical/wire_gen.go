@@ -8,8 +8,8 @@ package mylogical
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
@@ -56,11 +56,11 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	bypassBypass := &bypass.Bypass{}
 	sequencerConfig := &eagerConfig.Sequencer
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
+	immediateImmediate := &immediate.Immediate{}
 	stagingConfig := &eagerConfig.Staging
 	stagingPool, err := sinkprod.ProvideStagingPool(ctx, stagingConfig, diagnostics, targetConfig)
 	if err != nil {
@@ -75,7 +75,7 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 		return nil, err
 	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	mylogicalConn, err := ProvideConn(ctx, acceptor, bypassBypass, chaosChaos, config, memoMemo, sequencer, stagingPool, targetPool, watchers)
+	mylogicalConn, err := ProvideConn(ctx, acceptor, chaosChaos, config, immediateImmediate, memoMemo, sequencer, stagingPool, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}

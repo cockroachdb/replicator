@@ -23,7 +23,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
@@ -42,7 +42,7 @@ type Fixture struct {
 	*all.Fixture
 
 	BestEffort *besteffort.BestEffort
-	Bypass     *bypass.Bypass
+	Immediate  *immediate.Immediate
 	Retire     *retire.Retire
 	Serial     *serial.Serial
 	Script     *script.Sequencer
@@ -58,8 +58,8 @@ func (f *Fixture) SequencerFor(
 	switch mode {
 	case switcher.ModeBestEffort:
 		return f.BestEffort, nil
-	case switcher.ModeBypass:
-		return f.Bypass, nil
+	case switcher.ModeImmediate:
+		return f.Immediate, nil
 	case switcher.ModeSerial:
 		return f.Serial, nil
 	case switcher.ModeShingle:
