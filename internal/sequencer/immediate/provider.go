@@ -14,11 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package bypass
+package immediate
 
 import "github.com/google/wire"
 
 // Set is used by Wire.
 var Set = wire.NewSet(
-	wire.Struct(new(Bypass)),
+	wire.Struct(new(Immediate)),
 )

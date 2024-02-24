@@ -10,14 +10,15 @@ func _() {
 	var x [1]struct{}
 	_ = x[ModeUnknown-0]
 	_ = x[ModeBestEffort-1]
-	_ = x[ModeBypass-2]
+	_ = x[ModeImmediate-2]
 	_ = x[ModeSerial-3]
 	_ = x[ModeShingle-4]
+	_ = x[MinMode-1]
 }
 
-const _Mode_name = "ModeUnknownModeBestEffortModeBypassModeSerialModeShingle"
+const _Mode_name = "ModeUnknownModeBestEffortModeImmediateModeSerialModeShingle"
 
-var _Mode_index = [...]uint8{0, 11, 25, 35, 45, 56}
+var _Mode_index = [...]uint8{0, 11, 25, 38, 48, 59}
 
 func (i Mode) String() string {
 	if i < 0 || i >= Mode(len(_Mode_index)-1) {

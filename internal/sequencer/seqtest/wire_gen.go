@@ -10,8 +10,8 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
@@ -35,7 +35,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	targetPool := baseFixture.TargetPool
 	watchers := fixture.Watchers
 	bestEffort := besteffort.ProvideBestEffort(config, leases, stagingPool, stagers, targetPool, watchers)
-	bypassBypass := &bypass.Bypass{}
+	immediateImmediate := &immediate.Immediate{}
 	retireRetire := retire.ProvideRetire(config, stagingPool, stagers)
 	serialSerial := serial.ProvideSerial(config, leases, stagers, stagingPool, targetPool)
 	configs := fixture.Configs
@@ -49,11 +49,11 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	chaosChaos := &chaos.Chaos{
 		Config: config,
 	}
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, scriptSequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, chaosChaos, diagnostics, immediateImmediate, scriptSequencer, serialSerial, shingleShingle, stagingPool, targetPool)
 	seqtestFixture := &Fixture{
 		Fixture:    fixture,
 		BestEffort: bestEffort,
-		Bypass:     bypassBypass,
+		Immediate:  immediateImmediate,
 		Retire:     retireRetire,
 		Serial:     serialSerial,
 		Script:     scriptSequencer,

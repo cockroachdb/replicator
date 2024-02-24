@@ -8,8 +8,8 @@ package pglogical
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
@@ -60,7 +60,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
-	bypassBypass := &bypass.Bypass{}
+	immediateImmediate := &immediate.Immediate{}
 	stagingConfig := &eagerConfig.Staging
 	stagingPool, err := sinkprod.ProvideStagingPool(context, stagingConfig, diagnostics, targetConfig)
 	if err != nil {
@@ -75,7 +75,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	conn, err := ProvideConn(context, acceptor, chaosChaos, config, bypassBypass, memoMemo, sequencer, stagingPool, targetPool, watchers)
+	conn, err := ProvideConn(context, acceptor, chaosChaos, config, immediateImmediate, memoMemo, sequencer, stagingPool, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}

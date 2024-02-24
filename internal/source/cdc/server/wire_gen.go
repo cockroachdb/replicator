@@ -9,8 +9,8 @@ package server
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
@@ -99,14 +99,14 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 		return nil, err
 	}
 	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
-	bypassBypass := &bypass.Bypass{}
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
+	immediateImmediate := &immediate.Immediate{}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
 	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, chaosChaos, diagnostics, immediateImmediate, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
 	targets, err := cdc.ProvideTargets(ctx, acceptor, cdcConfig, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err
@@ -185,10 +185,10 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		return nil, nil, err
 	}
 	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
-	bypassBypass := &bypass.Bypass{}
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
+	immediateImmediate := &immediate.Immediate{}
 	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
 	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
 	if err != nil {
@@ -197,7 +197,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
 	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, bypassBypass, chaosChaos, diagnostics, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, chaosChaos, diagnostics, immediateImmediate, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
 	targets, err := cdc.ProvideTargets(context, acceptor, cdcConfig, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, nil, err

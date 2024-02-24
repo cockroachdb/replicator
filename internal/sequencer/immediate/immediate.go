@@ -14,9 +14,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package bypass contains a trivial [sequencer.Sequencer]
+// Package immediate contains a trivial [sequencer.Sequencer]
 // implementation which writes data directly to the configured acceptor.
-package bypass
+package immediate
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
@@ -28,15 +28,15 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
 )
 
-// Bypass is a trivial implementation of [sequencer.Sequencer] that
+// Immediate is a trivial implementation of [sequencer.Sequencer] that
 // writes through to the underlying acceptor.
-type Bypass struct{}
+type Immediate struct{}
 
-var _ sequencer.Sequencer = (*Bypass)(nil)
+var _ sequencer.Sequencer = (*Immediate)(nil)
 
 // Start implements [sequencer.Sequencer]. The emitted stat will advance
 // all tables in the group to the ends of the resolving bounds.
-func (b *Bypass) Start(
+func (i *Immediate) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
 	ret := &notify.Var[sequencer.Stat]{}

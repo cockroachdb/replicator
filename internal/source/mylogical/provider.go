@@ -19,8 +19,8 @@ package mylogical
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	scriptSeq "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -44,9 +44,9 @@ var Set = wire.NewSet(
 func ProvideConn(
 	ctx *stopper.Context,
 	acc *apply.Acceptor,
-	bypass *bypass.Bypass,
 	chaos *chaos.Chaos,
 	config *Config,
+	imm *immediate.Immediate,
 	memo types.Memo,
 	scriptSeq *scriptSeq.Sequencer,
 	stagingPool *types.StagingPool,
@@ -72,7 +72,7 @@ func ProvideConn(
 		TLSConfig: config.tlsConfig,
 	}
 
-	seq, err := scriptSeq.Wrap(ctx, bypass)
+	seq, err := scriptSeq.Wrap(ctx, imm)
 	if err != nil {
 		return nil, err
 	}

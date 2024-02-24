@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package bypass_test
+package immediate_test
 
 import (
 	"encoding/json"
@@ -34,12 +34,12 @@ import (
 )
 
 // This can be seen as a skeleton for more interesting sequencers.
-func TestBypass(t *testing.T) {
+func TestImmediate(t *testing.T) {
 	r := require.New(t)
 	fixture, err := all.NewFixture(t)
 	r.NoError(err)
 	ctx := fixture.Context
-	fakeTable := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("bypass_table"))
+	fakeTable := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("immediate_table"))
 
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
 		&sequencer.Config{
@@ -49,14 +49,14 @@ func TestBypass(t *testing.T) {
 		},
 		&script.Config{})
 	r.NoError(err)
-	bypass := seqFixture.Bypass
+	imm := seqFixture.Immediate
 
 	bounds := &notify.Var[hlc.Range]{}
-	acc, stats, err := bypass.Start(ctx, &sequencer.StartOptions{
+	acc, stats, err := imm.Start(ctx, &sequencer.StartOptions{
 		Bounds:   bounds,
 		Delegate: types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
 		Group: &types.TableGroup{
-			Name:   ident.New("bypass_group"),
+			Name:   ident.New("immediate_group"),
 			Tables: []ident.Table{fakeTable},
 		},
 	})

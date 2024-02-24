@@ -23,8 +23,8 @@ import (
 	"context"
 
 	scriptRuntime "github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/bypass"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	scriptSequencer "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
@@ -43,7 +43,7 @@ func Start(*stopper.Context, *Config) (*PGLogical, error) {
 		wire.FieldsOf(new(*Config), "Script"),
 		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Staging", "Target"),
 		Set,
-		bypass.Set,
+		immediate.Set,
 		chaos.Set,
 		diag.New,
 		scriptRuntime.Set,

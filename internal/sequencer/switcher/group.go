@@ -128,8 +128,8 @@ func (g *groupSequencer) switchModeLocked(
 	switch next {
 	case ModeBestEffort:
 		nextSeq = g.bestEffort
-	case ModeBypass:
-		nextSeq = g.bypass
+	case ModeImmediate:
+		nextSeq = g.immediate
 	case ModeSerial:
 		nextSeq = g.serial
 	case ModeShingle:
