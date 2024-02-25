@@ -25,6 +25,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestBefore(t *testing.T) {
+	a := assert.New(t)
+
+	a.Equal(Time{1, 0}, Time{1, 1}.Before())
+	a.Equal(Time{1, math.MaxInt}, Time{2, 0}.Before())
+}
+
 func TestCompare(t *testing.T) {
 	a := assert.New(t)
 
@@ -43,11 +50,36 @@ func TestNext(t *testing.T) {
 	a.Equal(New(1, 1), New(1, 0).Next())
 }
 
-func TestRange(t *testing.T) {
+func TestEmpty(t *testing.T) {
 	a := assert.New(t)
 
-	a.True(Range{Time{1, 0}, Time{1, 0}}.Empty())
-	a.False(Range{Time{1, 0}, Time{1, 1}}.Empty())
+	a.True(RangeEmpty().Empty())
+	a.True(RangeEmptyAt(Time{1, 0}).Empty())
+
+	a.False(RangeIncluding(Time{1, 0}, Time{1, 0}).Empty())
+	a.False(RangeIncluding(Time{1, 0}, Time{1, 1}).Empty())
+}
+
+func TestWithMin(t *testing.T) {
+	a := assert.New(t)
+
+	five := New(5, 0)
+	ten := New(10, 0)
+	twenty := New(20, 0)
+	thirty := New(30, 0)
+
+	rng := RangeIncluding(ten, twenty)
+
+	// Move minimum to lower value.
+	a.Equal(RangeIncluding(five, twenty), rng.WithMin(five))
+	// Move minimum forward within range.
+	a.Equal(RangeIncluding(ten.Next(), twenty), rng.WithMin(ten.Next()))
+	// Set min to max, should create an empty range.
+	a.Equal(RangeEmptyAt(twenty), rng.WithMin(twenty))
+	// Set min to just beyond max, should create an empty range.
+	a.Equal(RangeEmptyAt(twenty.Next()), rng.WithMin(twenty.Next()))
+	// Set min to much larger value, should create an empty range.
+	a.Equal(RangeEmptyAt(thirty), rng.WithMin(thirty))
 }
 
 func TestParse(t *testing.T) {

@@ -26,6 +26,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -209,6 +210,23 @@ type UnstageCursor struct {
 	// multiplied by the number of tables listed in Targets. This will
 	// return all rows within the selected timestamp(s) if unset.
 	UpdateLimit int
+}
+
+// MinOffset returns the common minimum of all table offsets within
+// the cursor, or StartAt.
+func (c *UnstageCursor) MinOffset() hlc.Time {
+	if len(c.Targets) != c.TableOffsets.Len() {
+		return c.StartAt
+	}
+	min := hlc.New(math.MaxInt64, math.MaxInt)
+	// Ignoring error since callback returns nil.
+	_ = c.TableOffsets.Range(func(_ ident.Table, off UnstageOffset) error {
+		if hlc.Compare(off.Time, min) < 0 {
+			min = off.Time
+		}
+		return nil
+	})
+	return min
 }
 
 // String is for debugging use only.

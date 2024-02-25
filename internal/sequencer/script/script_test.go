@@ -138,7 +138,7 @@ api.configureTable("t_2", {
 	r.NoError(err)
 
 	const numEmits = 100
-	endTime := hlc.New(numEmits+1, 1)
+	endTime := hlc.New(numEmits+1, 0)
 	for i := 0; i < numEmits; i++ {
 		r.NoError(acc.AcceptTableBatch(ctx,
 			sinktest.TableBatchOf(
@@ -155,7 +155,7 @@ api.configureTable("t_2", {
 	}
 
 	// Make staged mutations eligible for processing.
-	bounds.Set(hlc.Range{hlc.Zero(), endTime})
+	bounds.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
 
 	// Wait for (async) replication for the first table name.
 	progress, progressMade := stats.Get()

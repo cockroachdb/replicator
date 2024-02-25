@@ -30,6 +30,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,12 +83,14 @@ func TestImmediate(t *testing.T) {
 
 	// Ensure table progress tracks resolved timestamps.
 	resolved := hlc.New(100, 100)
-	bounds.Set(hlc.Range{hlc.Zero(), resolved})
+	bounds.Set(hlc.RangeIncluding(hlc.Zero(), resolved))
 	for {
 		stat, changed := stats.Get()
-		if stat.Progress().GetZero(fakeTable) == resolved {
+		min := sequencer.CommonMin(stat)
+		if hlc.Compare(min, resolved) >= 0 {
 			break
 		}
+		log.Infof("waiting for progress: %s vs %s", min, resolved)
 		select {
 		case <-changed:
 		case <-ctx.Stopping():

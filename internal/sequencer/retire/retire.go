@@ -48,7 +48,7 @@ func (r *Retire) Start(
 	ret := &notify.Var[hlc.Time]{}
 	ctx.Go(func() error {
 		for {
-			_, err := stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, bounds, time.Minute,
+			_, err := stopvar.DoWhenChangedOrInterval(ctx, hlc.RangeEmpty(), bounds, time.Minute,
 				func(ctx *stopper.Context, _, bounds hlc.Range) error {
 					before := bounds.Min()
 					before = hlc.New(before.Nanos()-r.cfg.RetireOffset.Nanoseconds(), before.Logical())

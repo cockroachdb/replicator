@@ -216,12 +216,12 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	r.Len(peeked, 5)
 
 	// Make staged data available to be processed.
-	sweepBounds.Set(hlc.Range{hlc.Zero(), hlc.New(5, 1)})
+	sweepBounds.Set(hlc.RangeIncluding(hlc.Zero(), hlc.New(5, 0)))
 	// Wait until the background process has caught for all tables.
 	sweepProgress, swept := stats.Get()
 	for {
 		progress := sequencer.CommonMin(sweepProgress)
-		done := hlc.Compare(progress, hlc.New(5, 1)) >= 0
+		done := hlc.Compare(progress, hlc.New(5, 0)) >= 0
 		if done {
 			break
 		}

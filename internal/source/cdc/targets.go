@@ -173,7 +173,7 @@ func (t *Targets) metrics(info *targetInfo) {
 		min := resolvedMinTimestamp.WithLabelValues(info.target.Raw())
 		max := resolvedMaxTimestamp.WithLabelValues(info.target.Raw())
 		_, err := stopvar.DoWhenChangedOrInterval(t.stopper,
-			hlc.Range{}, &info.resolvingRange, tick,
+			hlc.RangeEmpty(), &info.resolvingRange, tick,
 			func(ctx *stopper.Context, _, new hlc.Range) error {
 				min.Set(float64(new.Min().Nanos()) / 1e9)
 				max.Set(float64(new.Max().Nanos()) / 1e9)
@@ -195,7 +195,7 @@ func (t *Targets) modeSelector(info *targetInfo) {
 	_, initialSet := info.mode.Get()
 	t.stopper.Go(func() error {
 		_, err := stopvar.DoWhenChangedOrInterval(t.stopper,
-			hlc.Range{hlc.New(-1, -1), hlc.Zero()},
+			hlc.RangeEmptyAt(hlc.New(-1, -1)), // Pick a non-zero time so the callback fires.
 			&info.resolvingRange,
 			10*time.Second, // Re-evaluate to allow un-jamming big serial transactions.
 			func(ctx *stopper.Context, _, bounds hlc.Range) error {
@@ -255,12 +255,12 @@ func (t *Targets) updateResolved(info *targetInfo) {
 
 				_, _, _ = info.resolvingRange.Update(func(window hlc.Range) (new hlc.Range, _ error) {
 					// If the new minimum doesn't push the window forward, do nothing.
-					if hlc.Compare(newMin, window.Min().Next()) <= 0 {
+					if hlc.Compare(newMin, window.Min()) <= 0 {
 						return window, notify.ErrNoUpdate
 					}
 
 					// Mark the range as being complete.
-					complete := hlc.Range{window.Min(), newMin.Next()}
+					complete := hlc.RangeIncluding(window.Min(), newMin)
 					if err := info.checkpoint.Commit(ctx, complete); err != nil {
 						log.WithError(err).Warnf(
 							"could not store updated resolved timestamp for %s; will continue",
@@ -270,7 +270,7 @@ func (t *Targets) updateResolved(info *targetInfo) {
 					}
 					log.Tracef("wrote applied_at time for %s: %s", info.target, complete)
 
-					return hlc.Range{newMin, window.Max()}, nil
+					return window.WithMin(newMin), nil
 				})
 				return nil
 			})

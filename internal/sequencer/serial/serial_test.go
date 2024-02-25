@@ -104,36 +104,19 @@ val INT DEFAULT 0 NOT NULL
 	r.NoError(err)
 	r.Len(peeked, 1)
 
-	group := &types.TableGroup{
-		Name: ident.New(fixture.StagingDB.Raw()),
-		// These table names are reversed to ensure that we'll re-order
-		// based on schema dependency order.
-		Tables: []ident.Table{
-			childInfo.Name(),
-			parentInfo.Name(),
-		},
-	}
-
 	// Set the sweep bounds here.
 	end := hlc.New(100, 0)
-	sweepBounds.Set(hlc.Range{hlc.Zero(), end}) // Max is exclusive.
+	sweepBounds.Set(hlc.RangeIncluding(hlc.Zero(), end))
 
 	// Wait for all tables to catch up to the end value.
-	sweepProgress, swept := stats.Get()
+	stat, swept := stats.Get()
 	for {
-		done := true
-		for _, tbl := range group.Tables {
-			if sweepProgress.Progress().GetZero(tbl) != end {
-				done = false
-				break
-			}
-		}
-		if done {
+		if hlc.Compare(sequencer.CommonMin(stat), end) >= 0 {
 			break
 		}
 		select {
 		case <-swept:
-			sweepProgress, swept = stats.Get()
+			stat, swept = stats.Get()
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
 		}
