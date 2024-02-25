@@ -19,8 +19,27 @@ package hlc
 import "fmt"
 
 // Range represents a half-open range of HLC values, inclusive of Min
-// and exclusive of Max.
+// and exclusive of Max. For code readability, prefer using [RangeEmpty]
+// or [RangeIncluding] to construct ranges instead of directly creating
+// a [Range].
 type Range [2]Time
+
+// RangeEmpty returns an empty range.
+func RangeEmpty() Range {
+	return Range{}
+}
+
+// RangeEmptyAt returns a Range that starts at the given time, but for
+// which [Range.Empty] will return true.
+func RangeEmptyAt(ts Time) Range {
+	return Range{ts, ts}
+}
+
+// RangeIncluding returns the smallest range that includes both the
+// start and end times.
+func RangeIncluding(start, end Time) Range {
+	return Range{start, end.Next()}
+}
 
 // Empty returns true if the Min time is greater than or equal to the
 // Max value.
@@ -32,6 +51,15 @@ func (r Range) Min() Time { return r[0] }
 // Max returns the exclusive, maximum value.
 func (r Range) Max() Time { return r[1] }
 
+// MaxIncluded returns the maximum value that is within the range. That
+// is, it returns one tick before the exclusive end bound.
+func (r Range) MaxIncluded() Time { return r[1].Before() }
+
 func (r Range) String() string {
 	return fmt.Sprintf("[ %s -> %s )", r[0], r[1])
+}
+
+// WithMin returns a new range that includes the minimum.
+func (r Range) WithMin(min Time) Range {
+	return Range{min, r[1]}
 }

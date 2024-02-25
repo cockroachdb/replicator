@@ -25,6 +25,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestBefore(t *testing.T) {
+	a := assert.New(t)
+
+	a.Equal(Time{1, 0}, Time{1, 1}.Before())
+	a.Equal(Time{1, math.MaxInt}, Time{2, 0}.Before())
+}
+
 func TestCompare(t *testing.T) {
 	a := assert.New(t)
 
@@ -43,11 +50,14 @@ func TestNext(t *testing.T) {
 	a.Equal(New(1, 1), New(1, 0).Next())
 }
 
-func TestRange(t *testing.T) {
+func TestEmpty(t *testing.T) {
 	a := assert.New(t)
 
-	a.True(Range{Time{1, 0}, Time{1, 0}}.Empty())
-	a.False(Range{Time{1, 0}, Time{1, 1}}.Empty())
+	a.True(RangeEmpty().Empty())
+	a.True(RangeEmptyAt(Time{1, 0}).Empty())
+
+	a.False(RangeIncluding(Time{1, 0}, Time{1, 0}).Empty())
+	a.False(RangeIncluding(Time{1, 0}, Time{1, 1}).Empty())
 }
 
 func TestParse(t *testing.T) {

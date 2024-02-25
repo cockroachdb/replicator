@@ -74,13 +74,11 @@ func TestResolved(t *testing.T) {
 		g2.Refresh()
 
 		r.NoError(stopvar.WaitForValue(ctx,
-			// 1 because end is exclusive.
-			hlc.Range{hlc.New(0, 0), hlc.New(minNanos, 1)},
+			hlc.RangeIncluding(hlc.Zero(), hlc.New(minNanos, 0)),
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
-			// 1 because end is exclusive.
-			hlc.Range{hlc.New(0, 0), hlc.New(minNanos, 1)},
+			hlc.RangeIncluding(hlc.Zero(), hlc.New(minNanos, 0)),
 			bounds2,
 		))
 	})
@@ -95,40 +93,34 @@ func TestResolved(t *testing.T) {
 	// Commit first half to check partial advancement
 	t.Run("record-first-half", func(t *testing.T) {
 		r := require.New(t)
-		// Setting logical to 1 since end is exclusive; makes the tests below less awkward.
-		r.NoError(g1.Commit(ctx, hlc.Range{hlc.New(0, 0), hlc.New(maxNanos/2, 1)}))
+		r.NoError(g1.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos/2, 0))))
 
 		// Fast refresh of other group.
 		g2.Refresh()
 
 		r.NoError(stopvar.WaitForValue(ctx,
-			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos/2, 1), hlc.New(maxNanos/2+1, 1)},
+			hlc.RangeIncluding(hlc.New(maxNanos/2, 0), hlc.New(maxNanos/2+1, 0)),
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
-			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos/2, 1), hlc.New(maxNanos/2+1, 1)},
+			hlc.RangeIncluding(hlc.New(maxNanos/2, 0), hlc.New(maxNanos/2+1, 0)),
 			bounds2))
 	})
 
 	// Use the second group instance.
 	t.Run("record-and-refresh", func(t *testing.T) {
 		r := require.New(t)
-		// Setting logical to 1 since end is exclusive; makes the tests below less awkward.
-		r.NoError(g2.Commit(ctx, hlc.Range{hlc.New(minNanos, 0), hlc.New(maxNanos, 1)}))
+		r.NoError(g2.Commit(ctx, hlc.RangeIncluding(hlc.New(minNanos, 0), hlc.New(maxNanos, 0))))
 
 		// Fast refresh of other group.
 		g1.Refresh()
 
 		r.NoError(stopvar.WaitForValue(ctx,
-			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos, 1), hlc.New(maxNanos, 1)},
+			hlc.RangeIncluding(hlc.New(maxNanos, 0), hlc.New(maxNanos, 0)),
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
-			// 1 because end is exclusive.
-			hlc.Range{hlc.New(maxNanos, 1), hlc.New(maxNanos, 1)},
+			hlc.RangeIncluding(hlc.New(maxNanos, 0), hlc.New(maxNanos, 0)),
 			bounds2))
 	})
 
@@ -155,14 +147,17 @@ func TestTransitions(t *testing.T) {
 
 	bounds := &notify.Var[hlc.Range]{}
 	expect := func(low, high int) {
-		var lo, hi hlc.Time
-		if low > 0 {
-			lo = hlc.New(int64(low), low+1)
+		rng := hlc.RangeEmpty()
+		if low > 0 || high > 0 {
+			var lo, hi hlc.Time
+			if low > 0 {
+				lo = hlc.New(int64(low), low)
+			}
+			if high > 0 {
+				hi = hlc.New(int64(high), high)
+			}
+			rng = hlc.RangeIncluding(lo, hi)
 		}
-		if high > 0 {
-			hi = hlc.New(int64(high), high+1)
-		}
-		rng := hlc.Range{lo, hi}
 		log.Infof("waiting for %s", rng)
 		r.NoError(stopvar.WaitForValue(ctx, rng, bounds))
 	}
@@ -177,7 +172,7 @@ func TestTransitions(t *testing.T) {
 	}
 	commit := func(ts int) {
 		h := hlc.New(int64(ts), ts)
-		r.NoError(group.Commit(ctx, hlc.Range{h, h.Next()}))
+		r.NoError(group.Commit(ctx, hlc.RangeIncluding(h, h)))
 	}
 
 	expect(0, 0)

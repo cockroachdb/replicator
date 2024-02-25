@@ -110,7 +110,7 @@ func TestRetire(t *testing.T) {
 	r.Equal(rowcount, countStaged())
 
 	// Update the retirement bounds and wait for progress.
-	bounds.Set(hlc.Range{hlc.New(unstageStart+unstageCount, 0), hlc.New(rowcount*2, 0)})
+	bounds.Set(hlc.RangeIncluding(hlc.New(unstageStart+unstageCount, 0), hlc.New(rowcount*2, 0)))
 	r.NoError(stopvar.WaitForValue(ctx, hlc.New(unstageStart+unstageCount, 0), progress))
 	r.Equal(rowcount-unstageCount, countStaged())
 }
