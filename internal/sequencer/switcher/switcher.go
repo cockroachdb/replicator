@@ -69,6 +69,7 @@ type Switcher struct {
 var _ sequencer.Sequencer = (*Switcher)(nil)
 
 // Start a sequencer that can switch between various modes of operation.
+// Callers must call [Switcher.WithMode] before calling this method.
 func (s *Switcher) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
@@ -105,7 +106,8 @@ func (s *Switcher) Start(
 }
 
 // WithMode returns a copy of the Switcher that uses the given variable
-// for mode control.
+// for mode control. This method exists so that Switcher can satisfy the
+// [sequencer.Sequencer] interface.
 func (s *Switcher) WithMode(mode *notify.Var[Mode]) *Switcher {
 	ret := *s
 	ret.mode = mode

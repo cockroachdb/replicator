@@ -45,7 +45,7 @@ func (i *Immediate) Start(
 	// Set each table's progress to the end of the bounds. This
 	// will allow the checkpointer to clean up resolved timestamps.
 	ctx.Go(func() error {
-		_, err := stopvar.DoWhenChanged(ctx, hlc.Range{}, opts.Bounds,
+		_, err := stopvar.DoWhenChanged(ctx, hlc.RangeEmpty(), opts.Bounds,
 			func(ctx *stopper.Context, old, new hlc.Range) error {
 				// Do nothing if the new end point didn't advance.
 				if hlc.Compare(new.Max(), old.Max()) <= 0 {
@@ -56,7 +56,9 @@ func (i *Immediate) Start(
 				// the end of the resolving range.
 				nextProgress := &ident.TableMap[hlc.Time]{}
 				for _, table := range opts.Group.Tables {
-					nextProgress.Put(table, new.Max())
+					// The end of the range is exclusive, so we can
+					// only show progress to one tick before.
+					nextProgress.Put(table, new.MaxInclusive())
 				}
 				ret.Set(sequencer.NewStat(opts.Group, nextProgress))
 				return nil

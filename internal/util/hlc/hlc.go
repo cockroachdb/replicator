@@ -22,6 +22,7 @@ package hlc
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +80,15 @@ func Parse(timestamp string) (Time, error) {
 // Zero returns a zero-valued Time.
 func Zero() Time {
 	return Time{}
+}
+
+// Before returns the time minus one logical tick. If the time has a
+// zero logical component, the previous nanosecond will be returned.
+func (t Time) Before() Time {
+	if t.logical > 0 {
+		return Time{t.nanos, t.logical - 1}
+	}
+	return Time{t.nanos - 1, math.MaxInt}
 }
 
 // Logical returns the logical counter.

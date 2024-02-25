@@ -77,7 +77,8 @@ func (s *Serial) Start(
 		}()
 
 		// Ignoring error since it's always nil.
-		_, _ = stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, opts.Bounds, s.cfg.QuiescentPeriod,
+		_, _ = stopvar.DoWhenChangedOrInterval(ctx,
+			hlc.RangeEmpty(), opts.Bounds, s.cfg.QuiescentPeriod,
 			func(ctx *stopper.Context, _, bound hlc.Range) error {
 				// Do nothing if, e.g. the caller has advanced the min time to the max time.
 				if bound.Empty() {
@@ -190,7 +191,9 @@ func (s *Serial) sweepOnce(
 	workCount := work.Count()
 	// We're done, just exit.
 	if workCount == 0 && !moreWork {
-		return q.EndBefore, false, nil
+		// This EndBefore value is exclusive, so we want to return a
+		// timestamp that was within the timestamps actually read.
+		return bounds.MaxInclusive(), false, nil
 	}
 
 	targetTx, err := s.targetPool.BeginTx(ctx, nil)
@@ -213,11 +216,13 @@ func (s *Serial) sweepOnce(
 		return hlc.Zero(), false, errors.WithStack(err)
 	}
 
-	// Without X/A transactions, we are in a vulnerable state here. If
-	// the staging transaction fails to commit, however, we'd re-apply
-	// the work that was just performed. This should wind up being a
-	// no-op in the general case.
+	// The staging transaction will be null if the delegate stack
+	// implements the MarkingAcceptor interface.
 	if stagingTx != nil {
+		// Without X/A transactions, we are in a vulnerable state here.
+		// If the staging transaction fails to commit, however, we'd
+		// re-apply the work that was just performed. This should wind
+		// up being a no-op in the general case.
 		if err := stagingTx.Commit(ctx); err != nil {
 			skew.Inc()
 			return hlc.Zero(), false, errors.Wrapf(err, "Serial.sweepOnce: skew condition")
@@ -230,12 +235,6 @@ func (s *Serial) sweepOnce(
 	duration.Observe(time.Since(start).Seconds())
 	success.SetToCurrentTime()
 
-	// If there's potentially more work to do, we can only guarantee
-	// we've processed up to the point at which the query would resume.
-	// However, if we know that we've consumed all possible data, we can
-	// jump ahead to the end of the time range.
-	if moreWork {
-		return q.StartAt, true, nil
-	}
-	return q.EndBefore, false, nil
+	// Report timestamp progress.
+	return q.MinOffset(), true, nil
 }

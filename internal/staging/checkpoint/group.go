@@ -213,10 +213,10 @@ WITH
 pairs AS (
 SELECT
   COALESCE(lag(source_nanos) OVER (), 0) start_n,
-  COALESCE(lag(source_logical) OVER ()+1, 0) start_l,
+  COALESCE(lag(source_logical) OVER (), 0) start_l,
   COALESCE(lag(target_applied_at IS NOT NULL) OVER (), true) start_ok,
   source_nanos end_n,
-  source_logical + 1 end_l,
+  source_logical end_l,
   target_applied_at IS NULL end_ok
  FROM %[1]s
 WHERE target_schema = $1 AND (source_nanos, source_logical) >= ($2-1, $3-1)
@@ -255,15 +255,15 @@ func (r *Group) refreshBounds(ctx context.Context) error {
 				old.Min().Nanos(),
 				old.Min().Logical(),
 			).Scan(&minNanos, &minLogical, &maxNanos, &maxLogical); err == nil {
-				next = hlc.Range{
+				next = hlc.RangeIncluding(
 					hlc.New(minNanos, minLogical),
 					hlc.New(maxNanos, maxLogical),
-				}
+				)
 			} else if errors.Is(err, pgx.ErrNoRows) {
 				// If there's no data for this group, do nothing.
 				return old, notify.ErrNoUpdate
 			} else {
-				return hlc.Range{}, errors.WithStack(err)
+				return hlc.RangeEmpty(), errors.WithStack(err)
 			}
 			if next == old {
 				log.Tracef("group %s: checkpoint range unchanged: %s", r.target, old)
@@ -307,7 +307,8 @@ func (r *Group) refreshJob(ctx *stopper.Context) {
 // allow age metrics to tick.
 func (r *Group) reportMetrics(ctx *stopper.Context) {
 	ctx.Go(func() error {
-		_, err := stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, r.bounds, 5*time.Second,
+		_, err := stopvar.DoWhenChangedOrInterval(ctx,
+			hlc.RangeEmpty(), r.bounds, 5*time.Second,
 			func(ctx *stopper.Context, _, bounds hlc.Range) error {
 				minTime := bounds.Min().Nanos()
 				maxTime := bounds.Max().Nanos()
