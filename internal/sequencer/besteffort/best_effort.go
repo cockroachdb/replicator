@@ -140,7 +140,8 @@ func (s *BestEffort) sweepTable(
 	ctx.Go(func() error {
 		log.Tracef("BestEffort starting on %s", table)
 
-		_, err := stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, bounds, s.cfg.QuiescentPeriod,
+		_, err := stopvar.DoWhenChangedOrInterval(ctx,
+			hlc.RangeEmpty(), bounds, s.cfg.QuiescentPeriod,
 			func(ctx *stopper.Context, _, bound hlc.Range) error {
 				// The bounds will be empty in the idle on initial-backfill
 				// condition. We still want to be able to proactively sweep
@@ -150,7 +151,7 @@ func (s *BestEffort) sweepTable(
 				// initial-backfill.
 				report := partialProgress
 				if bound.Empty() {
-					bound = hlc.Range{bound.Min(), s.timeSource()}
+					bound = hlc.RangeIncluding(bound.Min(), s.timeSource())
 					if bound.Empty() {
 						return nil
 					}
@@ -356,19 +357,22 @@ func (s *BestEffort) sweepOnce(
 			// We failed a mutation, so we can't advance beyond the time
 			// of that mutation. Reporting this time will allow us to
 			// retry the failed mutation later.
-			stat.LastProgress = earliestFailed
+			stat.LastProgress = earliestFailed.Before()
 		} else if hasMore {
 			// We did not see any failed mutations within this
 			// iteration, but there may be additional mutations to
-			// unstage later.
-			stat.LastProgress = q.TableOffsets.GetZero(tbl).Time
+			// unstage later. We can report that all times before the
+			// minimum offset within the cursor have been successfully
+			// applied.
+			stat.LastProgress = q.MinOffset().Before()
 		} else if earliestFailed.Nanos() == math.MaxInt64 {
 			// There are no more mutations that can be unstaged within
 			// the requested bounds. Since we've completed all possible
 			// work to perform, we can advance our progress report to
-			// the end of the requested range. In this case, we can
-			// report the end time used in the sweep
-			stat.LastProgress = bounds.Max()
+			// the last timestamp within the requested range (max is
+			// exclusive). In this case, we can report the end time used
+			// in the sweep
+			stat.LastProgress = bounds.MaxInclusive()
 		}
 
 		// Report progress to observer so that we may mark checkpoints

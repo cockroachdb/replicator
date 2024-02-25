@@ -170,7 +170,7 @@ func (g *Generator) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 // Range returns a range that includes all times at which the Generator
 // created data.
 func (g *Generator) Range() hlc.Range {
-	return hlc.Range{hlc.Zero(), g.MaxTime.Next()}
+	return hlc.RangeIncluding(hlc.Zero(), g.MaxTime)
 }
 
 // WaitForCatchUp returns when the Stat shows all tables have advanced
@@ -179,7 +179,7 @@ func (g *Generator) WaitForCatchUp(ctx context.Context, stats *notify.Var[sequen
 	for {
 		stat, changed := stats.Get()
 		min := sequencer.CommonMin(stat)
-		if hlc.Compare(min, g.MaxTime) > 0 {
+		if hlc.Compare(min, g.MaxTime) >= 0 {
 			log.Debugf("caught up to %s", min)
 			return nil
 		}

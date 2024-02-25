@@ -89,6 +89,7 @@ func TestPutAndDrain(t *testing.T) {
 			muts[i].Before = []byte("before")
 		}
 	}
+	endTime := muts[len(muts)-1].Time
 
 	// Insert.
 	r.NoError(s.Stage(ctx, pool, muts))
@@ -108,17 +109,19 @@ func TestPutAndDrain(t *testing.T) {
 
 	// Verify metrics query. We can't test AOST=true since the schema
 	// change will not have taken place yet.
-	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0), false)
+	count, err = ctr.CountUnapplied(ctx, pool, endTime.Next(), false)
 	r.NoError(err)
 	a.Equal(total, count)
 
 	// Select all mutations to set the applied flag. This allows the
 	// mutations to be deleted.
 	cursor := &types.UnstageCursor{
-		EndBefore:      hlc.New(math.MaxInt64, 0),
+		EndBefore:      endTime.Next(),
 		Targets:        []ident.Table{dummyTarget},
 		TimestampLimit: count / 10,
 	}
+	a.Equal(hlc.Zero(), cursor.MinOffset())
+
 	unstagedCount := 0
 	readBack := make([]types.Mutation, 0, len(muts))
 	for unstaging := true; unstaging; {
@@ -132,14 +135,15 @@ func TestPutAndDrain(t *testing.T) {
 	}
 	a.Equal(total, unstagedCount)
 	a.Equal(muts, readBack)
+	a.Equal(endTime, cursor.MinOffset())
 
 	// Verify metrics query.
-	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0), false)
+	count, err = ctr.CountUnapplied(ctx, pool, endTime.Next(), false)
 	r.NoError(err)
 	a.Zero(count)
 
 	// Retire mutations.
-	r.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
+	r.NoError(s.Retire(ctx, pool, endTime))
 
 	// Should be empty now.
 	count, err = base.GetRowCount(ctx, pool, stagingTable)
@@ -148,8 +152,8 @@ func TestPutAndDrain(t *testing.T) {
 
 	// Verify various no-op calls are OK.
 	r.NoError(s.Retire(ctx, pool, hlc.Zero()))
-	r.NoError(s.Retire(ctx, pool, muts[len(muts)-1].Time))
-	r.NoError(s.Retire(ctx, pool, hlc.New(muts[len(muts)-1].Time.Nanos()+1, 0)))
+	r.NoError(s.Retire(ctx, pool, endTime))
+	r.NoError(s.Retire(ctx, pool, endTime.Next()))
 }
 
 func TestStoreIfExists(t *testing.T) {

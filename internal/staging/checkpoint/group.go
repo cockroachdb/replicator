@@ -195,13 +195,11 @@ func (r *Group) TableGroup() *types.TableGroup {
 // unapplied timestamp
 //
 // CTE components:
+//   - start_from: Back up one row from the minimum timestamp. This
+//     helps to minimize the number of rows ultimately scanned.
 //   - pairs: Generates pairs of candidate start/end rows. The coalesce
 //     functions allow us to handle the case where there is exactly one
-//     unapplied row. The extra +1 in the start_l and end_l projection
-//     ensure that the returned range does not include (i.e.
-//     inclusive-starts after) the last applied timestamp and does include
-//     (i.e. exclusive-ends after) the timestamp that we want to process
-//     up to.
+//     unapplied row.
 //   - ideal: Selects the first pair that has an applied start time and
 //     an unapplied end time. This should be the general case when we're
 //     processing data.
@@ -210,22 +208,30 @@ func (r *Group) TableGroup() *types.TableGroup {
 //     beyond the final applied checkpoint.
 const refreshTemplate = `
 WITH
+start_from AS (
+  SELECT source_nanos n, source_logical l
+    FROM %[1]s
+   WHERE target_schema = $1 AND (source_nanos, source_logical) < ($2, $3)
+   ORDER BY source_nanos DESC, source_logical DESC
+   LIMIT 1
+),
 pairs AS (
 SELECT
   COALESCE(lag(source_nanos) OVER (), 0) start_n,
-  COALESCE(lag(source_logical) OVER ()+1, 0) start_l,
-  COALESCE(lag(target_applied_at IS NOT NULL) OVER (), true) start_ok,
+  COALESCE(lag(source_logical) OVER (), 0) start_l,
+  COALESCE(lag(target_applied_at IS NOT NULL) OVER (), true) start_applied,
   source_nanos end_n,
-  source_logical + 1 end_l,
-  target_applied_at IS NULL end_ok
+  source_logical end_l,
+  target_applied_at IS NOT NULL end_applied
  FROM %[1]s
-WHERE target_schema = $1 AND (source_nanos, source_logical) >= ($2-1, $3-1)
+WHERE target_schema = $1
+  AND (source_nanos, source_logical) >= COALESCE((SELECT (n, l) FROM start_from), (0,0))
 ORDER BY source_nanos, source_logical
 ),
 ideal AS (
  SELECT start_n, start_l, end_n, end_l
   FROM pairs
- WHERE start_ok AND end_ok
+ WHERE start_applied AND NOT end_applied
  LIMIT 1
 ),
 complete AS (
@@ -235,7 +241,7 @@ SELECT
   last_value(end_n) OVER w,
   last_value(end_l) OVER w
   FROM pairs
-  WHERE NOT EXISTS (SELECT * FROM ideal) AND NOT end_ok
+  WHERE NOT EXISTS (SELECT * FROM ideal) AND end_applied
   WINDOW w AS (ORDER BY end_n, end_l ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
 )
 SELECT * FROM ideal UNION ALL
@@ -255,15 +261,15 @@ func (r *Group) refreshBounds(ctx context.Context) error {
 				old.Min().Nanos(),
 				old.Min().Logical(),
 			).Scan(&minNanos, &minLogical, &maxNanos, &maxLogical); err == nil {
-				next = hlc.Range{
+				next = hlc.RangeIncluding(
 					hlc.New(minNanos, minLogical),
 					hlc.New(maxNanos, maxLogical),
-				}
+				)
 			} else if errors.Is(err, pgx.ErrNoRows) {
 				// If there's no data for this group, do nothing.
 				return old, notify.ErrNoUpdate
 			} else {
-				return hlc.Range{}, errors.WithStack(err)
+				return hlc.RangeEmpty(), errors.WithStack(err)
 			}
 			if next == old {
 				log.Tracef("group %s: checkpoint range unchanged: %s", r.target, old)
@@ -307,7 +313,8 @@ func (r *Group) refreshJob(ctx *stopper.Context) {
 // allow age metrics to tick.
 func (r *Group) reportMetrics(ctx *stopper.Context) {
 	ctx.Go(func() error {
-		_, err := stopvar.DoWhenChangedOrInterval(ctx, hlc.Range{}, r.bounds, 5*time.Second,
+		_, err := stopvar.DoWhenChangedOrInterval(ctx,
+			hlc.RangeEmpty(), r.bounds, 5*time.Second,
 			func(ctx *stopper.Context, _, bounds hlc.Range) error {
 				minTime := bounds.Min().Nanos()
 				maxTime := bounds.Max().Nanos()
