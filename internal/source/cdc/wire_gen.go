@@ -9,7 +9,6 @@ package cdc
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
@@ -60,9 +59,6 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 		return nil, err
 	}
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
-	chaosChaos := &chaos.Chaos{
-		Config: sequencerConfig,
-	}
 	immediateImmediate := &immediate.Immediate{}
 	scriptConfig := ProvideScriptConfig(config)
 	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
@@ -71,8 +67,8 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
-	shingleShingle := shingle.ProvideShingle(sequencerConfig, targetPool)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, chaosChaos, diagnostics, immediateImmediate, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	shingleShingle := shingle.ProvideShingle(sequencerConfig, stagers, stagingPool, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, diagnostics, immediateImmediate, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
 	targets, err := ProvideTargets(context, acceptor, config, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err

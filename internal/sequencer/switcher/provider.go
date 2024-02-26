@@ -43,7 +43,6 @@ var Set = wire.NewSet(
 // ProvideSequencer is called by Wire.
 func ProvideSequencer(
 	best *besteffort.BestEffort,
-	chaos *chaos.Chaos,
 	diags *diag.Diagnostics,
 	imm *immediate.Immediate,
 	script *script.Sequencer,
@@ -54,9 +53,8 @@ func ProvideSequencer(
 ) *Switcher {
 	return &Switcher{
 		bestEffort:  best,
-		immediate:   imm,
-		chaos:       chaos,
 		diags:       diags,
+		immediate:   imm,
 		script:      script,
 		serial:      serial,
 		shingle:     shingle,
