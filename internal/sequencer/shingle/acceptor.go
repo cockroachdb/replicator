@@ -21,10 +21,13 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/semaphore"
 )
@@ -35,7 +38,10 @@ type acceptor struct {
 	order    lockset.Set[string]
 }
 
-var _ types.MultiAcceptor = (*acceptor)(nil)
+var (
+	_ sequencer.MarkingAcceptor = (*acceptor)(nil)
+	_ types.MultiAcceptor       = (*acceptor)(nil)
+)
 
 // AcceptTableBatch implements [types.MultiAcceptor] and calls the
 // delegate.
@@ -59,11 +65,7 @@ func (a *acceptor) AcceptTemporalBatch(
 func (a *acceptor) AcceptMultiBatch(
 	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
 ) error {
-	// If one sub-batch fails, we want to unwind the entire unstaging
-	// operation. We'll create a nested context here to be able to
-	// quickly tear down the concurrent transactions.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	stopCtx := stopper.From(ctx)
 
 	// Limit total concurrency to something reasonable.
 	sem := semaphore.NewWeighted(int64(a.cfg.Parallelism))
@@ -74,31 +76,49 @@ func (a *acceptor) AcceptMultiBatch(
 		keys := batchKeys(sub)
 		outcomes[idx], _ = a.order.Schedule(keys, func([]string) error {
 			if err := sem.Acquire(ctx, 1); err != nil {
-				cancel()
 				return errors.WithStack(err)
 			}
 			defer sem.Release(1)
 
+			// We may have been delayed for some time, so we'll re-check
+			// that it's OK to continue running.
+			if stopCtx.IsStopping() {
+				return context.Canceled
+			}
+
 			tx, err := a.target.BeginTx(ctx, &sql.TxOptions{})
 			if err != nil {
-				cancel()
 				return errors.WithStack(err)
 			}
-			defer tx.Rollback()
+			defer func() { _ = tx.Rollback() }()
 
 			opts := opts.Copy()
 			opts.TargetQuerier = tx
 			if err := a.delegate.AcceptTemporalBatch(ctx, sub, opts); err != nil {
-				cancel()
 				return err
 			}
 
 			if err := tx.Commit(); err != nil {
-				cancel()
 				return errors.WithStack(err)
 			}
 
-			return nil
+			// Mark the mutations as having been applied.
+			stagingTx, err := a.staging.BeginTx(ctx, pgx.TxOptions{})
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			defer func() { _ = stagingTx.Rollback(context.Background()) }()
+
+			if err := sub.Data.Range(func(table ident.Table, tableBatch *types.TableBatch) error {
+				stager, err := a.stagers.Get(ctx, table)
+				if err != nil {
+					return err
+				}
+				return stager.MarkApplied(ctx, stagingTx, tableBatch.Data)
+			}); err != nil {
+				return err
+			}
+			return errors.WithStack(stagingTx.Commit(ctx))
 		})
 	}
 
@@ -121,6 +141,9 @@ outer:
 	}
 	return nil
 }
+
+// IsMarking implements [sequencer.MarkingAcceptor].
+func (a *acceptor) IsMarking() bool { return true }
 
 // Unwrap is an informal protocol to return the delegate.
 func (a *acceptor) Unwrap() types.MultiAcceptor {
