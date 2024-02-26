@@ -23,6 +23,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
@@ -42,6 +43,7 @@ type Fixture struct {
 	*all.Fixture
 
 	BestEffort *besteffort.BestEffort
+	Chaos      *chaos.Chaos
 	Immediate  *immediate.Immediate
 	Retire     *retire.Retire
 	Serial     *serial.Serial

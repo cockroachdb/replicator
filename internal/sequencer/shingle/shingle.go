@@ -29,8 +29,10 @@ import (
 // target transaction to be applied concurrently, with ordering enforced
 // on a per-key basis.
 type Shingle struct {
-	cfg    *sequencer.Config
-	target *types.TargetPool
+	cfg     *sequencer.Config
+	stagers types.Stagers
+	staging *types.StagingPool
+	target  *types.TargetPool
 }
 
 var _ sequencer.Shim = (*Shingle)(nil)

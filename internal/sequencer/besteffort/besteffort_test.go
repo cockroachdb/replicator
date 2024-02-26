@@ -37,7 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAcceptAndSweep(t *testing.T) {
+func TestStepByStep(t *testing.T) {
 	r := require.New(t)
 	fixture, err := all.NewFixture(t)
 	r.NoError(err)
@@ -253,119 +253,10 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	r.Equal(5, ct)
 }
 
-// TestSweepingFromStaging writes mutations to the staging table and
-// then starts the sweep process. This ensures that BestEffort can be
-// cold-started. Increasing the number of batches written here is also
-// an ersatz performance test of the sweep cycle.
-func TestSweepingFromStaging(t *testing.T) {
-	const batches = 100
-
-	r := require.New(t)
-	fixture, err := all.NewFixture(t)
-	r.NoError(err)
-	ctx := fixture.Context
-
-	parentInfo, err := fixture.CreateTargetTable(ctx, "CREATE TABLE %s (parent INT PRIMARY KEY)")
-	r.NoError(err)
-
-	childInfo, err := fixture.CreateTargetTable(ctx, fmt.Sprintf(
-		`CREATE TABLE %%s (
-child INT PRIMARY KEY,
-parent INT NOT NULL,
-val INT DEFAULT 0 NOT NULL,
-CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
-)`, parentInfo.Name()))
-	r.NoError(err)
-
-	group := &types.TableGroup{
-		Name:      ident.New("testing"),
-		Enclosing: fixture.TargetSchema.Schema(),
-		Tables: []ident.Table{
-			parentInfo.Name(),
-			childInfo.Name(),
+func TestBestEffort(t *testing.T) {
+	seqtest.CheckSequencer(t,
+		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
+			return seqFixture.BestEffort
 		},
-	}
-
-	// Write to staging tables directly, so we're testing the sweeping
-	// behavior without measuring the fast-path.
-	var ctr int
-	parents := make(map[int]struct{})
-	children := make(map[int]struct{})
-	now := time.Now()
-	for i := 0; i < batches; i++ {
-		batch := seqtest.GenerateBatch(
-			&ctr, hlc.New(int64(i+1), 0),
-			parents, children,
-			parentInfo.Name(), childInfo.Name())
-		for _, sub := range batch.Data {
-			r.NoError(sub.Data.Range(func(table ident.Table, data *types.TableBatch) error {
-				stager, err := fixture.Stagers.Get(ctx, table)
-				if err != nil {
-					return err
-				}
-				return stager.Stage(ctx, fixture.StagingPool, data.Data)
-			}))
-		}
-	}
-	log.Infof("staged data in %s", time.Since(now))
-	endTime := hlc.New(batches+1, 1)
-
-	// Create sequencer test fixture.
-	seqFixture, err := seqtest.NewSequencerFixture(fixture,
-		&sequencer.Config{
-			Parallelism:     8,
-			QuiescentPeriod: 100 * time.Millisecond,
-			TimestampLimit:  batches/10 + 1,
-			SweepLimit:      batches/10 + 1,
-		},
-		&script.Config{})
-	r.NoError(err)
-
-	// Set up the BestEffort processes.
-	bounds := &notify.Var[hlc.Range]{}
-	_, stats, err := seqFixture.BestEffort.Start(ctx, &sequencer.StartOptions{
-		Bounds:   bounds,
-		Delegate: types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
-		Group:    group,
-	})
-	r.NoError(err)
-
-	// Set desired range.
-	now = time.Now()
-	_, _, err = bounds.Update(func(old hlc.Range) (new hlc.Range, _ error) {
-		return hlc.Range{old.Min(), endTime}, nil
-	})
-	r.NoError(err)
-
-	// Wait to catch up.
-	for {
-		stat, changed := stats.Get()
-		min := sequencer.CommonMin(stat)
-		if hlc.Compare(min, endTime) >= 0 {
-			log.Infof("caught up in %s", time.Since(now))
-			break
-		}
-		log.Infof("waiting for catch-up: %s vs %s", min, endTime)
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			r.NoError(ctx.Err())
-		}
-	}
-
-	// Verify all mutations have been unstaged.
-	staged, err := fixture.PeekStaged(ctx, parentInfo.Name(), hlc.Zero(), endTime)
-	r.NoError(err)
-	r.Empty(staged)
-	staged, err = fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), endTime)
-	r.NoError(err)
-	r.Empty(staged)
-
-	// Verify target row counts against generated data.
-	parentCount, err := parentInfo.RowCount(ctx)
-	r.NoError(err)
-	r.Equal(len(parents), parentCount)
-	childCount, err := childInfo.RowCount(ctx)
-	r.NoError(err)
-	r.Equal(len(children), childCount)
+		func(t *testing.T, check *seqtest.Check) {})
 }
