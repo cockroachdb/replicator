@@ -26,9 +26,16 @@ import (
 var Set = wire.NewSet(ProvideShingle)
 
 // ProvideShingle is called by Wire.
-func ProvideShingle(cfg *sequencer.Config, target *types.TargetPool) *Shingle {
+func ProvideShingle(
+	cfg *sequencer.Config,
+	stagers types.Stagers,
+	staging *types.StagingPool,
+	target *types.TargetPool,
+) *Shingle {
 	return &Shingle{
-		cfg:    cfg,
-		target: target,
+		cfg:     cfg,
+		stagers: stagers,
+		staging: staging,
+		target:  target,
 	}
 }

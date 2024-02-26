@@ -155,16 +155,30 @@ func (s *Serial) sweepOnce(
 		// Not setting an UpdateLimit since we need to read complete transactions.
 	}
 
-	// Open a staging database transaction to retrieve unstaged mutations.
-	stagingTx, err := s.stagingPool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return hlc.Zero(), false, errors.WithStack(err)
+	// If the downstream acceptor implements (or delegates to an
+	// implementation of) MarkingAcceptor, we don't need to create a
+	// transaction in the staging database.
+	var stagingTx pgx.Tx
+	var stagingQ types.StagingQuerier
+	isMarking := sequencer.IsMarking(acceptor)
+	if isMarking {
+		stagingQ = s.stagingPool
+		q.LeaseExpiry = start.Add(s.cfg.QuiescentPeriod)
+	} else {
+		// Open a staging database transaction to retrieve unstaged mutations.
+		var err error
+		stagingTx, err = s.stagingPool.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			return hlc.Zero(), false, errors.WithStack(err)
+		}
+		defer func() { _ = stagingTx.Rollback(ctx) }()
+		stagingQ = stagingTx
 	}
-	defer func() { _ = stagingTx.Rollback(ctx) }()
 
 	// Accumulate work in a time- and table-grouped fashion.
+	var err error
 	work := &types.MultiBatch{}
-	q, moreWork, err = s.stagers.Unstage(ctx, stagingTx, q,
+	q, moreWork, err = s.stagers.Unstage(ctx, stagingQ, q,
 		func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
 			return work.Accumulate(tbl, mut)
 		})
@@ -187,7 +201,7 @@ func (s *Serial) sweepOnce(
 
 	// Provide downstream acceptors with access to our transactions.
 	opts := &types.AcceptOptions{
-		StagingQuerier: stagingTx,
+		StagingQuerier: stagingQ,
 		TargetQuerier:  targetTx,
 	}
 	if err := acceptor.AcceptMultiBatch(ctx, work, opts); err != nil {
@@ -203,9 +217,11 @@ func (s *Serial) sweepOnce(
 	// the staging transaction fails to commit, however, we'd re-apply
 	// the work that was just performed. This should wind up being a
 	// no-op in the general case.
-	if err := stagingTx.Commit(ctx); err != nil {
-		skew.Inc()
-		return hlc.Zero(), false, errors.Wrapf(err, "Serial.sweepOnce: skew condition")
+	if stagingTx != nil {
+		if err := stagingTx.Commit(ctx); err != nil {
+			skew.Inc()
+			return hlc.Zero(), false, errors.Wrapf(err, "Serial.sweepOnce: skew condition")
+		}
 	}
 
 	log.Tracef("Serial.sweepOnce: committed %s (%d mutations, %d timestamps)",

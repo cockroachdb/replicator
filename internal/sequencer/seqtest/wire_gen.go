@@ -35,6 +35,9 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	targetPool := baseFixture.TargetPool
 	watchers := fixture.Watchers
 	bestEffort := besteffort.ProvideBestEffort(config, leases, stagingPool, stagers, targetPool, watchers)
+	chaosChaos := &chaos.Chaos{
+		Config: config,
+	}
 	immediateImmediate := &immediate.Immediate{}
 	retireRetire := retire.ProvideRetire(config, stagingPool, stagers)
 	serialSerial := serial.ProvideSerial(config, leases, stagers, stagingPool, targetPool)
@@ -45,14 +48,12 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 		return nil, err
 	}
 	scriptSequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	shingleShingle := shingle.ProvideShingle(config, targetPool)
-	chaosChaos := &chaos.Chaos{
-		Config: config,
-	}
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, chaosChaos, diagnostics, immediateImmediate, scriptSequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	shingleShingle := shingle.ProvideShingle(config, stagers, stagingPool, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, diagnostics, immediateImmediate, scriptSequencer, serialSerial, shingleShingle, stagingPool, targetPool)
 	seqtestFixture := &Fixture{
 		Fixture:    fixture,
 		BestEffort: bestEffort,
+		Chaos:      chaosChaos,
 		Immediate:  immediateImmediate,
 		Retire:     retireRetire,
 		Serial:     serialSerial,

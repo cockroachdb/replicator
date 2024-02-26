@@ -23,7 +23,6 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
@@ -56,7 +55,6 @@ const (
 // bindings into the sequencer stack.
 type Switcher struct {
 	bestEffort  *besteffort.BestEffort
-	chaos       *chaos.Chaos
 	diags       *diag.Diagnostics
 	immediate   *immediate.Immediate
 	serial      *serial.Serial
@@ -64,12 +62,20 @@ type Switcher struct {
 	shingle     *shingle.Shingle
 	stagingPool *types.StagingPool
 	targetPool  *types.TargetPool
+
+	mode *notify.Var[Mode] // Set by WithMode.
 }
+
+var _ sequencer.Sequencer = (*Switcher)(nil)
 
 // Start a sequencer that can switch between various modes of operation.
 func (s *Switcher) Start(
-	ctx *stopper.Context, opts *sequencer.StartOptions, mode *notify.Var[Mode],
+	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+	mode := s.mode
+	if mode == nil {
+		return nil, nil, errors.New("call WithMode() first")
+	}
 	// Ensure the group is ready to go before returning. Otherwise,
 	// the accept methods wouldn't have anywhere to send mutations to.
 	initialMode, _ := mode.Get()
@@ -95,9 +101,13 @@ func (s *Switcher) Start(
 	if err != nil {
 		return nil, nil, err
 	}
-	ret, err = s.chaos.Wrap(ctx, ret)
-	if err != nil {
-		return nil, nil, err
-	}
 	return ret.Start(ctx, opts)
+}
+
+// WithMode returns a copy of the Switcher that uses the given variable
+// for mode control.
+func (s *Switcher) WithMode(mode *notify.Var[Mode]) *Switcher {
+	ret := *s
+	ret.mode = mode
+	return &ret
 }

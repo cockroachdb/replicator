@@ -109,15 +109,13 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 	// Set the mode before starting the switcher.
 	t.modeSelector(ret)
 
-	ret.acceptor, ret.stat, err = t.switcher.Start(
+	ret.acceptor, ret.stat, err = t.switcher.WithMode(&ret.mode).Start(
 		t.stopper,
 		&sequencer.StartOptions{
 			Bounds:   &ret.resolvingRange,
 			Delegate: types.OrderedAcceptorFrom(t.tableAcceptor, t.watchers),
 			Group:    tableGroup,
-		},
-		&ret.mode,
-	)
+		})
 	if err != nil {
 		return nil, err
 	}
