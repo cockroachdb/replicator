@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 )
 
@@ -45,6 +46,10 @@ type Config struct {
 
 	// Force the use of BestEffort mode.
 	BestEffortOnly bool
+
+	// Discard all incoming HTTP payloads. This is useful for tuning
+	// changefeed throughput without considering cdc-sink performance.
+	Discard bool
 
 	// Write directly to staging tables. May limit compatibility with
 	// schemas that contain foreign keys.
@@ -71,6 +76,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 			"is behind; 0 to disable")
 	f.BoolVar(&c.BestEffortOnly, "bestEffortOnly", false,
 		"disable serial mode; useful for high throughput, skew-tolerant schemas with FKs")
+	f.BoolVar(&c.Discard, "discard", false,
+		"(dangerous) discard all incoming HTTP requests; useful for changefeed throughput testing")
 	f.BoolVar(&c.Immediate, "immediate", false,
 		"bypass staging tables and write only to target; "+
 			"recommended only for KV-style workloads")
@@ -95,6 +102,9 @@ func (c *Config) Preflight() error {
 
 	// Backfill mode may be zero to disable BestEffort.
 
+	if c.Discard {
+		log.Warn("⚠️ HTTP server is discarding incoming payloads ⚠️")
+	}
 	if c.NDJsonBuffer == 0 {
 		c.NDJsonBuffer = defaultNDJsonBuffer
 	}
