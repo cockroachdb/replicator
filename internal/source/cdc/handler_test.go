@@ -43,6 +43,7 @@ import (
 )
 
 type fixtureConfig struct {
+	discard   bool
 	immediate bool
 	script    bool
 }
@@ -88,6 +89,7 @@ func createFixture(
 
 	cfg := &Config{
 		BestEffortWindow: math.MaxInt64,
+		Discard:          htc.discard,
 		Immediate:        htc.immediate,
 		SequencerConfig: sequencer.Config{
 			RetireOffset:    time.Hour, // Enable post-hoc inspection.
@@ -489,6 +491,18 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 			body:   strings.NewReader(""),
 		}))
 	})
+}
+
+func TestDiscard(t *testing.T) {
+	a := assert.New(t)
+	fixture, _ := createFixture(t, &fixtureConfig{discard: true})
+	h := fixture.Handler
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/anything", strings.NewReader("Ignored world"))
+	h.ServeHTTP(rec, req)
+
+	a.Equal(200, rec.Code)
 }
 
 func TestRejectedAuth(t *testing.T) {

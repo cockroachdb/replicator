@@ -22,6 +22,7 @@ package cdc
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 
@@ -77,6 +78,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.WithField(
 		"path", sanitizer.Replace(r.URL.Path),
 	).Trace("request")
+
+	if h.Config.Discard {
+		_, err := io.Copy(io.Discard, r.Body)
+		sendErr(err)
+		return
+	}
 
 	req, err := h.newRequest(r)
 	if err != nil {
