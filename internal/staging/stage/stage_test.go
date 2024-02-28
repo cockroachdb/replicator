@@ -63,7 +63,9 @@ func TestPutAndDrain(t *testing.T) {
 
 	// Not part of public API, but we want to test the metrics function.
 	ctr := s.(interface {
-		CountUnapplied(ctx context.Context, db types.StagingQuerier, before hlc.Time) (int, error)
+		CountUnapplied(
+			ctx context.Context, db types.StagingQuerier, before hlc.Time, aost bool,
+		) (int, error)
 	})
 
 	jumbledStager, err := fixture.Stagers.Get(ctx, sinktest.JumbleTable(dummyTarget))
@@ -104,8 +106,9 @@ func TestPutAndDrain(t *testing.T) {
 	r.NoError(err)
 	a.Equal(total, count)
 
-	// Verify metrics query.
-	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0))
+	// Verify metrics query. We can't test AOST=true since the schema
+	// change will not have taken place yet.
+	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0), false)
 	r.NoError(err)
 	a.Equal(total, count)
 
@@ -131,7 +134,7 @@ func TestPutAndDrain(t *testing.T) {
 	a.Equal(muts, readBack)
 
 	// Verify metrics query.
-	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0))
+	count, err = ctr.CountUnapplied(ctx, pool, hlc.New(math.MaxInt64, 0), false)
 	r.NoError(err)
 	a.Zero(count)
 
