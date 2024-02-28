@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -71,11 +72,12 @@ type stage struct {
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
-		markApplied string // Mark mutations as having been applied.
-		retire      string // Delete a batch of staged mutations.
-		stage       string // General-purpose upsert into staging table.
-		stageExists string // Stage a mutation if one already exists.
-		unapplied   string // Count stale, unapplied mutations.
+		markApplied   string // Mark mutations as having been applied.
+		retire        string // Delete a batch of staged mutations.
+		stage         string // General-purpose upsert into staging table.
+		stageExists   string // Stage a mutation if one already exists.
+		unapplied     string // Count stale, unapplied mutations.
+		unappliedAOST string // Count stale, unapplied mutations.
 	}
 }
 
@@ -161,6 +163,9 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 	s.sql.stage = fmt.Sprintf(stageTemplate, table)
 	s.sql.stageExists = fmt.Sprintf(stageIfExistsTemplate, table)
 	s.sql.unapplied = fmt.Sprintf(countTemplate, table)
+	s.sql.unappliedAOST = strings.ReplaceAll(
+		fmt.Sprintf(countTemplate, table),
+		"WHERE", "AS OF SYSTEM TIME follower_read_timestamp() WHERE")
 
 	// Report unapplied mutations on a periodic basis.
 	ctx.Go(func() error {
@@ -172,7 +177,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 			// since this value may be updated at a high rate on the
 			// instance of cdc-sink that holds the resolver lease.
 			from, _ := s.retireFrom.Get()
-			ct, err := s.CountUnapplied(ctx, db, from)
+			ct, err := s.CountUnapplied(ctx, db, from, true /* AOST */)
 			if err != nil {
 				log.WithError(err).Warnf("could not count unapplied mutations for target: %s", target)
 			} else {
@@ -201,13 +206,20 @@ WHERE (nanos, logical) < ($1, $2) AND NOT applied
 // CountUnapplied returns the number of dangling mutations that likely
 // indicate an error condition.
 func (s *stage) CountUnapplied(
-	ctx context.Context, db types.StagingQuerier, before hlc.Time,
+	ctx context.Context, db types.StagingQuerier, before hlc.Time, aost bool,
 ) (int, error) {
+	var q string
+	if aost {
+		q = s.sql.unappliedAOST
+	} else {
+		q = s.sql.unapplied
+	}
+
 	var ret int
 	err := retry.Retry(ctx, func(ctx context.Context) error {
-		return db.QueryRow(ctx, s.sql.unapplied, before.Nanos(), before.Logical()).Scan(&ret)
+		return db.QueryRow(ctx, q, before.Nanos(), before.Logical()).Scan(&ret)
 	})
-	return ret, errors.Wrap(err, s.sql.unapplied)
+	return ret, errors.Wrap(err, q)
 }
 
 // GetTable returns the table that the stage is storing into.
