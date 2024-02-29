@@ -30,9 +30,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
 	"github.com/dop251/goja"
 	"github.com/pkg/errors"
-	"golang.org/x/sync/errgroup"
 )
 
 // DeleteKey is similar to Map in that it has the opportunity to modify
@@ -125,7 +125,7 @@ type UserScript struct {
 	rt        *goja.Runtime        // The JavaScript VM. See execJS.
 	rtExit    notify.Var[struct{}] // Forms an ersatz event loop for checking promise status.
 	rtMu      *sync.RWMutex        // Serialize access to the VM or its side-effects.
-	tasks     *errgroup.Group      // Limits number of concurrent background tasks.
+	tasks     *workgroup.Group     // Limits number of concurrent background tasks.
 	target    ident.Schema         // The schema being populated.
 	tracker   asyncTracker         // Assists async promise chains. See execTrackedJS.
 	watcher   types.Watcher        // Access to target schema.
@@ -678,12 +678,13 @@ func (s *UserScript) execTrackedPromise(
 		})
 	}
 
-	s.tasks.Go(func() error {
+	if err := s.tasks.Go(func(context.Context) {
 		if err := fn(safeResolve); err != nil {
 			safeReject(err)
 		}
-		return nil
-	})
+	}); err != nil {
+		safeReject(err)
+	}
 
 	return promise
 }

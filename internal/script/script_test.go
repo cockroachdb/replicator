@@ -101,7 +101,7 @@ CREATE TABLE %s.skewed_merge_times(
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
 	var opts mapOptions
 
-	loader, err := ProvideLoader(fixture.Configs, &Config{
+	loader, err := ProvideLoader(ctx, fixture.Configs, &Config{
 		FS:       testData,
 		MainPath: "/testdata/main.ts",
 		Options:  &opts,

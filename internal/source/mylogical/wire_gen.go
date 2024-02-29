@@ -32,7 +32,7 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 		return nil, err
 	}
 	scriptConfig := &config.Script
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	loader, err := script.ProvideLoader(ctx, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
