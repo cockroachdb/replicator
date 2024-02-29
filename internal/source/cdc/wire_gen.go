@@ -61,7 +61,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	immediateImmediate := &immediate.Immediate{}
 	scriptConfig := ProvideScriptConfig(config)
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}

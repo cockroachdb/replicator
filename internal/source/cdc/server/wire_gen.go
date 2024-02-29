@@ -45,7 +45,7 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	}
 	cdcConfig := &config.CDC
 	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	loader, err := script.ProvideLoader(ctx, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +183,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
 	immediateImmediate := &immediate.Immediate{}
 	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}

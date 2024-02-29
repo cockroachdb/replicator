@@ -32,7 +32,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	scriptConfig := &config.Script
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
