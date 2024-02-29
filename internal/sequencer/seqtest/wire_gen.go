@@ -43,7 +43,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	serialSerial := serial.ProvideSerial(config, leases, stagers, stagingPool, targetPool)
 	configs := fixture.Configs
 	diagnostics := fixture.Diagnostics
-	loader, err := script.ProvideLoader(configs, scriptConfig, diagnostics)
+	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}

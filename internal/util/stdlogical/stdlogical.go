@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof" // Register pprof handlers.
+	"runtime"
 	"runtime/debug"
 	"time"
 
@@ -39,6 +40,14 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
+
+// Since we're installing the pprof handlers, we also want to enable
+// profiling for blocking calls and mutex locking. This is a reasonable
+// rate that's also used by CockroachDB proper.
+func init() {
+	runtime.SetBlockProfileRate(1000)
+	runtime.SetMutexProfileFraction(1000)
+}
 
 // MetricsAddrFlag is a global flag that will start an HTTP server.
 const MetricsAddrFlag = "metricsAddr"

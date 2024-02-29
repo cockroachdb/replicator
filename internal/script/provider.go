@@ -17,11 +17,14 @@
 package script
 
 import (
+	"context"
 	"net/url"
+	"runtime"
 	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/google/wire"
@@ -36,7 +39,7 @@ var Set = wire.NewSet(
 // loading, parsing, and top-level api handling. This provider
 // may return nil if there is no configuration.
 func ProvideLoader(
-	applyConfigs *applycfg.Configs, cfg *Config, diags *diag.Diagnostics,
+	ctx context.Context, applyConfigs *applycfg.Configs, cfg *Config, diags *diag.Diagnostics,
 ) (*Loader, error) {
 	// Return an empty version if unconfigured.
 	if cfg.FS == nil {
@@ -58,6 +61,7 @@ func ProvideLoader(
 		rtMu:         &sync.RWMutex{},
 		sources:      make(map[string]*sourceJS),
 		targets:      make(map[string]*targetJS),
+		tasks:        workgroup.WithSize(ctx, 2*runtime.GOMAXPROCS(0), 100_000),
 	}
 
 	// Use a "goja" tag on struct fields to control name bindings.

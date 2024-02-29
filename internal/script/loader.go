@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -32,11 +31,11 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
 	"github.com/dop251/goja"
 	esbuild "github.com/evanw/esbuild/pkg/api"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 )
 
 // Analogous to mapJS, save that it operates on a primary-key array. A
@@ -146,6 +145,7 @@ type Loader struct {
 	rtMu         *sync.RWMutex         // Serialize access to the VM.
 	sources      map[string]*sourceJS  // User configuration.
 	targets      map[string]*targetJS  // User configuration.
+	tasks        *workgroup.Group      // Limit concurrency of JS background tasks.
 }
 
 // Bind resolves the various table names used in the script file to the
@@ -182,13 +182,10 @@ func (l *Loader) Bind(
 		rt:        l.rt,
 		rtMu:      l.rtMu,
 		target:    sch,
+		tasks:     l.tasks,
 		watcher:   watcher,
 	}
 
-	// Limit the total number of background tasks that the script
-	// can start at any given time.
-	ret.tasks, _ = errgroup.WithContext(ctx)
-	ret.tasks.SetLimit(2 * runtime.GOMAXPROCS(0))
 	// Generate helpful message if execJS is not called.
 	ret.rt.Interrupt(errUseExec)
 	// Provide continuity of, e.g. getTX(), across
