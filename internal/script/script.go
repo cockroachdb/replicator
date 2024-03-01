@@ -26,6 +26,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/crep"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
@@ -271,9 +272,13 @@ func (s *UserScript) bind(loader *Loader) error {
 func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) DeleteKey {
 	return func(ctx context.Context, mut types.Mutation) (types.Mutation, bool, error) {
 		// Unpack key into slice.
-		var key []any
-		if err := unmarshal(mut.Key, &key); err != nil {
+		key, err := crep.Unmarshal(mut.Key)
+		if err != nil {
 			return mut, false, errors.WithStack(err)
+		}
+		keyArr, ok := key.([]any)
+		if !ok {
+			return mut, false, errors.New("mutation key was not an array")
 		}
 		meta := mut.Meta
 		if meta == nil {
@@ -283,7 +288,7 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 		var jsKeyLen int
 		var keyBytes json.RawMessage
 		if err := s.execJS(func(*goja.Runtime) error {
-			jsKey, err := deleteKey(key, meta)
+			jsKey, err := deleteKey(keyArr, meta)
 			if err != nil {
 				return err
 			}
@@ -336,9 +341,13 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 	return func(ctx context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
 		// Unmarshal the mutation's data as a generic map.
-		data := make(map[string]any)
-		if err := unmarshal(mut.Data, &data); err != nil {
+		data, err := crep.Unmarshal(mut.Data)
+		if err != nil {
 			return nil, errors.WithStack(err)
+		}
+		dataMap, ok := data.(map[string]any)
+		if !ok {
+			return nil, errors.New("mutation data was not an object")
 		}
 
 		// Execute the user function to route the mutation.
@@ -348,7 +357,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 			if meta == nil {
 				meta = make(map[string]any)
 			}
-			dispatches, err = dispatch(data, meta)
+			dispatches, err = dispatch(dataMap, meta)
 			return err
 		}); err != nil {
 			return nil, err
@@ -423,9 +432,13 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 	return func(ctx context.Context, mut types.Mutation) (types.Mutation, bool, error) {
 		// Unpack data into generic map.
-		data := make(map[string]any)
-		if err := unmarshal(mut.Data, &data); err != nil {
+		data, err := crep.Unmarshal(mut.Data)
+		if err != nil {
 			return mut, false, errors.WithStack(err)
+		}
+		dataMap, ok := data.(map[string]any)
+		if !ok {
+			return mut, false, errors.New("mutation data was not an object")
 		}
 
 		// Execute the user code to return the replacement values.
@@ -435,7 +448,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 			if meta == nil {
 				meta = make(map[string]any)
 			}
-			rawMapped, err = mapper(data, meta)
+			rawMapped, err = mapper(dataMap, meta)
 			return err
 		}); err != nil {
 			return mut, false, err
