@@ -14,182 +14,197 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package script
+package crep
 
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/dop251/goja"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSafeValue(t *testing.T) {
-	rt := goja.New()
+// The maximum safe numeric value in JavaScript.
+const maxInt = 1 << 53
+
+// The more complicated values will also test Unmarshal.
+func TestCanonical(t *testing.T) {
 	now := time.UnixMilli(1708731562135).UTC()
 
 	tcs := []struct {
 		input      any
 		exportType string
 		err        string
-		jsString   string
-		test       func(a *assert.Assertions, value goja.Value)
+		expected   Value
+		test       func(a *assert.Assertions, value any)
 	}{
 		{
 			input:    nil,
-			jsString: "null",
+			expected: nil,
 		},
 		{
 			input:      false,
 			exportType: "bool",
-			jsString:   "false",
+			expected:   false,
 		},
 		{
 			input:      true,
 			exportType: "bool",
-			jsString:   "true",
+			expected:   true,
 		},
 		{
 			input:      "foo",
 			exportType: "string",
-			jsString:   "foo",
+			expected:   "foo",
 		},
 		{
 			input:      int(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      int8(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      int16(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      int32(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      int64(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      uint(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      uint8(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      uint16(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      uint32(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      uint64(42),
 			exportType: "string",
-			jsString:   "42",
+			expected:   "42",
 		},
 		{
 			input:      maxInt + 1,
 			exportType: "string",
-			jsString:   fmt.Sprintf("%d", maxInt+1),
+			expected:   fmt.Sprintf("%d", maxInt+1),
 		},
 		{
 			input:      uint(maxInt + 1),
 			exportType: "string",
-			jsString:   fmt.Sprintf("%d", maxInt+1),
+			expected:   fmt.Sprintf("%d", maxInt+1),
 		},
 		{
 			input:      json.Number("12345"),
 			exportType: "string",
-			jsString:   "12345",
+			expected:   "12345",
 		},
 		{
 			input:      now,
 			exportType: "string",
-			jsString:   "2024-02-23T23:39:22.135Z",
-			test: func(a *assert.Assertions, _ goja.Value) {
+			expected:   "2024-02-23T23:39:22.135Z",
+			test: func(a *assert.Assertions, _ any) {
 				a.Equal("2024-02-23 23:39:22.135 +0000 UTC", now.String())
 			},
 		},
 		{
 			input:      []any{now, now},
 			exportType: "[]interface {}",
-			jsString:   "2024-02-23T23:39:22.135Z,2024-02-23T23:39:22.135Z",
+			expected:   []any{"2024-02-23T23:39:22.135Z", "2024-02-23T23:39:22.135Z"},
 		},
 		{
 			input:      float32(3.141592),
 			exportType: "string",
-			jsString:   "3.141592",
+			expected:   "3.141592",
 		},
 		{
 			input:      float64(3.141592),
 			exportType: "string",
-			jsString:   "3.141592",
+			expected:   "3.141592",
 		},
 		{
 			input:      json.RawMessage("    3.141592"),
 			exportType: "string",
-			jsString:   "3.141592",
+			expected:   "3.141592",
 		},
 		{
 			input:      json.RawMessage("    -3.141592"),
 			exportType: "string",
-			jsString:   "-3.141592",
+			expected:   "-3.141592",
 		},
 		{
 			input:      json.RawMessage(`  "    3.141592"`),
 			exportType: "string",
-			jsString:   "    3.141592",
+			expected:   "    3.141592",
 		},
 		{
 			input:    json.RawMessage("null"),
-			jsString: "null",
+			expected: nil,
 		},
 		{
 			input:      json.RawMessage("true"),
 			exportType: "bool",
-			jsString:   "true",
+			expected:   true,
 		},
 		{
 			input:      json.RawMessage("false"),
 			exportType: "bool",
-			jsString:   "false",
+			expected:   false,
 		},
 		{
-			input:      json.RawMessage(`{"BigInt":9007199254740995}`),
+			input: json.RawMessage(`{
+"BigFloat": 9007199254740995.98765,
+"BigInt": 9007199254740995,
+"Embedded": {
+  "Baz": [ 1, 2, 3],
+  "EmptyArr": [],
+  "EmptyObj": {},
+  "Foo": "Bar",
+  "Null": null
+}
+}`),
 			exportType: "map[string]interface {}",
-			jsString:   "[object Object]",
-			test: func(a *assert.Assertions, value goja.Value) {
-				obj := value.(*goja.Object)
-				a.Equal(`9007199254740995`, obj.Get("BigInt").String())
+			expected: map[string]any{
+				"BigFloat": "9007199254740995.98765",
+				"BigInt":   "9007199254740995",
+				"Embedded": map[string]any{
+					"Baz":      []any{"1", "2", "3"},
+					"EmptyArr": []any(nil),
+					"EmptyObj": map[string]any{},
+					"Foo":      "Bar",
+					"Null":     nil,
+				},
 			},
 		},
 		{
 			input:      json.RawMessage(`[9007199254740995]`),
 			exportType: "[]interface {}",
-			jsString:   "9007199254740995",
-			test: func(a *assert.Assertions, value goja.Value) {
-				obj := value.(*goja.Object)
-				a.Equal(`9007199254740995`, obj.Get("0").String())
-			},
+			expected:   []any{"9007199254740995"},
 		},
 		{
 			input: json.RawMessage(`     `),
@@ -200,24 +215,30 @@ func TestSafeValue(t *testing.T) {
 			err:   "invalid JSON input",
 		},
 		{
-			input:    goja.Undefined(),
-			jsString: "undefined",
+			// Test missing end delimiter.
+			input: json.RawMessage(`[1,2,`),
+			err:   "unexpected EOF",
+		},
+		{
+			// Test mismatched delimiter.
+			input: json.RawMessage(`[1,2, { "foo": "bar" ] ]`),
+			err:   "invalid character ']' after object key:value pair",
 		},
 	}
 
 	for idx, tc := range tcs {
 		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
 			a := assert.New(t)
-			value, err := safeValue(rt, tc.input)
+			value, err := Canonical(tc.input)
 			if tc.err != "" {
 				a.ErrorContains(err, tc.err)
 			} else if a.NoError(err) {
 				if tc.exportType == "" {
-					a.Nil(value.ExportType())
+					a.Nil(value)
 				} else {
-					a.Equal(tc.exportType, value.ExportType().String())
+					a.Equal(tc.exportType, reflect.TypeOf(value).String())
 				}
-				a.Equal(tc.jsString, value.String())
+				a.Equal(tc.expected, value)
 				if tc.test != nil {
 					tc.test(a, value)
 				}

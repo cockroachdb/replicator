@@ -221,7 +221,7 @@ CREATE TABLE %s.skewed_merge_times(
 			mut, keep, err := filter(context.Background(), types.Mutation{Key: []byte(`[ 1, 2 ]`)})
 			a.NoError(err)
 			a.True(keep)
-			a.Equal(json.RawMessage(`[2,1]`), mut.Key)
+			a.Equal(json.RawMessage(`["2","1"]`), mut.Key)
 		}
 	}
 
