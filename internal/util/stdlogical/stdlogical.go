@@ -55,7 +55,6 @@ const MetricsAddrFlag = "metricsAddr"
 // Config is our standard protocol for configuration objects.
 type Config interface {
 	Bind(set *pflag.FlagSet)
-	Preflight() error
 }
 
 // HasAuthenticator allows the object to supply a [types.Authenticator].
@@ -107,13 +106,6 @@ func New(t *Template) *cobra.Command {
 					info[s.Key] = s.Value
 				}
 				log.WithFields(info).Info("cdc-sink starting")
-			}
-
-			// Validate configuration.
-			if t.Config != nil {
-				if err := t.Config.Preflight(); err != nil {
-					return err
-				}
 			}
 
 			// Delegate startup. main.go provides a stopper.

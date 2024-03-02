@@ -57,9 +57,9 @@ func ProvideAuthenticator(
 }
 
 // ProvideEagerConfig makes the configuration objects depend upon the
-// script loader.
-func ProvideEagerConfig(cfg *Config, _ *script.Loader) *EagerConfig {
-	return (*EagerConfig)(cfg)
+// script loader and preflights the configuration.
+func ProvideEagerConfig(cfg *Config, _ *script.Loader) (*EagerConfig, error) {
+	return (*EagerConfig)(cfg), cfg.Preflight()
 }
 
 // ProvideListener is called by Wire to construct the incoming network

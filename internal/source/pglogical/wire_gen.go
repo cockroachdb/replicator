@@ -36,7 +36,10 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	eagerConfig := ProvideEagerConfig(config, loader)
+	eagerConfig, err := ProvideEagerConfig(config, loader)
+	if err != nil {
+		return nil, err
+	}
 	targetConfig := &eagerConfig.Target
 	targetPool, err := sinkprod.ProvideTargetPool(context, targetConfig, diagnostics)
 	if err != nil {

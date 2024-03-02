@@ -49,7 +49,10 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	if err != nil {
 		return nil, err
 	}
-	eagerConfig := ProvideEagerConfig(config, loader)
+	eagerConfig, err := ProvideEagerConfig(config, loader)
+	if err != nil {
+		return nil, err
+	}
 	stagingConfig := &eagerConfig.Staging
 	targetConfig := &eagerConfig.Target
 	stagingPool, err := sinkprod.ProvideStagingPool(ctx, stagingConfig, diagnostics, targetConfig)

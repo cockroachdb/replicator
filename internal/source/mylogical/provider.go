@@ -111,7 +111,7 @@ func ProvideConn(
 
 // ProvideEagerConfig is a hack to move up the evaluation of the user
 // script so that the options callbacks can set any non-script-related
-// CLI flags.
-func ProvideEagerConfig(cfg *Config, _ *script.Loader) *EagerConfig {
-	return (*EagerConfig)(cfg)
+// CLI flags. The configuration will be preflighted.
+func ProvideEagerConfig(cfg *Config, _ *script.Loader) (*EagerConfig, error) {
+	return (*EagerConfig)(cfg), cfg.Preflight()
 }
