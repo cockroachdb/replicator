@@ -134,8 +134,8 @@ func TestCanonical(t *testing.T) {
 		},
 		{
 			input:      []any{now, now},
-			exportType: "[]interface {}",
-			expected:   []any{"2024-02-23T23:39:22.135Z", "2024-02-23T23:39:22.135Z"},
+			exportType: "[]crep.Value",
+			expected:   []Value{"2024-02-23T23:39:22.135Z", "2024-02-23T23:39:22.135Z"},
 		},
 		{
 			input:      float32(3.141592),
@@ -188,14 +188,14 @@ func TestCanonical(t *testing.T) {
   "Null": null
 }
 }`),
-			exportType: "map[string]interface {}",
-			expected: map[string]any{
+			exportType: "map[string]crep.Value",
+			expected: map[string]Value{
 				"BigFloat": "9007199254740995.98765",
 				"BigInt":   "9007199254740995",
-				"Embedded": map[string]any{
-					"Baz":      []any{"1", "2", "3"},
-					"EmptyArr": []any(nil),
-					"EmptyObj": map[string]any{},
+				"Embedded": map[string]Value{
+					"Baz":      []Value{"1", "2", "3"},
+					"EmptyArr": []Value(nil),
+					"EmptyObj": map[string]Value{},
 					"Foo":      "Bar",
 					"Null":     nil,
 				},
@@ -203,8 +203,8 @@ func TestCanonical(t *testing.T) {
 		},
 		{
 			input:      json.RawMessage(`[9007199254740995]`),
-			exportType: "[]interface {}",
-			expected:   []any{"9007199254740995"},
+			exportType: "[]crep.Value",
+			expected:   []Value{"9007199254740995"},
 		},
 		{
 			input: json.RawMessage(`     `),

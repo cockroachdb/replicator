@@ -276,7 +276,7 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 		if err != nil {
 			return mut, false, errors.WithStack(err)
 		}
-		keyArr, ok := key.([]any)
+		keyArr, ok := key.([]crep.Value)
 		if !ok {
 			return mut, false, errors.New("mutation key was not an array")
 		}
@@ -345,7 +345,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		dataMap, ok := data.(map[string]any)
+		dataMap, ok := data.(map[string]crep.Value)
 		if !ok {
 			return nil, errors.New("mutation data was not an object")
 		}
@@ -436,7 +436,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		if err != nil {
 			return mut, false, errors.WithStack(err)
 		}
-		dataMap, ok := data.(map[string]any)
+		dataMap, ok := data.(map[string]crep.Value)
 		if !ok {
 			return mut, false, errors.New("mutation data was not an object")
 		}

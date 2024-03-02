@@ -28,6 +28,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
+	"github.com/cockroachdb/cdc-sink/internal/util/crep"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
@@ -44,7 +45,7 @@ import (
 //
 // [ pk0, pk1, ..., pkN ] => [ pk0, pkN, ... ]
 type deleteKeyJS func(
-	key []any,
+	key []crep.Value,
 	meta map[string]any,
 ) ([]any, error)
 
@@ -54,7 +55,7 @@ type deleteKeyJS func(
 //
 //	{ doc } => { "target" : [ { doc }, ... ], "otherTarget" : [ { doc }, ... ], ... }
 type dispatchJS func(
-	doc map[string]any,
+	doc map[string]crep.Value,
 	meta map[string]any,
 ) (map[string][]map[string]any, error)
 
@@ -62,7 +63,7 @@ type dispatchJS func(
 //
 //	{ doc } => { doc }
 type mapJS func(
-	doc map[string]any,
+	doc map[string]crep.Value,
 	meta map[string]any,
 ) (map[string]any, error)
 
