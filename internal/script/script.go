@@ -274,11 +274,11 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 		// Unpack key into slice.
 		key, err := crep.Unmarshal(mut.Key)
 		if err != nil {
-			return mut, false, errors.WithStack(err)
+			return types.Mutation{}, false, errors.WithStack(err)
 		}
-		keyArr, ok := key.([]any)
+		keyArr, ok := key.([]crep.Value)
 		if !ok {
-			return mut, false, errors.New("mutation key was not an array")
+			return types.Mutation{}, false, errors.New("mutation key was not an array")
 		}
 		meta := mut.Meta
 		if meta == nil {
@@ -301,7 +301,7 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 
 			return err
 		}); err != nil {
-			return mut, false, err
+			return types.Mutation{}, false, err
 		}
 
 		// Allow delete to be elided.
@@ -312,7 +312,8 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 		// Sanity check now, rather than in apply code.
 		colData, ok := s.watcher.Get().Columns.Get(table)
 		if !ok {
-			return mut, false, errors.Errorf("deleteKey missing schema data for %s", table)
+			return types.Mutation{}, false,
+				errors.Errorf("deleteKey missing schema data for %s", table)
 		}
 
 		pkCount := 0
@@ -325,8 +326,9 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 		}
 
 		if jsKeyLen != pkCount {
-			return mut, false, errors.Errorf("deleteKey function returned %d elements, but %s has %d PK columns",
-				jsKeyLen, table, pkCount)
+			return types.Mutation{}, false,
+				errors.Errorf("deleteKey function returned %d elements, but %s has %d PK columns",
+					jsKeyLen, table, pkCount)
 		}
 
 		return types.Mutation{
@@ -345,7 +347,7 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		dataMap, ok := data.(map[string]any)
+		dataMap, ok := data.(map[string]crep.Value)
 		if !ok {
 			return nil, errors.New("mutation data was not an object")
 		}
@@ -434,11 +436,11 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 		// Unpack data into generic map.
 		data, err := crep.Unmarshal(mut.Data)
 		if err != nil {
-			return mut, false, errors.WithStack(err)
+			return types.Mutation{}, false, errors.WithStack(err)
 		}
-		dataMap, ok := data.(map[string]any)
+		dataMap, ok := data.(map[string]crep.Value)
 		if !ok {
-			return mut, false, errors.New("mutation data was not an object")
+			return types.Mutation{}, false, errors.New("mutation data was not an object")
 		}
 
 		// Execute the user code to return the replacement values.
@@ -451,7 +453,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 			rawMapped, err = mapper(dataMap, meta)
 			return err
 		}); err != nil {
-			return mut, false, err
+			return types.Mutation{}, false, err
 		}
 
 		// Filtered out.
@@ -467,13 +469,13 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 
 		dataBytes, err := json.Marshal(mapped)
 		if err != nil {
-			return mut, false, errors.WithStack(err)
+			return types.Mutation{}, false, errors.WithStack(err)
 		}
 
 		// Refresh the primary-key values in the mutation.
 		colData, ok := s.watcher.Get().Columns.Get(table)
 		if !ok {
-			return mut, false, errors.Errorf("map missing schema data for %s", table)
+			return types.Mutation{}, false, errors.Errorf("map missing schema data for %s", table)
 		}
 
 		var jsKey []any
@@ -481,7 +483,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 			if colData.Primary {
 				keyVal, ok := mapped.Get(colData.Name)
 				if !ok {
-					return mut, false, errors.Errorf(
+					return types.Mutation{}, false, errors.Errorf(
 						"map document missing value for PK column %s", colData.Name)
 				}
 				jsKey = append(jsKey, keyVal)
@@ -490,7 +492,7 @@ func (s *UserScript) bindMap(table ident.Table, mapper mapJS) Map {
 
 		keyBytes, err := json.Marshal(jsKey)
 		if err != nil {
-			return mut, false, errors.WithStack(err)
+			return types.Mutation{}, false, errors.WithStack(err)
 		}
 
 		return types.Mutation{

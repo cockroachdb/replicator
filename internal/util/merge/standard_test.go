@@ -20,14 +20,22 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/crep"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
 
 // TestStandardMerge is a test for coverage.
 func TestStandardMerge(t *testing.T) {
+	// We use these two values to check that fuzzy-matching logic is
+	// wired into the merge function. More comprehensive comparison
+	// testing is in the crep package.
+	now := time.UnixMilli(1708731562135).UTC()
+	nowJSON := "2024-02-23T23:39:22.135Z"
+
 	cols := []types.ColData{
 		{
 			Name:    ident.New("pk0"),
@@ -47,6 +55,10 @@ func TestStandardMerge(t *testing.T) {
 			Name: ident.New("col1"),
 			Type: "INT8",
 		},
+		{
+			Name: ident.New("ts"),
+			Type: "TIMESTAMPTZ",
+		},
 	}
 
 	tcs := []struct {
@@ -64,6 +76,7 @@ func TestStandardMerge(t *testing.T) {
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", now,
 				),
 			},
 			expect: &Resolution{
@@ -72,6 +85,7 @@ func TestStandardMerge(t *testing.T) {
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", nowJSON,
 				),
 			},
 		},
@@ -86,6 +100,7 @@ func TestStandardMerge(t *testing.T) {
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", now,
 				),
 				Target: NewBagOf(cols, nil),
 			},
@@ -95,6 +110,7 @@ func TestStandardMerge(t *testing.T) {
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", nowJSON,
 				),
 			},
 		},
@@ -301,7 +317,9 @@ func TestStandardMerge(t *testing.T) {
 			expectErr: `"Unmerged":["col0","col1"]`,
 		},
 		{
-			// No before data, but the update is a no-op.
+			// No before data, but the update is a no-op. We see cases
+			// like this if an INSERT operation is replayed in immediate
+			// mode.
 			merger: &Standard{},
 			con: &Conflict{
 				Proposed: NewBagOf(cols, nil,
@@ -309,12 +327,14 @@ func TestStandardMerge(t *testing.T) {
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", nowJSON, // Incoming value will be a string.
 				),
 				Target: NewBagOf(cols, nil,
 					"pk0", 0,
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", now, // Existing value will be a time.Time.
 				),
 			},
 			expect: &Resolution{
@@ -323,6 +343,7 @@ func TestStandardMerge(t *testing.T) {
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", now,
 				),
 			},
 		},
@@ -336,6 +357,7 @@ func TestStandardMerge(t *testing.T) {
 					"col0", 0,
 					"col1", 42,
 					"foo", 99,
+					"ts", nowJSON, // Incoming text value
 				),
 				Target: NewBagOf(cols, nil,
 					"pk0", 0,
@@ -343,6 +365,7 @@ func TestStandardMerge(t *testing.T) {
 					"col0", 0,
 					"col1", 42,
 					"bar", 101,
+					"ts", now, // time.Time from the target
 				),
 			},
 			expect: &Resolution{
@@ -353,6 +376,7 @@ func TestStandardMerge(t *testing.T) {
 					"col1", 42,
 					"foo", 99,
 					"bar", 101,
+					"ts", now,
 				),
 			},
 		},
@@ -365,12 +389,14 @@ func TestStandardMerge(t *testing.T) {
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", now,
 				),
 				Target: NewBagOf(cols, nil,
 					"pk0", 0,
 					"pk1", 1,
 					"col0", 0,
 					"col1", 42,
+					"ts", now,
 				),
 			},
 			expectErr: "no proposed data",
@@ -384,7 +410,7 @@ func TestStandardMerge(t *testing.T) {
 			if tc.expectErr != "" {
 				a.ErrorContains(err, tc.expectErr)
 			} else if a.NoError(err) {
-				eq, err := canonicalEquals(tc.expect, res)
+				eq, err := crep.Equal(tc.expect, res)
 				if a.NoError(err) {
 					a.Truef(eq, "expected: %#v \n\n actual: %#v", tc.expect, res)
 				}

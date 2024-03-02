@@ -17,11 +17,10 @@
 package merge
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"sort"
 
+	"github.com/cockroachdb/cdc-sink/internal/util/crep"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 )
@@ -56,23 +55,6 @@ func (s *Standard) Merge(ctx context.Context, con *Conflict) (*Resolution, error
 
 	// The merge failed and there's nowhere to store the data.
 	return nil, ConflictError(con)
-}
-
-// canonicalEquals returns true if the JSON encoding of the two values
-// are equal. This is not a maximally efficient way to determine
-// arbitrary value equality since it consumes memory and cannot
-// early-out, so we should revisit this if cdc-sink gets a proper Datum
-// type.
-func canonicalEquals(a, b any) (bool, error) {
-	aBytes, err := json.Marshal(a)
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	bBytes, err := json.Marshal(b)
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	return bytes.Equal(aBytes, bBytes), nil
 }
 
 // undefined is a sentinel value that represents the absence of a
@@ -130,7 +112,7 @@ func merge(con *Conflict) error {
 		// equality, since we could have varying in memory type from the
 		// json package versus the database. For example, we could see
 		// an untyped int versus an int64.
-		isUnchanged, err := canonicalEquals(before, proposed)
+		isUnchanged, err := crep.Equal(before, proposed)
 		if err != nil {
 			return errors.Wrapf(err, "property: %s", prop)
 		}
@@ -143,7 +125,7 @@ func merge(con *Conflict) error {
 
 		// If the proposed value already exists within the target, then
 		// we can treat the update as a no-op.
-		isIdempotent, err := canonicalEquals(target, proposed)
+		isIdempotent, err := crep.Equal(target, proposed)
 		if err != nil {
 			return errors.Wrapf(err, "property: %s", prop)
 		}
@@ -159,7 +141,7 @@ func merge(con *Conflict) error {
 		if !targetExists {
 			isSafe = true
 		} else {
-			isSafe, err = canonicalEquals(before, target)
+			isSafe, err = crep.Equal(before, target)
 			if err != nil {
 				return err
 			}
