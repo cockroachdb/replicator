@@ -32,10 +32,13 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/scripttest"
+	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
 	"github.com/cockroachdb/cdc-sink/internal/util/auth/reject"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -75,12 +78,16 @@ func createFixture(
 
 	// Ensure that the dispatch and mapper functions must have been
 	// called by using a column name that's only known to the mapper
-	// function.
+	// function. We set this to a type large enough to store a 64-bit
+	// number so we can test for numeric type truncation.
 	var schema string
 	if htc.script {
-		schema = `CREATE TABLE %s (pk INT PRIMARY KEY, v_mapped INT NOT NULL)`
+		schema = `CREATE TABLE %s (pk INT PRIMARY KEY, v_mapped BIGINT NOT NULL)`
 	} else {
-		schema = `CREATE TABLE %s (pk INT PRIMARY KEY, v INT NOT NULL)`
+		schema = `CREATE TABLE %s (pk INT PRIMARY KEY, v BIGINT NOT NULL)`
+	}
+	if baseFixture.TargetPool.Product == types.ProductOracle {
+		schema = strings.ReplaceAll(schema, "BIGINT", "NUMBER(20,0)")
 	}
 
 	ctx := baseFixture.Context
@@ -145,11 +152,13 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 	t.Run("bulkStyleEndpoints", func(t *testing.T) {
 		a := assert.New(t)
 
-		// Stage two lines of data.
+		// Stage two lines of data. When this test is run with scripting
+		// enabled, we also want to see the bigint value successfully
+		// transit the JS runtime without being mangled.
 		a.NoError(h.ndjson(ctx, &request{
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
-{"__event__": "insert", "pk" : 42, "v" : 99, "__crdb__": {"updated": "1.0"}}
+{"__event__": "insert", "pk" : 42, "v" : 9007199254740995, "__crdb__": {"updated": "1.0"}}
 {"__event__": "insert", "pk" : 99, "v" : 42, "__crdb__": {"updated": "1.0"}, "cdc_prev": {"pk" : 99, "v" : 33 }}
 `),
 		}, h.parseNdjsonQueryMutation))
@@ -163,7 +172,7 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 				// is ordered, in part, by the key.
 				a.Equal([]types.Mutation{
 					{
-						Data: []byte(`{"pk":42,"v":99}`),
+						Data: []byte(`{"pk":42,"v":9007199254740995}`),
 						Key:  []byte(`[42]`),
 						Time: hlc.New(1, 0),
 					},
@@ -217,7 +226,7 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
 { "payload" : [
-	{"__event__": "insert", "pk" : 42, "v" : 99, "__crdb__": {"updated": "10.0"}},
+	{"__event__": "insert", "pk" : 42, "v" : 9007199254740995, "__crdb__": {"updated": "10.0"}},
 	{"__event__": "insert", "pk" : 99, "v" : 42, "cdc_prev": { "pk" : 99, "v" : 21 }, "__crdb__": {"updated": "10.0"}}
 ] }
 `),
@@ -232,7 +241,7 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 				// orders by HLC and key.
 				a.Equal([]types.Mutation{
 					{
-						Data: []byte(`{"pk":42,"v":99}`),
+						Data: []byte(`{"pk":42,"v":9007199254740995}`),
 						Key:  []byte(`[42]`),
 						Time: hlc.New(10, 0),
 					},
@@ -503,6 +512,139 @@ func TestDiscard(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	a.Equal(200, rec.Code)
+}
+
+// TestMergeInt ensures that we have a clean, end-to-end test of a
+// user apply+merge setup that uses integer values.
+func TestMergeInt(t *testing.T) {
+	r := require.New(t)
+	fixture, _ := createFixture(t, &fixtureConfig{
+		immediate: true,
+	})
+
+	if !apply.IsMergeSupported(fixture.TargetPool.Product) {
+		t.Skipf("merge not implemented for %s", fixture.TargetPool.Product)
+	}
+
+	ctx := fixture.Context
+	h := fixture.Handler
+
+	table, err := fixture.CreateTargetTable(ctx, `
+CREATE TABLE %s (
+pk INT8 PRIMARY KEY,
+version INT8 NOT NULL,
+v INT8 NOT NULL)`)
+	r.NoError(err)
+
+	// Configure the table with a basic merge setup.
+	cfg := applycfg.NewConfig().Patch(&applycfg.Config{
+		CASColumns: []ident.Ident{ident.New("version")},
+		Merger:     &merge.Standard{Fallback: merge.DLQ("dead")},
+	})
+	r.NoError(fixture.Configs.Set(table.Name(), cfg))
+
+	sendUpdate := func(version int, v int64) error {
+		return h.ndjson(ctx, &request{
+			target: table.Name(),
+			body: strings.NewReader(fmt.Sprintf(`
+{ "after" : { "pk" : 42, "version": %d, "v" : %d }, "key" : [ 42 ], "updated" : "1.0" }`,
+				version,
+				v,
+			)),
+		}, parseNdjsonMutation)
+	}
+
+	// Send an update at V9. We're starting with 9 to ensure that when
+	// we increase to 10 we're getting a numeric, not a lexicographical
+	// comparison.
+	r.NoError(sendUpdate(9, 1<<55))
+
+	var v int64
+	r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
+		"SELECT v FROM %s", table.Name())).Scan(&v))
+	r.Equal(int64(1<<55), v)
+
+	// Send an update at V8 that would normally go to the DLQ, had we
+	// created one. This is a sanity-check for the idempotent check
+	// below.
+	r.ErrorContains(sendUpdate(8, 1), "must be created")
+
+	// Repeat the T0 update to ensure that idempotent updates are OK.
+	r.NoError(sendUpdate(9, 1<<55))
+
+	// Send a T+1 update. This is expected to succeed.
+	r.NoError(sendUpdate(10, 1<<56))
+
+	r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
+		"SELECT v FROM %s", table.Name())).Scan(&v))
+	r.Equal(int64(1<<56), v)
+}
+
+// TestMergeTime ensures that we have a clean, end-to-end test of a
+// user apply+merge setup that uses timestamp values.
+func TestMergeTime(t *testing.T) {
+	r := require.New(t)
+	fixture, _ := createFixture(t, &fixtureConfig{
+		immediate: true,
+	})
+
+	if !apply.IsMergeSupported(fixture.TargetPool.Product) {
+		t.Skipf("merge not implemented for %s", fixture.TargetPool.Product)
+	}
+
+	ctx := fixture.Context
+	h := fixture.Handler
+
+	table, err := fixture.CreateTargetTable(ctx, `
+CREATE TABLE %s (
+pk INT8 PRIMARY KEY,
+updated_at TIMESTAMP NOT NULL,
+v INT8 NOT NULL)`)
+	r.NoError(err)
+
+	// Configure the table with a basic merge setup.
+	cfg := applycfg.NewConfig().Patch(&applycfg.Config{
+		CASColumns: []ident.Ident{ident.New("updated_at")},
+		Merger:     &merge.Standard{Fallback: merge.DLQ("dead")},
+	})
+	r.NoError(fixture.Configs.Set(table.Name(), cfg))
+
+	sendUpdate := func(ts time.Time, v int64) error {
+		return h.ndjson(ctx, &request{
+			target: table.Name(),
+			body: strings.NewReader(fmt.Sprintf(`
+{ "after" : { "pk" : 42, "updated_at": %q, "v" : %d }, "key" : [ 42 ], "updated" : "1.0" }`,
+				ts.Format(time.RFC3339Nano),
+				v,
+			)),
+		}, parseNdjsonMutation)
+	}
+
+	// Round time to reflect actual storage.
+	now := time.Now().UTC().Round(time.Microsecond)
+
+	// Send an update at T0.
+	r.NoError(sendUpdate(now, 1<<55))
+
+	var v int64
+	r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
+		"SELECT v FROM %s", table.Name())).Scan(&v))
+	r.Equal(int64(1<<55), v)
+
+	// Send an update at T-1 that would normally go to the DLQ, had we
+	// created one. This is a sanity-check for the idempotent check
+	// below.
+	r.ErrorContains(sendUpdate(now.Add(-time.Minute), 1), "must be created")
+
+	// Repeat the T0 update to ensure that idempotent updates are OK.
+	r.NoError(sendUpdate(now, 1<<55))
+
+	// Send a T+1 update. This is expected to succeed.
+	r.NoError(sendUpdate(now.Add(time.Minute), 1<<56))
+
+	r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
+		"SELECT v FROM %s", table.Name())).Scan(&v))
+	r.Equal(int64(1<<56), v)
 }
 
 func TestRejectedAuth(t *testing.T) {
