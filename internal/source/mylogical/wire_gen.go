@@ -36,7 +36,10 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	eagerConfig := ProvideEagerConfig(config, loader)
+	eagerConfig, err := ProvideEagerConfig(config, loader)
+	if err != nil {
+		return nil, err
+	}
 	targetConfig := &eagerConfig.Target
 	targetPool, err := sinkprod.ProvideTargetPool(ctx, targetConfig, diagnostics)
 	if err != nil {
