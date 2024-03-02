@@ -15,7 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package crep ("see-rep") contains a utility for producing a Canonical
-// REPresentation of a value type.
+// REPresentation of a value type and for comparing objects using a
+// fuzzy equivalence relationship.
 package crep
 
 import (
@@ -30,7 +31,7 @@ import (
 
 // A Value is one of:
 //   - nil
-//   - string
+//   - string, possibly numeric in nature
 //   - bool
 //   - []Value
 //   - map[string]Value
@@ -122,13 +123,14 @@ func Unmarshal(data []byte) (Value, error) {
 }
 
 // decoder interprets a JSON token stream, replacing any [json.Number]
-// values that we encounter with a string.
+// values that we encounter with a string. We could, in the future, replace
+// the use of string-keyed maps with our case-insensitive map type.
 type decoder struct {
 	source *json.Decoder
 
-	arrStack []*[]any
-	objStack []*map[string]any
-	valStack []any
+	arrStack []*[]Value
+	objStack []*map[string]Value
+	valStack []Value
 }
 
 // Decode returns a reified form of the next value in the JSON token
@@ -164,7 +166,7 @@ func (d *decoder) Decode() (any, error) {
 				// pointer to the enclosing accumulator (a map or a
 				// slice) onto both the value stack and a separate
 				// accumulator-specific stack.
-				var arr []any
+				var arr []Value
 				ptr := &arr
 				d.arrStack = append(d.arrStack, ptr)
 				d.valStack = append(d.valStack, ptr)
@@ -174,7 +176,7 @@ func (d *decoder) Decode() (any, error) {
 				// As above. While a map is a pointer type, it is not a
 				// comparable type, so we still need a pointer to know
 				// when we're done popping values.
-				obj := make(map[string]any)
+				obj := make(map[string]Value)
 				ptr := &obj
 				d.objStack = append(d.objStack, ptr)
 				d.valStack = append(d.valStack, ptr)
@@ -190,7 +192,7 @@ func (d *decoder) Decode() (any, error) {
 				accumulator := d.popArrPtr()
 			accumulateArr:
 				for {
-					if ptr, ok := d.topValMayBePointer().(*[]any); ok && accumulator == ptr {
+					if ptr, ok := d.topValMayBePointer().(*[]Value); ok && accumulator == ptr {
 						// We're accumulating the values in a LIFO
 						// order, so we need to reverse the slice. We'll
 						// do this by walking from both ends until the
@@ -213,7 +215,7 @@ func (d *decoder) Decode() (any, error) {
 				accumulator := d.popObjPtr()
 			accumulateObj:
 				for {
-					if m, ok := d.topValMayBePointer().(*map[string]any); ok && accumulator == m {
+					if m, ok := d.topValMayBePointer().(*map[string]Value); ok && accumulator == m {
 						break accumulateObj
 					}
 					val := d.popValActual()
@@ -236,7 +238,7 @@ func (d *decoder) Decode() (any, error) {
 }
 
 // popArrPtr pops the top array accumulator pointer from the stack.
-func (d *decoder) popArrPtr() *[]any {
+func (d *decoder) popArrPtr() *[]Value {
 	idx := len(d.arrStack) - 1
 	ret := d.arrStack[idx]
 	d.arrStack = d.arrStack[:idx]
@@ -244,7 +246,7 @@ func (d *decoder) popArrPtr() *[]any {
 }
 
 // popObjPtr pops the top object accumulator pointer from the stack.
-func (d *decoder) popObjPtr() *map[string]any {
+func (d *decoder) popObjPtr() *map[string]Value {
 	idx := len(d.objStack) - 1
 	ret := d.objStack[idx]
 	d.objStack = d.objStack[:idx]
@@ -259,9 +261,9 @@ func (d *decoder) popValActual() any {
 	ret := d.valStack[idx]
 	d.valStack = d.valStack[:idx]
 	switch t := ret.(type) {
-	case *[]any:
+	case *[]Value:
 		return *t
-	case *map[string]any:
+	case *map[string]Value:
 		return *t
 	default:
 		return t

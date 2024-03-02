@@ -131,7 +131,7 @@ func TestSafeValue(t *testing.T) {
 		},
 		{
 			input:      []any{now, now},
-			exportType: "[]interface {}",
+			exportType: "[]crep.Value",
 			jsString:   "2024-02-23T23:39:22.135Z,2024-02-23T23:39:22.135Z",
 		},
 		{
@@ -175,7 +175,7 @@ func TestSafeValue(t *testing.T) {
 		},
 		{
 			input:      json.RawMessage(`{"BigInt":9007199254740995}`),
-			exportType: "map[string]interface {}",
+			exportType: "map[string]crep.Value",
 			jsString:   "[object Object]",
 			test: func(a *assert.Assertions, value goja.Value) {
 				obj := value.(*goja.Object)
@@ -184,7 +184,7 @@ func TestSafeValue(t *testing.T) {
 		},
 		{
 			input:      json.RawMessage(`[9007199254740995]`),
-			exportType: "[]interface {}",
+			exportType: "[]crep.Value",
 			jsString:   "9007199254740995",
 			test: func(a *assert.Assertions, value goja.Value) {
 				obj := value.(*goja.Object)
