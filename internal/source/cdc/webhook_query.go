@@ -28,9 +28,8 @@ import (
 )
 
 // webhookForQuery responds to the v23.1 webhook scheme for cdc feeds with queries.
-// we expect the select statement in the CREATE CHANGE FEED to use the following convention:
-// the SELECT Statement must have a column "__event_op__" returned by the event_op() function.
-// SELECT *, event_op() as __event_op__
+// We expect the CREATE CHANGE FEED INTO ... AS ... to use the following options:
+// envelope="wrapped",format="json",diff
 func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	table := req.target.(ident.Table)
 	target, err := h.Targets.getTarget(table.Schema())
@@ -43,11 +42,13 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		return err
 	}
 	var message struct {
-		Payload  []json.RawMessage `json:"payload"`
-		Length   int               `json:"length"`
-		Metadata Metadata          `json:"__crdb__"`
+		Payload []json.RawMessage `json:"payload"`
+		Length  int               `json:"length"`
+		// With envelope="bare" (default for queries), there is a  `__crdb__` property.
+		Bare json.RawMessage `json:"__crdb__"`
+		// With envelope="wrapped" there is `resolved` property.
+		Resolved string `json:"resolved"`
 	}
-
 	dec := json.NewDecoder(req.body)
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
@@ -58,8 +59,13 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		}
 		return errors.Wrap(err, "could not decode payload")
 	}
-	if message.Metadata.Resolved != "" {
-		timestamp, err := hlc.Parse(message.Metadata.Resolved)
+	// Bare messages are not longer supported.
+	if message.Bare != nil {
+		return errors.New(bareEnvelopeErrorMsg)
+	}
+	// Check if it is a resolved message.
+	if message.Resolved != "" {
+		timestamp, err := hlc.Parse(message.Resolved)
 		if err != nil {
 			return err
 		}
@@ -79,6 +85,10 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		mut, err := qp.AsMutation()
 		if err != nil {
 			return err
+		}
+		// Discard phantom deletes.
+		if mut.IsDelete() && mut.Key == nil {
+			continue
 		}
 		if err := toProcess.Accumulate(table, mut); err != nil {
 			return err
