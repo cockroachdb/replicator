@@ -30,7 +30,9 @@ type Config struct {
 	MainPath string  // A path, relative to FS that holds the entrypoint.
 	Options  Options // The target for calls to api.setOptions().
 
-	userscript string // An external filesystem path.
+	// An external filesystem path. This will be cleared after Preflight
+	// has been called. This symbol is exported for testing.
+	UserScriptPath string
 }
 
 // Bind adds flags to the set.
@@ -38,14 +40,14 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	if c.Options == nil {
 		c.Options = &FlagOptions{f}
 	}
-	f.StringVar(&c.userscript, "userscript", "",
+	f.StringVar(&c.UserScriptPath, "userscript", "",
 		"the path to a configuration script, see userscript subcommand")
 }
 
-// Preflight validates the configuration.
+// Preflight will set FS and MainPath, if UserScriptPath is set.
 func (c *Config) Preflight() error {
-	if c.userscript != "" {
-		path, err := filepath.Abs(c.userscript)
+	if c.UserScriptPath != "" {
+		path, err := filepath.Abs(c.UserScriptPath)
 		if err != nil {
 			return err
 		}
@@ -53,7 +55,7 @@ func (c *Config) Preflight() error {
 		dir, path := filepath.Split(path)
 		c.FS = os.DirFS(dir)
 		c.MainPath = "/" + path
-		c.userscript = ""
+		c.UserScriptPath = ""
 	}
 
 	return nil
