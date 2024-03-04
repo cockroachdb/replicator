@@ -56,7 +56,7 @@ type Batch[B any] interface {
 // A well-formed MultiBatch will have its Data field sorted by time.
 // MultiBatch implements [sort.Interface] to make this simple.
 type MultiBatch struct {
-	noCopy
+	_      noCopy
 	ByTime map[hlc.Time]*TemporalBatch // Time-based indexing.
 	Data   []*TemporalBatch            // Time-ordered indexed.
 }
@@ -142,6 +142,7 @@ func (b *MultiBatch) Swap(i, j int) {
 // single timestamp. This likely corresponds to some part of a larger
 // transaction.
 type TableBatch struct {
+	_     noCopy
 	Data  []Mutation
 	Table ident.Table
 	Time  hlc.Time
@@ -163,9 +164,11 @@ func (b *TableBatch) Accumulate(table ident.Table, mut Mutation) error {
 
 // Copy returns a deep copy of the batch.
 func (b *TableBatch) Copy() *TableBatch {
-	ret := *b
-	ret.Data = append([]Mutation(nil), b.Data...)
-	return &ret
+	return &TableBatch{
+		Data:  append([]Mutation(nil), b.Data...),
+		Table: b.Table,
+		Time:  b.Time,
+	}
 }
 
 // Count returns the number of enclosed mutations.
@@ -175,16 +178,17 @@ func (b *TableBatch) Count() int {
 
 // Empty returns a TableBatch with the original metadata, but no data.
 func (b *TableBatch) Empty() *TableBatch {
-	ret := *b
-	ret.Data = nil
-	return &ret
+	return &TableBatch{
+		Table: b.Table,
+		Time:  b.Time,
+	}
 }
 
 // A TemporalBatch holds mutations for some number of tables that all
 // occur at the same time. This likely corresponds to a single source
 // transaction.
 type TemporalBatch struct {
-	noCopy
+	_    noCopy
 	Time hlc.Time
 	Data ident.TableMap[*TableBatch]
 }
