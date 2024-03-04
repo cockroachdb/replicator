@@ -20,7 +20,7 @@ require (
 	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
 	github.com/jstemmer/go-junit-report/v2 v2.1.0
 	github.com/pkg/errors v0.9.1
-	github.com/prometheus/client_golang v1.18.0
+	github.com/prometheus/client_golang v1.19.0
 	github.com/sijms/go-ora/v2 v2.8.7
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
@@ -31,11 +31,6 @@ require (
 	golang.org/x/sync v0.6.0
 	golang.org/x/tools v0.18.0
 	honnef.co/go/tools v0.4.7
-)
-
-require (
-	github.com/google/go-cmp v0.6.0 // indirect
-	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
 )
 
 require (
@@ -68,7 +63,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.0
-	github.com/prometheus/common v0.45.0 // indirect
+	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/sergi/go-diff v1.2.0 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
