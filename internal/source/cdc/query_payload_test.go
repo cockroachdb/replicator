@@ -27,6 +27,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const wrappedErrorMsg = `raw enveloped is not supported. Use envelope="wrapped",format="json" in CREATE CHANGEFEED ... AS SELECT`
+
 func TestQueryPayload(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -36,7 +38,7 @@ func TestQueryPayload(t *testing.T) {
 		wantErr string
 	}{
 		{"insert",
-			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
+			`{"after":{"pk":42,"v":9},"before":null,"updated":"1.0"}`,
 			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{
 				Data: json.RawMessage(`{"pk":42,"v":9}`),
@@ -45,11 +47,18 @@ func TestQueryPayload(t *testing.T) {
 			},
 			"",
 		},
-		{"insert diff",
-			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}, "cdc_prev": {"foo":"bar"}}`,
+		// we are not supporting raw any more.
+		{"insert raw",
+			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
+			ident.MapOf[int](ident.New("pk"), 0),
+			types.Mutation{},
+			wrappedErrorMsg,
+		},
+		{"update with diff",
+			`{"after":{"pk":42,"v":9},"before":{"pk":42,"v":10},"updated":"1.0"}`,
 			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{
-				Before: json.RawMessage(`{"foo":"bar"}`),
+				Before: json.RawMessage(`{"pk":42,"v":10}`),
 				Data:   json.RawMessage(`{"pk":42,"v":9}`),
 				Time:   hlc.New(1, 0),
 				Key:    json.RawMessage(`[42]`),
@@ -57,7 +66,7 @@ func TestQueryPayload(t *testing.T) {
 			"",
 		},
 		{"insert 2 pk",
-			`{"__event__": "insert", "pk" : 42, "pk2" : 43, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
+			`{"after":{"pk":42,"pk2":43,"v":9}, "updated":"1.0"}`,
 			ident.MapOf[int](ident.New("pk"), 0, ident.New("pk2"), 1),
 			types.Mutation{
 				Data: json.RawMessage(`{"pk":42,"pk2":43,"v":9}`),
@@ -66,8 +75,8 @@ func TestQueryPayload(t *testing.T) {
 			},
 			"",
 		},
-		{"update 3 pk",
-			`{"__event__": "update", "pk" : 42, "pk2" : 43, "pk3" : 44, "v" : 9, "v2" : 10, "__crdb__": {"updated": "10.0"}}`,
+		{"insert 3 pk",
+			`{ "after": {"pk" : 42, "pk2" : 43, "pk3" : 44, "v" : 9, "v2" : 10},"updated":"10.0"}`,
 			ident.MapOf[int](ident.New("pk"), 0, ident.New("pk2"), 1, ident.New("pk3"), 2),
 			types.Mutation{
 				Data: json.RawMessage(`{"pk":42,"pk2":43,"pk3":44,"v":9,"v2":10}`),
@@ -77,38 +86,32 @@ func TestQueryPayload(t *testing.T) {
 			"",
 		},
 		{"delete",
-			`{"__event__": "delete", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
+			`{"before":{"pk":42,"v":8},"updated":"1.0"}`,
 			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{
-				Data: nil,
-				Time: hlc.New(1, 0),
-				Key:  json.RawMessage(`[42]`),
+				Before: json.RawMessage(`{"pk":42,"v":8}`),
+				Time:   hlc.New(1, 0),
+				Key:    json.RawMessage(`[42]`),
 			},
 			"",
 		},
+		{"phantom delete",
+			`{"before":null,"updated":"1.0"}`,
+			ident.MapOf[int](ident.New("pk"), 0),
+			types.Mutation{},
+			"",
+		},
 		{"missing pk",
-			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
+			`{"after":{"pk":42,"v":9},"before":null,"updated":"1.0"}`,
 			ident.MapOf[int](ident.New("pk"), 0, ident.New("pk2"), 1),
 			types.Mutation{},
 			`missing primary key: "pk2"`,
 		},
 		{"missing timestamp",
-			`{"__event__": "delete", "pk" : 42, "v" : 9, "__crdb__": {"something": "1.0"}}`,
+			`{"after":{"pk":42,"v":9},"before":null}`,
 			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{},
-			"can't parse timestamp ",
-		},
-		{"missing op",
-			`{"pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			ident.MapOf[int](ident.New("pk"), 0),
-			types.Mutation{},
-			"Add __event__ column to changefeed: CREATE CHANGEFEED ... AS SELECT event_op() AS __event__",
-		},
-		{"invalid op",
-			`{"__event__": "select","pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
-			ident.MapOf[int](ident.New("pk"), 0),
-			types.Mutation{},
-			`unknown __event__ value: "select"`,
+			"could not find timestamp in field \"updated\" while attempting to parse envelope=wrapped",
 		},
 	}
 	for _, tt := range tests {

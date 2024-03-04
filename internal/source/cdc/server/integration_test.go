@@ -278,10 +278,8 @@ func testIntegration(t *testing.T, cfg testConfig) {
 		createStmt += ",min_checkpoint_frequency='1s'"
 	}
 	if cfg.queries {
-		createStmt += " AS SELECT event_op() __event__, pk, val"
-		if cfg.diff {
-			createStmt += ", cdc_prev"
-		}
+		createStmt += ",envelope='wrapped',format='json'"
+		createStmt += " AS SELECT pk, val"
 		createStmt += " FROM %s"
 	}
 
@@ -387,8 +385,7 @@ func supportsWebhook(version string) bool {
 }
 
 func supportsQueries(version string) bool {
-	// CDC Queries were added in v22.2, but the event_op() function was
-	// only added in v23.1.
+	// While queries are supported in v22.2, they were in preview.
 	if strings.Contains(version, "v20.") ||
 		strings.Contains(version, "v21.") ||
 		strings.Contains(version, "v22.") {

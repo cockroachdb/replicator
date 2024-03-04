@@ -158,8 +158,8 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		a.NoError(h.ndjson(ctx, &request{
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
-{"__event__": "insert", "pk" : 42, "v" : 9007199254740995, "__crdb__": {"updated": "1.0"}}
-{"__event__": "insert", "pk" : 99, "v" : 42, "__crdb__": {"updated": "1.0"}, "cdc_prev": {"pk" : 99, "v" : 33 }}
+{"after" : {"pk" : 42, "v" : 9007199254740995}, "updated": "1.0"}
+{"after":  {"pk" : 99, "v" : 42}, "updated": "1.0", "before": {"pk" : 99, "v" : 33 }}
 `),
 		}, h.parseNdjsonQueryMutation))
 
@@ -201,8 +201,8 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		a.NoError(h.ndjson(ctx, &request{
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
-{"__event__": "delete", "pk" : 42, "v" : null, "__crdb__": {"updated": "3.0"}}
-{"__event__": "delete", "pk" : 99, "v" : null, "__crdb__": {"updated": "3.0"}}
+{"before":{"pk" : 42, "v" : null},"updated": "3.0"}
+{"before":{"pk" : 99, "v" : null},"updated": "3.0"}
 `),
 		}, h.parseNdjsonQueryMutation))
 
@@ -226,8 +226,8 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
 { "payload" : [
-	{"__event__": "insert", "pk" : 42, "v" : 9007199254740995, "__crdb__": {"updated": "10.0"}},
-	{"__event__": "insert", "pk" : 99, "v" : 42, "cdc_prev": { "pk" : 99, "v" : 21 }, "__crdb__": {"updated": "10.0"}}
+	{"after": {"pk" : 42, "v" : 9007199254740995}, "updated": "10.0"},
+	{"after": {"pk" : 99, "v" : 42}, "before": { "pk" : 99, "v" : 21 }, "updated": "10.0"}
 ] }
 `),
 		}))
@@ -257,7 +257,7 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 
 		a.NoError(h.webhookForQuery(ctx, &request{
 			target: tableInfo.Name(),
-			body:   strings.NewReader(`{ "__crdb__": {"resolved" : "20.0" }}`),
+			body:   strings.NewReader(`{ "resolved" : "20.0" }`),
 		}))
 		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(20, 0)))
 
@@ -270,15 +270,15 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
 { "payload" : [
-	{"__event__": "delete", "pk" : 42, "v" : null, "__crdb__": {"updated": "30.0"}},
-	{"__event__": "delete", "pk" : 99, "v" : null, "__crdb__": {"updated": "30.0"}}
+	{"before": {"pk" : 42, "v" : null}, "updated": "30.0"},
+	{"before": { "pk" : 99, "v" : null}, "updated": "30.0"}
 ] }
 `),
 		}))
 
 		a.NoError(h.webhookForQuery(ctx, &request{
 			target: tableInfo.Name(),
-			body:   strings.NewReader(`{ "__crdb__": {"resolved" : "40.0" }}`),
+			body:   strings.NewReader(`{"resolved" : "40.0" }`),
 		}))
 		a.NoError(maybeFlush(tableInfo.Name().Schema(), hlc.New(40, 0)))
 
