@@ -41,6 +41,12 @@ var Set = wire.NewSet(
 func ProvideLoader(
 	ctx context.Context, applyConfigs *applycfg.Configs, cfg *Config, diags *diag.Diagnostics,
 ) (*Loader, error) {
+	// We depend on preflight to expand the file path. Ensure that it
+	// has been called at least once.
+	if err := cfg.Preflight(); err != nil {
+		return nil, err
+	}
+
 	// Return an empty version if unconfigured.
 	if cfg.FS == nil {
 		return &Loader{}, nil

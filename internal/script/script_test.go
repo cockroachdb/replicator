@@ -18,7 +18,6 @@ package script
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -35,9 +34,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-//go:embed testdata/*
-var testData embed.FS
 
 type mapOptions struct {
 	data map[string]string
@@ -101,11 +97,11 @@ CREATE TABLE %s.skewed_merge_times(
 	r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
 	var opts mapOptions
 
-	loader, err := ProvideLoader(ctx, fixture.Configs, &Config{
-		FS:       testData,
-		MainPath: "/testdata/main.ts",
-		Options:  &opts,
-	}, fixture.Diagnostics)
+	cfg := &Config{
+		Options:        &opts,
+		UserScriptPath: "./testdata/main.ts",
+	}
+	loader, err := ProvideLoader(ctx, fixture.Configs, cfg, fixture.Diagnostics)
 	r.NoError(err)
 
 	s, err := loader.Bind(ctx, fixture.TargetSchema, fixture.ApplyAcceptor, fixture.Watchers)
