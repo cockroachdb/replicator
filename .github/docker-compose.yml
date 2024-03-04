@@ -51,6 +51,10 @@ services:
     image: cockroachdb/cockroach:latest-v23.1
     network_mode: host
     command: start-single-node --insecure --store type=mem,size=2G
+  cockroachdb-v23.2:
+    image: cockroachdb/cockroach:latest-v23.2
+    network_mode: host
+    command: start-single-node --insecure --store type=mem,size=2G
 
   # These two services are used for testing split-mode operations. We
   # need to bypass the usual entry-point script because it has a check
@@ -58,13 +62,13 @@ services:
   # default port.
   #
   # https://github.com/cockroachdb/cockroach/issues/84166
-  source-cockroachdb-v23.1:
-    image: cockroachdb/cockroach:latest-v23.1
+  source-cockroachdb-v23.2:
+    image: cockroachdb/cockroach:latest-v23.2
     network_mode: host
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
-  target-cockroachdb-v23.1:
-    image: cockroachdb/cockroach:latest-v23.1
+  target-cockroachdb-v23.2:
+    image: cockroachdb/cockroach:latest-v23.2
     network_mode: host
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5401 --http-addr :8082
