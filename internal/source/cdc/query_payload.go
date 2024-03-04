@@ -18,7 +18,6 @@ package cdc
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -28,9 +27,12 @@ import (
 
 // labels
 var (
-	beforeLabel = ident.New("cdc_prev")
+	afterLabel  = ident.New("after")
+	beforeLabel = ident.New("before")
 	crdbLabel   = ident.New("__crdb__")
 	eventLabel  = ident.New("__event__")
+	prevLabel   = ident.New("cdc_prev")
+	updated     = ident.New("updated")
 )
 
 // Metadata contains a string representation of a timestamp,
@@ -86,17 +88,18 @@ func (q *queryPayload) AsMutation() (types.Mutation, error) {
 	// The JSON marshaling errors should fall into the never-happens
 	// category since we unmarshalled the values below.
 	var after, before json.RawMessage
-	if q.operation != deleteOp {
+	if q.after != nil && q.operation != deleteOp {
 		var err error
 		after, err = json.Marshal(q.after)
 		if err != nil {
 			return types.Mutation{}, errors.WithStack(err)
 		}
-		if q.before != nil {
-			before, err = json.Marshal(q.before)
-			if err != nil {
-				return types.Mutation{}, errors.WithStack(err)
-			}
+	}
+	if q.before != nil {
+		var err error
+		before, err = json.Marshal(q.before)
+		if err != nil {
+			return types.Mutation{}, errors.WithStack(err)
 		}
 	}
 	key, err := json.Marshal(q.keyValues)
@@ -116,52 +119,92 @@ func (q *queryPayload) AsMutation() (types.Mutation, error) {
 // for all the remaining fields.
 // If QueryPayload is initialized with Keys that are expected in the data,
 // UnmarshalJSON will extract and store them in keyValues slice.
-// Example:
+// Supports json format with envelope='raw' (default for queries) or envelope='wrapped'.
+// Example raw:
 // {"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}
+// Example wrapped:
+// {"after":{"__event__":"insert","k":2,"v":"a"},"before":null,"updated":"1.0"}
 func (q *queryPayload) UnmarshalJSON(data []byte) error {
-	// Parse the payload into after. We'll perform some additional
+	// Parse the payload into msg. We'll perform some additional
 	// extraction on the data momentarily.
-	if err := json.Unmarshal(data, &q.after); err != nil {
+	var msg *ident.Map[json.RawMessage]
+	if err := json.Unmarshal(data, &msg); err != nil {
 		return errors.Wrap(err, "could not parse query payload")
 	}
 
-	// Process __event__ marker to determine if it's a deletion.
-	if eventRaw, hasEvent := q.after.Get(eventLabel); !hasEvent {
-		return errors.Errorf(
-			"Add %[1]s column to changefeed: CREATE CHANGEFEED ... AS SELECT event_op() AS %[1]s",
-			eventLabel.Raw())
-	} else if op, validOp := encodedOpLookup[string(eventRaw)]; !validOp {
-		return fmt.Errorf("unknown %s value: %s", eventLabel.Raw(), string(eventRaw))
+	// Check if there is a __crdb__ property.
+	// If it's there extract the MVCC timestamp.
+	// And use the top level properties for after.
+	crdbRaw, hasCrdb := msg.Get(crdbLabel)
+	if hasCrdb {
+		var err error
+		if q.updated, err = decodeUpdatedTimestamp(crdbRaw); err != nil {
+			return err
+		}
+		msg.Delete(crdbLabel)
+		// Process optional cdc_prev data for three-way merge.
+		if beforeRaw, hasBefore := msg.Get(prevLabel); hasBefore {
+			if err := json.Unmarshal(beforeRaw, &q.before); err != nil {
+				return errors.Wrapf(err, "could not parse embeded %s payload", prevLabel)
+			}
+			msg.Delete(prevLabel)
+		}
+		q.after = msg
 	} else {
+		// if not, try envelope=wrapped json format
+		ts, ok := msg.Get(updated)
+		if !ok {
+			return errors.New("missing timestamp")
+		}
+		var tsAsString string
+		if err := json.Unmarshal(ts, &tsAsString); err != nil {
+			return errors.Wrap(err, "could not parse timestamp")
+		}
+		var err error
+		if q.updated, err = hlc.Parse(tsAsString); err != nil {
+			return err
+		}
+		if after, ok := msg.Get(afterLabel); ok {
+			if err := json.Unmarshal(after, &q.after); err != nil {
+				return errors.Wrap(err, "could not parse 'after' payload")
+			}
+		}
+		if before, ok := msg.Get(beforeLabel); ok {
+			if err := json.Unmarshal(before, &q.before); err != nil {
+				return errors.Wrap(err, "could not parse 'before' payload")
+			}
+		}
+	}
+	// if the envelope=wrapped, q.after could be empty
+	if q.after != nil {
+		msg = q.after
+		// Process __event__ marker to determine the operation.
+		eventRaw, hasEvent := q.after.Get(eventLabel)
+		if !hasEvent {
+			return errors.Errorf(
+				"Add %[1]s column to changefeed: CREATE CHANGEFEED ... AS SELECT event_op() AS %[1]s",
+				eventLabel.Raw())
+		}
+		op, validOp := encodedOpLookup[string(eventRaw)]
+		if !validOp {
+			return errors.Errorf("unknown %s value: %s", eventLabel.Raw(), string(eventRaw))
+		}
 		q.after.Delete(eventLabel)
 		q.operation = op
+	} else {
+		// we will get keys from q.before
+		msg = q.before
+		q.operation = deleteOp
 	}
-
-	// Process __crdb__ to extract the MVCC timestamp.
-	crdbRaw, hasCrdb := q.after.Get(crdbLabel)
-	if !hasCrdb {
-		return errors.Errorf("missing %s field", crdbLabel)
-	}
-	var err error
-	if q.updated, err = decodeUpdatedTimestamp(crdbRaw); err != nil {
-		return err
-	}
-	q.after.Delete(crdbLabel)
-
-	// Process optional cdc_prev data for three-way merge.
-	if beforeRaw, hasBefore := q.after.Get(beforeLabel); hasBefore {
-		if err := json.Unmarshal(beforeRaw, &q.before); err != nil {
-			return errors.Wrapf(err, "could not parse embeded %s payload", beforeLabel)
-		}
-		q.after.Delete(beforeLabel)
-	}
-
 	// Extract PK values.
 	q.keyValues = make([]json.RawMessage, q.keys.Len())
 	return q.keys.Range(func(k ident.Ident, pos int) error {
-		v, ok := q.after.Get(k)
+		if msg == nil {
+			return errors.New("missing primary keys")
+		}
+		v, ok := msg.Get(k)
 		if !ok {
-			return fmt.Errorf("missing primary key: %s", k)
+			return errors.Errorf("missing primary key: %s", k)
 		}
 		q.keyValues[pos] = v
 		return nil

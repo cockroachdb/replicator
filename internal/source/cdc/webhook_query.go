@@ -43,11 +43,13 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		return err
 	}
 	var message struct {
-		Payload  []json.RawMessage `json:"payload"`
-		Length   int               `json:"length"`
-		Metadata Metadata          `json:"__crdb__"`
+		Payload []json.RawMessage `json:"payload"`
+		Length  int               `json:"length"`
+		// With envelope="raw", there is a  `__crdb__` property.
+		Metadata Metadata `json:"__crdb__"`
+		// With envelope="wrapped" there is `resolved` property.
+		Resolved string `json:"resolved"`
 	}
-
 	dec := json.NewDecoder(req.body)
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
@@ -60,6 +62,15 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	}
 	if message.Metadata.Resolved != "" {
 		timestamp, err := hlc.Parse(message.Metadata.Resolved)
+		if err != nil {
+			return err
+		}
+		req.timestamp = timestamp
+		return h.resolved(ctx, req)
+	}
+	// It could be a wrapped message.
+	if message.Resolved != "" {
+		timestamp, err := hlc.Parse(message.Resolved)
 		if err != nil {
 			return err
 		}

@@ -63,11 +63,12 @@ const (
 )
 
 type testConfig struct {
-	diff      bool
-	immediate bool
-	shingle   bool
-	queries   bool
-	webhook   bool
+	diff        bool
+	immediate   bool
+	rawEnvelope bool
+	shingle     bool
+	queries     bool
+	webhook     bool
 }
 
 func (c *testConfig) String() string {
@@ -86,6 +87,11 @@ func (c *testConfig) String() string {
 		sb.WriteString(" queries")
 	} else {
 		sb.WriteString(" tables")
+	}
+	if c.rawEnvelope {
+		sb.WriteString(" raw")
+	} else {
+		sb.WriteString(" wrapped")
 	}
 	if c.shingle {
 		sb.WriteString(" shingle")
@@ -147,6 +153,10 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	}
 	if cfg.queries && !supportsQueries(version) {
 		t.Skipf("CDC queries are not compatible with %s version of cockroach", version)
+	}
+	if cfg.rawEnvelope && !cfg.queries {
+		// For CDC queries, the default envelope=raw
+		t.Skip("Raw envelope supported only with queries")
 	}
 
 	ctx := sourceFixture.Context
@@ -278,8 +288,13 @@ func testIntegration(t *testing.T, cfg testConfig) {
 		createStmt += ",min_checkpoint_frequency='1s'"
 	}
 	if cfg.queries {
+		// For queries raw envelope is the default.
+		// We also test envelope = wrapped.
+		if !cfg.rawEnvelope {
+			createStmt += ",envelope='wrapped'"
+		}
 		createStmt += " AS SELECT event_op() __event__, pk, val"
-		if cfg.diff {
+		if cfg.diff && cfg.rawEnvelope {
 			createStmt += ", cdc_prev"
 		}
 		createStmt += " FROM %s"
