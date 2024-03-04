@@ -87,6 +87,10 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		if err != nil {
 			return err
 		}
+		// Discard phantom deletes.
+		if mut.IsDelete() && mut.Key == nil {
+			continue
+		}
 		if err := batch.Accumulate(table, mut); err != nil {
 			return err
 		}

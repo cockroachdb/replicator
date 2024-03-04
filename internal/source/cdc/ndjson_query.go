@@ -27,10 +27,8 @@ import (
 )
 
 // parseNdjsonQueryMutation is a parseMutation function.
-// When using CDC queries the SELECT Statement must include the event (as "__event__")
-// returned by the event_op() function.
-// SELECT *, event_op() as operation
-// See (https://www.cockroachlabs.com/docs/stable/cdc-queries.html#cdc-query-function-support)
+// We expect the CREATE CHANGE FEED INTO ... AS ... to use the following options:
+// envelope="wrapped",format="json",diff
 func (h *Handler) parseNdjsonQueryMutation(req *request, rawBytes []byte) (types.Mutation, error) {
 	keys, err := h.getPrimaryKey(req)
 	if err != nil {
