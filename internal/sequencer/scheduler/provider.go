@@ -14,31 +14,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package shingle
+package scheduler
 
 import (
+	"context"
+
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
 	"github.com/google/wire"
+	"github.com/pkg/errors"
 )
 
 // Set is used by Wire.
-var Set = wire.NewSet(ProvideShingle)
+var Set = wire.NewSet(ProvideScheduler)
 
-// ProvideShingle is called by Wire.
-func ProvideShingle(
-	cfg *sequencer.Config,
-	scheduler *scheduler.Scheduler,
-	stagers types.Stagers,
-	staging *types.StagingPool,
-	target *types.TargetPool,
-) *Shingle {
-	return &Shingle{
-		cfg:       cfg,
-		scheduler: scheduler,
-		stagers:   stagers,
-		staging:   staging,
-		target:    target,
+// ProvideScheduler is called by Wire.
+func ProvideScheduler(ctx context.Context, cfg *sequencer.Config) (*Scheduler, error) {
+	p := cfg.Parallelism
+	if p <= 0 {
+		return nil, errors.Errorf("cannot schedule work on %d workers", p)
 	}
+	ret := &Scheduler{}
+	// The queue depth is sufficiently large that other things
+	// should catch fire before we can't admit more work.
+	ret.set.Runner = workgroup.WithSize(ctx, p, 10_000*p)
+	return ret, nil
 }

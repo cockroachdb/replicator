@@ -110,6 +110,7 @@ func createFixture(
 			MainPath: "/testdata/logical_test.ts",
 		}
 	}
+	r.NoError(cfg.Preflight())
 	fixture, err := newTestFixture(baseFixture, cfg)
 	r.NoError(err)
 
@@ -753,6 +754,7 @@ func testMassBackfillWithForeignKeys(
 	for idx := range fixtures {
 		cfg := &Config{
 			SequencerConfig: sequencer.Config{
+				FlushSize:       rowCount / 4,
 				Parallelism:     2,
 				QuiescentPeriod: 100 * time.Millisecond,
 				RetireOffset:    time.Hour,

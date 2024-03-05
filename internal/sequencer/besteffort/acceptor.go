@@ -21,10 +21,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 )
 
 type acceptor struct {
@@ -34,33 +35,10 @@ type acceptor struct {
 
 var _ types.TableAcceptor = (*acceptor)(nil)
 
-// AcceptTableBatch implements [types.TableAcceptor]. This
-// implementation ignores the options, since we always want to use the
-// staging or target database pools.
-func (a *acceptor) AcceptTableBatch(
-	ctx context.Context, batch *types.TableBatch, _ *types.AcceptOptions,
-) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	eg, egCtx := errgroup.WithContext(ctx)
-	if p := a.cfg.Parallelism; p > 0 {
-		eg.SetLimit(p)
-	}
-
-	if err := a.applyOrStage(egCtx, eg, batch, a.delegate); err != nil {
-		return err
-	}
-	return eg.Wait()
-}
-
-// Unwrap is an informal protocol to return the delegate.
-func (a *acceptor) Unwrap() types.TableAcceptor {
-	return a.delegate
-}
-
-// applyOrStage will write mutations directly into the destination
-// table or write them into a staging table.
+// AcceptTableBatch implements [types.TableAcceptor]. It will write
+// mutations directly into the destination table or write them into a
+// staging table. This implementation ignores the options, since we
+// always want to use the staging or target database pools.
 //
 // This method will stage mutations if a staged mutation for the key
 // already exists. This ensures that per-key data flows in an ordered
@@ -71,16 +49,13 @@ func (a *acceptor) Unwrap() types.TableAcceptor {
 // cannot be written to the target, it will be written instead a staging
 // table. This helps to prevent backpressure on the source if the target
 // is malfunctioning.
-//
-// The errgroup argument is used to control overall parallelism when
-// operating at the individual row level.
-func (a *acceptor) applyOrStage(
-	ctx context.Context, eg *errgroup.Group, batch *types.TableBatch, acceptor types.TableAcceptor,
+func (a *acceptor) AcceptTableBatch(
+	ctx context.Context, batch *types.TableBatch, _ *types.AcceptOptions,
 ) error {
-	start := time.Now()
 	if len(batch.Data) == 0 {
 		return nil
 	}
+	start := time.Now()
 	tblValues := metrics.TableValues(batch.Table)
 	appliedCount := acceptAppliedCount.WithLabelValues(tblValues...)
 	deferredCount := acceptDeferredCount.WithLabelValues(tblValues...)
@@ -108,6 +83,7 @@ func (a *acceptor) applyOrStage(
 
 	// Try to apply multiple mutations in a single batch. This should
 	// generally succeed in no-FK or FK-to-reference kinds of use-cases.
+	acceptor := a.delegate
 	if len(attempt) > 1 {
 		batch = batch.Copy()
 		batch.Data = attempt
@@ -126,11 +102,15 @@ func (a *acceptor) applyOrStage(
 	// the staging table and processed later. This ultimately allows
 	// BestEffort to insulate the source (changefeed) from target
 	// database malfunction, schema drift, etc. as long as the staging
-	// table can be written to.
+	// table can be written to. Overall parallelism is limited by
+	// the lockset's Runner.
+	outcomes := make([]*notify.Var[*lockset.Status], len(attempt))
 	for idx := range attempt {
+		mut := batch.Data[idx]
 		singleBatch := batch.Empty()
-		singleBatch.Data = []types.Mutation{batch.Data[idx]}
-		eg.Go(func() error {
+		singleBatch.Data = []types.Mutation{mut}
+
+		outcomes[idx] = a.scheduler.Singleton(batch.Table, mut, func() error {
 			err := acceptor.AcceptTableBatch(ctx, singleBatch, &types.AcceptOptions{
 				TargetQuerier: a.targetPool,
 			})
@@ -142,7 +122,8 @@ func (a *acceptor) applyOrStage(
 			deferredCount.Inc()
 			// We'll suppress errors like FK constraint violations.
 			if !isNormalError(err) {
-				log.WithError(err).Warnf("staging mutation instead of target table %s key %s",
+				log.WithError(err).Warnf(
+					"staging mutation instead of target table %s key %s",
 					singleBatch.Table, string(singleBatch.Data[0].Key))
 			}
 			if err := stager.Stage(ctx, a.stagingPool, singleBatch.Data); err != nil {
@@ -152,5 +133,11 @@ func (a *acceptor) applyOrStage(
 			return nil
 		})
 	}
-	return nil
+
+	return lockset.Wait(ctx, outcomes)
+}
+
+// Unwrap is an informal protocol to return the delegate.
+func (a *acceptor) Unwrap() types.TableAcceptor {
+	return a.delegate
 }

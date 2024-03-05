@@ -14,31 +14,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package shingle
+package scheduler
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/google/wire"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Set is used by Wire.
-var Set = wire.NewSet(ProvideShingle)
-
-// ProvideShingle is called by Wire.
-func ProvideShingle(
-	cfg *sequencer.Config,
-	scheduler *scheduler.Scheduler,
-	stagers types.Stagers,
-	staging *types.StagingPool,
-	target *types.TargetPool,
-) *Shingle {
-	return &Shingle{
-		cfg:       cfg,
-		scheduler: scheduler,
-		stagers:   stagers,
-		staging:   staging,
-		target:    target,
-	}
-}
+var (
+	executedCount = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "sequencer_scheduler_executed_tasks_count",
+		Help: "the number of scheduled tasks that were executed",
+	})
+	executingCount = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "sequencer_scheduler_executing_tasks_count",
+		Help: "the number of scheduled tasks currently executing",
+	})
+)

@@ -20,6 +20,7 @@ package shingle
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
@@ -29,10 +30,11 @@ import (
 // target transaction to be applied concurrently, with ordering enforced
 // on a per-key basis.
 type Shingle struct {
-	cfg     *sequencer.Config
-	stagers types.Stagers
-	staging *types.StagingPool
-	target  *types.TargetPool
+	cfg       *sequencer.Config
+	scheduler *scheduler.Scheduler
+	stagers   types.Stagers
+	staging   *types.StagingPool
+	target    *types.TargetPool
 }
 
 var _ sequencer.Shim = (*Shingle)(nil)
