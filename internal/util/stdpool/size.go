@@ -42,7 +42,7 @@ func (o *withPoolSize) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) err
 	return nil
 }
 func (o *withPoolSize) sqlDB(_ context.Context, impl *sql.DB) error {
-	impl.SetMaxIdleConns(o.size)
+	impl.SetMaxIdleConns(2)
 	impl.SetMaxOpenConns(o.size)
 	return nil
 }
