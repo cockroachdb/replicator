@@ -231,6 +231,7 @@ func ProvideStagingPool(ctx *stopper.Context) (*types.StagingPool, error) {
 			WaitForStartup: true,
 		}),
 		stdpool.WithPoolSize(32),
+		stdpool.WithTransactionTimeout(2*time.Minute), // Aligns with test case timeout.
 	)
 	if err != nil {
 		return nil, err
@@ -255,6 +256,7 @@ func ProvideTargetPool(
 			WaitForStartup: true,
 		}),
 		stdpool.WithPoolSize(32),
+		stdpool.WithTransactionTimeout(2*time.Minute), // Aligns with test case timeout.
 	)
 	if err != nil {
 		return nil, err

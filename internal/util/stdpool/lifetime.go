@@ -24,24 +24,30 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// WithConnectionLifetime configures a nominal connection pool size.
-func WithConnectionLifetime(lifetime time.Duration) Option {
-	return &withConnectionLifetime{lifetime}
+// WithConnectionLifetime configures a connection lifetimes.
+func WithConnectionLifetime(maxLifetime, maxIdle, jitter time.Duration) Option {
+	return &withConnectionLifetime{
+		jitter:      jitter,
+		maxIdle:     maxIdle,
+		maxLifetime: maxLifetime,
+	}
 }
 
 type withConnectionLifetime struct {
-	lifetime time.Duration
+	jitter      time.Duration
+	maxIdle     time.Duration
+	maxLifetime time.Duration
 }
 
 func (o *withConnectionLifetime) option() {}
 func (o *withConnectionLifetime) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) error {
-	cfg.MaxConnLifetime = o.lifetime
-	if cfg.MaxConnLifetimeJitter == 0 {
-		cfg.MaxConnLifetimeJitter = time.Minute
-	}
+	cfg.MaxConnIdleTime = o.maxIdle
+	cfg.MaxConnLifetime = o.maxLifetime
+	cfg.MaxConnLifetimeJitter = o.jitter
 	return nil
 }
 func (o *withConnectionLifetime) sqlDB(_ context.Context, db *sql.DB) error {
-	db.SetConnMaxLifetime(o.lifetime)
+	db.SetConnMaxIdleTime(o.maxIdle)
+	db.SetConnMaxLifetime(o.maxLifetime)
 	return nil
 }

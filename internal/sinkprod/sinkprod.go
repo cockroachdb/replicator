@@ -34,7 +34,9 @@ var Set = wire.NewSet(
 
 const (
 	defaultApplyTimeout = 30 * time.Second
-	defaultLifetime     = 10 * time.Minute
 	defaultCacheSize    = 128
-	defaultPoolSize     = 128
+	defaultJitterTime   = 15 * time.Second
+	defaultIdleTime     = 1 * time.Minute
+	defaultMaxLifetime  = 5 * time.Minute
+	defaultMaxPoolSize  = 128
 )

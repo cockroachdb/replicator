@@ -488,8 +488,10 @@ func getConfig(fixture *all.Fixture, fc *fixtureConfig, tgt ident.Table) (*Confi
 			Schema: fixture.StagingDB.Schema(),
 		},
 		Target: sinkprod.TargetConfig{
+			CommonConfig: sinkprod.CommonConfig{
+				Conn: crdbPool.ConnectionString,
+			},
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			Conn:         crdbPool.ConnectionString,
 		},
 		SourceConn:   defaultSourceConn,
 		ProcessID:    123456,

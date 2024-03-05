@@ -34,7 +34,10 @@ type withPoolSize struct {
 
 func (o *withPoolSize) option() {}
 func (o *withPoolSize) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) error {
-	cfg.MinConns = int32(o.size)
+	// We can't limit the number of idle connections, but we can set a
+	// minimum pool size to ensure that some number of connections are
+	// always ready to go.
+	cfg.MinConns = 2
 	cfg.MaxConns = int32(o.size)
 	return nil
 }
