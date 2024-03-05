@@ -77,7 +77,7 @@ func testTargetConnection(ctx *stopper.Context, connString string) error {
 	pool, err := stdpool.OpenTarget(
 		ctx,
 		connString,
-		stdpool.WithConnectionLifetime(5*time.Minute),
+		stdpool.WithConnectionLifetime(5*time.Minute, time.Minute, 15*time.Second),
 		stdpool.WithTransactionTimeout(time.Minute),
 	)
 	if err != nil {
@@ -133,7 +133,7 @@ func testStagingConnection(ctx *stopper.Context, connString string) error {
 	pool, err := stdpool.OpenPgxAsStaging(
 		ctx,
 		connString,
-		stdpool.WithConnectionLifetime(5*time.Minute),
+		stdpool.WithConnectionLifetime(5*time.Minute, time.Minute, 15*time.Second),
 		stdpool.WithTransactionTimeout(time.Minute),
 	)
 	if err != nil {

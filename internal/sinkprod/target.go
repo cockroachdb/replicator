@@ -24,23 +24,16 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
-	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )
 
 // TargetConfig defines target-database connection behaviors.
 type TargetConfig struct {
+	CommonConfig
+
 	// The maximum length of time to wait for an incoming transaction
 	// to settle (i.e. to detect stalls in the target database).
 	ApplyTimeout time.Duration
-	// Connection string for the target cluster.
-	Conn string
-	// The maximum lifetime for a database connection; improves
-	// loadbalancer compatibility.
-	Lifetime time.Duration
-	// The number of connections to the target database. If zero, a
-	// default value will be used.
-	PoolSize int
 	// The number of prepared statements to retain in the target
 	// database connection pool. Depending on the database in question,
 	// there may be more or fewer available resources to retain
@@ -50,14 +43,10 @@ type TargetConfig struct {
 
 // Bind adds flags to the set.
 func (c *TargetConfig) Bind(f *pflag.FlagSet) {
+	c.CommonConfig.bind(f, "target")
+
 	f.DurationVar(&c.ApplyTimeout, "applyTimeout", defaultApplyTimeout,
 		"the maximum amount of time to wait for an update to be applied")
-	f.StringVar(&c.Conn, "targetConn", "",
-		"the target database's connection string; always required")
-	f.IntVar(&c.PoolSize, "targetDBConns", defaultPoolSize,
-		"the maximum pool size to the target cluster")
-	f.DurationVar(&c.Lifetime, "targetDBLifetime", defaultLifetime,
-		"the maximum lifetime for an individual database connection")
 	f.IntVar(&c.StatementCacheSize, "targetStatementCacheSize", defaultCacheSize,
 		"the maximum number of prepared statements to retain")
 }
@@ -66,17 +55,8 @@ func (c *TargetConfig) Bind(f *pflag.FlagSet) {
 // and returns an error if the TargetConfig is missing any fields for which a
 // default cannot be provided.
 func (c *TargetConfig) Preflight() error {
-	if c.ApplyTimeout == 0 {
-		c.ApplyTimeout = defaultApplyTimeout
-	}
-	if c.Conn == "" {
-		return errors.New("targetConn must be set")
-	}
-	if c.Lifetime == 0 {
-		c.Lifetime = defaultLifetime
-	}
-	if c.PoolSize == 0 {
-		c.PoolSize = defaultPoolSize
+	if err := c.CommonConfig.preflight("target", true); err != nil {
+		return err
 	}
 	if c.StatementCacheSize == 0 {
 		c.StatementCacheSize = defaultCacheSize
@@ -91,10 +71,10 @@ func ProvideTargetPool(
 	ctx *stopper.Context, config *TargetConfig, diags *diag.Diagnostics,
 ) (*types.TargetPool, error) {
 	options := []stdpool.Option{
-		stdpool.WithConnectionLifetime(config.Lifetime),
+		stdpool.WithConnectionLifetime(config.MaxLifetime, config.IdleTime, config.JitterTime),
 		stdpool.WithDiagnostics(diags, "target"),
 		stdpool.WithMetrics("target"),
-		stdpool.WithPoolSize(config.PoolSize),
+		stdpool.WithPoolSize(config.MaxPoolSize),
 		stdpool.WithTransactionTimeout(config.ApplyTimeout),
 	}
 

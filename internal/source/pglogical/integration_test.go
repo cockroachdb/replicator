@@ -190,8 +190,10 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 			Schema: fixture.StagingDB.Schema(),
 		},
 		Target: sinkprod.TargetConfig{
+			CommonConfig: sinkprod.CommonConfig{
+				Conn: crdbPool.ConnectionString,
+			},
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			Conn:         crdbPool.ConnectionString,
 		},
 		Publication:    pubNameRaw,
 		Slot:           pubNameRaw,
@@ -432,8 +434,10 @@ func TestDataTypes(t *testing.T) {
 			Schema: fixture.StagingDB.Schema(),
 		},
 		Target: sinkprod.TargetConfig{
+			CommonConfig: sinkprod.CommonConfig{
+				Conn: crdbPool.ConnectionString,
+			},
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			Conn:         crdbPool.ConnectionString,
 		},
 		Publication:    pubNameRaw,
 		Slot:           pubNameRaw,
@@ -544,8 +548,10 @@ func TestEmptyTransactions(t *testing.T) {
 			Schema: fixture.StagingDB.Schema(),
 		},
 		Target: sinkprod.TargetConfig{
+			CommonConfig: sinkprod.CommonConfig{
+				Conn: crdbPool.ConnectionString,
+			},
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			Conn:         crdbPool.ConnectionString,
 		},
 		Publication:    pubNameRaw,
 		Slot:           pubNameRaw,
@@ -675,8 +681,10 @@ func TestToast(t *testing.T) {
 			Schema: fixture.StagingDB.Schema(),
 		},
 		Target: sinkprod.TargetConfig{
+			CommonConfig: sinkprod.CommonConfig{
+				Conn: crdbPool.ConnectionString,
+			},
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
-			Conn:         crdbPool.ConnectionString,
 		},
 		Publication:    pubNameRaw,
 		Slot:           pubNameRaw,
