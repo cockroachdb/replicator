@@ -52,6 +52,7 @@ func CheckSequencer(
 
 		// Create sequencer test fixture.
 		cfg := &sequencer.Config{
+			FlushSize:       batches/10 + 1,
 			Parallelism:     8,
 			QuiescentPeriod: 100 * time.Millisecond,
 			TimestampLimit:  batches/10 + 1,

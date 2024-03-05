@@ -19,23 +19,23 @@ package shingle
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
-	"golang.org/x/sync/semaphore"
+	log "github.com/sirupsen/logrus"
 )
 
 type acceptor struct {
 	*Shingle
 	delegate types.MultiAcceptor
-	order    lockset.Set[string]
 }
 
 var (
@@ -43,20 +43,26 @@ var (
 	_ types.MultiAcceptor       = (*acceptor)(nil)
 )
 
-// AcceptTableBatch implements [types.MultiAcceptor] and calls the
-// delegate.
+// AcceptTableBatch implements [types.MultiAcceptor]. It is not expected
+// to be called in the general case.
 func (a *acceptor) AcceptTableBatch(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
-	return a.delegate.AcceptTableBatch(ctx, batch, opts)
+	temp := &types.TemporalBatch{Time: batch.Time}
+	temp.Data.Put(batch.Table, batch)
+	return a.AcceptTemporalBatch(ctx, temp, opts)
 }
 
-// AcceptTemporalBatch implements [types.TemporalAcceptor] and calls the
-// delegate.
+// AcceptTemporalBatch implements [types.TemporalAcceptor]. It is not
+// expected // to be called in the general case.
 func (a *acceptor) AcceptTemporalBatch(
 	ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions,
 ) error {
-	return a.delegate.AcceptTemporalBatch(ctx, batch, opts)
+	multi := &types.MultiBatch{
+		ByTime: map[hlc.Time]*types.TemporalBatch{batch.Time: batch},
+		Data:   []*types.TemporalBatch{batch},
+	}
+	return a.AcceptMultiBatch(ctx, multi, opts)
 }
 
 // AcceptMultiBatch executes each enclosed TemporalBatch in a concurrent
@@ -65,21 +71,17 @@ func (a *acceptor) AcceptTemporalBatch(
 func (a *acceptor) AcceptMultiBatch(
 	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
 ) error {
+	// Break the incoming batch up into reasonably-sized chunks. We want
+	// to avoid sending hundreds of trivially-small transactions to the
+	// target.
+	segments := segmentMultiBatch(batch, a.cfg.FlushSize)
+
 	stopCtx := stopper.From(ctx)
 
-	// Limit total concurrency to something reasonable.
-	sem := semaphore.NewWeighted(int64(a.cfg.Parallelism))
-
-	outcomes := make([]*notify.Var[*lockset.Status], len(batch.Data))
-	for idx, sub := range batch.Data {
-		idx, sub := idx, sub // Capture
-		keys := batchKeys(sub)
-		outcomes[idx], _ = a.order.Schedule(keys, func([]string) error {
-			if err := sem.Acquire(ctx, 1); err != nil {
-				return errors.WithStack(err)
-			}
-			defer sem.Release(1)
-
+	outcomes := make([]*notify.Var[*lockset.Status], len(segments))
+	for idx, segment := range segments {
+		idx, segment := idx, segment // Capture
+		outcomes[idx] = a.scheduler.Batch(segment, func() error {
 			// We may have been delayed for some time, so we'll re-check
 			// that it's OK to continue running.
 			if stopCtx.IsStopping() {
@@ -94,51 +96,57 @@ func (a *acceptor) AcceptMultiBatch(
 
 			opts := opts.Copy()
 			opts.TargetQuerier = tx
-			if err := a.delegate.AcceptTemporalBatch(ctx, sub, opts); err != nil {
+			if err := a.delegate.AcceptMultiBatch(ctx, segment, opts); err != nil {
 				return err
 			}
 
 			if err := tx.Commit(); err != nil {
 				return errors.WithStack(err)
 			}
-
-			// Mark the mutations as having been applied.
-			stagingTx, err := a.staging.BeginTx(ctx, pgx.TxOptions{})
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer func() { _ = stagingTx.Rollback(context.Background()) }()
-
-			if err := sub.Data.Range(func(table ident.Table, tableBatch *types.TableBatch) error {
-				stager, err := a.stagers.Get(ctx, table)
-				if err != nil {
-					return err
-				}
-				return stager.MarkApplied(ctx, stagingTx, tableBatch.Data)
-			}); err != nil {
-				return err
-			}
-			return errors.WithStack(stagingTx.Commit(ctx))
+			return nil
 		})
 	}
 
 	// Await completion of tasks.
-outer:
-	for _, outcome := range outcomes {
-		for {
-			status, changed := outcome.Get()
-			if status.Success() {
-				continue outer
-			} else if status.Err() != nil {
-				return status.Err()
-			}
-			select {
-			case <-changed:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
+	if err := lockset.Wait(ctx, outcomes); err != nil {
+		return err
 	}
+
+	// Mark all mutations in the original batch as having been applied.
+	// We need to do this as an atomic unit of work. Consider the case
+	// where segments S1 and S2 have a key in common. S1 may have failed
+	// to commit, while S2 succeeded. We don't want to mark the
+	// mutations comprising S2 as successful yet. Otherwise, when we
+	// retry S1 without re-attempting the mutations in S2, time might
+	// reverse.
+	markingStart := time.Now()
+	var toMark ident.TableMap[[]types.Mutation]
+	for _, temp := range batch.Data {
+		// Callback always returns nil.
+		_ = temp.Data.Range(func(table ident.Table, tableBatch *types.TableBatch) error {
+			toMark.Put(table, append(toMark.GetZero(table), tableBatch.Data...))
+			return nil
+		})
+	}
+
+	stagingTx, err := a.staging.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer func() { _ = stagingTx.Rollback(context.Background()) }()
+	if err := toMark.Range(func(table ident.Table, muts []types.Mutation) error {
+		stager, err := a.stagers.Get(ctx, table)
+		if err != nil {
+			return err
+		}
+		return stager.MarkApplied(ctx, stagingTx, muts)
+	}); err != nil {
+		return err
+	}
+	if err := errors.WithStack(stagingTx.Commit(ctx)); err != nil {
+		return err
+	}
+	log.Tracef("marking finished in %s", time.Since(markingStart))
 	return nil
 }
 
@@ -148,16 +156,4 @@ func (a *acceptor) IsMarking() bool { return true }
 // Unwrap is an informal protocol to return the delegate.
 func (a *acceptor) Unwrap() types.MultiAcceptor {
 	return a.delegate
-}
-
-func batchKeys(batch *types.TemporalBatch) []string {
-	var ret []string
-	// Ignoring error because callback only returns nil.
-	_ = batch.Data.Range(func(tbl ident.Table, tblData *types.TableBatch) error {
-		for _, mut := range tblData.Data {
-			ret = append(ret, fmt.Sprintf("%s:%s", tbl.Raw(), string(mut.Key)))
-		}
-		return nil
-	})
-	return ret
 }
