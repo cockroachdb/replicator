@@ -170,13 +170,17 @@ func testIntegration(t *testing.T, cfg testConfig) {
 			GenerateSelfSigned: cfg.webhook && supportsWebhook, // Webhook implies self-signed TLS is ok.
 		},
 		Staging: stagingProd.StagingConfig{
-			Conn:     destFixture.StagingPool.ConnectionString,
-			Schema:   destFixture.StagingDB.Schema(),
-			PoolSize: 16,
+			CommonConfig: stagingProd.CommonConfig{
+				Conn:        destFixture.StagingPool.ConnectionString,
+				MaxPoolSize: 16,
+			},
+			Schema: destFixture.StagingDB.Schema(),
 		},
 		Target: stagingProd.TargetConfig{
-			Conn:     targetPool.ConnectionString,
-			PoolSize: 16,
+			CommonConfig: stagingProd.CommonConfig{
+				Conn:        targetPool.ConnectionString,
+				MaxPoolSize: 16,
+			},
 		},
 	}
 	if cfg.shingle {

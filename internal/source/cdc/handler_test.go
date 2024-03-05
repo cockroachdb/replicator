@@ -760,6 +760,7 @@ func testMassBackfillWithForeignKeys(
 				SweepLimit:      rowCount / 3, // Read the same timestamp more than once.
 			},
 		}
+		r.NoError(cfg.Preflight())
 		for _, fn := range fns {
 			fn(cfg)
 		}
