@@ -34,12 +34,19 @@ type withPoolSize struct {
 
 func (o *withPoolSize) option() {}
 func (o *withPoolSize) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) error {
-	cfg.MinConns = int32(o.size)
+	// We can't limit the number of idle connections, but we can set a
+	// minimum pool size to ensure that some number of connections are
+	// always ready to go.
+	cfg.MinConns = 2
 	cfg.MaxConns = int32(o.size)
 	return nil
 }
 func (o *withPoolSize) sqlDB(_ context.Context, impl *sql.DB) error {
-	impl.SetMaxIdleConns(o.size)
+	// This code patch is only used for non-pgx targets. They typically
+	// don't want to leave idle connections lying around. Setting this
+	// value higher also seems to trigger test failures due to
+	// https://github.com/sijms/go-ora/issues/513
+	impl.SetMaxIdleConns(2)
 	impl.SetMaxOpenConns(o.size)
 	return nil
 }

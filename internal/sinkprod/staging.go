@@ -29,14 +29,7 @@ import (
 
 // StagingConfig defines staging-database connection behaviors.
 type StagingConfig struct {
-	// Connection string for the target cluster.
-	Conn string
-	// The maximum lifetime for a database connection; improves
-	// loadbalancer compatibility.
-	Lifetime time.Duration
-	// The number of connections to the target database. If zero, a
-	// default value will be used.
-	PoolSize int
+	CommonConfig
 	// The name of a SQL schema in the staging cluster to store
 	// metadata in.
 	Schema ident.Schema
@@ -44,12 +37,7 @@ type StagingConfig struct {
 
 // Bind adds flags to the set.
 func (c *StagingConfig) Bind(f *pflag.FlagSet) {
-	f.StringVar(&c.Conn, "stagingConn", "",
-		"the staging database's connection string")
-	f.IntVar(&c.PoolSize, "stagingDBConns", defaultPoolSize,
-		"the maximum pool size to the staging cluster")
-	f.DurationVar(&c.Lifetime, "stagingDBLifetime", defaultLifetime,
-		"the maximum lifetime for an staging database connection")
+	c.CommonConfig.bind(f, "staging")
 
 	c.Schema = ident.MustSchema(ident.New("_cdc_sink"), ident.Public)
 	f.Var(ident.NewSchemaFlag(&c.Schema), "stagingSchema",
@@ -60,12 +48,8 @@ func (c *StagingConfig) Bind(f *pflag.FlagSet) {
 // and returns an error if the StagingConfig is missing any fields for
 // which a default cannot be provided.
 func (c *StagingConfig) Preflight() error {
-	// Staging connection may be empty, since target may be used.
-	if c.Lifetime == 0 {
-		c.Lifetime = defaultLifetime
-	}
-	if c.PoolSize == 0 {
-		c.PoolSize = defaultPoolSize
+	if err := c.CommonConfig.preflight("staging", false); err != nil {
+		return err
 	}
 	if c.Schema.Empty() {
 		c.Schema = ident.MustSchema(ident.New("_cdc_sink"), ident.Public)
@@ -93,10 +77,10 @@ func ProvideStagingPool(
 
 	ret, err := stdpool.OpenPgxAsStaging(ctx,
 		conn,
-		stdpool.WithConnectionLifetime(config.Lifetime),
+		stdpool.WithConnectionLifetime(config.MaxLifetime, config.IdleTime, config.JitterTime),
 		stdpool.WithDiagnostics(diags, "staging"),
 		stdpool.WithMetrics("staging"),
-		stdpool.WithPoolSize(config.PoolSize),
+		stdpool.WithPoolSize(config.MaxPoolSize),
 		stdpool.WithTransactionTimeout(time.Minute), // Staging shouldn't take that much time.
 	)
 	if err != nil {
