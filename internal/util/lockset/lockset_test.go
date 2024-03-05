@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -33,6 +34,8 @@ import (
 func TestSerial(t *testing.T) {
 	const numWaiters = 1024
 	r := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// We want to verify that we see execution order for a key match the
 	// scheduling order.
@@ -53,7 +56,7 @@ func TestSerial(t *testing.T) {
 		outcomes[i], _ = s.Schedule([]struct{}{{}}, checker(i))
 	}
 
-	r.NoError(checkOutcomes(outcomes))
+	r.NoError(Wait(ctx, outcomes))
 }
 
 // Use random key sets and ensure that we don't see any collisions on
@@ -90,7 +93,9 @@ func TestSmoke(t *testing.T) {
 		return nil
 	}
 
-	var s Set[int]
+	s := Set[int]{
+		Runner: workgroup.WithSize(ctx, numWaiters/2, numResources),
+	}
 	outcomes := make([]*notify.Var[*Status], numWaiters)
 	eg, _ := errgroup.WithContext(ctx)
 	for i := 0; i < numWaiters; i++ {
@@ -110,11 +115,13 @@ func TestSmoke(t *testing.T) {
 	r.NoError(eg.Wait())
 
 	// Wait for each task to arrive at a successful state.
-	r.NoError(checkOutcomes(outcomes))
+	r.NoError(Wait(ctx, outcomes))
 }
 
 func TestCancel(t *testing.T) {
 	r := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	var s Set[int]
 
@@ -136,7 +143,7 @@ func TestCancel(t *testing.T) {
 	close(blockCh)          // Allow the machinery to proceed.
 
 	// The blocker should be successful.
-	r.NoError(checkOutcomes([]*notify.Var[*Status]{blocker}))
+	r.NoError(Wait(ctx, []*notify.Var[*Status]{blocker}))
 
 	for {
 		status, changed := canceled.Get()
@@ -150,6 +157,36 @@ func TestCancel(t *testing.T) {
 		}
 		<-changed
 	}
+}
+
+func TestRunnerRejection(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := Set[int]{
+		Runner: workgroup.WithSize(ctx, 1, 0),
+	}
+
+	block := make(chan struct{})
+
+	// An empty key set will cause this to be executed immediately.
+	s.Schedule(nil, func(keys []int) error {
+		select {
+		case <-block:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
+	rejectedStatus, _ := s.Schedule(nil, func(keys []int) error {
+		r.Fail("should not execute")
+		return nil
+	})
+	rejected, _ := rejectedStatus.Get()
+	r.ErrorContains(rejected.Err(), "queue depth 0 exceeded")
 }
 
 func TestPanic(t *testing.T) {
@@ -182,30 +219,4 @@ func TestPanic(t *testing.T) {
 		}
 		<-changed
 	}
-}
-
-// checkOutcomes ensures that all status have arrived at a successful
-// state. The first error, if any, will be returned.
-func checkOutcomes(outcomes []*notify.Var[*Status]) error {
-outer:
-	for _, outcome := range outcomes {
-		for {
-			status, changed := outcome.Get()
-			if status.Err() != nil {
-				return status.Err()
-			}
-			switch {
-			case status.Success():
-				continue outer
-			case status.Queued():
-				// Still waiting.
-			case status.Executing():
-				// Still waiting.
-			default:
-				return errors.New("unexpected state")
-			}
-			<-changed
-		}
-	}
-	return nil
 }
