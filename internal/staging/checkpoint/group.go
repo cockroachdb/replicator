@@ -195,8 +195,6 @@ func (r *Group) TableGroup() *types.TableGroup {
 // unapplied timestamp
 //
 // CTE components:
-//   - start_from: Back up one row from the minimum timestamp. This
-//     helps to minimize the number of rows ultimately scanned.
 //   - pairs: Generates pairs of candidate start/end rows. The coalesce
 //     functions allow us to handle the case where there is exactly one
 //     unapplied row.
@@ -208,13 +206,6 @@ func (r *Group) TableGroup() *types.TableGroup {
 //     beyond the final applied checkpoint.
 const refreshTemplate = `
 WITH
-start_from AS (
-  SELECT source_nanos n, source_logical l
-    FROM %[1]s
-   WHERE target_schema = $1 AND (source_nanos, source_logical) < ($2, $3)
-   ORDER BY source_nanos DESC, source_logical DESC
-   LIMIT 1
-),
 pairs AS (
 SELECT
   COALESCE(lag(source_nanos) OVER (), 0) start_n,
@@ -225,7 +216,7 @@ SELECT
   target_applied_at IS NOT NULL end_applied
  FROM %[1]s
 WHERE target_schema = $1
-  AND (source_nanos, source_logical) >= COALESCE((SELECT (n, l) FROM start_from), (0,0))
+  AND (source_nanos, source_logical) >= ($2, $3)
 ORDER BY source_nanos, source_logical
 ),
 ideal AS (
