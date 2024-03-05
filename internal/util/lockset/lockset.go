@@ -29,6 +29,13 @@ import (
 // A Callback is provided to [Set.Schedule].
 type Callback[K any] func(keys []K) error
 
+// A Runner can be provided to Set to control the execution of scheduled
+// tatks.
+type Runner interface {
+	// Go should execute the function in a non-blocking fashion.
+	Go(func(context.Context)) error
+}
+
 // Status is returned by [Set.Schedule].
 type Status struct {
 	err error
@@ -86,6 +93,13 @@ type waiter[K any] struct {
 // zero-valued Set is ready to use. A Set should not be copied after it
 // has been created.
 type Set[K comparable] struct {
+	// If non-nil, execute goroutines through this [Runner] instead of
+	// using the go keyword. This allows callers to provide their own
+	// concurrency control. If the [Runner] rejects a scheduled task,
+	// the rejection will be available from the [notify.Var] returned
+	// from [Set.Schedule].
+	Runner Runner
+
 	mu struct {
 		sync.Mutex
 		// Deadlocks between waiters are avoided since the relative
@@ -216,7 +230,7 @@ func (s *Set[K]) dequeue(w *waiter[K]) []*waiter[K] {
 // will be dequeued from the Set, possibly leading to cascading
 // callbacks.
 func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
-	go func() {
+	work := func(_ context.Context) {
 		// Clear the function reference to make the effects of dispose a
 		// one-shot.
 		s.mu.Lock()
@@ -264,7 +278,16 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 		} else {
 			w.result.Set(&Status{err: err})
 		}
-	}()
+	}
+
+	if s.Runner == nil {
+		go work(context.Background())
+		return
+	}
+
+	if err := s.Runner.Go(work); err != nil {
+		w.result.Set(&Status{err: err})
+	}
 }
 
 // enqueue adds the waiter to the Set. If the waiter is immediately
@@ -292,4 +315,26 @@ func (s *Set[K]) enqueue(w *waiter[K]) {
 	if w.headCount == len(w.keys) {
 		s.dispose(w, false)
 	}
+}
+
+// Wait returns the first non-nil error.
+func Wait(ctx context.Context, outcomes []*notify.Var[*Status]) error {
+outcome:
+	for _, outcome := range outcomes {
+		for {
+			status, changed := outcome.Get()
+			if status.Success() {
+				continue outcome
+			}
+			if err := status.Err(); err != nil {
+				return err
+			}
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return nil
 }
