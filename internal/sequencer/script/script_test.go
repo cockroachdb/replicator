@@ -111,13 +111,13 @@ api.configureTable("t_2", {
 });
 `)}}}
 
+	seqCfg := &sequencer.Config{
+		Parallelism:     2,
+		QuiescentPeriod: 100 * time.Millisecond,
+	}
+	r.NoError(seqCfg.Preflight())
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
-		&sequencer.Config{
-			Parallelism:     2,
-			QuiescentPeriod: time.Second,
-			SweepLimit:      sequencer.DefaultSweepLimit,
-			TimestampLimit:  sequencer.DefaultTimestampLimit,
-		},
+		seqCfg,
 		scriptCfg)
 	r.NoError(err)
 

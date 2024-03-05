@@ -40,13 +40,12 @@ func TestStepByStep(t *testing.T) {
 	r.NoError(err)
 	ctx := fixture.Context
 
+	seqCfg := &sequencer.Config{
+		QuiescentPeriod: 100 * time.Millisecond,
+	}
+	r.NoError(seqCfg.Preflight())
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
-		&sequencer.Config{
-			Parallelism:     2, // Has no particular effect on serial.
-			QuiescentPeriod: time.Second,
-			SweepLimit:      sequencer.DefaultSweepLimit,
-			TimestampLimit:  sequencer.DefaultTimestampLimit,
-		},
+		seqCfg,
 		&script.Config{})
 	r.NoError(err)
 	serial := seqFixture.Serial
