@@ -24,10 +24,12 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/sequtil"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
@@ -38,7 +40,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 )
 
 // BestEffort looks for deferred mutations and attempts to apply them on a
@@ -47,6 +48,7 @@ import (
 type BestEffort struct {
 	cfg         *sequencer.Config
 	leases      types.Leases
+	scheduler   *scheduler.Scheduler
 	stagingPool *types.StagingPool
 	stagers     types.Stagers
 	targetPool  *types.TargetPool
@@ -275,8 +277,6 @@ func (s *BestEffort) sweepOnce(
 		// operating on has been deferred at least once, so using larger
 		// batches is unlikely to yield any real improvement here.
 		// We can, at least, apply the mutations in parallel.
-		eg, egCtx := errgroup.WithContext(ctx)
-		eg.SetLimit(s.cfg.Parallelism)
 
 		// These accumulate the timestamps of any failed mutations.
 		// They're accessed from within the goroutines launched below.
@@ -290,16 +290,18 @@ func (s *BestEffort) sweepOnce(
 		// subsequently mark as applied. Even though multiple goroutines
 		// are rewriting the slice, they never access the same index,
 		// and they're always behind the index of the initiating loop.
+		// Overall parallelism is limited by the lockset's Runner.
 		var successIdx atomic.Int32
-		for _, mut := range pending {
+		outcomes := make([]*notify.Var[*lockset.Status], len(pending))
+		for idx, mut := range pending {
 			mut := mut // Capture.
-			eg.Go(func() error {
+			outcomes[idx] = s.scheduler.Singleton(tbl, mut, func() error {
 				batch := &types.TableBatch{
 					Data:  []types.Mutation{mut},
 					Table: tbl,
 					Time:  mut.Time,
 				}
-				err := acceptor.AcceptTableBatch(egCtx, batch, &types.AcceptOptions{})
+				err := acceptor.AcceptTableBatch(ctx, batch, &types.AcceptOptions{})
 				// Save applied mutations to mark later.
 				if err == nil {
 					idx := successIdx.Add(1) - 1
@@ -333,7 +335,7 @@ func (s *BestEffort) sweepOnce(
 		// Wait for all apply tasks to complete. The only expected error
 		// here would be context cancellation; the worker always returns
 		// a nil error.
-		if err := eg.Wait(); err != nil {
+		if err := lockset.Wait(ctx, outcomes); err != nil {
 			return err
 		}
 

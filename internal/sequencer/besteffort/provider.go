@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/google/wire"
@@ -34,6 +35,7 @@ var Set = wire.NewSet(
 func ProvideBestEffort(
 	cfg *sequencer.Config,
 	leases types.Leases,
+	scheduler *scheduler.Scheduler,
 	stagingPool *types.StagingPool,
 	stagers types.Stagers,
 	targetPool *types.TargetPool,
@@ -42,6 +44,7 @@ func ProvideBestEffort(
 	return &BestEffort{
 		cfg:         cfg,
 		leases:      leases,
+		scheduler:   scheduler,
 		stagingPool: stagingPool,
 		stagers:     stagers,
 		targetPool:  targetPool,

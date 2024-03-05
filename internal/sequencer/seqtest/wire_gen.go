@@ -13,6 +13,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
@@ -31,10 +32,14 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	if err != nil {
 		return nil, err
 	}
+	schedulerScheduler, err := scheduler.ProvideScheduler(context, config)
+	if err != nil {
+		return nil, err
+	}
 	stagers := fixture.Stagers
 	targetPool := baseFixture.TargetPool
 	watchers := fixture.Watchers
-	bestEffort := besteffort.ProvideBestEffort(config, leases, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(config, leases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	chaosChaos := &chaos.Chaos{
 		Config: config,
 	}
@@ -48,7 +53,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 		return nil, err
 	}
 	scriptSequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	shingleShingle := shingle.ProvideShingle(config, stagers, stagingPool, targetPool)
+	shingleShingle := shingle.ProvideShingle(config, schedulerScheduler, stagers, stagingPool, targetPool)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, diagnostics, immediateImmediate, scriptSequencer, serialSerial, shingleShingle, stagingPool, targetPool)
 	seqtestFixture := &Fixture{
 		Fixture:    fixture,

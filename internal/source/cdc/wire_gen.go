@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
@@ -37,6 +38,10 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
+	schedulerScheduler, err := scheduler.ProvideScheduler(context, sequencerConfig)
+	if err != nil {
+		return nil, err
+	}
 	stagers := fixture.Stagers
 	targetPool := baseFixture.TargetPool
 	diagnostics := diag.New(context)
@@ -44,7 +49,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	authenticator := trust.New()
 	targetStatements := baseFixture.TargetCache
 	configs := fixture.Configs
@@ -67,7 +72,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
-	shingleShingle := shingle.ProvideShingle(sequencerConfig, stagers, stagingPool, targetPool)
+	shingleShingle := shingle.ProvideShingle(sequencerConfig, schedulerScheduler, stagers, stagingPool, targetPool)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, diagnostics, immediateImmediate, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
 	targets, err := ProvideTargets(context, acceptor, config, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
