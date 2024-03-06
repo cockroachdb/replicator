@@ -32,42 +32,49 @@ import (
 // that acquires a lease based on the group name. The callback will be
 // executed as a goroutine within a suitably nested stopper.
 func LeaseGroup(
-	ctx *stopper.Context,
+	outer *stopper.Context,
 	leases types.Leases,
 	group *types.TableGroup,
 	fn func(*stopper.Context, *types.TableGroup),
 ) {
 	// Start a goroutine in the outer context.
-	ctx.Go(func() error {
-		// Acquire a lease.
-		leases.Singleton(ctx, fmt.Sprintf("sequtil.Lease.%s", group.Name), func(leaseContext context.Context) error {
-			log.Tracef("sequtil.LeaseGroup: acquired %s", group.Name)
-			defer log.Tracef("sequtil.LeaseGroup: released %s", group.Name)
+	outer.Go(func() error {
+		// Run this in a loop in case of non-renewal. This is likely
+		// caused by database overload or any other case where we can't
+		// run SQL in a timely fashion.
+		for !outer.IsStopping() {
+			// Acquire a lease.
+			leases.Singleton(outer, fmt.Sprintf("sequtil.Lease.%s", group.Name),
+				func(leaseContext context.Context) error {
+					log.Infof("acquired gloabal lease for %s", group.Name)
+					defer log.Infof("lost global lease for %s", group.Name)
 
-			// Create a nested stopper whose lifetime is bound to that
-			// of the lease.
-			sub := stopper.WithContext(leaseContext)
-			defer sub.Stop(0)
+					// Create a nested stopper whose lifetime is bound
+					// to that of the lease.
+					sub := stopper.WithContext(leaseContext)
+					defer sub.Stop(0)
 
-			// Execute the callback from a goroutine.
-			sub.Go(func() error {
-				// Tear down the stopper when the main callback has exited.
-				defer sub.Stop(time.Second)
-				fn(sub, group)
-				return nil
-			})
+					// Execute the callback from a goroutine.
+					sub.Go(func() error {
+						// Tear down the stopper when the main callback
+						// has exited.
+						defer sub.Stop(time.Second)
+						fn(sub, group)
+						return nil
+					})
 
-			select {
-			case <-sub.Stopping():
-				// Defer release until all work has stopped. This avoids
-				// spammy cancellation errors.
-				<-sub.Done()
-				return types.ErrCancelSingleton
-			case <-sub.Done():
-				// The lease has expired, we'll just exit.
-				return sub.Err()
-			}
-		})
+					select {
+					case <-sub.Stopping():
+						// Defer release until all work has stopped.
+						// This avoids spammy cancellation errors.
+						<-sub.Done()
+						return types.ErrCancelSingleton
+					case <-sub.Done():
+						// The lease has expired, we'll just exit.
+						return sub.Err()
+					}
+				})
+		}
 		return nil
 	})
 }
