@@ -23,6 +23,7 @@ import (
 	"math/rand"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
@@ -219,4 +220,59 @@ func TestPanic(t *testing.T) {
 		}
 		<-changed
 	}
+}
+
+func TestRetry(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var s Set[int]
+
+	// This task will be at the head of the queue.
+	block := make(chan struct{})
+	blocker, _ := s.Schedule([]int{0}, func([]int) error {
+		select {
+		case <-block:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
+	// This task will retry itself and block the checker below.
+	var didRetry, expectRetry atomic.Bool
+	retried, _ := s.Schedule([]int{42}, func([]int) error {
+		if expectRetry.CompareAndSwap(false, true) {
+			close(block)
+			// This error should never be seen.
+			return RetryAtHead(errors.New("masked"))
+		}
+
+		if didRetry.CompareAndSwap(false, true) {
+			// Retrying on a retry returns the error.
+			return RetryAtHead(errors.New("should see this"))
+		}
+
+		r.Fail("called too many times")
+		return nil
+	})
+
+	// Set up a task that depends upon the retried task. It shouldn't
+	// until the retry has taken place.
+	checker, _ := s.Schedule([]int{42}, func([]int) error {
+		r.True(didRetry.Load())
+		return nil
+	})
+
+	r.EqualError(
+		Wait(ctx, []*notify.Var[*Status]{blocker, checker, retried}),
+		"should see this")
+
+	// Ensure that other tasks can still proceed.
+	simple, _ := s.Schedule([]int{42}, func([]int) error {
+		return nil
+	})
+	r.NoError(Wait(ctx, []*notify.Var[*Status]{simple}))
 }

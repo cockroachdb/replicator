@@ -20,11 +20,27 @@ package lockset
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 )
+
+// RetryAtHead returns an error that callbacks can use to retry a
+// callback once it has reached the global head of line.  That is, the
+// callback will be retried when all other callbacks scheduled before it
+// have completed. If this error is emitted while the callback is at the
+// global head of line, the causal error will be emitted from
+// [Set.Schedule].
+func RetryAtHead(cause error) error {
+	return &retryAtHead{cause}
+}
+
+type retryAtHead struct{ cause error }
+
+func (e *retryAtHead) Error() string { return "callback requested a retry" }
+func (e *retryAtHead) Unwrap() error { return e.cause }
 
 // A Callback is provided to [Set.Schedule].
 type Callback[K any] func(keys []K) error
@@ -43,9 +59,9 @@ type Status struct {
 
 // Sentinel instances of Status.
 var (
-	canceled  = &Status{err: context.Canceled}
 	executing = &Status{}
 	queued    = &Status{}
+	retrying  = &Status{}
 	success   = &Status{}
 )
 
@@ -70,20 +86,42 @@ func (s *Status) Queued() bool {
 	return s == queued
 }
 
+// Retrying returns true if the callback returned [RetryAtHead] and it
+// has not yet been re-attempted.
+func (s *Status) Retrying() bool {
+	return s == retrying
+}
+
 // Success returns true if the Status represents the successful
 // completion of a scheduled waiter.
 func (s *Status) Success() bool {
 	return s == success
 }
 
+func (s *Status) String() string {
+	switch s {
+	case executing:
+		return "executing"
+	case queued:
+		return "queued"
+	case retrying:
+		return "retrying"
+	case success:
+		return "success"
+	default:
+		return "error: " + s.err.Error()
+	}
+}
+
 // A waiter represents a request to acquire locks on some number of
 // keys. Instances of this type should only be accessed while
 // holding the lock on the parent Set.
 type waiter[K any] struct {
-	fn        Callback[K] // nil if already executed.
-	headCount int         // The number of keys where this waiter is head of queue.
-	keys      []K         // Desired key set.
-	result    notify.Var[*Status]
+	fn        Callback[K]         // nil if already executed.
+	headCount int                 // The number of keys where this waiter is head of queue.
+	keys      []K                 // Desired key set.
+	next      *waiter[K]          // The waiter that was scheduled next.
+	result    notify.Var[*Status] // The outbox for the waiter.
 }
 
 // Set implements an in-order admission queue for actors requiring
@@ -102,6 +140,10 @@ type Set[K comparable] struct {
 
 	mu struct {
 		sync.Mutex
+		// These waiters are used to maintain a global ordering of
+		// waiters to implement [RetryAtHead].
+		head, tail *waiter[K]
+
 		// Deadlocks between waiters are avoided since the relative
 		// order of enqueued waiters is maintained. That is, if
 		// Schedule() is called with W1 and then W2, the first waiter
@@ -115,6 +157,11 @@ type Set[K comparable] struct {
 // Schedule executes the Callback once all keys have been locked.
 // The result from the callback is available through the returned
 // variable.
+//
+// Callbacks that need to be retried may return [RetryAtHead]. This we
+// execute the callback again when all other callbacks scheduled before
+// it have been completed. A retrying callback will continue to hold
+// its key locks until the retry has taken place.
 //
 // It is valid to call this method with an empty key slice. The
 // callback will simply be executed in a separate goroutine.
@@ -177,52 +224,88 @@ func (s *Set[K]) dequeue(w *waiter[K]) []*waiter[K] {
 	defer s.mu.Unlock()
 
 	var ret []*waiter[K]
-	// Remove the waiter from each key's queue.
-	for _, k := range w.keys {
-		q := s.mu.queues[k]
+	status, _ := w.result.Get()
 
-		// Search for the waiter in the queue. It's always going to be
-		// the first element in the slice, except in the cancellation
-		// case.
-		var idx int
-		for idx = range q {
-			if q[idx] == w {
-				break
+	// If the waiter has reached a terminal condition, clean up its
+	// entries.
+	if status.Completed() {
+		// Remove the waiter from each key's queue.
+		for _, k := range w.keys {
+			q := s.mu.queues[k]
+
+			// Search for the waiter in the queue. It's always going to
+			// be the first element in the slice, except in the
+			// cancellation case.
+			var idx int
+			for idx = range q {
+				if q[idx] == w {
+					break
+				}
 			}
-		}
-		if idx == len(q) {
-			panic("waiter not found in queue")
-		}
 
-		// If the waiter was the first in the queue (likely), promote
-		// the next waiter, possibly making it eligible to be run.
-		if idx == 0 {
-			q = q[1:]
-			if len(q) == 0 {
-				// The waiter was the only element of the queue, so
-				// we'll just delete the slice from the map.
-				delete(s.mu.queues, k)
+			// The waiter wasn't in the queue. We could prevent this
+			// case by adding a mutex on each waiter, but this is a
+			// relatively rare occurrence.
+			if idx == len(q) {
 				continue
 			}
 
-			// Promote the next waiter. If the waiter is now at the
-			// head of its queues, return it so it can be started.
-			head := q[0]
-			head.headCount++
-			if head.headCount == len(head.keys) {
-				ret = append(ret, head)
-			} else if head.headCount > len(head.keys) {
-				panic("over counted")
+			// If the waiter was the first in the queue (likely),
+			// promote the next waiter, possibly making it eligible to
+			// be run.
+			if idx == 0 {
+				q = q[1:]
+				if len(q) == 0 {
+					// The waiter was the only element of the queue, so
+					// we'll just delete the slice from the map.
+					delete(s.mu.queues, k)
+					continue
+				}
+
+				// Promote the next waiter. If the waiter is now at the
+				// head of its queues, return it so it can be started.
+				head := q[0]
+				head.headCount++
+				if head.headCount == len(head.keys) {
+					ret = append(ret, head)
+				} else if head.headCount > len(head.keys) {
+					panic("over counted")
+				}
+			} else {
+				// The (canceled) waiter was in the middle of the queue,
+				// just remove it from the slice.
+				q = append(q[:idx], q[idx+1:]...)
 			}
-		} else {
-			// The (canceled) waiter was in the middle of the queue,
-			// just remove it from the slice.
-			q = append(q[:idx], q[idx+1:]...)
+
+			// Put the shortened queue back in the map.
+			s.mu.queues[k] = q
+		}
+	}
+
+	// Make some progress on the global queue.
+	head := s.mu.head
+	for head != nil {
+		outcome, _ := head.result.Get()
+
+		// If the head waiter is finished, we want to advance the queue.
+		if outcome.Completed() {
+			head = head.next
+			s.mu.head = head
+			continue
 		}
 
-		// Put the shortened queue back in the map.
-		s.mu.queues[k] = q
+		// The head has requested to be retried, so add it to the
+		// slice of waiters to execute.
+		if outcome.Retrying() {
+			ret = append(ret, head)
+		}
+		break
 	}
+	// If we reached the end, clear the tail field.
+	if head == nil {
+		s.mu.tail = nil
+	}
+
 	return ret
 }
 
@@ -236,6 +319,7 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 		s.mu.Lock()
 		fn := w.fn
 		w.fn = nil
+		initialStatus, _ := w.result.Get()
 		s.mu.Unlock()
 
 		// Already executed and/or canceled.
@@ -243,18 +327,37 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 			return
 		}
 
-		// Once the waiter has been disposed of, dequeue it to release
-		// its locks and dispose any unblocked waiters.
+		// Once the waiter has been called, update its status and call
+		// dequeue to find any tasks that have been unblocked.
+		var finalErr error
 		defer func() {
+			if finalErr == nil {
+				w.result.Set(success)
+			} else if retryErr := (*retryAtHead)(nil); errors.As(finalErr, &retryErr) {
+				// A callback may retry at the global head of queue
+				// exactly once. If it
+				if initialStatus.Retrying() {
+					w.result.Set(&Status{err: retryErr.Unwrap()})
+				} else {
+					// Re-enable the waiter.
+					s.mu.Lock()
+					w.fn = fn
+					w.result.Set(retrying)
+					s.mu.Unlock()
+				}
+			} else {
+				w.result.Set(&Status{err: finalErr})
+			}
+
 			next := s.dequeue(w)
-			for _, head := range next {
-				s.dispose(head, false)
+			for _, unblocked := range next {
+				s.dispose(unblocked, false)
 			}
 		}()
 
 		// If a cancellation is requested, set the variable.
 		if cancel {
-			w.result.Set(canceled)
+			finalErr = context.Canceled
 			return
 		}
 
@@ -265,19 +368,14 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 			case nil:
 			// Success.
 			case error:
-				w.result.Set(&Status{err: t})
+				finalErr = t
 			default:
-				w.result.Set(&Status{err: fmt.Errorf("panic in waiter: %v", t)})
+				finalErr = fmt.Errorf("panic in waiter: %v", t)
 			}
 		}()
 
 		w.result.Set(executing)
-		err := fn(w.keys)
-		if err == nil {
-			w.result.Set(success)
-		} else {
-			w.result.Set(&Status{err: err})
-		}
+		finalErr = fn(w.keys)
 	}
 
 	if s.Runner == nil {
@@ -299,6 +397,14 @@ func (s *Set[K]) enqueue(w *waiter[K]) {
 	if s.mu.queues == nil {
 		s.mu.queues = make(map[K][]*waiter[K])
 	}
+
+	// Insert the waiter into the global queue.
+	if s.mu.tail == nil {
+		s.mu.head = w
+	} else {
+		s.mu.tail.next = w
+	}
+	s.mu.tail = w
 
 	// Add the waiter to each queue. If it's the only waiter for that
 	// key, also increment its headCount.
