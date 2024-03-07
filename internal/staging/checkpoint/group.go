@@ -194,10 +194,15 @@ func (r *Group) TableGroup() *types.TableGroup {
 // This query locates the newest applied timestamp and returns the next
 // unapplied timestamp
 //
+// Params:
+//   - $1: target schema
+//   - $2: last successful checkpoint nanos
+//   - $3: last successful checkpoint logical
+//
 // CTE components:
 //   - pairs: Generates pairs of candidate start/end rows. The coalesce
 //     functions allow us to handle the case where there is exactly one
-//     unapplied row.
+//     unapplied row; we'll get the previous successful timestamp.
 //   - ideal: Selects the first pair that has an applied start time and
 //     an unapplied end time. This should be the general case when we're
 //     processing data.
@@ -208,8 +213,8 @@ const refreshTemplate = `
 WITH
 pairs AS (
 SELECT
-  COALESCE(lag(source_nanos) OVER (), 0) start_n,
-  COALESCE(lag(source_logical) OVER (), 0) start_l,
+  COALESCE(lag(source_nanos) OVER (), $2) start_n,
+  COALESCE(lag(source_logical) OVER (), $3) start_l,
   COALESCE(lag(target_applied_at IS NOT NULL) OVER (), true) start_applied,
   source_nanos end_n,
   source_logical end_l,
