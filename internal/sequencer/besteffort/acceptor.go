@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/sequtil"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
@@ -121,7 +122,7 @@ func (a *acceptor) AcceptTableBatch(
 			}
 			deferredCount.Inc()
 			// We'll suppress errors like FK constraint violations.
-			if !isNormalError(err) {
+			if !sequtil.IsDeferrableError(err) {
 				log.WithError(err).Warnf(
 					"staging mutation instead of target table %s key %s",
 					singleBatch.Table, string(singleBatch.Data[0].Key))

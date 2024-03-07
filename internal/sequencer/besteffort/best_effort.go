@@ -34,11 +34,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
-	"github.com/go-sql-driver/mysql"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -316,7 +312,7 @@ func (s *BestEffort) sweepOnce(
 				// Ignore expected errors, we'll try again later. We'll
 				// leave the lease intact so that we might skip the
 				// mutation until a later cycle.
-				if isNormalError(err) {
+				if sequtil.IsDeferrableError(err) {
 					deferrals.Inc()
 					return nil
 				}
@@ -406,34 +402,4 @@ func (s *BestEffort) sweepOnce(
 		}
 	}
 	return nil
-}
-
-// isNormalError returns true if the error represents an error that's
-// likely to go away on its own in the future (e.g. FK constraints).
-// These are errors that we're ok with reducing log levels for.
-//
-// https://github.com/cockroachdb/cdc-sink/issues/688
-func isNormalError(err error) bool {
-	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
-		return pgErr.Code == "23503" // foreign_key_violation
-	} else if myErr := (*mysql.MySQLError)(nil); errors.As(err, &myErr) {
-		// Cannot add or update a child row: a foreign key constraint fails
-		return myErr.Number == 1452
-	} else if oraErr := (*network.OracleError)(nil); errors.As(err, &oraErr) {
-		switch oraErr.ErrCode {
-		case 1: // ORA-0001 unique constraint violated
-			// The MERGE that we execute uses read-committed reads, so
-			// it's possible for two concurrent merges to attempt to
-			// insert the same row.
-			return true
-		case 60: // ORA-00060: Deadlock detected
-		// Our attempt to insert ran into another transaction, possibly
-		// from a different cdc-sink instance. This can happen since a
-		// MERGE operation reads before it starts writing and the order
-		// in which locks are acquired may vary.
-		case 2291: // ORA-02291: integrity constraint
-			return true
-		}
-	}
-	return false
 }
