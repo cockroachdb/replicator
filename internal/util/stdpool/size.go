@@ -42,11 +42,8 @@ func (o *withPoolSize) pgxPoolConfig(_ context.Context, cfg *pgxpool.Config) err
 	return nil
 }
 func (o *withPoolSize) sqlDB(_ context.Context, impl *sql.DB) error {
-	// This code patch is only used for non-pgx targets. They typically
-	// don't want to leave idle connections lying around. Setting this
-	// value higher also seems to trigger test failures due to
-	// https://github.com/sijms/go-ora/issues/513
-	impl.SetMaxIdleConns(2)
+	// Allow idle connections to fall out based on lifetime settings.
+	impl.SetMaxIdleConns(o.size)
 	impl.SetMaxOpenConns(o.size)
 	return nil
 }
