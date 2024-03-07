@@ -230,6 +230,7 @@ func ProvideStagingPool(ctx *stopper.Context) (*types.StagingPool, error) {
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
+		stdpool.WithConnectionLifetime(time.Minute, 15*time.Second, 5*time.Second),
 		stdpool.WithPoolSize(32),
 		stdpool.WithTransactionTimeout(2*time.Minute), // Aligns with test case timeout.
 	)
@@ -255,6 +256,7 @@ func ProvideTargetPool(
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
 		}),
+		stdpool.WithConnectionLifetime(time.Minute, 15*time.Second, 5*time.Second),
 		stdpool.WithPoolSize(32),
 		stdpool.WithTransactionTimeout(2*time.Minute), // Aligns with test case timeout.
 	)
