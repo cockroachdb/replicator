@@ -208,8 +208,8 @@ const refreshTemplate = `
 WITH
 pairs AS (
 SELECT
-  COALESCE(lag(source_nanos) OVER (), 0) start_n,
-  COALESCE(lag(source_logical) OVER (), 0) start_l,
+  COALESCE(lag(source_nanos) OVER (), $2) start_n,
+  COALESCE(lag(source_logical) OVER (), $3) start_l,
   COALESCE(lag(target_applied_at IS NOT NULL) OVER (), true) start_applied,
   source_nanos end_n,
   source_logical end_l,
