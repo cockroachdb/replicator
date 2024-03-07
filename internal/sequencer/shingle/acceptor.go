@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/sequtil"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -82,28 +83,17 @@ func (a *acceptor) AcceptMultiBatch(
 	for idx, segment := range segments {
 		idx, segment := idx, segment // Capture
 		outcomes[idx] = a.scheduler.Batch(segment, func() error {
-			// We may have been delayed for some time, so we'll re-check
-			// that it's OK to continue running.
-			if stopCtx.IsStopping() {
-				return context.Canceled
+			// If applying the batch fails out with a deferrable error
+			// (e.g., constraint violation), we'll ask the scheduler to
+			// retry this segment once all previously-scheduled segments
+			// have cleared the queue. If there's nothing else that
+			// might be in this segment's way, the underlying error will
+			// be emitted.
+			err := a.tryBatch(stopCtx, segment, opts)
+			if sequtil.IsDeferrableError(err) {
+				return lockset.RetryAtHead(err)
 			}
-
-			tx, err := a.target.BeginTx(ctx, &sql.TxOptions{})
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer func() { _ = tx.Rollback() }()
-
-			opts := opts.Copy()
-			opts.TargetQuerier = tx
-			if err := a.delegate.AcceptMultiBatch(ctx, segment, opts); err != nil {
-				return err
-			}
-
-			if err := tx.Commit(); err != nil {
-				return errors.WithStack(err)
-			}
-			return nil
+			return err
 		})
 	}
 
@@ -156,4 +146,32 @@ func (a *acceptor) IsMarking() bool { return true }
 // Unwrap is an informal protocol to return the delegate.
 func (a *acceptor) Unwrap() types.MultiAcceptor {
 	return a.delegate
+}
+
+// tryBatch attempts to apply the given segment.
+func (a *acceptor) tryBatch(
+	ctx *stopper.Context, segment *types.MultiBatch, opts *types.AcceptOptions,
+) error {
+	// We may have been delayed for some time, so we'll re-check
+	// that it's OK to continue running.
+	if ctx.IsStopping() {
+		return context.Canceled
+	}
+
+	tx, err := a.target.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	opts = opts.Copy()
+	opts.TargetQuerier = tx
+	if err := a.delegate.AcceptMultiBatch(ctx, segment, opts); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
 }
