@@ -19,7 +19,7 @@
 #
 # The go compiler will run using the host architecture, but
 # cross-compile to the desired target platform given to buildx.
-FROM --platform=$BUILDPLATFORM golang:1.20 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.22 AS builder
 WORKDIR /tmp/compile
 ARG TARGETOS TARGETARCH
 RUN --mount=target=. \
