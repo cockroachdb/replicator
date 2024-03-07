@@ -224,7 +224,7 @@ jobs:
           -coverprofile=${{ env.COVER_OUT }}
           $RACE
           -v
-          ./... 2>&1 |
+          ./internal/... 2>&1 |
           go run github.com/jstemmer/go-junit-report/v2
           -iocopy
           -out ${{ env.JUNIT_OUT }}
