@@ -31,7 +31,7 @@ import (
 // there are mutations with identical Keys and Times, exactly one of the
 // values will be chosen arbitrarily.
 //
-// The modified slice is returned.
+// A new slice is returned.
 //
 // This function will panic if any of the mutation Key fields are
 // entirely empty. An empty json array (i.e. `[]`) is acceptable.
@@ -61,7 +61,7 @@ func UniqueByKey(x []types.Mutation) []types.Mutation {
 // two mutations share the same (time, key) pair, then the one later in
 // the input slice is returned.
 //
-// The modified slice is returned.
+// A new slice is returned.
 //
 // This function will panic if any of the mutation Key fields are
 // entirely empty. An empty json array (i.e. `[]`) is acceptable.
@@ -84,6 +84,12 @@ func UniqueByTimeKey(x []types.Mutation) []types.Mutation {
 func uniqueBy[T ~[]E, E any, C comparable](
 	x T, keyFn func(e E) C, pickFn func(existing, proposed E) E,
 ) T {
+	if x == nil {
+		return nil
+	}
+	// Make a copy of the data, to avoid side-effect pollution.
+	x = append(T{}, x...)
+
 	// For any given Key, we're going to track the index in the slice
 	// that holds data for the key.
 	seenIdx := make(map[C]int, len(x))

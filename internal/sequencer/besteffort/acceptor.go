@@ -18,6 +18,7 @@ package besteffort
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/sequtil"
@@ -82,18 +83,16 @@ func (a *acceptor) AcceptTableBatch(
 		return nil
 	}
 
+	batch = batch.Empty()
+	batch.Data = attempt
+
 	// Try to apply multiple mutations in a single batch. This should
 	// generally succeed in no-FK or FK-to-reference kinds of use-cases.
-	acceptor := a.delegate
-	if len(attempt) > 1 {
-		batch = batch.Copy()
-		batch.Data = attempt
-		if err := acceptor.AcceptTableBatch(ctx, batch, &types.AcceptOptions{}); err == nil {
-			// If we can apply all mutations, then we're done.
-			appliedCount.Add(float64(len(attempt)))
-			duration.Observe(time.Since(start).Seconds())
-			return nil
-		}
+	if err := a.delegate.AcceptTableBatch(ctx, batch, &types.AcceptOptions{}); err == nil {
+		// If we can apply all mutations, then we're done.
+		appliedCount.Add(float64(len(attempt)))
+		duration.Observe(time.Since(start).Seconds())
+		return nil
 	}
 
 	// We've encountered some error that may affect one or all of the
@@ -105,14 +104,36 @@ func (a *acceptor) AcceptTableBatch(
 	// database malfunction, schema drift, etc. as long as the staging
 	// table can be written to. Overall parallelism is limited by
 	// the lockset's Runner.
-	outcomes := make([]*notify.Var[*lockset.Status], len(attempt))
-	for idx := range attempt {
-		mut := batch.Data[idx]
-		singleBatch := batch.Empty()
-		singleBatch.Data = []types.Mutation{mut}
 
+	// We need to ensure that updates to any give key remain in a
+	// time-ordered fashion. If we fail a key at T1 it needs to stay
+	// failed at any subsequent time. Poisoned keys are written directly
+	// to staging.
+	poisonedKeys := make(map[string]struct{})
+	var poisonedMu sync.RWMutex
+
+	outcomes := make([]*notify.Var[*lockset.Status], len(attempt))
+	for idx, mut := range attempt {
+		mut := mut // Capture
 		outcomes[idx] = a.scheduler.Singleton(batch.Table, mut, func() error {
-			err := acceptor.AcceptTableBatch(ctx, singleBatch, &types.AcceptOptions{
+			key := string(mut.Key)
+
+			// If another task operating on this key had to stage its
+			// mutation, we should follow suit. This ensures that we
+			// don't wind up reading an earlier value out of staging
+			// after applying a later value here.
+			poisonedMu.RLock()
+			_, poison := poisonedKeys[key]
+			poisonedMu.RUnlock()
+			if poison {
+				deferredCount.Inc()
+				return stager.Stage(ctx, a.stagingPool, []types.Mutation{mut})
+			}
+
+			// Try again to write the mutation to the target.
+			singleBatch := batch.Empty()
+			singleBatch.Data = []types.Mutation{mut}
+			err := a.delegate.AcceptTableBatch(ctx, singleBatch, &types.AcceptOptions{
 				TargetQuerier: a.targetPool,
 			})
 			if err == nil {
@@ -121,12 +142,22 @@ func (a *acceptor) AcceptTableBatch(
 				return nil
 			}
 			deferredCount.Inc()
-			// We'll suppress errors like FK constraint violations.
-			if !sequtil.IsDeferrableError(err) {
-				log.WithError(err).Warnf(
-					"staging mutation instead of target table %s key %s",
-					singleBatch.Table, string(singleBatch.Data[0].Key))
+
+			// Since we couldn't apply the mutation, we need to mark
+			// its key as bad so that any other tasks operating on this
+			// key will force it to be staged.
+			poisonedMu.Lock()
+			poisonedKeys[key] = struct{}{}
+			poisonedMu.Unlock()
+
+			level := log.WarnLevel
+			if sequtil.IsDeferrableError(err) {
+				// We'll suppress errors like FK constraint violations.
+				level = log.TraceLevel
 			}
+			log.WithError(err).Logf(level,
+				"writing mutation to staging instead of target table: %s key: %s time: %s",
+				singleBatch.Table, string(singleBatch.Data[0].Key), singleBatch.Data[0].Time)
 			if err := stager.Stage(ctx, a.stagingPool, singleBatch.Data); err != nil {
 				errCount.Inc()
 				return errors.WithStack(err)

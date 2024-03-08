@@ -43,6 +43,12 @@ type Generator struct {
 	Parent, Child     base.TableInfo[*types.TargetPool]
 	Parents, Children map[int]struct{}
 
+	// Compare data to ensure time order is maintained.
+	ParentVals, ChildVals map[int]int64
+
+	// The keys are child ids and the value the parent id.
+	ChildToParent map[int]int
+
 	ctr int
 }
 
@@ -51,7 +57,8 @@ type Generator struct {
 func NewGenerator(
 	ctx context.Context, fixture *all.Fixture,
 ) (*Generator, *types.TableGroup, error) {
-	parentInfo, err := fixture.CreateTargetTable(ctx, "CREATE TABLE %s (parent INT PRIMARY KEY)")
+	parentInfo, err := fixture.CreateTargetTable(ctx,
+		"CREATE TABLE %s (parent INT PRIMARY KEY, val INT DEFAULT 0 NOT NULL)")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -68,11 +75,14 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	}
 
 	return &Generator{
-			Child:    childInfo,
-			Children: make(map[int]struct{}),
-			Fixture:  fixture,
-			Parent:   parentInfo,
-			Parents:  make(map[int]struct{}),
+			Child:         childInfo,
+			Children:      make(map[int]struct{}),
+			ChildToParent: make(map[int]int),
+			ChildVals:     make(map[int]int64),
+			Fixture:       fixture,
+			Parent:        parentInfo,
+			Parents:       make(map[int]struct{}),
+			ParentVals:    make(map[int]int64),
 		},
 		&types.TableGroup{
 			Name:      ident.New("testing"),
@@ -85,41 +95,98 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 // CheckConsistent verifies that the staging tables are empty and that
 // the requisite number of rows exist in the target tables.
 func (g *Generator) CheckConsistent(ctx context.Context, t testing.TB) {
-	r := assert.New(t)
+	a := assert.New(t)
 
 	// Verify all mutations have been unstaged.
 	rng := g.Range()
 	staged, err := g.Fixture.PeekStaged(ctx, g.Parent.Name(), rng.Min(), rng.Max())
-	r.NoError(err)
-	r.Emptyf(staged, "staging table %s not empty", g.Parent)
+	if a.NoError(err) {
+		a.Emptyf(staged, "staging table %s not empty", g.Parent)
+	}
 	staged, err = g.Fixture.PeekStaged(ctx, g.Child.Name(), rng.Min(), rng.Max())
-	r.NoError(err)
-	r.Emptyf(staged, "staging table %s not empty", g.Child)
+	if a.NoError(err) {
+		a.Emptyf(staged, "staging table %s not empty", g.Child)
+	}
 
 	// Verify target row counts against generated data.
 	parentCount, err := g.Parent.RowCount(ctx)
-	r.NoError(err)
-	r.Equalf(len(g.Parents), parentCount, "parent %s", g.Parent.Name())
+	if a.NoError(err) {
+		a.Equalf(len(g.Parents), parentCount, "parent %s", g.Parent.Name())
+	}
 	childCount, err := g.Child.RowCount(ctx)
-	r.NoError(err)
-	r.Equal(len(g.Children), childCount, "child %s", g.Child.Name())
+	if a.NoError(err) {
+		a.Equal(len(g.Children), childCount, "child %s", g.Child.Name())
+	}
+
+	// Verify parent vals to ensure update order is maintained.
+	rows, err := g.Fixture.TargetPool.QueryContext(ctx, fmt.Sprintf(
+		"SELECT parent, val FROM %s", g.Parent.Name()))
+	if a.NoError(err) {
+		seen := 0
+		for rows.Next() {
+			seen++
+			var parent int
+			var val int64
+			if a.NoError(rows.Scan(&parent, &val)) {
+				expectedVal, ok := g.ParentVals[parent]
+				if a.Truef(ok, "unexpected parent %d", parent) {
+					a.Equalf(expectedVal, val, "parent %d val mismatch", parent)
+				}
+			}
+		}
+		// Check final error state.
+		if a.NoError(rows.Err()) {
+			a.Equal(parentCount, seen)
+		}
+	}
+	_ = rows.Close()
+
+	// Verify child parents and vals to ensure update order.
+	rows, err = g.Fixture.TargetPool.QueryContext(ctx, fmt.Sprintf(
+		"SELECT child, parent, val FROM %s", g.Child.Name()))
+	if a.NoError(err) {
+		seen := 0
+		for rows.Next() {
+			seen++
+			var child, parent int
+			var val int64
+			if a.NoError(rows.Scan(&child, &parent, &val)) {
+				expectedVal, ok := g.ChildVals[child]
+				if a.Truef(ok, "unexpected child %d", child) {
+					a.Equalf(expectedVal, val, "child %d val mismatch", child)
+				}
+				expectedParent, ok := g.ChildToParent[child]
+				if a.Truef(ok, "unexpected child %d", child) {
+					a.Equalf(expectedParent, parent, "child %d parent mismatch", child)
+				}
+			}
+		}
+		// Check final error state.
+		if a.NoError(rows.Err()) {
+			a.Equal(childCount, seen)
+		}
+	}
+	_ = rows.Close()
 }
 
 // GenerateInto will add mutations to the batch at the requested time.
 func (g *Generator) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
+	val := time.Nanos()
 	switch g.ctr % 5 {
 	case 0: // Insert a parent row
 		parent := g.pickNewParent()
+		g.ParentVals[parent] = val
 		_ = batch.Accumulate(g.Parent.Name(), types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "parent": %d }`, parent)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "parent": %d, "val": %d}`, parent, val)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, parent)),
 			Time: time,
 		})
 
 	case 1: // Update a parent row
 		parent := g.pickExistingParent()
+		g.ParentVals[parent] = val
 		_ = batch.Accumulate(g.Parent.Name(), types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "parent": %d }`, parent)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "parent": %d, "val": %d }`, parent, val)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, parent)),
 			Time: time,
 		})
@@ -127,8 +194,11 @@ func (g *Generator) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 	case 2: // Insert a child row referencing an existing parent
 		parent := g.pickExistingParent()
 		child := g.pickNewChild()
+		g.ChildVals[child] = val
+		g.ChildToParent[child] = parent
 		_ = batch.Accumulate(g.Child.Name(), types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d }`, child, parent)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d }`,
+				child, parent, val)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time: time,
 		})
@@ -136,14 +206,18 @@ func (g *Generator) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 	case 3: // Insert a new child row referencing a new parent
 		parent := g.pickNewParent()
 		_ = batch.Accumulate(g.Parent.Name(), types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "parent": %d }`, parent)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "parent": %d, "val": %d }`, parent, val)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, parent)),
 			Time: time,
 		})
+		g.ParentVals[parent] = val
 
 		child := g.pickNewChild()
+		g.ChildVals[child] = val
+		g.ChildToParent[child] = parent
 		_ = batch.Accumulate(g.Child.Name(), types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d }`, child, parent)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d }`,
+				child, parent, val)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time: time,
 		})
@@ -151,8 +225,11 @@ func (g *Generator) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 	case 4: // Re-parent an existing child
 		parent := g.pickExistingParent()
 		child := g.pickExistingChild()
+		g.ChildVals[child] = val
+		g.ChildToParent[child] = parent
 		_ = batch.Accumulate(g.Child.Name(), types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d }`, child, parent)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d }`,
+				child, parent, val)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time: time,
 		})

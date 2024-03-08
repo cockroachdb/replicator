@@ -20,7 +20,7 @@ package besteffort
 import (
 	"context"
 	"math"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
@@ -141,19 +141,20 @@ func (s *BestEffort) sweepTable(
 		_, err := stopvar.DoWhenChangedOrInterval(ctx,
 			hlc.RangeEmpty(), bounds, s.cfg.QuiescentPeriod,
 			func(ctx *stopper.Context, _, bound hlc.Range) error {
-				// The bounds will be empty in the idle on initial-backfill
-				// condition. We still want to be able to proactively sweep
-				// for mutations, so we'll invent a fake bound timestamp
-				// that won't be reported. This allows us to continue to
-				// make partial progress on staged mutations within an
-				// initial-backfill.
+				// The bounds will be empty in the idle case on an
+				// initial-backfill condition. We still want to be able
+				// to proactively sweep for mutations, so we'll invent a
+				// fake bound timestamp that won't be reported. This
+				// allows us to continue to make partial progress on
+				// staged mutations within an initial-backfill.
 				report := partialProgress
-				if bound.Empty() {
-					bound = hlc.RangeIncluding(bound.Min(), s.timeSource())
+				if bound == hlc.RangeEmpty() {
+					bound = hlc.RangeIncluding(hlc.Zero(), s.timeSource())
 					if bound.Empty() {
 						return nil
 					}
 					report = nil
+					log.Tracef("BestEffort: %s sweeping proactively %s", table, bound)
 				}
 				if err := s.sweepOnce(ctx, table, bound, acceptor, report); err != nil {
 					// We'll sleep and then retry with the same or similar bounds.
@@ -228,7 +229,11 @@ func (s *BestEffort) sweepOnce(
 	// query. Ideally, the workers started in this method will be in a
 	// position to "run behind" the worker(s) for the parent tables.
 	earliestFailed := hlc.New(math.MaxInt64, math.MaxInt)
-	failedCount := 0
+
+	// We need to ensure that updates to any give key remain in a
+	// time-ordered fashion. If we fail a key at T1 it needs to stay
+	// failed at any subsequent time that we may encounter it.
+	poisonedKeys := make(map[string]struct{})
 
 	log.Tracef("BestEffort.sweepOnce: starting %s in %s", tbl, bounds)
 	marker, err := s.stagers.Get(ctx, tbl)
@@ -255,75 +260,91 @@ func (s *BestEffort) sweepOnce(
 		q.LeaseExpiry = time.Now().Add(s.cfg.QuiescentPeriod)
 
 		// Collect some number of mutations.
-		var pending []types.Mutation
+		pending := &types.MultiBatch{}
 		q, hasMore, err = s.stagers.Unstage(ctx, s.stagingPool, q,
 			func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-				pending = append(pending, mut)
-				return nil
+				return pending.Accumulate(tbl, mut)
 			})
 		if err != nil {
 			return err
 		}
+		pendingCount := pending.Count()
 
 		stat := &Stat{}
-		stat.Attempted += len(pending)
+		stat.Attempted += pendingCount
 
-		// Just as in the acceptor, we want to try applying each
-		// mutation individually. We know that any mutation we're
-		// operating on has been deferred at least once, so using larger
-		// batches is unlikely to yield any real improvement here.
-		// We can, at least, apply the mutations in parallel.
+		// Split the large batch of data into reasonably-sized segments
+		// that can be attempted in parallel. Even though an entire
+		// segment is accepted or rejected atomically, and it would be
+		// ideal to attempt each mutation individually, there's a ~5ms
+		// minimum latency for any given database transaction. This
+		// limits our total throughput, even at high levels of SQL
+		// concurrency. Instead, we'll take a pragmatic middle ground
+		// to optimize for bulk backfill or catch-up cases.
+		//
+		// A guarantee provided by this segmentation code is that all
+		// mutations for a given key will be in the same segment. This
+		// avoids having to perform error-tracking across
+		// concurrently-executing segments.
+		segments := sequtil.SegmentTableBatches(pending, tbl, s.cfg.FlushSize)
 
-		// These accumulate the timestamps of any failed mutations.
-		// They're accessed from within the goroutines launched below.
-		// We use an atomic counter to allow non-conflicting writes into
-		// the slice of failed timestamps.
-		failedTimes := make([]hlc.Time, len(pending))
-		var failedIdx atomic.Int32
+		// Synchronize external accesses from callback below.
+		var resultMu sync.RWMutex
 
-		// This is a filter-in-place operation to retain only those
-		// mutations that were successfully applied and which we can
-		// subsequently mark as applied. Even though multiple goroutines
-		// are rewriting the slice, they never access the same index,
-		// and they're always behind the index of the initiating loop.
-		// Overall parallelism is limited by the lockset's Runner.
-		var successIdx atomic.Int32
-		outcomes := make([]*notify.Var[*lockset.Status], len(pending))
-		for idx, mut := range pending {
-			mut := mut // Capture.
-			outcomes[idx] = s.scheduler.Singleton(tbl, mut, func() error {
-				batch := &types.TableBatch{
-					Data:  []types.Mutation{mut},
-					Table: tbl,
-					Time:  mut.Time,
+		// This accumulates the mutations from segments that were
+		// successfully applied and which we can subsequently mark as
+		// applied.
+		successMuts := make([]types.Mutation, 0, pendingCount)
+
+		outcomes := make([]*notify.Var[*lockset.Status], len(segments))
+		for idx, segment := range segments {
+			segment := segment // Capture.
+			outcomes[idx] = s.scheduler.TableBatch(segment, func() error {
+				// Filter any keys poisoned by previous tasks.
+				resultMu.RLock()
+				if len(poisonedKeys) > 0 {
+					idx := 0
+					for _, mut := range segment.Data {
+						if _, poisoned := poisonedKeys[string(mut.Key)]; !poisoned {
+							segment.Data[idx] = mut
+							idx++
+						}
+					}
+					segment.Data = segment.Data[:idx]
 				}
-				err := acceptor.AcceptTableBatch(ctx, batch, &types.AcceptOptions{})
+				resultMu.RUnlock()
+
+				// Perform database access outside critical section.
+				err := acceptor.AcceptTableBatch(ctx, segment, &types.AcceptOptions{})
+
+				resultMu.Lock()
+				defer resultMu.Unlock()
+
 				// Save applied mutations to mark later.
 				if err == nil {
-					idx := successIdx.Add(1) - 1
-					pending[idx] = mut
+					successMuts = append(successMuts, segment.Data...)
 					return nil
 				}
 
-				// Record failed timestamps.
-				idx := failedIdx.Add(1) - 1
-				failedTimes[idx] = mut.Time
+				// Record failed keys and minimum timestamps.
+				for _, mut := range segment.Data {
+					poisonedKeys[string(mut.Key)] = struct{}{}
+					if hlc.Compare(mut.Time, earliestFailed) < 0 {
+						earliestFailed = mut.Time
+					}
+				}
 
-				// Ignore expected errors, we'll try again later. We'll
-				// leave the lease intact so that we might skip the
-				// mutation until a later cycle.
+				level := log.WarnLevel
 				if sequtil.IsDeferrableError(err) {
+					// We'll suppress errors like FK constraint violations.
+					level = log.TraceLevel
 					deferrals.Inc()
-					return nil
+				} else {
+					errCount.Inc()
 				}
-				// Log any other errors, they're not going to block us
-				// and we can retry later. We'll leave the lease
-				// expiration intact so that we can skip this row for a
-				// period of time.
-				log.WithError(err).Warnf(
-					"sweep: table %s; key %s; will retry mutation later",
-					tbl, string(mut.Key))
-				errCount.Inc()
+				log.WithError(err).Logf(level,
+					"BestEffort.sweepOnce: table %s; will retry %d mutations later",
+					tbl, segment.Count())
 				return nil
 			})
 		}
@@ -336,22 +357,14 @@ func (s *BestEffort) sweepOnce(
 		}
 
 		// Mark successful mutations and keep reading.
-		if idx := successIdx.Load(); idx > 0 {
-			if err := marker.MarkApplied(ctx, s.stagingPool, pending[:idx]); err != nil {
+		if len(successMuts) > 0 {
+			if err := marker.MarkApplied(ctx, s.stagingPool, successMuts); err != nil {
 				return err
 			}
-			stat.Applied += int(idx)
+			stat.Applied += len(successMuts)
 		}
 
-		// Locate earliest failed timestamp.
-		failedTimes = failedTimes[:failedIdx.Load()]
-		for _, failed := range failedTimes {
-			if hlc.Compare(failed, earliestFailed) < 0 {
-				earliestFailed = failed
-			}
-		}
-
-		if earliestFailed.Nanos() != math.MaxInt64 {
+		if len(poisonedKeys) > 0 {
 			// We failed a mutation, so we can't advance beyond the time
 			// of that mutation. Reporting this time will allow us to
 			// retry the failed mutation later.
@@ -363,7 +376,7 @@ func (s *BestEffort) sweepOnce(
 			// minimum offset within the cursor have been successfully
 			// applied.
 			stat.LastProgress = q.MinOffset().Before()
-		} else if earliestFailed.Nanos() == math.MaxInt64 {
+		} else {
 			// There are no more mutations that can be unstaged within
 			// the requested bounds. Since we've completed all possible
 			// work to perform, we can advance our progress report to
@@ -393,11 +406,10 @@ func (s *BestEffort) sweepOnce(
 		// We may have failed out too many mutations, so we'll exit
 		// early in the hopes that a short delay will allow this table
 		// to run behind its ancestor table(s).
-		failedCount += len(failedTimes)
-		if failedCount >= s.cfg.SweepLimit {
+		if len(poisonedKeys) >= s.cfg.SweepLimit {
 			sweepAbandoned.Inc()
 			log.Infof("BestEffort.sweepOnce: encountered %d failed mutations in %s; backing off",
-				failedCount, tbl)
+				len(poisonedKeys), tbl)
 			break
 		}
 	}
