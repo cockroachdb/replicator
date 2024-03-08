@@ -75,7 +75,7 @@ func (a *acceptor) AcceptMultiBatch(
 	// Break the incoming batch up into reasonably-sized chunks. We want
 	// to avoid sending hundreds of trivially-small transactions to the
 	// target.
-	segments := segmentMultiBatch(batch, a.cfg.FlushSize)
+	segments := sequtil.SegmentMultiBatch(batch, a.cfg.FlushSize)
 
 	stopCtx := stopper.From(ctx)
 

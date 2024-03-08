@@ -40,10 +40,12 @@ func TestScheduler(t *testing.T) {
 	table := ident.NewTable(ident.MustSchema(ident.New("schema")), ident.New("table"))
 
 	batch := &types.MultiBatch{}
+	tableBatch := &types.TableBatch{Table: table}
 	var lastMut types.Mutation
 	for i := 0; i < 100; i++ {
 		lastMut = <-muts
 		r.NoError(batch.Accumulate(table, lastMut))
+		tableBatch.Data = append(tableBatch.Data, lastMut)
 	}
 
 	block := make(chan struct{})
@@ -56,6 +58,10 @@ func TestScheduler(t *testing.T) {
 		<-block
 		return nil
 	})
+	tableStatus := s.TableBatch(tableBatch, func() error {
+		seen = append(seen, "table")
+		return nil
+	})
 	batchStatus := s.Batch(batch, func() error {
 		seen = append(seen, "batch")
 		return nil
@@ -65,8 +71,10 @@ func TestScheduler(t *testing.T) {
 	close(block)
 
 	// Await outcome.
-	r.NoError(lockset.Wait(ctx, []*notify.Var[*lockset.Status]{singleStatus, batchStatus}))
+	r.NoError(lockset.Wait(ctx, []*notify.Var[*lockset.Status]{
+		singleStatus, tableStatus, batchStatus,
+	}))
 
 	// Verify execution order.
-	r.Equal([]string{"single", "batch"}, seen)
+	r.Equal([]string{"single", "table", "batch"}, seen)
 }

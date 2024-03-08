@@ -65,10 +65,32 @@ func (s *Scheduler) Singleton(
 	return ret
 }
 
-// keyForSingleton prevents collisions if the same key is operated on multiple
-// times within a single sweep.
+// TableBatch executes the callback executed when it has clear access to
+// apply the mutation in the given batch.
+func (s *Scheduler) TableBatch(
+	batch *types.TableBatch, fn func() error,
+) *notify.Var[*lockset.Status] {
+	ret, _ := s.set.Schedule(
+		keyForTableBatch(batch),
+		func([]string) error {
+			executingCount.Inc()
+			defer executingCount.Dec()
+			defer executedCount.Inc()
+			return fn()
+		},
+	)
+	return ret
+}
+
+// key returns a locking key for a single mutation.
+func key(table ident.Table, mut types.Mutation) string {
+	return fmt.Sprintf("%s:%s", table, string(mut.Key))
+}
+
+// keyForSingleton prevents collisions if the same key is operated on
+// multiple times within a single sweep.
 func keyForSingleton(table ident.Table, mut types.Mutation) []string {
-	return []string{fmt.Sprintf("%s:%s", table, string(mut.Key))}
+	return []string{key(table, mut)}
 }
 
 // keyForBatch creates a locking set for all rows within the batch.
@@ -86,5 +108,15 @@ func keyForBatch(batch *types.MultiBatch) []string {
 		})
 	}
 	return ret
+}
 
+// keyForTableBatch creates a locking set for all rows within the batch.
+func keyForTableBatch(batch *types.TableBatch) []string {
+	// The keys will be deduplicated and ordered by
+	// lockset.Set.Schedule, so we don't need to worry about that here.
+	ret := make([]string, len(batch.Data))
+	for idx, mut := range batch.Data {
+		ret[idx] = key(batch.Table, mut)
+	}
+	return ret
 }
