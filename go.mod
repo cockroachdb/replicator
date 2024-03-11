@@ -33,6 +33,8 @@ require (
 	honnef.co/go/tools v0.4.7
 )
 
+require filippo.io/edwards25519 v1.1.0 // indirect
+
 require (
 	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -45,7 +47,7 @@ require (
 	github.com/emirpasic/gods v1.12.0 // indirect
 	github.com/go-logr/logr v1.3.0 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/go-sql-driver/mysql v1.7.1
+	github.com/go-sql-driver/mysql v1.8.0
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148 // indirect
 	github.com/google/pprof v0.0.0-20230926050212-f7f687d19a98 // indirect
