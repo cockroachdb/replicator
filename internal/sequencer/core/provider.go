@@ -14,28 +14,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package serial
+package core
 
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/google/wire"
 )
 
 // Set is used by Wire.
-var Set = wire.NewSet(ProvideSerial)
+var Set = wire.NewSet(ProvideCore)
 
-// ProvideSerial is called by Wire.
-func ProvideSerial(
+// ProvideCore is called by Wire.
+func ProvideCore(
 	cfg *sequencer.Config,
 	leases types.Leases,
+	scheduler *scheduler.Scheduler,
 	stagers types.Stagers,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
-) *Serial {
-	return &Serial{
+) *Core {
+	return &Core{
 		cfg:         cfg,
 		leases:      leases,
+		scheduler:   scheduler,
 		stagers:     stagers,
 		stagingPool: stagingPool,
 		targetPool:  targetPool,

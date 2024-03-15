@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package serial_test
+package core_test
 
 import (
 	"encoding/json"
@@ -31,6 +31,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,13 +43,14 @@ func TestStepByStep(t *testing.T) {
 
 	seqCfg := &sequencer.Config{
 		QuiescentPeriod: 100 * time.Millisecond,
+		Parallelism:     1,
 	}
 	r.NoError(seqCfg.Preflight())
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
 		seqCfg,
 		&script.Config{})
 	r.NoError(err)
-	serial := seqFixture.Serial
+	serial := seqFixture.Core
 
 	parentInfo, err := fixture.CreateTargetTable(ctx, "CREATE TABLE %s (parent INT PRIMARY KEY)")
 	r.NoError(err)
@@ -85,7 +87,8 @@ val INT DEFAULT 0 NOT NULL
 		}),
 		&types.AcceptOptions{},
 	))
-	peeked, err := fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err := fixture.PeekStaged(ctx, childInfo.Name(),
+		hlc.RangeIncluding(hlc.Zero(), hlc.New(100, 0)))
 	r.NoError(err)
 	r.Len(peeked, 1)
 
@@ -99,7 +102,8 @@ val INT DEFAULT 0 NOT NULL
 		}),
 		&types.AcceptOptions{},
 	))
-	peeked, err = fixture.PeekStaged(ctx, parentInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err = fixture.PeekStaged(ctx, parentInfo.Name(),
+		hlc.RangeIncluding(hlc.Zero(), hlc.New(100, 0)))
 	r.NoError(err)
 	r.Len(peeked, 1)
 
@@ -108,14 +112,15 @@ val INT DEFAULT 0 NOT NULL
 	sweepBounds.Set(hlc.RangeIncluding(hlc.Zero(), end))
 
 	// Wait for all tables to catch up to the end value.
-	stat, swept := stats.Get()
 	for {
-		if hlc.Compare(sequencer.CommonMin(stat), end) >= 0 {
+		stat, swept := stats.Get()
+		progress := sequencer.CommonProgress(stat)
+		if hlc.Compare(progress.Max(), end) >= 0 {
 			break
 		}
+		log.Infof("saw %s, waiting for %s", progress, end)
 		select {
 		case <-swept:
-			stat, swept = stats.Get()
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
 		}
@@ -128,29 +133,12 @@ val INT DEFAULT 0 NOT NULL
 	ct, err = childInfo.RowCount(ctx)
 	r.NoError(err)
 	r.Equal(1, ct)
-
-	// Demonstrate that we could still pick up unapplied mutations
-	// within the existing bounds should it be necessary.
-	r.NoError(acc.AcceptTableBatch(ctx,
-		sinktest.TableBatchOf(parentInfo.Name(), hlc.New(2, 0), []types.Mutation{
-			{
-				Data: json.RawMessage(`{"parent":2}`),
-				Key:  json.RawMessage(`[2]`),
-			},
-		}),
-		&types.AcceptOptions{},
-	))
-	sweepBounds.Notify() // Wake the loop before the timer fires.
-	<-swept
-	ct, err = parentInfo.RowCount(ctx)
-	r.NoError(err)
-	r.Equal(2, ct)
 }
 
 func TestSerial(t *testing.T) {
 	seqtest.CheckSequencer(t,
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
-			return seqFixture.Serial
+			return seqFixture.Core
 		},
 		func(t *testing.T, check *seqtest.Check) {})
 }

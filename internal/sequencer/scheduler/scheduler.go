@@ -37,7 +37,7 @@ type Scheduler struct {
 // all mutations in the given batch.
 func (s *Scheduler) Batch(batch *types.MultiBatch, fn func() error) *notify.Var[*lockset.Status] {
 	ret, _ := s.set.Schedule(
-		keyForBatch(batch),
+		keyForBatch[*types.MultiBatch](batch),
 		func([]string) error {
 			executingCount.Inc()
 			defer executingCount.Dec()
@@ -71,7 +71,24 @@ func (s *Scheduler) TableBatch(
 	batch *types.TableBatch, fn func() error,
 ) *notify.Var[*lockset.Status] {
 	ret, _ := s.set.Schedule(
-		keyForTableBatch(batch),
+		keyForBatch[*types.TableBatch](batch),
+		func([]string) error {
+			executingCount.Inc()
+			defer executingCount.Dec()
+			defer executedCount.Inc()
+			return fn()
+		},
+	)
+	return ret
+}
+
+// TemporalBatch executes the callback executed when it has clear access
+// to apply the mutations in the given batch.
+func (s *Scheduler) TemporalBatch(
+	batch *types.TemporalBatch, fn func() error,
+) *notify.Var[*lockset.Status] {
+	ret, _ := s.set.Schedule(
+		keyForBatch[*types.TemporalBatch](batch),
 		func([]string) error {
 			executingCount.Inc()
 			defer executingCount.Dec()
@@ -84,7 +101,7 @@ func (s *Scheduler) TableBatch(
 
 // key returns a locking key for a single mutation.
 func key(table ident.Table, mut types.Mutation) string {
-	return fmt.Sprintf("%s:%s", table, string(mut.Key))
+	return fmt.Sprintf("%s:%s", table, mut.Key)
 }
 
 // keyForSingleton prevents collisions if the same key is operated on
@@ -94,24 +111,11 @@ func keyForSingleton(table ident.Table, mut types.Mutation) []string {
 }
 
 // keyForBatch creates a locking set for all rows within the batch.
-func keyForBatch(batch *types.MultiBatch) []string {
-	// The keys will be deduplicated and ordered by
-	// lockset.Set.Schedule, so we don't need to worry about that here.
+func keyForBatch[B any](batch types.Batch[B]) []string {
 	var ret []string
 	_ = batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
 		ret = append(ret, keyForSingleton(table, mut)...)
 		return nil
 	}))
-	return ret
-}
-
-// keyForTableBatch creates a locking set for all rows within the batch.
-func keyForTableBatch(batch *types.TableBatch) []string {
-	// The keys will be deduplicated and ordered by
-	// lockset.Set.Schedule, so we don't need to worry about that here.
-	ret := make([]string, len(batch.Data))
-	for idx, mut := range batch.Data {
-		ret[idx] = key(batch.Table, mut)
-	}
 	return ret
 }

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -95,6 +96,7 @@ func (a *acceptor) AcceptTableBatch(
 		if err := a.delegate.AcceptTableBatch(ctx, batch, opts); err != nil {
 			return err
 		}
+		a.delay()
 		return chaos
 	}
 	return a.delegate.AcceptTableBatch(ctx, batch, opts)
@@ -111,6 +113,7 @@ func (a *acceptor) AcceptTemporalBatch(
 		if err := a.delegate.AcceptTemporalBatch(ctx, batch, opts); err != nil {
 			return err
 		}
+		a.delay()
 		return chaos
 	}
 	return a.delegate.AcceptTemporalBatch(ctx, batch, opts)
@@ -127,6 +130,7 @@ func (a *acceptor) AcceptMultiBatch(
 		if err := a.delegate.AcceptMultiBatch(ctx, batch, opts); err != nil {
 			return err
 		}
+		a.delay()
 		return chaos
 	}
 	return a.delegate.AcceptMultiBatch(ctx, batch, opts)
@@ -143,4 +147,10 @@ func (a *acceptor) chaos() error {
 		return ErrChaos
 	}
 	return nil
+}
+
+// delay exists to add jitter within the system. It can help shake loose
+// race conditions.
+func (a *acceptor) delay() {
+	time.Sleep(time.Duration(rand.Int63n(time.Millisecond.Nanoseconds())))
 }

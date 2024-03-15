@@ -37,6 +37,13 @@ type TableGroup struct {
 	Tables []ident.Table
 }
 
+// Copy returns a deep copy of the TableGroup.
+func (g *TableGroup) Copy() *TableGroup {
+	cpy := *g
+	cpy.Tables = append([]ident.Table(nil), g.Tables...)
+	return &cpy
+}
+
 // Schema returns a common schema for the group, either
 // [TableGroup.Enclosing] or a schema common to all configured tables.
 func (g *TableGroup) Schema() (ident.Schema, error) {

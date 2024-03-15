@@ -39,9 +39,9 @@ type Config struct {
 	SequencerConfig sequencer.Config
 	ScriptConfig    script.Config
 
-	// Switch between BestEffort mode and Serial or Shingle if the
-	// applied resolved timestamp is older than this threshold. A
-	// negative or zero value will disable BestEffort switching.
+	// Switch between BestEffort mode and Core if the applied resolved
+	// timestamp is older than this threshold. A negative or zero value
+	// will disable BestEffort switching.
 	BestEffortWindow time.Duration
 
 	// Force the use of BestEffort mode.
@@ -75,12 +75,12 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"use an eventually-consistent mode for initial backfill or when replication "+
 			"is behind; 0 to disable")
 	f.BoolVar(&c.BestEffortOnly, "bestEffortOnly", false,
-		"disable serial mode; useful for high throughput, skew-tolerant schemas with FKs")
+		"eventually-consistent mode; useful for high throughput, skew-tolerant schemas with FKs")
 	f.BoolVar(&c.Discard, "discard", false,
 		"(dangerous) discard all incoming HTTP requests; useful for changefeed throughput testing")
 	f.BoolVar(&c.Immediate, "immediate", false,
-		"bypass staging tables and write only to target; "+
-			"recommended only for KV-style workloads")
+		"bypass staging tables and write directly to target; "+
+			"recommended only for KV-style workloads with no FKs")
 	f.IntVar(&c.NDJsonBuffer, "ndjsonBufferSize", defaultNDJsonBuffer,
 		"the maximum amount of data to buffer while reading a single line of ndjson input; "+
 			"increase when source cluster has large blob values")

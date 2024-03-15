@@ -26,13 +26,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -169,68 +170,42 @@ type Stager interface {
 	StageIfExists(ctx context.Context, db StagingQuerier, muts []Mutation) ([]Mutation, error)
 }
 
-// UnstageCallback is provided to [Stagers.Unstage] to receive the
-// incoming data.
-type UnstageCallback func(ctx context.Context, tbl ident.Table, mut Mutation) error
+// StagingCursor is emitted by [Stagers.Read].
+type StagingCursor struct {
+	// A batch of data, corresponding to a transaction in the source
+	// database. This may be nil for a progress-only update.
+	Batch *TemporalBatch
 
-// UnstageCursor is used with Stagers.SelectMany. The After values
-// will be updated by the method, allowing callers to call Unstage
-// in a loop until it returns false.
-type UnstageCursor struct {
-	// If true, un-applied mutations with an active lease will be
-	// returned. This is intended for final cleanups and testing.
-	IgnoreLeases bool
+	// This field will be populated if the reader encounters an
+	// unrecoverable error while processing. A result containing an
+	// error will be the final message in the channel before it is
+	// closed.
+	Error error
 
-	// If non-zero, the retrieved mutations will be marked with a
-	// lease-expiration time, rather than being marked as applied.
-	// Callers making use of lease expirations must make a subsequent
-	// call to [Stagers.MarkApplied] to prevent the mutation from
-	// being applied later.
-	LeaseExpiry time.Time
+	// Fragment will be set if the Batch is not guaranteed to contain
+	// all data for its given timestamp. This will occur, for example,
+	// if the number of mutations for the timestamp exceeds
+	// [StagingQuery.FragmentSize] or if an underlying database query is
+	// not guaranteed to have yet read all values at the the batch's
+	// time (e.g. scan boundary alignment). Consumers that require
+	// transactionally-consistent views of the data should wait for the
+	// next, non-fragmented, cursor update.
+	Fragment bool
 
-	// A half-open interval: [ StartAt, EndBefore )
-	StartAt, EndBefore hlc.Time
+	// Jump indicates that the scanning bounds changed such that the
+	// data in the stream may be disjoint.
+	Jump bool
 
-	// TableOffsets is used when processing very large batches that
-	// occur within a single timestamp, to provide an additional offset
-	// for skipping already-processed rows. The implementation of
-	// [Stagers.Unstage] will automatically populate this field.
-	TableOffsets ident.TableMap[UnstageOffset]
-
-	// Targets defines the order in which data for the selected tables
-	// will be passed to the results callback.
-	Targets []ident.Table
-
-	// Limit the number of distinct MVCC timestamps that are returned.
-	// This will default to a single timestamp if unset.
-	TimestampLimit int
-
-	// Limit the number of rows that are selected from any given staging
-	// table. The total number of rows that can be emitted is the limit
-	// multiplied by the number of tables listed in Targets. This will
-	// return all rows within the selected timestamp(s) if unset.
-	UpdateLimit int
-}
-
-// MinOffset returns the common minimum of all table offsets within
-// the cursor, or StartAt.
-func (c *UnstageCursor) MinOffset() hlc.Time {
-	if len(c.Targets) != c.TableOffsets.Len() {
-		return c.StartAt
-	}
-	min := hlc.New(math.MaxInt64, math.MaxInt)
-	// Ignoring error since callback returns nil.
-	_ = c.TableOffsets.Range(func(_ ident.Table, off UnstageOffset) error {
-		if hlc.Compare(off.Time, min) < 0 {
-			min = off.Time
-		}
-		return nil
-	})
-	return min
+	// Progress indicates the range of data which has been successfully
+	// scanned so far. Receivers may encounter progress-only updates
+	// which happen when the end of the scanned bounds have been reached
+	// or if there is a "pipeline bubble" when reading data from the
+	// staging tables.
+	Progress hlc.Range
 }
 
 // String is for debugging use only.
-func (c *UnstageCursor) String() string {
+func (c *StagingCursor) String() string {
 	var buf strings.Builder
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", " ")
@@ -240,48 +215,41 @@ func (c *UnstageCursor) String() string {
 	return buf.String()
 }
 
-// UnstageOffset is used within an [UnstageCursor] to provide
-// fine-grained pagination within the records for a single table.
-type UnstageOffset struct {
-	Key  json.RawMessage
-	Time hlc.Time
-}
+// StagingQuery is passed to [Stagers.Read].
+type StagingQuery struct {
+	// The bounds variable governs the reader to ensure that it does not
+	// read beyond the data known to be consistent, by pausing reads
+	// when the maximum time has been reached. The minimum value of the
+	// bounds may be updated to optimize database scans.
+	Bounds *notify.Var[hlc.Range]
 
-func (o *UnstageOffset) String() string {
-	return fmt.Sprintf("%s @ %s", o.Key, o.Time)
-}
+	// FragmentSize places an upper bound on the size of any individual
+	// cursor entry. If a batch has exceeded the requested segment size,
+	// the [StagingCursor.Fragment] flag will be set.
+	FragmentSize int
 
-// Copy returns a copy of the cursor so that it may be updated.
-func (c *UnstageCursor) Copy() *UnstageCursor {
-	cpy := &UnstageCursor{
-		EndBefore:      c.EndBefore,
-		StartAt:        c.StartAt,
-		IgnoreLeases:   c.IgnoreLeases,
-		LeaseExpiry:    c.LeaseExpiry,
-		Targets:        make([]ident.Table, len(c.Targets)),
-		TimestampLimit: c.TimestampLimit,
-		UpdateLimit:    c.UpdateLimit,
-	}
-	c.TableOffsets.CopyInto(&cpy.TableOffsets)
-	copy(cpy.Targets, c.Targets)
-	return cpy
+	// The tables to query.
+	Group *TableGroup
 }
 
 // Stagers is a factory for Stager instances.
 type Stagers interface {
 	Get(ctx context.Context, target ident.Table) (Stager, error)
 
-	// Unstage implements an exactly-once behavior of reading staged
-	// mutations.
+	// Read provides access to joined staging data. Because this can
+	// be a potentially expensive or otherwise unbounded amount of data,
+	// the results are provided via a channel which may be incrementally
+	// consumed from buffered data. Results will be provided in temporal
+	// order.
 	//
-	// This method returns true if at least one row was returned. It
-	// will also return an updated cursor that allows a caller to resume
-	// reading.
+	// Any errors encountered while reading will be returned in the
+	// final message before closing the channel.
 	//
-	// Rows will be emitted in (time, table, key) order. As such,
-	// transaction boundaries can be detected by looking for a change in
-	// the timestamp values.
-	Unstage(ctx context.Context, tx StagingQuerier, q *UnstageCursor, fn UnstageCallback) (*UnstageCursor, bool, error)
+	// Care should be taken to [stopper.Context.Stop] the context passed
+	// into this method to prevent goroutine or database leaks. When the
+	// context is gracefully stopped, the channel will be closed
+	// normally.
+	Read(ctx *stopper.Context, q *StagingQuery) (<-chan *StagingCursor, error)
 }
 
 // ToastedColumnPlaceholder is a placeholder to identify a unchanged
