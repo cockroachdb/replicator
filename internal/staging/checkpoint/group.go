@@ -191,8 +191,8 @@ func (r *Group) TableGroup() *types.TableGroup {
 	return r.target
 }
 
-// This query locates the newest applied timestamp and returns the next
-// unapplied timestamp
+// This query computes the open checkpoint window. That is, it returns
+// the newest applied and newest unapplied checkpoint times.
 //
 // Params:
 //   - $1: target schema
@@ -200,48 +200,37 @@ func (r *Group) TableGroup() *types.TableGroup {
 //   - $3: last successful checkpoint logical
 //
 // CTE components:
-//   - pairs: Generates pairs of candidate start/end rows. The coalesce
-//     functions allow us to handle the case where there is exactly one
-//     unapplied row; we'll get the previous successful timestamp.
-//   - ideal: Selects the first pair that has an applied start time and
-//     an unapplied end time. This should be the general case when we're
-//     processing data.
-//   - complete: Handles the case where there are no unresolved
-//     timestamps remaining. This query returns an empty range
-//     beyond the final applied checkpoint.
+//   - start: The newest applied timestamp
+//   - stop: The newest unapplied timestamp (i.e. the last row)
+//
+// The top-level query uses coalesce+sub-select to provide default
+// values if either one of the CTE elements returns no rows. In the
+// bootstrap or idle case, the ($2, $3) pair will be emitted.
 const refreshTemplate = `
 WITH
-pairs AS (
-SELECT
-  COALESCE(lag(source_nanos) OVER (), $2) start_n,
-  COALESCE(lag(source_logical) OVER (), $3) start_l,
-  COALESCE(lag(target_applied_at IS NOT NULL) OVER (), true) start_applied,
-  source_nanos end_n,
-  source_logical end_l,
-  target_applied_at IS NOT NULL end_applied
- FROM %[1]s
-WHERE target_schema = $1
-  AND (source_nanos, source_logical) >= ($2, $3)
-ORDER BY source_nanos, source_logical
-),
-ideal AS (
- SELECT start_n, start_l, end_n, end_l
-  FROM pairs
- WHERE start_applied AND NOT end_applied
+start AS (
+SELECT source_nanos n, source_logical l
+  FROM %[1]s
+ WHERE target_schema = $1
+   AND (source_nanos, source_logical) >= ($2, $3)
+   AND target_applied_at IS NOT NULL
+ ORDER BY n DESC, l DESC
  LIMIT 1
 ),
-complete AS (
-SELECT
-  last_value(end_n) OVER w,
-  last_value(end_l) OVER w,
-  last_value(end_n) OVER w,
-  last_value(end_l) OVER w
-  FROM pairs
-  WHERE NOT EXISTS (SELECT * FROM ideal) AND end_applied
-  WINDOW w AS (ORDER BY end_n, end_l ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+stop AS (
+SELECT source_nanos n, source_logical l
+  FROM %[1]s
+ WHERE target_schema = $1
+   AND (source_nanos, source_logical) >= ($2, $3)
+   AND target_applied_at IS NULL
+ ORDER BY n DESC, l DESC
+ LIMIT 1
 )
-SELECT * FROM ideal UNION ALL
-SELECT * FROM complete
+SELECT 
+  COALESCE((SELECT start.n FROM start), $2),
+  COALESCE((SELECT start.l FROM start), $3),
+  COALESCE((SELECT stop.n FROM stop), $2),
+  COALESCE((SELECT stop.l FROM stop), $3)
 `
 
 // refreshBounds synchronizes the in-memory bounds with the database.

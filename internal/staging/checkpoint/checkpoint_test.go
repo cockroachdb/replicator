@@ -74,11 +74,11 @@ func TestResolved(t *testing.T) {
 		g2.Refresh()
 
 		r.NoError(stopvar.WaitForValue(ctx,
-			hlc.RangeIncluding(hlc.Zero(), hlc.New(minNanos, 0)),
+			hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos, 0)),
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
-			hlc.RangeIncluding(hlc.Zero(), hlc.New(minNanos, 0)),
+			hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos, 0)),
 			bounds2,
 		))
 	})
@@ -99,11 +99,11 @@ func TestResolved(t *testing.T) {
 		g2.Refresh()
 
 		r.NoError(stopvar.WaitForValue(ctx,
-			hlc.RangeIncluding(hlc.New(maxNanos/2, 0), hlc.New(maxNanos/2+1, 0)),
+			hlc.RangeIncluding(hlc.New(maxNanos/2, 0), hlc.New(maxNanos, 0)),
 			bounds1,
 		))
 		r.NoError(stopvar.WaitForValue(ctx,
-			hlc.RangeIncluding(hlc.New(maxNanos/2, 0), hlc.New(maxNanos/2+1, 0)),
+			hlc.RangeIncluding(hlc.New(maxNanos/2, 0), hlc.New(maxNanos, 0)),
 			bounds2))
 	})
 
@@ -147,17 +147,9 @@ func TestTransitions(t *testing.T) {
 
 	bounds := &notify.Var[hlc.Range]{}
 	expect := func(low, high int) {
-		rng := hlc.RangeEmpty()
-		if low > 0 || high > 0 {
-			var lo, hi hlc.Time
-			if low > 0 {
-				lo = hlc.New(int64(low), low)
-			}
-			if high > 0 {
-				hi = hlc.New(int64(high), high)
-			}
-			rng = hlc.RangeIncluding(lo, hi)
-		}
+		lo := hlc.New(int64(low), low)
+		hi := hlc.New(int64(high), high)
+		rng := hlc.RangeIncluding(lo, hi)
 		log.Infof("waiting for %s", rng)
 		r.NoError(stopvar.WaitForValue(ctx, rng, bounds))
 	}
@@ -203,11 +195,11 @@ func TestTransitions(t *testing.T) {
 	advance(20)
 	advance(25)
 
-	expect(5, 10)
+	expect(5, 25)
 	commit(10)
-	expect(10, 15)
+	expect(10, 25)
 	commit(15)
-	expect(15, 20)
+	expect(15, 25)
 
 	// Commit several and wait for catch up.
 	commit(20)
@@ -222,7 +214,7 @@ func TestTransitions(t *testing.T) {
 	advance(110)
 	commit(100)
 	commit(110)
-	expect(100, 105)
+	expect(110, 110)
 	commit(105)
 	expect(110, 110)
 }

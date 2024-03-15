@@ -9,12 +9,11 @@ package cdc
 import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/core"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
@@ -64,6 +63,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 		return nil, err
 	}
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
+	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
 	immediateImmediate := &immediate.Immediate{}
 	scriptConfig := ProvideScriptConfig(config)
 	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
@@ -71,9 +71,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 		return nil, err
 	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
-	shingleShingle := shingle.ProvideShingle(sequencerConfig, schedulerScheduler, stagers, stagingPool, targetPool)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, diagnostics, immediateImmediate, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
 	targets, err := ProvideTargets(context, acceptor, config, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err

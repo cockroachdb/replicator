@@ -24,11 +24,10 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/core"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
@@ -44,11 +43,10 @@ type Fixture struct {
 
 	BestEffort *besteffort.BestEffort
 	Chaos      *chaos.Chaos
+	Core       *core.Core
 	Immediate  *immediate.Immediate
 	Retire     *retire.Retire
-	Serial     *serial.Serial
 	Script     *script.Sequencer
-	Shingle    *shingle.Shingle
 	Switcher   *switcher.Switcher
 }
 
@@ -59,13 +57,11 @@ func (f *Fixture) SequencerFor(
 ) (sequencer.Sequencer, error) {
 	switch mode {
 	case switcher.ModeBestEffort:
-		return f.BestEffort, nil
+		return f.BestEffort.Wrap(ctx, f.Core)
+	case switcher.ModeConsistent:
+		return f.Core, nil
 	case switcher.ModeImmediate:
 		return f.Immediate, nil
-	case switcher.ModeSerial:
-		return f.Serial, nil
-	case switcher.ModeShingle:
-		return f.Shingle.Wrap(ctx, f.Serial)
 	default:
 		return nil, errors.Errorf("unimplemented, %s", mode)
 	}
