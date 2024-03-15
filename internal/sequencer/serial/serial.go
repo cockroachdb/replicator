@@ -55,8 +55,7 @@ var _ sequencer.Sequencer = (*Serial)(nil)
 func (s *Serial) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
-	stats := &notify.Var[sequencer.Stat]{}
-	stats.Set(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Time]{}))
+	stats := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Time]{}))
 	delegate := opts.Delegate
 
 	activeGauges := make([]prometheus.Gauge, len(opts.Group.Tables))

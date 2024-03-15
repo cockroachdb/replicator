@@ -32,8 +32,7 @@ func TestSwitcher(t *testing.T) {
 	seqtest.CheckSequencer(t,
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
 			ctx := fixture.Context
-			mode := &notify.Var[switcher.Mode]{}
-			mode.Set(switcher.ModeBestEffort)
+			mode := notify.VarOf(switcher.ModeBestEffort)
 			fixture.Context.Go(func() error {
 				for {
 					select {

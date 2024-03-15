@@ -116,3 +116,16 @@ func TestVar(t *testing.T) {
 		r.Fail("channel should be closed")
 	}
 }
+
+func TestVarOf(t *testing.T) {
+	r := require.New(t)
+
+	v := VarOf(1)
+	current, ch := v.Get()
+	r.Equal(1, current)
+	select {
+	case <-ch:
+		r.Fail("channel should be open")
+	default:
+	}
+}
