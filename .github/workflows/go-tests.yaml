@@ -135,7 +135,9 @@ jobs:
             integration: postgresql-v14
           - cockroachdb: v23.2
             integration: postgresql-v15
-
+          # Test CRDB via a Kafka cluster
+          - cockroachdb: v23.2
+            integration: kafka-v7.6
           # Test CRDB -> PostgreSQL for migration backfill use cases.
           - cockroachdb: v23.2
             target: postgresql-v11
