@@ -196,7 +196,6 @@ jobs:
         run: >
           set -o pipefail;
           go test
-          -p 4
           -count 1
           -coverpkg=./internal/...
           -covermode=atomic
