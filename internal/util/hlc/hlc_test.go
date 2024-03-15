@@ -50,6 +50,36 @@ func TestNext(t *testing.T) {
 	a.Equal(New(1, 1), New(1, 0).Next())
 }
 
+func TestContains(t *testing.T) {
+	a := assert.New(t)
+
+	zero := New(0, 0)
+	nine := New(9, 0)
+	almostTen := New(9, math.MaxInt32)
+	ten := New(10, 0)
+	tenOne := New(10, 1)
+	fifteen := New(15, 0)
+	almostTwenty := New(19, math.MaxInt32)
+	twenty := New(20, 0)
+	overTwenty := New(20, 1)
+	thirty := New(30, 0)
+	max := New(math.MaxInt64, math.MaxInt32)
+	// Create a smallest range that includes ten and twenty.
+	rng := RangeIncluding(ten, twenty)
+
+	a.False(rng.Contains(zero))
+	a.False(rng.Contains(nine))
+	a.False(rng.Contains(almostTen))
+	a.True(rng.Contains(ten))
+	a.True(rng.Contains(tenOne))
+	a.True(rng.Contains(fifteen))
+	a.True(rng.Contains(almostTwenty))
+	a.True(rng.Contains(twenty))
+	a.False(rng.Contains(overTwenty))
+	a.False(rng.Contains(thirty))
+	a.False(rng.Contains(max))
+}
+
 func TestEmpty(t *testing.T) {
 	a := assert.New(t)
 
