@@ -35,10 +35,12 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUserScriptSequencer(t *testing.T) {
+	log.SetLevel(log.TraceLevel)
 	for mode := switcher.MinMode; mode <= switcher.MaxMode; mode++ {
 		t.Run(mode.String(), func(t *testing.T) {
 			testUserScriptSequencer(t, mode)
@@ -120,6 +122,8 @@ api.configureTable("t_2", {
 		seqCfg,
 		scriptCfg)
 	r.NoError(err)
+	// Fake timestamps in use.
+	seqFixture.BestEffort.SetTimeSource(hlc.Zero)
 
 	base, err := seqFixture.SequencerFor(ctx, baseMode)
 	r.NoError(err)
@@ -160,9 +164,11 @@ api.configureTable("t_2", {
 	// Wait for (async) replication for the first table name.
 	progress, progressMade := stats.Get()
 	for {
-		if progress.Progress().GetZero(tgts[0]) == endTime {
+		targetProgress := progress.Progress().GetZero(tgts[0])
+		if hlc.Compare(targetProgress.MaxInclusive(), endTime) >= 0 {
 			break
 		}
+		log.Infof("waiting for %s, saw %s", endTime, targetProgress)
 		select {
 		case <-progressMade:
 			progress, progressMade = stats.Get()

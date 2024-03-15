@@ -88,7 +88,7 @@ func (t Time) Before() Time {
 	if t.logical > 0 {
 		return Time{t.nanos, t.logical - 1}
 	}
-	return Time{t.nanos - 1, math.MaxInt}
+	return Time{t.nanos - 1, math.MaxInt32}
 }
 
 // Logical returns the logical counter.
@@ -98,7 +98,9 @@ func (t Time) Logical() int { return t.logical }
 func (t Time) Nanos() int64 { return t.nanos }
 
 // Next returns the time plus one logical tick.
-func (t Time) Next() Time { return Time{t.nanos, t.logical + 1} }
+func (t Time) Next() Time {
+	return Time{t.nanos, t.logical + 1}
+}
 
 // MarshalJSON represents the time as a JSON string. This is used when
 // logging timestamps.

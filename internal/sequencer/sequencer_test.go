@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCommonMin(t *testing.T) {
+func TestCommonProgress(t *testing.T) {
 	r := require.New(t)
 
 	schema := ident.MustSchema(ident.New("foo"), ident.New("bar"))
@@ -36,20 +36,20 @@ func TestCommonMin(t *testing.T) {
 		},
 	}
 
-	progress := &ident.TableMap[hlc.Time]{}
+	progress := &ident.TableMap[hlc.Range]{}
 	stat := NewStat(group, progress)
 
 	// Nil case.
-	r.Equal(hlc.Zero(), CommonMin(nil))
+	r.Equal(hlc.RangeEmpty(), CommonProgress(nil))
 
 	// Empty case.
-	r.Equal(hlc.Zero(), CommonMin(stat))
+	r.Equal(hlc.RangeEmpty(), CommonProgress(stat))
 
 	// One table with no progress.
-	progress.Put(group.Tables[0], hlc.New(1, 1))
-	r.Equal(hlc.Zero(), CommonMin(stat))
+	progress.Put(group.Tables[0], hlc.RangeIncluding(hlc.Zero(), hlc.New(1, 1)))
+	r.Equal(hlc.RangeEmpty(), CommonProgress(stat))
 
 	// All tables have progress.
-	progress.Put(group.Tables[1], hlc.New(2, 1))
-	r.Equal(hlc.New(1, 1), CommonMin(stat))
+	progress.Put(group.Tables[1], hlc.RangeIncluding(hlc.Zero(), hlc.New(2, 1)))
+	r.Equal(hlc.RangeIncluding(hlc.Zero(), hlc.New(1, 1)), CommonProgress(stat))
 }

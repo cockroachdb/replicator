@@ -57,7 +57,7 @@ const (
 	testModeDiff = 1 << iota
 	testModeImmediate
 	testModeQueries
-	testModeShingle
+	testModeParallel
 	testModeWebhook
 
 	testModeMax // Sentinel value
@@ -66,7 +66,7 @@ const (
 type testConfig struct {
 	diff      bool
 	immediate bool
-	shingle   bool
+	parallel  bool
 	queries   bool
 	webhook   bool
 }
@@ -88,8 +88,8 @@ func (c *testConfig) String() string {
 	} else {
 		sb.WriteString(" tables")
 	}
-	if c.shingle {
-		sb.WriteString(" shingle")
+	if c.parallel {
+		sb.WriteString(" parallel")
 	} else {
 		sb.WriteString(" serial")
 	}
@@ -114,7 +114,7 @@ func TestIntegration(t *testing.T) {
 			diff:      i&testModeDiff == testModeDiff,
 			immediate: i&testModeImmediate == testModeImmediate,
 			queries:   i&testModeQueries == testModeQueries,
-			shingle:   i&testModeShingle == testModeShingle,
+			parallel:  i&testModeParallel == testModeParallel,
 			webhook:   i&testModeWebhook == testModeWebhook,
 		}
 	}
@@ -185,7 +185,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 			},
 		},
 	}
-	if cfg.shingle {
+	if cfg.parallel {
 		serverCfg.CDC.SequencerConfig.Parallelism = 4
 	} else {
 		serverCfg.CDC.SequencerConfig.Parallelism = 1

@@ -52,7 +52,7 @@ func TestScheduler(t *testing.T) {
 	var seen []string
 	var s Scheduler
 
-	// This single task should block the batch.
+	// This single task executes first, and blocks the following tasks.
 	singleStatus := s.Singleton(table, lastMut, func() error {
 		seen = append(seen, "single")
 		<-block
@@ -60,6 +60,10 @@ func TestScheduler(t *testing.T) {
 	})
 	tableStatus := s.TableBatch(tableBatch, func() error {
 		seen = append(seen, "table")
+		return nil
+	})
+	temporalStatus := s.TemporalBatch(batch.Data[0], func() error {
+		seen = append(seen, "temporal")
 		return nil
 	})
 	batchStatus := s.Batch(batch, func() error {
@@ -72,9 +76,9 @@ func TestScheduler(t *testing.T) {
 
 	// Await outcome.
 	r.NoError(lockset.Wait(ctx, []*notify.Var[*lockset.Status]{
-		singleStatus, tableStatus, batchStatus,
+		singleStatus, tableStatus, temporalStatus, batchStatus,
 	}))
 
 	// Verify execution order.
-	r.Equal([]string{"single", "table", "batch"}, seen)
+	r.Equal([]string{"single", "table", "temporal", "batch"}, seen)
 }

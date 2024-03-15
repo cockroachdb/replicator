@@ -40,37 +40,4 @@ var (
 		Name: "best_effort_accept_error_count",
 		Help: "number of errors encountered while apply or staging for later sweeping",
 	}, metrics.TableLabels)
-	sweepActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "best_effort_sweep_active_bool",
-		Help: "non-zero if this instance of cdc-sink is processing the table",
-	}, metrics.TableLabels)
-	sweepAbandonedCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "best_effort_sweep_abandoned_count",
-		Help: "number of sweep attempts that were abandoned early due to too many un-appliable mutations",
-	}, metrics.TableLabels)
-	sweepAttemptedCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "best_effort_sweep_attempt_count",
-		Help: "number of mutations found during cleanup sweep",
-	}, metrics.TableLabels)
-	sweepAppliedCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "best_effort_sweep_apply_count",
-		Help: "number of mutations applied during cleanup sweep",
-	}, metrics.TableLabels)
-	sweepDeferrals = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "best_effort_sweep_deferral_count",
-		Help: "applies that were deferred during cleanup sweeps due to FK constraints",
-	}, metrics.TableLabels)
-	sweepErrors = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "best_effort_sweep_error_count",
-		Help: "applies that errored out during cleanup sweeps",
-	}, metrics.TableLabels)
-	sweepDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "best_effort_sweep_duration_seconds",
-		Help:    "the length of time it took to look for and apply staged mutations",
-		Buckets: metrics.LatencyBuckets,
-	}, metrics.TableLabels)
-	sweepLastAttempt = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "best_effort_sweep_attempt_timestamp_seconds",
-		Help: "the wall time at which a sweep attempt was last tried",
-	}, metrics.TableLabels)
 )
