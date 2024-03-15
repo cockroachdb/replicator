@@ -29,6 +29,7 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/cmd/dumphelp"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/dumptemplates"
+	"github.com/cockroachdb/cdc-sink/internal/cmd/kafka"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/licenses"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mkjwt"
 	"github.com/cockroachdb/cdc-sink/internal/cmd/mylogical"
@@ -105,6 +106,7 @@ func main() {
 	root.AddCommand(
 		dumphelp.Command(),
 		dumptemplates.Command(),
+		kafka.Command(),
 		licenses.Command(),
 		mkjwt.Command(),
 		mylogical.Command(),
