@@ -124,6 +124,8 @@ jobs:
           - cockroachdb: v23.2
             target: oracle-v21.3
             targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
+          - cockroachdb: v23.2
+            integration: kafka-v7.6
 
           # Test CRDB -> PostgreSQL for migration backfill use cases.
           - cockroachdb: v23.2

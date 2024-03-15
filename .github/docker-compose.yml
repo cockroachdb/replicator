@@ -73,6 +73,26 @@ services:
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5401 --http-addr :8082
 
+  # Single broker kafka cluster
+  kafka-v7.6:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper-v7.6
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-v7.6:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-v7.6:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  zookeeper-v7.6:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    
   mysql-v5.7:
     image: mysql:5.7
     platform: linux/x86_64
