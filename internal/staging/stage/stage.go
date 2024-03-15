@@ -90,12 +90,11 @@ CREATE TABLE IF NOT EXISTS %[1]s (
       mut BYTES NOT NULL,
    before BYTES NULL,
   applied BOOL NOT NULL DEFAULT false,
-    lease TIMESTAMP NULL,
   %[2]s
   PRIMARY KEY (nanos, logical, key),
     INDEX %[3]s (key) STORING (applied), -- Improve performance of StageIfExists
    FAMILY cold (mut, before),
-   FAMILY hot (applied, lease)
+   FAMILY hot (applied)
 )`
 
 // newStage constructs a new mutation stage that will track pending
@@ -128,11 +127,6 @@ func newStage(
 	log.Tracef("upgrading schema for %s", table)
 	if err := retry.Execute(ctx, db, fmt.Sprintf(`
 ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
-`, table)); err != nil {
-		return nil, errors.WithStack(err)
-	}
-	if err := retry.Execute(ctx, db, fmt.Sprintf(`
-ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS lease TIMESTAMP NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -407,7 +401,7 @@ func (s *stage) stageOneBatch(
 
 const markAppliedTemplate = `
 WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
-UPDATE %s x SET applied=true, lease=NULL
+UPDATE %s x SET applied=true
 FROM t
 WHERE (x.key, x.nanos, x.logical) = (t.key, t.nanos, t.logical) 
 `

@@ -35,6 +35,12 @@ func RangeEmptyAt(ts Time) Range {
 	return Range{ts, ts}
 }
 
+// RangeExcluding returns a Range that includes the start time and
+// excludes the end time.
+func RangeExcluding(startInclusive, endExclusive Time) Range {
+	return Range{startInclusive, endExclusive}
+}
+
 // RangeIncluding returns the smallest range that includes both the
 // start and end times.
 func RangeIncluding(start, end Time) Range {

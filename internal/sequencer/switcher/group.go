@@ -127,14 +127,11 @@ func (g *groupSequencer) switchModeLocked(
 	var nextSeq sequencer.Sequencer
 	switch next {
 	case ModeBestEffort:
-		nextSeq = g.bestEffort
+		nextSeq, err = g.bestEffort.Wrap(ctx, g.core)
 	case ModeImmediate:
 		nextSeq = g.immediate
-	case ModeSerial:
-		nextSeq = g.serial
-	case ModeShingle:
-		// Will return the delegate if parallelism == 1.
-		nextSeq, err = g.shingle.Wrap(ctx, g.serial)
+	case ModeConsistent:
+		nextSeq = g.core
 	default:
 		err = errors.Errorf("unimplemented: %v", next)
 	}

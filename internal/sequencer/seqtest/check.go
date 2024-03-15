@@ -17,6 +17,7 @@
 package seqtest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// CheckFlag describes the range of configurations to be tested. See
+// [CheckFlags].
+type CheckFlag int
+
+const (
+	checkStage CheckFlag = 1 << iota
+	checkChaos
+
+	checkMax           // Sentinel
+	checkMin CheckFlag = 0
+)
+
+// CheckFlags returns all check combinations.
+func CheckFlags() []CheckFlag {
+	var ret []CheckFlag
+	for i := checkMin; i < checkMax; i++ {
+		ret = append(ret, i)
+	}
+	return ret
+}
+
+func (f CheckFlag) String() string {
+	var sb strings.Builder
+	if f&checkStage == checkStage {
+		sb.WriteString("stage")
+	} else {
+		sb.WriteString("direct")
+	}
+	if f&checkChaos == checkChaos {
+		sb.WriteString("-chaos")
+	}
+	return sb.String()
+}
+
 // CheckSequencer implements a general-purpose smoke test of a
 // [sequencer.Sequencer] implementation. The sequencer must
 // support foreign-key relationships. The post-hook may be nil.
@@ -42,8 +77,8 @@ func CheckSequencer(
 	pre func(t *testing.T, fixture *all.Fixture, seqFixture *Fixture) sequencer.Sequencer,
 	post func(t *testing.T, check *Check),
 ) {
-	const batches = 100
-	check := func(t *testing.T, stage bool, addChaos bool) {
+	const batches = 1_000
+	check := func(t *testing.T, flags CheckFlag) {
 		r := require.New(t)
 
 		fixture, err := all.NewFixture(t)
@@ -55,15 +90,16 @@ func CheckSequencer(
 			FlushSize:       batches/10 + 1,
 			Parallelism:     8,
 			QuiescentPeriod: 100 * time.Millisecond,
+			ScanSize:        batches/5 + 1,
 			TimestampLimit:  batches/10 + 1,
-			SweepLimit:      batches/10 + 1,
 		}
+		r.NoError(cfg.Preflight())
 
 		seqFixture, err := NewSequencerFixture(fixture, cfg, &script.Config{})
 		r.NoError(err)
 
 		seq := pre(t, fixture, seqFixture)
-		if addChaos {
+		if flags&checkChaos == checkChaos {
 			cfg.Chaos = 0.1
 			seq, err = seqFixture.Chaos.Wrap(ctx, seq)
 			r.NoError(err)
@@ -72,7 +108,7 @@ func CheckSequencer(
 			Batches:   batches,
 			Fixture:   fixture,
 			Sequencer: seq,
-			Stage:     stage,
+			Stage:     flags&checkStage == checkStage,
 		}
 		basic.Check(ctx, t)
 		if post != nil {
@@ -80,18 +116,11 @@ func CheckSequencer(
 		}
 	}
 
-	t.Run("direct", func(t *testing.T) {
-		check(t, false, false)
-	})
-	t.Run("direct-chaos", func(t *testing.T) {
-		check(t, false, true)
-	})
-	t.Run("staged", func(t *testing.T) {
-		check(t, true, false)
-	})
-	t.Run("staged-chaos", func(t *testing.T) {
-		check(t, true, true)
-	})
+	for _, flag := range CheckFlags() {
+		t.Run(flag.String(), func(t *testing.T) {
+			check(t, flag)
+		})
+	}
 }
 
 // Check implements a reusable test over a parent/child table pair.
@@ -116,36 +145,37 @@ type Check struct {
 }
 
 // Check generates data and verifies that it reaches the target tables.
-func (b *Check) Check(ctx *stopper.Context, t testing.TB) {
+func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
 	r := require.New(t)
 
-	generator, group, err := NewGenerator(ctx, b.Fixture)
+	generator, group, err := NewGenerator(ctx, c.Fixture)
 	r.NoError(err)
-	b.Group = group
+	c.Group = group
 
-	seqAcc, stats, err := b.Sequencer.Start(ctx, &sequencer.StartOptions{
-		Bounds:   &b.Bounds,
-		Delegate: types.OrderedAcceptorFrom(b.Fixture.ApplyAcceptor, b.Fixture.Watchers),
+	startOpts := &sequencer.StartOptions{
+		Bounds:   &c.Bounds,
+		Delegate: types.OrderedAcceptorFrom(c.Fixture.ApplyAcceptor, c.Fixture.Watchers),
 		Group:    group,
-	})
+	}
+	seqAcc, stats, err := c.Sequencer.Start(ctx, startOpts)
 	r.NoError(err)
-	b.Acceptor = seqAcc
+	c.Acceptor = seqAcc
 
 	now := time.Now()
 	testData := &types.MultiBatch{}
-	for i := 0; i < b.Batches; i++ {
+	for i := 0; i < c.Batches; i++ {
 		generator.GenerateInto(testData, hlc.New(int64(i+1), 0))
 	}
 
-	if b.Stage {
+	if c.Stage {
 		// Apply data to the staging table, to test sweeping behavior.
 		for _, temporal := range testData.Data {
 			r.NoError(temporal.Data.Range(func(table ident.Table, batch *types.TableBatch) error {
-				stager, err := b.Fixture.Stagers.Get(ctx, table)
+				stager, err := c.Fixture.Stagers.Get(ctx, table)
 				if err != nil {
 					return err
 				}
-				return stager.Stage(ctx, b.Fixture.StagingPool, batch.Data)
+				return stager.Stage(ctx, c.Fixture.StagingPool, batch.Data)
 			}))
 		}
 	} else {
@@ -173,7 +203,7 @@ func (b *Check) Check(ctx *stopper.Context, t testing.TB) {
 	log.Infof("accepted data in %s", time.Since(now))
 
 	// Set desired range.
-	b.Bounds.Set(generator.Range())
+	c.Bounds.Set(generator.Range())
 	r.NoError(err)
 
 	// Wait to catch up.

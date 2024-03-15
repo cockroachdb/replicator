@@ -389,7 +389,11 @@ func CreateSchema[P types.AnyPool](
 		default:
 			// nothing to do.
 		}
-		err := retry.Execute(ctx, pool, fmt.Sprintf("DROP DATABASE IF EXISTS %s %s", name, option))
+		// Called from stopper.Context.Defer, so we must use Background.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		err := retry.Execute(ctx, pool,
+			fmt.Sprintf("DROP DATABASE IF EXISTS %s %s", name, option))
 		log.WithError(err).WithField("target", name).Debug("dropped database")
 	}
 	ctx.Defer(cancel)

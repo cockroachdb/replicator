@@ -29,7 +29,7 @@ func TestBefore(t *testing.T) {
 	a := assert.New(t)
 
 	a.Equal(Time{1, 0}, Time{1, 1}.Before())
-	a.Equal(Time{1, math.MaxInt}, Time{2, 0}.Before())
+	a.Equal(Time{1, math.MaxInt32}, Time{2, 0}.Before())
 }
 
 func TestCompare(t *testing.T) {

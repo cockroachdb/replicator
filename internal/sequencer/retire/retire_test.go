@@ -17,7 +17,6 @@
 package retire_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -43,7 +42,6 @@ func TestRetire(t *testing.T) {
 		&sequencer.Config{
 			Parallelism:     2,
 			QuiescentPeriod: time.Second,
-			SweepLimit:      1000,
 		},
 		&script.Config{})
 	r.NoError(err)
@@ -77,25 +75,13 @@ func TestRetire(t *testing.T) {
 	r.NoError(err)
 	r.NoError(stager.Stage(ctx, fixture.StagingPool, muts))
 
-	// Unstage mutations, marking them as applied.
-	unstaged := 0
-	_, _, err = fixture.Stagers.Unstage(ctx,
-		fixture.StagingPool,
-		&types.UnstageCursor{
-			StartAt:        hlc.New(unstageStart, 0),
-			EndBefore:      hlc.New(unstageStart+unstageCount, 0),
-			Targets:        []ident.Table{tblInfo.Name()},
-			TimestampLimit: 100,
-		},
-		func(ctx context.Context, tbl ident.Table, mut types.Mutation) error {
-			unstaged++
-			return nil
-		})
-	r.NoError(err)
-	r.Equal(unstageCount, unstaged)
+	// Mark some as applied.
+	r.NoError(stager.MarkApplied(ctx, fixture.StagingPool,
+		muts[unstageStart:unstageStart+unstageCount]))
 
 	// Ensure desired behavior from API and backing table.
-	staged, err := fixture.PeekStaged(ctx, tblInfo.Name(), hlc.Zero(), hlc.New(rowcount*2, 0))
+	staged, err := fixture.PeekStaged(ctx, tblInfo.Name(),
+		hlc.RangeIncluding(hlc.Zero(), hlc.New(rowcount*2, 0)))
 	r.NoError(err)
 	r.Len(staged, rowcount-unstageCount)
 

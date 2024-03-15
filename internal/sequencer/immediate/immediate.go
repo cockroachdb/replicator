@@ -39,7 +39,7 @@ var _ sequencer.Sequencer = (*Immediate)(nil)
 func (i *Immediate) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
-	ret := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Time]{}))
+	ret := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
 
 	// Set each table's progress to the end of the bounds. This
 	// will allow the checkpointer to clean up resolved timestamps.
@@ -53,11 +53,9 @@ func (i *Immediate) Start(
 
 				// Show each table in the group as having advanced to
 				// the end of the resolving range.
-				nextProgress := &ident.TableMap[hlc.Time]{}
+				nextProgress := &ident.TableMap[hlc.Range]{}
 				for _, table := range opts.Group.Tables {
-					// The end of the range is exclusive, so we can
-					// only show progress to one tick before.
-					nextProgress.Put(table, new.MaxInclusive())
+					nextProgress.Put(table, new)
 				}
 				ret.Set(sequencer.NewStat(opts.Group, nextProgress))
 				return nil

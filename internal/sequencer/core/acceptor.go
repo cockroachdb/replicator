@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package serial
+package core
 
 import (
 	"context"
@@ -24,8 +24,9 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 )
 
+// An acceptor writes incoming data to staging.
 type acceptor struct {
-	*Serial
+	*Core
 }
 
 var _ types.MultiAcceptor = (*acceptor)(nil)

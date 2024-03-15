@@ -24,7 +24,6 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/seqtest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
@@ -82,7 +81,9 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		Tables: []ident.Table{parentInfo.Name(), childInfo.Name()},
 	}
 
-	acc, stats, err := bestEffort.Start(sweepStopper, &sequencer.StartOptions{
+	seq, err := bestEffort.Wrap(ctx, seqFixture.Core)
+	r.NoError(err)
+	acc, stats, err := seq.Start(sweepStopper, &sequencer.StartOptions{
 		Bounds:   sweepBounds,
 		Delegate: types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
 		Group:    group,
@@ -99,7 +100,8 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		}),
 		&types.AcceptOptions{},
 	))
-	peeked, err := fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	maxBounds := hlc.RangeIncluding(hlc.Zero(), hlc.New(100, 0))
+	peeked, err := fixture.PeekStaged(ctx, childInfo.Name(), maxBounds)
 	r.NoError(err)
 	r.Len(peeked, 1)
 	r.Equal(json.RawMessage(`[1]`), peeked[0].Key)
@@ -133,7 +135,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	r.NoError(err)
 	r.Equal(1, ct)
 	// Still expect child row 1 to be staged.
-	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), maxBounds)
 	r.NoError(err)
 	r.Len(peeked, 1)
 	r.Equal(json.RawMessage(`[1]`), peeked[0].Key)
@@ -148,7 +150,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		}),
 		&types.AcceptOptions{},
 	))
-	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), maxBounds)
 	r.NoError(err)
 	r.Len(peeked, 2)
 	for _, mut := range peeked {
@@ -169,7 +171,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		}),
 		&types.AcceptOptions{},
 	))
-	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), maxBounds)
 	r.NoError(err)
 	r.Len(peeked, 3)
 	for _, mut := range peeked {
@@ -190,7 +192,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		}),
 		&types.AcceptOptions{},
 	))
-	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), maxBounds)
 	r.NoError(err)
 	r.Len(peeked, 3)
 	for _, mut := range peeked {
@@ -211,7 +213,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		}),
 		&types.AcceptOptions{},
 	))
-	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), maxBounds)
 	r.NoError(err)
 	r.Len(peeked, 5)
 
@@ -220,8 +222,8 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	// Wait until the background process has caught for all tables.
 	sweepProgress, swept := stats.Get()
 	for {
-		progress := sequencer.CommonMin(sweepProgress)
-		done := hlc.Compare(progress, hlc.New(5, 0)) >= 0
+		progress := sequencer.CommonProgress(sweepProgress)
+		done := hlc.Compare(progress.Max(), hlc.New(5, 0)) >= 0
 		if done {
 			break
 		}
@@ -232,16 +234,10 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 		case <-ctx.Done():
 		}
 	}
-	// This stat is a running total across potentially multiple
-	// iterations. It's safe to check Applied, but the number of
-	// attempts is unpredictable, although it will always be at least
-	// the number of potential records.
-	r.Equal(3, sweepProgress.(*besteffort.Stat).Applied)
-	r.GreaterOrEqual(sweepProgress.(*besteffort.Stat).Attempted, 3)
 
 	// Examine the remaining staged values. We should see the entries
 	// with parent:2.
-	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), hlc.Zero(), hlc.New(100, 0))
+	peeked, err = fixture.PeekStaged(ctx, childInfo.Name(), maxBounds)
 	r.NoError(err)
 	r.Len(peeked, 2)
 	ct, err = childInfo.RowCount(ctx)
@@ -259,7 +255,9 @@ func TestBestEffort(t *testing.T) {
 			// We only want BestEffort to do work when told; the test
 			// rig uses a counter to generate timestamps.
 			seqFixture.BestEffort.SetTimeSource(hlc.Zero)
-			return seqFixture.BestEffort
+			next, err := seqFixture.BestEffort.Wrap(fixture.Context, seqFixture.Core)
+			require.NoError(t, err)
+			return next
 		},
 		func(t *testing.T, check *seqtest.Check) {})
 }

@@ -18,6 +18,7 @@ package switcher_test
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/seqtest"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 )
 
@@ -32,16 +34,24 @@ func TestSwitcher(t *testing.T) {
 	seqtest.CheckSequencer(t,
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
 			ctx := fixture.Context
-			mode := notify.VarOf(switcher.ModeBestEffort)
+			// Ensure we cove both startup cases in CI.
+			var initial switcher.Mode
+			if rand.Float32() < 0.5 {
+				initial = switcher.ModeBestEffort
+			} else {
+				initial = switcher.ModeConsistent
+			}
+			mode := notify.VarOf(initial)
+			seqFixture.BestEffort.SetTimeSource(hlc.Zero) // The test rig uses fake timestamps.
 			fixture.Context.Go(func() error {
 				for {
 					select {
-					case <-time.After(100 * time.Millisecond):
+					case <-time.After(time.Second):
 						_, _, _ = mode.Update(func(mode switcher.Mode) (switcher.Mode, error) {
 							switch mode {
 							case switcher.ModeBestEffort:
-								return switcher.ModeShingle, nil
-							case switcher.ModeShingle:
+								return switcher.ModeConsistent, nil
+							case switcher.ModeConsistent:
 								return switcher.ModeBestEffort, nil
 							default:
 								panic(fmt.Sprintf("unexpected state %s", mode))
