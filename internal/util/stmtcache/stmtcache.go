@@ -92,13 +92,19 @@ func (c *Cache[T]) Prepare(
 }
 
 func (c *Cache[T]) get(ctx context.Context, key T, gen func() (string, error)) (*sql.Stmt, error) {
+	// It's an LRU cache. Calling Get will alter memory.
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if found, ok := c.mu.cache.Get(key); ok {
+	found, ok := c.mu.cache.Get(key)
+	c.mu.Unlock()
+	if ok {
+		c.hits.Inc()
 		return found.(*sql.Stmt), nil
 	}
 
+	// We'll generate and prepare the statement outside a critical
+	// region, since this can take an arbitrarily long amount of time.
+	// If we prepare the same statement twice, that's OK.
+	c.misses.Inc()
 	q, err := gen()
 	if err != nil {
 		return nil, err
@@ -108,6 +114,9 @@ func (c *Cache[T]) get(ctx context.Context, key T, gen func() (string, error)) (
 	if err != nil {
 		return nil, errors.Wrap(err, q)
 	}
+
+	c.mu.Lock()
 	c.mu.cache.Add(key, stmt)
+	c.mu.Unlock()
 	return stmt, nil
 }
