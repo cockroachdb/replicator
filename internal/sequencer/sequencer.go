@@ -59,60 +59,62 @@ type Shim interface {
 
 // StartOptions is passed to [Sequencer.Start].
 type StartOptions struct {
-	Bounds   *notify.Var[hlc.Range] // Control the range of eligible timestamps.
-	Delegate types.MultiAcceptor    // The acceptor to use when continuing to process mutations.
-	Group    *types.TableGroup      // The tables that should be operated on.
+	Bounds      *notify.Var[hlc.Range] // Control the range of eligible timestamps.
+	Delegate    types.MultiAcceptor    // The acceptor to use when continuing to process mutations.
+	Group       *types.TableGroup      // The tables that should be operated on.
+	MaxDeferred int                    // Back off after deferring this many mutations.
 }
 
-// Copy returns a shallow copy of the options.
+// Copy returns a deep copy of the options.
 func (o *StartOptions) Copy() *StartOptions {
 	ret := *o
+	ret.Group = ret.Group.Copy()
 	return &ret
 }
 
 // Stat is an interface to allow for more specialized types to aid in
 // testing.
 type Stat interface {
-	Copy() Stat                          // Copy returns a deep copy of the Stat.
-	Group() *types.TableGroup            // The TableGroup that was passed to [Sequencer.Start].
-	Progress() *ident.TableMap[hlc.Time] // The times to which the members of the group have advanced.
+	Copy() Stat                           // Copy returns a deep copy of the Stat.
+	Group() *types.TableGroup             // The TableGroup that was passed to [Sequencer.Start].
+	Progress() *ident.TableMap[hlc.Range] // The times to which the members of the group have advanced.
 }
 
 // NewStat constructs a basic Stat.
-func NewStat(group *types.TableGroup, progress *ident.TableMap[hlc.Time]) Stat {
+func NewStat(group *types.TableGroup, progress *ident.TableMap[hlc.Range]) Stat {
 	return &stat{group, progress}
 }
 
-// CommonMin is a returns the minimum [hlc.Time] across all tables
+// CommonProgress is a returns the minimum progress across all tables
 // within the [Stat.Group]. If no progress has been made for one or more
-// tables in the group, [hlc.Zero] will be returned.
-func CommonMin(s Stat) hlc.Time {
+// tables in the group, [hlc.RangeEmpty] will be returned.
+func CommonProgress(s Stat) hlc.Range {
 	if s == nil {
-		return hlc.Zero()
+		return hlc.RangeEmpty()
 	}
 	group := s.Group()
 	progress := s.Progress()
 
-	commonMin := hlc.New(math.MaxInt64, math.MaxInt)
+	commonMax := hlc.New(math.MaxInt64, math.MaxInt)
 	for _, table := range group.Tables {
 		ts, ok := progress.Get(table)
 		if !ok {
-			return hlc.Zero()
+			return hlc.RangeEmpty()
 		}
-		if hlc.Compare(ts, commonMin) < 0 {
-			commonMin = ts
+		if hlc.Compare(ts.Max(), commonMax) < 0 {
+			commonMax = ts.Max()
 		}
 	}
-	return commonMin
+	return hlc.RangeExcluding(hlc.Zero(), commonMax)
 }
 
 type stat struct {
 	group    *types.TableGroup
-	progress *ident.TableMap[hlc.Time]
+	progress *ident.TableMap[hlc.Range]
 }
 
 func (s *stat) Copy() Stat {
-	nextProgress := &ident.TableMap[hlc.Time]{}
+	nextProgress := &ident.TableMap[hlc.Range]{}
 	s.progress.CopyInto(nextProgress)
 	return &stat{
 		group:    s.group,
@@ -120,5 +122,5 @@ func (s *stat) Copy() Stat {
 	}
 }
 
-func (s *stat) Group() *types.TableGroup            { return s.group }
-func (s *stat) Progress() *ident.TableMap[hlc.Time] { return s.progress }
+func (s *stat) Group() *types.TableGroup             { return s.group }
+func (s *stat) Progress() *ident.TableMap[hlc.Range] { return s.progress }

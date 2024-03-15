@@ -23,6 +23,31 @@ import (
 )
 
 var (
+	stageMergeLag = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "stage_merge_lag_seconds",
+		Help: "the difference between wall time and the table merge operator progress",
+	}, metrics.SchemaLabels)
+	stageMergeQueue = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "stage_merge_queue_count",
+		Help: "the depth of the staging merge output queue",
+	}, metrics.SchemaLabels)
+	stageReadLag = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "stage_read_lag_seconds",
+		Help: "the difference between wall time and the table reader progress",
+	}, metrics.TableLabels)
+	stageReadRows = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_read_rows",
+		Help: "the number of rows read from staging",
+	}, metrics.TableLabels)
+	stageReadDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "stage_read_duration_seconds",
+		Help:    "the length of time it took to successfully retrieve a page of staged mutations",
+		Buckets: metrics.LatencyBuckets,
+	}, metrics.TableLabels)
+	stageReadQueue = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "stage_read_queue_count",
+		Help: "the depth of the table reader output queue",
+	}, metrics.TableLabels)
 	stageRetireDurations = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stage_retire_duration_seconds",
 		Help:    "the length of time it took to successfully retire applied mutations",

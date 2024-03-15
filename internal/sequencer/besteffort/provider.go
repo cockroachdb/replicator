@@ -48,7 +48,11 @@ func ProvideBestEffort(
 		stagingPool: stagingPool,
 		stagers:     stagers,
 		targetPool:  targetPool,
-		timeSource:  func() hlc.Time { return hlc.New(time.Now().UnixNano(), 0) },
-		watchers:    watchers,
+		timeSource: func() hlc.Time {
+			// Allow synthetic timestamps to be created at a reasonable
+			// point in the past, in the absence of any checkpoints.
+			return hlc.New(time.Now().Add(-time.Minute).UnixNano(), 0)
+		},
+		watchers: watchers,
 	}
 }

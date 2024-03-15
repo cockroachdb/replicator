@@ -24,11 +24,12 @@ import (
 
 // Defaults for flag bindings.
 const (
+	DefaultFlushPeriod     = 1 * time.Millisecond
 	DefaultFlushSize       = 1_000
 	DefaultParallelism     = 16
 	DefaultQuiescentPeriod = 10 * time.Second
 	DefaultRetireOffset    = 24 * time.Hour
-	DefaultSweepLimit      = 10_000
+	DefaultScanSize        = 10_000
 	DefaultTimestampLimit  = 1_000
 )
 
@@ -36,32 +37,38 @@ const (
 // all sequencers necessarily respond to all configuration options.
 type Config struct {
 	Chaos           float32       // Set by tests to inject errors.
-	FlushSize       int           // Flush after buffering this many mutations.
+	FlushPeriod     time.Duration // Don't queue mutations for longer than this.
+	FlushSize       int           // Ideal target database transaction size
 	Parallelism     int           // The number of concurrent connections to use.
 	QuiescentPeriod time.Duration // How often to sweep for queued mutations.
 	RetireOffset    time.Duration // Delay removal of applied mutations.
-	SweepLimit      int           // How many mutations to retrieve in a single batch.
+	ScanSize        int           // Limit on staging-table read queries.
 	TimestampLimit  int           // The maximum number of timestamps to operate on.
 }
 
 // Bind adds configuration flags to the set.
 func (c *Config) Bind(flags *pflag.FlagSet) {
+	flags.DurationVar(&c.FlushPeriod, "flushPeriod", DefaultFlushPeriod,
+		"flush queued mutations after this duration")
 	flags.IntVar(&c.FlushSize, "flushSize", DefaultFlushSize,
 		"ideal batch size to determine when to flush mutations")
 	flags.IntVar(&c.Parallelism, "parallelism", DefaultParallelism,
-		"the number of concurrent database transactions to use in best-effort or shingled modes")
+		"the number of concurrent database transactions to use")
 	flags.DurationVar(&c.QuiescentPeriod, "quiescentPeriod", DefaultQuiescentPeriod,
 		"how often to retry deferred mutations")
 	flags.DurationVar(&c.RetireOffset, "retireOffset", DefaultRetireOffset,
 		"delay removal of applied mutations")
-	flags.IntVar(&c.SweepLimit, "sweepLimit", DefaultSweepLimit,
-		"how many deferred mutations to attempt to retry at once in best-effort mode")
+	flags.IntVar(&c.ScanSize, "scanSize", DefaultScanSize,
+		"the number of rows to retrieve from staging")
 	flags.IntVar(&c.TimestampLimit, "timestampLimit", DefaultTimestampLimit,
-		"the maximum number of source timestamps to coalesce into a target transaction in serial mode")
+		"the maximum number of source timestamps to coalesce into a target transaction")
 }
 
 // Preflight ensure that the configuration has sane defaults.
 func (c *Config) Preflight() error {
+	if c.FlushPeriod == 0 {
+		c.FlushPeriod = DefaultFlushPeriod
+	}
 	if c.FlushSize == 0 {
 		c.FlushSize = DefaultFlushSize
 	}
@@ -75,8 +82,8 @@ func (c *Config) Preflight() error {
 	if c.RetireOffset < 0 {
 		c.RetireOffset = DefaultRetireOffset
 	}
-	if c.SweepLimit <= 0 {
-		c.SweepLimit = DefaultSweepLimit
+	if c.ScanSize == 0 {
+		c.ScanSize = DefaultScanSize
 	}
 	if c.TimestampLimit <= 0 {
 		c.TimestampLimit = DefaultTimestampLimit

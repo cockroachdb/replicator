@@ -19,11 +19,10 @@ package switcher
 import (
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/core"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/google/wire"
@@ -33,11 +32,10 @@ import (
 var Set = wire.NewSet(
 	besteffort.Set,
 	chaos.Set,
+	core.Set,
 	immediate.Set,
 	script.Set,
-	serial.Set,
 	scheduler.Set,
-	shingle.Set,
 
 	ProvideSequencer,
 )
@@ -45,21 +43,19 @@ var Set = wire.NewSet(
 // ProvideSequencer is called by Wire.
 func ProvideSequencer(
 	best *besteffort.BestEffort,
+	core *core.Core,
 	diags *diag.Diagnostics,
 	imm *immediate.Immediate,
 	script *script.Sequencer,
-	serial *serial.Serial,
-	shingle *shingle.Shingle,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
 ) *Switcher {
 	return &Switcher{
 		bestEffort:  best,
+		core:        core,
 		diags:       diags,
 		immediate:   imm,
 		script:      script,
-		serial:      serial,
-		shingle:     shingle,
 		stagingPool: stagingPool,
 		targetPool:  targetPool,
 	}

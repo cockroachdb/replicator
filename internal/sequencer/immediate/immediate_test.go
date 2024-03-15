@@ -19,7 +19,6 @@ package immediate_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
@@ -42,12 +41,10 @@ func TestImmediate(t *testing.T) {
 	ctx := fixture.Context
 	fakeTable := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("immediate_table"))
 
+	seqCfg := &sequencer.Config{}
+	r.NoError(seqCfg.Preflight())
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
-		&sequencer.Config{
-			Parallelism:     2,
-			QuiescentPeriod: time.Second,
-			SweepLimit:      1000,
-		},
+		seqCfg,
 		&script.Config{})
 	r.NoError(err)
 	imm := seqFixture.Immediate
@@ -86,11 +83,11 @@ func TestImmediate(t *testing.T) {
 	bounds.Set(hlc.RangeIncluding(hlc.Zero(), resolved))
 	for {
 		stat, changed := stats.Get()
-		min := sequencer.CommonMin(stat)
-		if hlc.Compare(min, resolved) >= 0 {
+		progress := sequencer.CommonProgress(stat)
+		if hlc.Compare(progress.Max(), resolved) >= 0 {
 			break
 		}
-		log.Infof("waiting for progress: %s vs %s", min, resolved)
+		log.Infof("waiting for progress: %s vs %s", progress, resolved)
 		select {
 		case <-changed:
 		case <-ctx.Stopping():

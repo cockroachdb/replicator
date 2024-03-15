@@ -28,7 +28,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
@@ -92,8 +91,9 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 	})
 
 	tableGroup := &types.TableGroup{
-		Name:   ident.New(schema.Raw()),
-		Tables: tables,
+		Enclosing: schema,
+		Name:      ident.New(schema.Raw()),
+		Tables:    tables,
 	}
 
 	ret := &targetInfo{
@@ -134,10 +134,14 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 }
 
 var (
-	lagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	sourceLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "cdc_source_lag_seconds",
+		Help: "the age of the data received from the source changefeed",
+	}, []string{"target"})
+	targetLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "cdc_target_lag_seconds",
 		Help: "the age of the data applied to the table",
-	}, metrics.TableLabels)
+	}, []string{"target"})
 	resolvedMinTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "cdc_target_applied_timestamp_seconds",
 		Help: "the wall time of the most recent applied resolved timestamp",
@@ -151,32 +155,23 @@ var (
 func (t *Targets) metrics(info *targetInfo) {
 	// We use an interval to ensure that this metric will tick at a
 	// reasonable rate in the idle condition.
-	const tick = 5 * time.Second
+	const tick = 1 * time.Second
 
-	// Refresh lag values.
-	t.stopper.Go(func() error {
-		_, err := stopvar.DoWhenChangedOrInterval(t.stopper,
-			nil, info.stat, tick,
-			func(ctx *stopper.Context, _, new sequencer.Stat) error {
-				now := time.Now()
-				return new.Progress().Range(func(tbl ident.Table, advanced hlc.Time) error {
-					lag := now.Sub(time.Unix(0, advanced.Nanos())).Seconds()
-					lagDuration.WithLabelValues(metrics.TableValues(tbl)...).Set(lag)
-					return nil
-				})
-			})
-		return err
-	})
-
-	// Export the min and max resolved timestamps that we see.
+	// Export the min and max resolved timestamps that we see and
+	// include lag computations. This happens on each node, regardless
+	// of whether it holds a lease.
 	t.stopper.Go(func() error {
 		min := resolvedMinTimestamp.WithLabelValues(info.target.Raw())
 		max := resolvedMaxTimestamp.WithLabelValues(info.target.Raw())
+		sourceLag := sourceLagDuration.WithLabelValues(info.target.Raw())
+		targetLag := targetLagDuration.WithLabelValues(info.target.Raw())
 		_, err := stopvar.DoWhenChangedOrInterval(t.stopper,
 			hlc.RangeEmpty(), &info.resolvingRange, tick,
 			func(ctx *stopper.Context, _, new hlc.Range) error {
 				min.Set(float64(new.Min().Nanos()) / 1e9)
-				max.Set(float64(new.Max().Nanos()) / 1e9)
+				targetLag.Set(float64(time.Now().UnixNano()-new.Min().Nanos()) / 1e9)
+				max.Set(float64(new.MaxInclusive().Nanos()) / 1e9)
+				sourceLag.Set(float64(time.Now().UnixNano()-new.MaxInclusive().Nanos()) / 1e9)
 				return nil
 			})
 		return err
@@ -206,13 +201,13 @@ func (t *Targets) modeSelector(info *targetInfo) {
 				want := switcher.ModeUnknown
 				if t.cfg.BestEffortWindow <= 0 {
 					// Force a consistent mode.
-					want = switcher.ModeShingle
+					want = switcher.ModeConsistent
 				} else if lag >= t.cfg.BestEffortWindow {
 					// Fallen behind, switch to best-effort.
 					want = switcher.ModeBestEffort
 				} else if lag <= t.cfg.BestEffortWindow/4 {
 					// Caught up close-enough to the current time.
-					want = switcher.ModeShingle
+					want = switcher.ModeConsistent
 				}
 
 				_, _, _ = info.mode.Update(func(current switcher.Mode) (switcher.Mode, error) {
@@ -245,33 +240,21 @@ func (t *Targets) updateResolved(info *targetInfo) {
 			nil,
 			info.stat,
 			func(ctx *stopper.Context, old, new sequencer.Stat) error {
-				oldMin := sequencer.CommonMin(old)
-				newMin := sequencer.CommonMin(new)
+				oldMin := sequencer.CommonProgress(old)
+				newMin := sequencer.CommonProgress(new)
 
 				// Not an interesting change since the minimum didn't advance.
 				if oldMin == newMin {
 					return nil
 				}
 
-				_, _, _ = info.resolvingRange.Update(func(window hlc.Range) (new hlc.Range, _ error) {
-					// If the new minimum doesn't push the window forward, do nothing.
-					if hlc.Compare(newMin, window.Min()) <= 0 {
-						return window, notify.ErrNoUpdate
-					}
-
-					// Mark the range as being complete.
-					complete := hlc.RangeIncluding(window.Min(), newMin)
-					if err := info.checkpoint.Commit(ctx, complete); err != nil {
-						log.WithError(err).Warnf(
-							"could not store updated resolved timestamp for %s; will continue",
-							info.target,
-						)
-						return window, notify.ErrNoUpdate
-					}
-					log.Tracef("wrote applied_at time for %s: %s", info.target, complete)
-
-					return window.WithMin(newMin), nil
-				})
+				// Mark the range as being complete.
+				if err := info.checkpoint.Commit(ctx, newMin); err != nil {
+					log.WithError(err).Warnf(
+						"could not store updated resolved timestamp for %s; will continue",
+						info.target,
+					)
+				}
 				return nil
 			})
 		return err
