@@ -29,6 +29,11 @@ const (
 	// integration tests for some databases. We expect this to be of the
 	// format "database-v123".
 	IntegrationEnvName = "CDC_INTEGRATION"
+	// KafkaName must be kept in alignment with the
+	// .github/docker-compose.yml file and the integration matrix
+	// variable in workflows/tests.yaml.
+	KafkaName = "kafka"
+
 	// MySQLName must be kept in alignment with the
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.

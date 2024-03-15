@@ -116,14 +116,14 @@ func TestAccumulate(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid",
+			name: "skipping extra field",
 			msg: &sarama.ConsumerMessage{
 				Timestamp: time.Now(),
-				Partition: 2,
 				Topic:     "table",
-				Value:     []byte(`{"invalid":"11.0"}`),
+				Partition: 2,
+				Key:       []byte(`[2]`),
+				Value:     []byte(`{"after": {"k":2, "v": "b"}, "updated":"20.0", "extra":"test"}`),
 			},
-			wantErr: "unknown field",
 		},
 		{
 			name: "no topic",
