@@ -98,15 +98,10 @@ func keyForBatch(batch *types.MultiBatch) []string {
 	// The keys will be deduplicated and ordered by
 	// lockset.Set.Schedule, so we don't need to worry about that here.
 	var ret []string
-	for _, sub := range batch.Data {
-		// Ignoring error because callback only returns nil.
-		_ = sub.Data.Range(func(tbl ident.Table, tblData *types.TableBatch) error {
-			for _, mut := range tblData.Data {
-				ret = append(ret, keyForSingleton(tbl, mut)...)
-			}
-			return nil
-		})
-	}
+	_ = batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+		ret = append(ret, keyForSingleton(table, mut)...)
+		return nil
+	}))
 	return ret
 }
 
