@@ -27,22 +27,15 @@ import (
 // remain in a time-ordered fashion.
 func Fragment(batch *types.MultiBatch) ([]*types.MultiBatch, error) {
 	var tableBatches ident.TableMap[*types.MultiBatch]
-	for _, temporal := range batch.Data {
-		if err := temporal.Data.Range(func(table ident.Table, tableBatch *types.TableBatch) error {
-			tableMulti := tableBatches.GetZero(table)
-			if tableMulti == nil {
-				tableMulti = &types.MultiBatch{}
-				tableBatches.Put(table, tableMulti)
-			}
-			for _, mut := range tableBatch.Data {
-				if err := tableMulti.Accumulate(table, mut); err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
-			return nil, err
+	if err := batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+		tableMulti := tableBatches.GetZero(table)
+		if tableMulti == nil {
+			tableMulti = &types.MultiBatch{}
+			tableBatches.Put(table, tableMulti)
 		}
+		return tableMulti.Accumulate(table, mut)
+	})); err != nil {
+		return nil, err
 	}
 
 	ret := make([]*types.MultiBatch, 0, tableBatches.Len())

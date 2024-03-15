@@ -22,19 +22,34 @@ package types
 // refers to some activity taking place in a database.
 
 import (
+	"bytes"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 )
 
-// The Batch interface is implemented by the various Batch types in this
-// package.
-type Batch[B any] interface {
+// Accumulator contains the Accumulate method.
+type Accumulator interface {
 	// Accumulate the mutation and ensure that batch invariants are
 	// maintained.
 	Accumulate(table ident.Table, mut Mutation) error
+}
+
+// AccumulatorFunc adapts a function to the [Accumulator] interface.
+type AccumulatorFunc func(ident.Table, Mutation) error
+
+// Accumulate implements [Accumulator].
+func (f AccumulatorFunc) Accumulate(table ident.Table, mut Mutation) error {
+	return f(table, mut)
+}
+
+// The Batch interface is implemented by the various Batch types in this
+// package.
+type Batch[B any] interface {
+	Accumulator
 
 	// Count returns the number of mutations contained in the Batch.
 	Count() int
@@ -42,10 +57,24 @@ type Batch[B any] interface {
 	// Copy returns a deep copy of the Batch.
 	Copy() B
 
+	// CopyInto copies the contents of the batch into accumulator.
+	CopyInto(acc Accumulator) error
+
 	// Empty returns a copy of the Batch, but with no enclosed
 	// mutations. This is useful when wanting to transform or filter a
 	// batch.
 	Empty() B
+}
+
+// Flatten copies all mutations in a batch into a slice.
+func Flatten[B any](batch Batch[B]) []Mutation {
+	var ret []Mutation
+	// Ignoring error since callback returns nil.
+	_ = batch.CopyInto(AccumulatorFunc(func(_ ident.Table, mut Mutation) error {
+		ret = append(ret, mut)
+		return nil
+	}))
+	return ret
 }
 
 // A MultiBatch is a time-ordered collection of per-table data to apply.
@@ -101,12 +130,26 @@ func (b *MultiBatch) Accumulate(table ident.Table, mut Mutation) error {
 // Copy returns a deep copy of the MultiBatch.
 func (b *MultiBatch) Copy() *MultiBatch {
 	ret := &MultiBatch{
-		Data: make([]*TemporalBatch, len(b.Data)),
+		ByTime: make(map[hlc.Time]*TemporalBatch, len(b.Data)),
+		Data:   make([]*TemporalBatch, len(b.Data)),
 	}
 	for idx, batch := range b.Data {
-		ret.Data[idx] = batch.Copy()
+		cpy := batch.Copy()
+		ret.ByTime[batch.Time] = cpy
+		ret.Data[idx] = cpy
 	}
 	return ret
+}
+
+// CopyInto copies the batch into the Accumulator. The data will
+// be ordered by time, table, and key.
+func (b *MultiBatch) CopyInto(acc Accumulator) error {
+	for _, sub := range b.Data {
+		if err := sub.CopyInto(acc); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Count returns the number of enclosed mutations.
@@ -171,6 +214,20 @@ func (b *TableBatch) Copy() *TableBatch {
 	}
 }
 
+// CopyInto copies the batch into the Accumulator ordered by key.
+func (b *TableBatch) CopyInto(acc Accumulator) error {
+	sorted := append([]Mutation(nil), b.Data...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return bytes.Compare(sorted[i].Key, sorted[j].Key) < 0
+	})
+	for _, mut := range sorted {
+		if err := acc.Accumulate(b.Table, mut); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Count returns the number of enclosed mutations.
 func (b *TableBatch) Count() int {
 	return len(b.Data)
@@ -221,6 +278,25 @@ func (b *TemporalBatch) Copy() *TemporalBatch {
 		return nil
 	})
 	return ret
+}
+
+// CopyInto copies the batch into the Accumulator. The data will be
+// sorted by table name and then by key.
+func (b *TemporalBatch) CopyInto(acc Accumulator) error {
+	var tables []ident.Table
+	_ = b.Data.Range(func(table ident.Table, _ *TableBatch) error {
+		tables = append(tables, table)
+		return nil
+	})
+	sort.Slice(tables, func(i, j int) bool {
+		return strings.Compare(tables[i].Raw(), tables[j].Raw()) < 0
+	})
+	for _, table := range tables {
+		if err := b.Data.GetZero(table).CopyInto(acc); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Count returns the number of enclosed mutations.
