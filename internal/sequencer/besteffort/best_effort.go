@@ -67,8 +67,7 @@ func (s *BestEffort) SetTimeSource(source func() hlc.Time) {
 func (s *BestEffort) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
-	stats := &notify.Var[sequencer.Stat]{}
-	stats.Set(newStat(opts.Group))
+	stats := notify.VarOf[sequencer.Stat](newStat(opts.Group))
 
 	delegate := opts.Delegate
 

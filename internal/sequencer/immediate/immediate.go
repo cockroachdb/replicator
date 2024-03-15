@@ -39,8 +39,7 @@ var _ sequencer.Sequencer = (*Immediate)(nil)
 func (i *Immediate) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
-	ret := &notify.Var[sequencer.Stat]{}
-	ret.Set(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Time]{}))
+	ret := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Time]{}))
 
 	// Set each table's progress to the end of the bounds. This
 	// will allow the checkpointer to clean up resolved timestamps.

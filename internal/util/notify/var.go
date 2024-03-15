@@ -43,6 +43,14 @@ type Var[T any] struct {
 	}
 }
 
+// VarOf constructs a Var set to the initial value.
+func VarOf[T any](initial T) *Var[T] {
+	ret := &Var[T]{}
+	ret.mu.data = initial
+	ret.mu.updated = make(chan struct{})
+	return ret
+}
+
 // Get returns the current (possibly zero) value for T and a channel
 // that will be closed the next time that Set or Update is called. This
 // API does not guarantee that a loop as shown below will see every

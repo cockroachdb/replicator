@@ -71,8 +71,7 @@ func (c *Configs) Get(tbl ident.Table) *notify.Var[*Config] {
 		return found
 	}
 
-	ret := &notify.Var[*Config]{}
-	ret.Set(NewConfig())
+	ret := notify.VarOf(NewConfig())
 	c.mu.data.Put(tbl, ret)
 	return ret
 }
