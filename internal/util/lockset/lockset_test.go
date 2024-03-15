@@ -21,6 +21,8 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,8 +62,8 @@ func TestSerial(t *testing.T) {
 	r.NoError(Wait(ctx, outcomes))
 }
 
-// Use random key sets and ensure that we don't see any collisions on
-// the underlying resources.
+// Use random key sets to ensure that we don't see any collisions on the
+// underlying resources and that execution occurs in the expected order.
 func TestSmoke(t *testing.T) {
 	const numResources = 128
 	const numWaiters = 10 * numResources
@@ -69,12 +71,21 @@ func TestSmoke(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Verify that each resource and waiter are run in the expected
+	// order and the expeced number of times.
+	executionCounts := make([]int, numWaiters)
+	executionOrder := make([][]int, numResources)
+
 	// The checker function will toggle the values between 0 and a nonce
 	// value to look for collisions.
 	resources := make([]atomic.Int64, numResources)
-	checker := func(keys []int) error {
+	checker := func(keys []int, retry bool, waiter int) error {
 		if len(keys) == 0 {
 			return errors.New("no keys")
+		}
+		executionCounts[waiter]++
+		for _, k := range keys {
+			executionOrder[k] = append(executionOrder[k], waiter)
 		}
 		fail := false
 		nonce := rand.Int63n(math.MaxInt64)
@@ -83,6 +94,8 @@ func TestSmoke(t *testing.T) {
 				fail = true
 			}
 		}
+		// Create goroutine scheduling jitter.
+		runtime.Gosched()
 		for _, k := range keys {
 			if !resources[k].CompareAndSwap(nonce, 0) {
 				fail = true
@@ -91,12 +104,29 @@ func TestSmoke(t *testing.T) {
 		if fail {
 			return errors.New("collision detected")
 		}
+		if retry {
+			return RetryAtHead(nil).Or(func() {
+				// If the task was at the head of the global queue
+				// already, this callback will be executed. We want to
+				// add a fake execution entry to make comparison below
+				// easy to think about.
+				if executionCounts[waiter] != 2 {
+					for _, k := range keys {
+						executionOrder[k] = append(executionOrder[k], waiter)
+					}
+				}
+			})
+		}
 		return nil
 	}
 
 	s := Set[int]{
 		Runner: workgroup.WithSize(ctx, numWaiters/2, numResources),
 	}
+
+	expectedOrder := make([][]int, numResources)
+	var expectedOrderMu sync.Mutex
+
 	outcomes := make([]*notify.Var[*Status], numWaiters)
 	eg, _ := errgroup.WithContext(ctx)
 	for i := 0; i < numWaiters; i++ {
@@ -107,9 +137,22 @@ func TestSmoke(t *testing.T) {
 			count := rand.Intn(numResources) + 1
 			keys := make([]int, count)
 			for idx := range keys {
-				keys[idx] = rand.Intn(numResources)
+				key := rand.Intn(numResources)
+				keys[idx] = key
 			}
-			outcomes[i], _ = s.Schedule(keys, checker)
+			// We need to test against the same key deduplication that
+			// the scheduler will perform when computing expected execution order.
+			deduped := dedup(keys)
+			willRetry := i%10 == 0
+			expectedOrderMu.Lock()
+			for _, key := range deduped {
+				expectedOrder[key] = append(expectedOrder[key], i)
+				if willRetry {
+					expectedOrder[key] = append(expectedOrder[key], i)
+				}
+			}
+			outcomes[i], _ = s.Schedule(keys, func(keys []int) error { return checker(keys, willRetry, i) })
+			expectedOrderMu.Unlock()
 			return nil
 		})
 	}
@@ -117,6 +160,10 @@ func TestSmoke(t *testing.T) {
 
 	// Wait for each task to arrive at a successful state.
 	r.NoError(Wait(ctx, outcomes))
+
+	for i := 0; i < numResources; i++ {
+		r.Equalf(expectedOrder[i], executionOrder[i], "key %d", i)
+	}
 }
 
 func TestCancel(t *testing.T) {
@@ -294,4 +341,84 @@ func TestRetry(t *testing.T) {
 		return nil
 	})
 	r.NoError(Wait(ctx, []*notify.Var[*Status]{simple}))
+}
+
+// This tests a case where a task requests rescheduling after another
+// task promotes it to the head of the global queue.
+func TestRetryAfterPromotion(t *testing.T) {
+	r := require.New(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var s Set[int]
+
+	blockPromoter := make(chan struct{})
+	promoterOutcome, _ := s.Schedule(nil, func(keys []int) error {
+		<-blockPromoter
+		return nil
+	})
+
+	s.mu.Lock()
+	promoterWaiter := s.mu.head
+	s.mu.Unlock()
+	r.NotNil(promoterWaiter)
+
+	blockRetry := make(chan struct{})
+	var retryCount atomic.Int32
+	var retryRan atomic.Bool
+	var retryWaiter *waiter[int]
+	retryOutcome, _ := s.Schedule(nil, func([]int) error {
+		if retryCount.Add(1) == 1 {
+			<-blockRetry
+		}
+		return RetryAtHead(nil).Or(func() {
+			// Ensure the tail was promoted.
+			s.mu.Lock()
+			r.Same(retryWaiter, s.mu.head)
+			s.mu.Unlock()
+			retryRan.Store(true)
+		})
+	})
+
+	s.mu.Lock()
+	retryWaiter = s.mu.tail
+	s.mu.Unlock()
+
+	r.NotNil(retryWaiter)
+	r.NotSame(promoterWaiter, retryWaiter)
+
+	close(blockPromoter)
+	r.NoError(Wait(ctx, []Outcome{promoterOutcome}))
+	close(blockRetry)
+
+	r.NoError(Wait(ctx, []Outcome{retryOutcome}))
+	r.True(retryRan.Load())
+}
+
+func TestStatusFor(t *testing.T) {
+	r := require.New(t)
+
+	r.True(StatusFor(nil).Success())
+	r.False(StatusFor(context.Canceled).Success())
+	r.ErrorIs(StatusFor(context.Canceled).Err(), context.Canceled)
+}
+
+func TestFakeOutcome(t *testing.T) {
+	r := require.New(t)
+
+	status, _ := NewOutcome().Get()
+	r.True(status.Executing())
+}
+
+func TestDedup(t *testing.T) {
+	r := require.New(t)
+
+	src := []int{0, 5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 0}
+	cpy := append([]int(nil), src...)
+	expected := []int{0, 5, 4, 3, 2, 1}
+
+	r.Equal(expected, dedup(src))
+	// Ensure that the source was not modified.
+	r.Equal(src, cpy)
 }
