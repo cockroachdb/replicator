@@ -66,10 +66,8 @@ type Conn struct {
 // If more that one processes is started, the partitions within the topics
 // are allocated to each process based on the chosen rebalance strategy.
 func (c *Conn) Start(ctx *stopper.Context) (err error) {
-	/**
-	 * Construct a new Sarama configuration.
-	 * The Kafka cluster version has to be defined before the consumer is initialized.
-	 */
+
+	// Construct a new Sarama configuration.
 	c.saramaConfig = sarama.NewConfig()
 	c.saramaConfig.Consumer.Group.Rebalance.GroupStrategies = c.config.rebalanceStrategy
 

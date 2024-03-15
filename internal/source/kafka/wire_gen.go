@@ -10,11 +10,10 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/core"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/serial"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/shingle"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
@@ -83,11 +82,10 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	}
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
 	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
-	immediateImmediate := &immediate.Immediate{}
+	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
+	immediateImmediate := immediate.ProvideImmediate(targetPool)
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	serialSerial := serial.ProvideSerial(sequencerConfig, typesLeases, stagers, stagingPool, targetPool)
-	shingleShingle := shingle.ProvideShingle(sequencerConfig, schedulerScheduler, stagers, stagingPool, targetPool)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, diagnostics, immediateImmediate, sequencer, serialSerial, shingleShingle, stagingPool, targetPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
@@ -95,7 +93,7 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := ProvideConn(ctx, acceptor, switcherSwitcher, chaosChaos, config, memoMemo, sequencer, stagingPool, targetPool, watchers)
+	conn, err := ProvideConn(ctx, acceptor, switcherSwitcher, chaosChaos, config, memoMemo, stagingPool, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
