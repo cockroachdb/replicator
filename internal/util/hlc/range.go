@@ -41,6 +41,11 @@ func RangeIncluding(start, end Time) Range {
 	return Range{start, end.Next()}
 }
 
+// Contains returns true if the time provided is within this range.
+func (r Range) Contains(t Time) bool {
+	return Compare(r.Min(), t) <= 0 && Compare(t, r.Max()) < 0
+}
+
 // Empty returns true if the Min time is greater than or equal to the
 // Max value.
 func (r Range) Empty() bool { return Compare(r[0], r[1]) >= 0 }
