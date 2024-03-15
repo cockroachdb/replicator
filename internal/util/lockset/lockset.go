@@ -30,14 +30,27 @@ import (
 // once all preceding tasks have completed. If this error is returned
 // when there are no preceding tasks, the causal error will be emitted
 // from [Set.Schedule].
-func RetryAtHead(cause error) error {
-	return &retryAtHead{cause}
+func RetryAtHead(cause error) *RetryAtHeadErr {
+	return &RetryAtHeadErr{cause, nil}
 }
 
-type retryAtHead struct{ cause error }
+// RetryAtHeadErr is returned by [RetryAtHead].
+type RetryAtHeadErr struct {
+	cause    error
+	fallback func()
+}
 
-func (e *retryAtHead) Error() string { return "callback requested a retry" }
-func (e *retryAtHead) Unwrap() error { return e.cause }
+// Error returns a message.
+func (e *RetryAtHeadErr) Error() string { return "callback requested a retry" }
+
+// Or sets a fallback function to invoke if the task was already
+// at the head of the global queue. This is used if a cleanup task
+// must be run if the task is not going to be retried. The receiver
+// is returned.
+func (e *RetryAtHeadErr) Or(fn func()) *RetryAtHeadErr { e.fallback = fn; return e }
+
+// Unwrap returns the causal error passed to [RetryAtHead].
+func (e *RetryAtHeadErr) Unwrap() error { return e.cause }
 
 // A Callback is provided to [Set.Schedule].
 type Callback[K any] func(keys []K) error
@@ -52,6 +65,23 @@ type Runner interface {
 // Status is returned by [Set.Schedule].
 type Status struct {
 	err error
+}
+
+// StatusFor constructs a successful status if err is null. Otherwise,
+// it returns a new Status object that returns the error.
+func StatusFor(err error) *Status {
+	if err == nil {
+		return success
+	}
+	return &Status{err: err}
+}
+
+// Outcome is a convenience type alias.
+type Outcome = *notify.Var[*Status]
+
+// NewOutcome is a convenience method to allocate an Outcome.
+func NewOutcome() Outcome {
+	return notify.VarOf(executing)
 }
 
 // Sentinel instances of Status.
@@ -175,21 +205,8 @@ type Set[K comparable] struct {
 // The cancel function may be called to asynchronously dequeue and
 // cancel the callback. If the callback has already started executing,
 // the cancel callback will have no effect.
-func (s *Set[K]) Schedule(keys []K, fn Callback[K]) (status *notify.Var[*Status], cancel func()) {
-	// Make a copy of the key slice and deduplicate it.
-	keys = append([]K(nil), keys...)
-	seen := make(map[K]struct{}, len(keys))
-	idx := 0
-	for _, key := range keys {
-		if _, dup := seen[key]; dup {
-			continue
-		}
-
-		keys[idx] = key
-		idx++
-		seen[key] = struct{}{}
-	}
-	keys = keys[:idx]
+func (s *Set[K]) Schedule(keys []K, fn Callback[K]) (outcome Outcome, cancel func()) {
+	keys = dedup(keys)
 
 	w := &waiter[K]{
 		fn:   fn,
@@ -318,6 +335,7 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 		s.mu.Lock()
 		fn := w.fn
 		w.fn = nil
+		startedAtHead := w == s.mu.head
 		s.mu.Unlock()
 
 		// Already executed and/or canceled.
@@ -340,31 +358,44 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 		case nil:
 			w.result.Set(success)
 
-		case *retryAtHead:
+		case *RetryAtHeadErr:
 			// The callback requested to be retried later.
-			var willRetry bool
-			s.mu.Lock()
-			if s.mu.head == w {
-				// The request for a retry will be rejected if the
-				// waiter was already at the head of the global queue,
-				// since there's nothing else to pump the event loop.
-				w.result.Set(&Status{err: t.Unwrap()})
+			if startedAtHead {
+				// The waiter was already executing at the global head
+				// of the queue. Reject the request and execute any
+				// fallback handler that may have been provided.
+				if t.fallback != nil {
+					t.fallback()
+				}
+				retryErr := t.Unwrap()
+				if retryErr == nil {
+					w.result.Set(success)
+				} else {
+					w.result.Set(&Status{err: retryErr})
+				}
 			} else {
 				// Otherwise, re-enable the waiter. The status will be
 				// set to retryRequested for later re-dispatching by the
 				// dispose method.
+				s.mu.Lock()
 				w.fn = fn
 				w.result.Set(retryRequested)
-				willRetry = true
-			}
-			s.mu.Unlock()
-			// We can't dequeue the waiter if it's going to retry later
-			// on. That would incorrectly unblock anything also waiting
-			// on this waiter's keys.
-			if willRetry {
+				endedAtHead := w == s.mu.head
+				s.mu.Unlock()
+
+				// It's possible that another task completed while this
+				// one was executing, which moved it to the head of the
+				// global queue. If this happens, we need to immediately
+				// queue up its retry.
+				if !startedAtHead && endedAtHead {
+					s.dispose(w, false)
+				}
+
+				// We can't dequeue the waiter if it's going to retry
+				// later on. That would incorrectly unblock anything
+				// also waiting on this waiter's keys.
 				return
 			}
-
 		default:
 			w.result.Set(&Status{err: err})
 		}
@@ -423,7 +454,7 @@ func (s *Set[K]) enqueue(w *waiter[K]) {
 }
 
 // Wait returns the first non-nil error.
-func Wait(ctx context.Context, outcomes []*notify.Var[*Status]) error {
+func Wait(ctx context.Context, outcomes []Outcome) error {
 outcome:
 	for _, outcome := range outcomes {
 		for {
@@ -442,6 +473,24 @@ outcome:
 		}
 	}
 	return nil
+}
+
+func dedup[K comparable](keys []K) []K {
+	// Make a copy of the key slice and deduplicate it.
+	keys = append([]K(nil), keys...)
+	seen := make(map[K]struct{}, len(keys))
+	idx := 0
+	for _, key := range keys {
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		keys[idx] = key
+		idx++
+	}
+	keys = keys[:idx]
+	return keys
 }
 
 // tryCall invokes the function with a panic handler.
