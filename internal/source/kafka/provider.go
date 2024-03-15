@@ -20,7 +20,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
-	scriptSequencer "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -47,7 +46,6 @@ func ProvideConn(
 	chaos *chaos.Chaos,
 	config *Config,
 	memo types.Memo,
-	scriptSeq *scriptSequencer.Sequencer,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
 	watchers types.Watchers,
@@ -58,11 +56,7 @@ func ProvideConn(
 	// ModeImmediate is the only mode supported for now.
 	mode := notify.VarOf(switcher.ModeImmediate)
 	sw = sw.WithMode(mode)
-	seq, err := scriptSeq.Wrap(ctx, sw)
-	if err != nil {
-		return nil, err
-	}
-	seq, err = chaos.Wrap(ctx, seq) // No-op if probability is 0.
+	seq, err := chaos.Wrap(ctx, sw) // No-op if probability is 0.
 	if err != nil {
 		return nil, err
 	}
