@@ -18,6 +18,7 @@ package stdpool
 
 import (
 	"database/sql"
+	"strconv"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
@@ -27,6 +28,51 @@ import (
 	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
 )
+
+func oraErrorCode(err error) (string, bool) {
+	if oraErr := (*network.OracleError)(nil); errors.As(err, &oraErr) {
+		return strconv.Itoa(oraErr.ErrCode), true
+	}
+	return "", false
+}
+
+func oraErrorDeferrable(err error) bool {
+	code, ok := oraErrorCode(err)
+	if !ok {
+		return false
+	}
+	switch code {
+	case "1": // ORA-0001 unique constraint violated
+		// The MERGE that we execute uses read-committed reads, so
+		// it's possible for two concurrent merges to attempt to
+		// insert the same row.
+		return true
+	case "60": // ORA-00060: Deadlock detected
+		// Our attempt to insert ran into another transaction, possibly
+		// from a different cdc-sink instance. This can happen since a
+		// MERGE operation reads before it starts writing and the order
+		// in which locks are acquired may vary.
+		return true
+	case "2291": // ORA-02291: integrity constraint
+		return true
+	default:
+		return false
+	}
+}
+
+func oraErrorRetryable(err error) bool {
+	code, ok := oraErrorCode(err)
+	if !ok {
+		return false
+	}
+	switch code {
+	case "1", // Constraint violation; MERGE reads at read-committed, so concurrent INSERTS are possible.
+		"60": // Deadlock detected
+		return true
+	default:
+		return false
+	}
+}
 
 // OpenOracleAsTarget opens a connection to an Oracle database endpoint and
 // return it as a [types.TargetPool].
@@ -49,6 +95,10 @@ func OpenOracleAsTarget(
 		PoolInfo: types.PoolInfo{
 			ConnectionString: connectString,
 			Product:          types.ProductOracle,
+
+			ErrCode:      oraErrorCode,
+			IsDeferrable: oraErrorDeferrable,
+			ShouldRetry:  oraErrorRetryable,
 		},
 	}
 	ctx.Defer(func() {

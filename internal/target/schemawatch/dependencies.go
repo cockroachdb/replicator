@@ -351,7 +351,7 @@ func getDependencyOrder(
 
 	var cycles []ident.Table
 	var depOrder [][]ident.Table
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, tx, func(ctx context.Context) error {
 		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return errors.Wrap(err, stmt)

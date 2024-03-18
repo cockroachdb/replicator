@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,9 +148,10 @@ func TestGuard(t *testing.T) {
 		time.Sleep(2 * testPeriod)
 
 		a.Nil(g.getTX())
-		if pgErr := (*pgconn.PgError)(nil); a.ErrorAs(g.IsAlive(), &pgErr) {
+
+		if code, ok := db.ErrCode(g.IsAlive()); a.Truef(ok, "was %T", err) {
 			// Syntax error code
-			a.Equal(pgErr.Code, "42601")
+			a.Equal(code, "42601")
 		}
 	})
 }

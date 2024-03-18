@@ -26,7 +26,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -309,7 +308,7 @@ func TestSanitize(t *testing.T) {
 	cfg := Config{}
 	a.EqualError(cfg.sanitize(), "pool must not be nil")
 
-	cfg.Pool = &pgxpool.Pool{}
+	cfg.Pool = &types.StagingPool{}
 	a.EqualError(cfg.sanitize(), "target must be set")
 
 	cfg.Target = ident.NewTable(ident.MustSchema(ident.New("db"), ident.Public), ident.New("tbl"))

@@ -24,7 +24,7 @@ import (
 var (
 	abortedCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "retry_aborted_total",
-		Help: "the number of times an unretryable pgwire error code was seen",
+		Help: "the number of times an unretryable database error code was seen",
 	}, []string{"code"})
 	actionsCount = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "retry_actions_total",
@@ -32,6 +32,6 @@ var (
 	})
 	retryCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "retry_retried_total",
-		Help: "the number of times a retryable pgwire error was seen",
+		Help: "the number of times a retryable database error was seen",
 	}, []string{"code"})
 )

@@ -40,7 +40,7 @@ func ProvideMemo(
 	if err := retry.Execute(ctx, db, fmt.Sprintf(schema, target)); err != nil {
 		return nil, err
 	}
-	ret := &Memo{}
+	ret := &Memo{stagingPool: db}
 	ret.sql.get = fmt.Sprintf(getTemplate, target)
 	ret.sql.update = fmt.Sprintf(updateTemplate, target)
 	return ret, nil

@@ -22,13 +22,15 @@ package retry
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
-	"github.com/sijms/go-ora/v2/network"
 )
+
+// HasInfo contains the Info method.
+type HasInfo interface {
+	Info() *types.PoolInfo
+}
 
 // Marker is a settable flag.
 type Marker bool
@@ -42,7 +44,7 @@ func (m *Marker) Marked() bool { return bool(*m) }
 // Execute is a wrapper around Retry that can be used for sql
 // queries that don't have any return values.
 func Execute[P types.AnyPool](ctx context.Context, db P, query string, args ...any) error {
-	return Retry(ctx, func(ctx context.Context) error {
+	return Retry(ctx, db, func(ctx context.Context) error {
 		var err error
 		switch t := any(db).(type) {
 		case *types.SourcePool:
@@ -59,11 +61,11 @@ func Execute[P types.AnyPool](ctx context.Context, db P, query string, args ...a
 }
 
 // Retry is a convenience wrapper to automatically retry idempotent
-// database operations that experience a transaction or or connection
+// database operations that experience a transaction or a connection
 // failure. The provided callback must be entirely idempotent, with
 // no observable side-effects during its execution.
-func Retry(ctx context.Context, idempotent func(context.Context) error) error {
-	return Loop(ctx, func(ctx context.Context, _ *Marker) error {
+func Retry(ctx context.Context, info HasInfo, idempotent func(context.Context) error) error {
+	return Loop(ctx, info, func(ctx context.Context, _ *Marker) error {
 		return idempotent(ctx)
 	})
 }
@@ -80,7 +82,9 @@ type inLoop struct{}
 // If Loop is called in a reentrant fashion, the retry behavior will be
 // suppressed within an inner loop, allowing the retryable error to
 // percolate into the outer loop.
-func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) error) error {
+func Loop(
+	ctx context.Context, info HasInfo, fn func(ctx context.Context, sideEffect *Marker) error,
+) error {
 	const maxAttempts = 10
 	if outerMarker, ok := ctx.Value(inLoop{}).(*Marker); ok {
 		return fn(ctx, outerMarker)
@@ -96,29 +100,17 @@ func Loop(ctx context.Context, fn func(ctx context.Context, sideEffect *Marker) 
 			return err
 		}
 
-		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "40001": // Serialization Failure
-			case "40003": // Statement Completion Unknown
-			case "08003": // Connection Does Not Exist
-			case "08006": // Connection Failure
-			default:
-				abortedCount.WithLabelValues(pgErr.Code).Inc()
-				return err
-			}
-			retryCount.WithLabelValues(pgErr.Code).Inc()
-		} else if oraErr := (*network.OracleError)(nil); errors.As(err, &oraErr) {
-			switch oraErr.ErrCode {
-			case 1: // Constraint violation; MERGE reads at read-committed, so concurrent INSERTS are possible.
-			case 60: // Deadlock detected
-			default:
-				abortedCount.WithLabelValues(strconv.Itoa(oraErr.ErrCode))
-				return err
-			}
-		} else {
-			return err
+		code, ok := info.Info().ErrCode(err)
+		if !ok {
+			code = "unknown"
 		}
+
+		if !info.Info().ShouldRetry(err) {
+			abortedCount.WithLabelValues(code).Inc()
+		}
+
 		attempt++
+		retryCount.WithLabelValues(code).Inc()
 		if attempt >= maxAttempts {
 			return errors.Wrapf(err, "maximum number of retries (%d) exceeded", maxAttempts)
 		}
