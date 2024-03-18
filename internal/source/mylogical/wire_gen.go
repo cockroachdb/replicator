@@ -63,7 +63,7 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
-	immediateImmediate := &immediate.Immediate{}
+	immediateImmediate := immediate.ProvideImmediate(targetPool)
 	stagingConfig := &eagerConfig.Staging
 	stagingPool, err := sinkprod.ProvideStagingPool(ctx, stagingConfig, diagnostics, targetConfig)
 	if err != nil {

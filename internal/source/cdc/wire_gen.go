@@ -64,7 +64,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	}
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
-	immediateImmediate := &immediate.Immediate{}
+	immediateImmediate := immediate.ProvideImmediate(targetPool)
 	scriptConfig := ProvideScriptConfig(config)
 	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {

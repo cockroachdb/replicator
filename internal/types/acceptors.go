@@ -29,8 +29,7 @@ import (
 // AcceptOptions is an API escape hatch to provide hints or other
 // metadata to acceptor implementations.
 type AcceptOptions struct {
-	StagingQuerier StagingQuerier // Override staging database access.
-	TargetQuerier  TargetQuerier  // Override the target database access.
+	TargetQuerier TargetQuerier // Override the target database access.
 }
 
 // Copy returns a copy of the options.

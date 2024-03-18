@@ -30,7 +30,9 @@ import (
 
 // Immediate is a trivial implementation of [sequencer.Sequencer] that
 // writes through to the underlying acceptor.
-type Immediate struct{}
+type Immediate struct {
+	targetPool *types.TargetPool
+}
 
 var _ sequencer.Sequencer = (*Immediate)(nil)
 
@@ -63,5 +65,5 @@ func (i *Immediate) Start(
 		return err
 	})
 
-	return opts.Delegate, ret, nil
+	return &acceptor{i, opts.Delegate}, ret, nil
 }
