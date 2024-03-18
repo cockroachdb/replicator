@@ -106,7 +106,7 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	}
 	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
-	immediateImmediate := &immediate.Immediate{}
+	immediateImmediate := immediate.ProvideImmediate(targetPool)
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
 	targets, err := cdc.ProvideTargets(ctx, acceptor, cdcConfig, checkpoints, retireRetire, stagingPool, switcherSwitcher, watchers)
@@ -192,7 +192,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	}
 	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
-	immediateImmediate := &immediate.Immediate{}
+	immediateImmediate := immediate.ProvideImmediate(targetPool)
 	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
 	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {

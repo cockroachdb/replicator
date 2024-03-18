@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 )
 
 // An acceptor writes incoming data to staging.
@@ -46,17 +47,14 @@ func (a *acceptor) AcceptMultiBatch(
 		})
 	}
 
-	tx := types.StagingQuerier(a.stagingPool)
-	if opts != nil && opts.StagingQuerier != nil {
-		tx = opts.StagingQuerier
-	}
-
 	return mutsByTable.Range(func(tbl ident.Table, muts []types.Mutation) error {
 		stager, err := a.stagers.Get(ctx, tbl)
 		if err != nil {
 			return err
 		}
-		return stager.Stage(ctx, tx, muts)
+		return retry.Retry(ctx, a.stagingPool, func(ctx context.Context) error {
+			return stager.Stage(ctx, a.stagingPool, muts)
+		})
 	})
 }
 
@@ -64,16 +62,13 @@ func (a *acceptor) AcceptMultiBatch(
 func (a *acceptor) AcceptTableBatch(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
-	tx := types.StagingQuerier(a.stagingPool)
-	if opts != nil && opts.StagingQuerier != nil {
-		tx = opts.StagingQuerier
-	}
-
 	stager, err := a.stagers.Get(ctx, batch.Table)
 	if err != nil {
 		return err
 	}
-	return stager.Stage(ctx, tx, batch.Data)
+	return retry.Retry(ctx, a.stagingPool, func(ctx context.Context) error {
+		return stager.Stage(ctx, a.stagingPool, batch.Data)
+	})
 }
 
 // AcceptTemporalBatch implements [types.MultiAcceptor]. This does not

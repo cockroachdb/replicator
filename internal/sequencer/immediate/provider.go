@@ -16,9 +16,17 @@
 
 package immediate
 
-import "github.com/google/wire"
+import (
+	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/google/wire"
+)
 
 // Set is used by Wire.
 var Set = wire.NewSet(
-	wire.Struct(new(Immediate)),
+	ProvideImmediate,
 )
+
+// ProvideImmediate is called by Wire.
+func ProvideImmediate(db *types.TargetPool) *Immediate {
+	return &Immediate{targetPool: db}
+}
