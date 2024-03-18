@@ -63,7 +63,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
-	immediateImmediate := &immediate.Immediate{}
+	immediateImmediate := immediate.ProvideImmediate(targetPool)
 	stagingConfig := &eagerConfig.Staging
 	stagingPool, err := sinkprod.ProvideStagingPool(context, stagingConfig, diagnostics, targetConfig)
 	if err != nil {

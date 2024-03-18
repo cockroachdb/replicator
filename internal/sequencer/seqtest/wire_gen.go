@@ -42,9 +42,9 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	chaosChaos := &chaos.Chaos{
 		Config: config,
 	}
-	immediateImmediate := &immediate.Immediate{}
-	retireRetire := retire.ProvideRetire(config, stagingPool, stagers)
 	coreCore := core.ProvideCore(config, leases, schedulerScheduler, stagers, stagingPool, targetPool)
+	immediateImmediate := immediate.ProvideImmediate(targetPool)
+	retireRetire := retire.ProvideRetire(config, stagingPool, stagers)
 	configs := fixture.Configs
 	diagnostics := fixture.Diagnostics
 	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
@@ -57,9 +57,9 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 		Fixture:    fixture,
 		BestEffort: bestEffort,
 		Chaos:      chaosChaos,
+		Core:       coreCore,
 		Immediate:  immediateImmediate,
 		Retire:     retireRetire,
-		Core:       coreCore,
 		Script:     scriptSequencer,
 		Switcher:   switcherSwitcher,
 	}
