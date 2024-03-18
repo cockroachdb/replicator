@@ -386,6 +386,16 @@ type PoolInfo struct {
 	ConnectionString string
 	Product          Product
 	Version          string
+
+	// ErrCode returns a database error code, if err is of the pool's
+	// underlying driver error type.
+	ErrCode func(err error) (string, bool) `json:"-"`
+	// IsDeferrable returns true if the error might clear if the work is
+	// tried at a future point in time (e.g.: foreign key dependencies).
+	IsDeferrable func(err error) bool `json:"-"`
+	// ShouldRetry returns true if the error should be retried
+	// immediately (e.g.: serializable isolation failure).
+	ShouldRetry func(err error) bool `json:"-"`
 }
 
 // Info returns the PoolInfo when embedded.

@@ -183,7 +183,7 @@ func ProvideSourcePool(ctx *stopper.Context, diags *diag.Diagnostics) (*types.So
 
 	// Set the cluster settings once, if we need to.
 	var enabled bool
-	if err := retry.Retry(ctx, func(ctx context.Context) error {
+	if err := retry.Retry(ctx, ret, func(ctx context.Context) error {
 		return ret.QueryRowContext(ctx, "SHOW CLUSTER SETTING kv.rangefeed.enabled").Scan(&enabled)
 	}); err != nil {
 		return nil, errors.Wrap(err, "could not check cluster setting")

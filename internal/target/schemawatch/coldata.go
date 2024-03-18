@@ -371,7 +371,7 @@ func getColumns(
 	}
 
 	var columns []types.ColData
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, tx, func(ctx context.Context) error {
 		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return err

@@ -41,8 +41,8 @@ const (
 
 // Config is passed to New.
 type Config struct {
-	Pool   types.StagingQuerier // Database access.
-	Target ident.Table          // The lease table.
+	Pool   *types.StagingPool // Database access.
+	Target ident.Table        // The lease table.
 
 	// Guard provides a quiescent period between when a lease is
 	// considered to be expired (i.e. a lease callback's context is
@@ -352,7 +352,7 @@ func (l *leases) keepRenewedOnce(
 func (l *leases) acquire(
 	ctx context.Context, name string,
 ) (leaseRow lease, acquired bool, err error) {
-	err = retry.Retry(ctx, func(ctx context.Context) error {
+	err = retry.Retry(ctx, l.cfg.Pool, func(ctx context.Context) error {
 		var err error
 		leaseRow, acquired, err = l.tryAcquire(ctx, name, time.Now())
 		return err
@@ -418,7 +418,7 @@ func (l *leases) tryAcquire(
 // release destroys the given lease.
 func (l *leases) release(ctx context.Context, rel lease) (bool, error) {
 	var ret bool
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, l.cfg.Pool, func(ctx context.Context) error {
 		var err error
 		ret, err = l.tryRelease(ctx, rel)
 		return err
@@ -445,7 +445,7 @@ func (l *leases) tryRelease(ctx context.Context, rel lease) (ok bool, err error)
 }
 
 func (l *leases) renew(ctx context.Context, tgt lease) (renewed lease, ok bool, err error) {
-	err = retry.Retry(ctx, func(ctx context.Context) error {
+	err = retry.Retry(ctx, l.cfg.Pool, func(ctx context.Context) error {
 		var err error
 		renewed, ok, err = l.tryRenew(ctx, tgt, time.Now())
 		return err

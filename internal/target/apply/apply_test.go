@@ -38,7 +38,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -318,7 +317,7 @@ func TestApply(t *testing.T) {
 
 						muts[i] = types.Mutation{Data: dataBytes, Key: keyBytes}
 					}
-					if err := retry.Retry(egCtx, func(retryCtx context.Context) error {
+					if err := retry.Retry(egCtx, fixture.TargetPool, func(retryCtx context.Context) error {
 						tx, err := fixture.TargetPool.BeginTx(retryCtx, nil)
 						if err != nil {
 							return errors.WithStack(err)
@@ -1107,8 +1106,8 @@ func TestAllDataTypes(t *testing.T) {
 			// the user couldn't have created a table in the target
 			// database using this type.
 			tbl, err := fixture.CreateTargetTable(ctx, create)
-			if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
-				switch pgErr.Code {
+			if code, ok := fixture.TargetPool.ErrCode(err); ok {
+				switch code {
 				case "42704", // Unknown data type
 					"0A000": // Feature not implemented, e.g. SERIAL[]
 					t.Skipf("data type %s not supported by %s", tc.columnType,

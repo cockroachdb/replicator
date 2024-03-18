@@ -161,7 +161,7 @@ func (r *tableReader) run(ctx *stopper.Context) {
 // nextCursor produces a value to send to the consumer.
 func (r *tableReader) nextCursor(ctx *stopper.Context) *tableCursor {
 	// Deal with database flakes.
-	if err := retry.Retry(ctx, func(ctx context.Context) error {
+	if err := retry.Retry(ctx, r.db, func(ctx context.Context) error {
 		return r.queryOnce(ctx)
 	}); err != nil {
 		return &tableCursor{Error: err}

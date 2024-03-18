@@ -85,7 +85,7 @@ func (c *Checker) Check(ctx context.Context) ([]string, error) {
 	}
 
 	var warnings []string
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, c.StagingPool, func(ctx context.Context) error {
 		warnings = nil
 
 		tx, err := c.StagingPool.Begin(ctx)
