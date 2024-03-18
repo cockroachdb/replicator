@@ -230,7 +230,7 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 		Columns: &ident.TableMap[[]types.ColData]{},
 	}
 
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, tx, func(ctx context.Context) error {
 		var rows *sql.Rows
 		var err error
 

@@ -37,7 +37,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -57,6 +56,7 @@ func stagingTable(stagingDB ident.Schema, target ident.Table) ident.Table {
 type stage struct {
 	// The staging table that holds the mutations.
 	stage      ident.Table
+	stagingDB  *types.StagingPool
 	retireFrom notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
 
 	retireDuration prometheus.Observer
@@ -112,10 +112,8 @@ func newStage(
 
 		// Old versions of CRDB don't know about to_timestamp(). Try
 		// again without the helper column.
-		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
-			if pgErr.Code == "42883" /* unknown function */ {
-				err = retry.Execute(ctx, db, fmt.Sprintf(tableSchema, table, "", keyIdx))
-			}
+		if code, ok := db.ErrCode(err); ok && code == "42883" /* unknown function */ {
+			err = retry.Execute(ctx, db, fmt.Sprintf(tableSchema, table, "", keyIdx))
 		}
 		if err != nil {
 			return nil, errors.WithStack(err)
@@ -140,6 +138,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 	labels := metrics.TableValues(target)
 	s := &stage{
 		stage:          table,
+		stagingDB:      db,
 		retireDuration: stageRetireDurations.WithLabelValues(labels...),
 		retireError:    stageRetireErrors.WithLabelValues(labels...),
 		selectCount:    stageSelectCount.WithLabelValues(labels...),
@@ -170,7 +169,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 			// instance of cdc-sink that holds the resolver lease.
 			from, _ := s.retireFrom.Get()
 			ct, err := s.CountUnapplied(ctx, db, from, true /* AOST */)
-			if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "3D000" {
+			if code, ok := s.stagingDB.ErrCode(err); ok && code == "3D000" {
 				// This prevents log spam during testing, since the AOST
 				// query may push the read behind the database time at
 				// which the table or database was created.
@@ -213,7 +212,7 @@ func (s *stage) CountUnapplied(
 	}
 
 	var ret int
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, s.stagingDB, func(ctx context.Context) error {
 		return db.QueryRow(ctx, q, before.Nanos(), before.Logical()).Scan(&ret)
 	})
 	return ret, errors.Wrap(err, q)
@@ -418,7 +417,7 @@ func (s *stage) MarkApplied(
 		nanos[idx] = mut.Time.Nanos()
 		logical[idx] = mut.Time.Logical()
 	}
-	return retry.Retry(ctx, func(ctx context.Context) error {
+	return retry.Retry(ctx, s.stagingDB, func(ctx context.Context) error {
 		tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
 		log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
 		return errors.WithMessage(err, s.sql.markApplied)
@@ -439,7 +438,7 @@ SELECT last_value(nanos) OVER (), last_value(logical) OVER ()
 // Retire deletes staged data up to the given end time.
 func (s *stage) Retire(ctx context.Context, db types.StagingQuerier, end hlc.Time) error {
 	start := time.Now()
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, s.stagingDB, func(ctx context.Context) error {
 		from, _ := s.retireFrom.Get()
 		for hlc.Compare(from, end) < 0 {
 			var lastNanos int64

@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/sequtil"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
@@ -151,7 +150,7 @@ func (a *acceptor) AcceptTableBatch(
 			poisonedMu.Unlock()
 
 			level := log.WarnLevel
-			if sequtil.IsDeferrableError(err) {
+			if a.targetPool.IsDeferrable(err) {
 				// We'll suppress errors like FK constraint violations.
 				level = log.TraceLevel
 			}

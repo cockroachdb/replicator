@@ -26,10 +26,44 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/retry"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pkg/errors"
 )
+
+// See also
+// https://www.postgresql.org/docs/current/errcodes-appendix.html
+func pgErrCode(err error) (string, bool) {
+	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
+		return pgErr.Code, true
+	}
+	return "", false
+}
+
+func pgErrDeferrable(err error) bool {
+	code, ok := pgErrCode(err)
+	if !ok {
+		return false
+	}
+	return code == "23503" // foreign_key_violation
+}
+
+func pgErrRetryable(err error) bool {
+	code, ok := pgErrCode(err)
+	if !ok {
+		return false
+	}
+	switch code {
+	case "40001", // Serialization Failure
+		"40003", // Statement Completion Unknown
+		"08003", // Connection Does Not Exist
+		"08006": // Connection Failure
+		return true
+	default:
+		return false
+	}
+}
 
 // OpenPgxAsConn uses pgx to open a database connection, returning it as
 // a single connection.
@@ -70,10 +104,13 @@ func OpenPgxAsStaging(
 		PoolInfo: types.PoolInfo{
 			ConnectionString: connectString,
 			Product:          types.ProductCockroachDB,
+			ErrCode:          pgErrCode,
+			IsDeferrable:     pgErrDeferrable,
+			ShouldRetry:      pgErrRetryable,
 		},
 	}
 
-	if err := retry.Retry(ctx, func(ctx context.Context) error {
+	if err := retry.Retry(ctx, ret, func(ctx context.Context) error {
 		return ret.QueryRow(ctx, "SELECT version()").Scan(&ret.Version)
 	}); err != nil {
 		return nil, errors.Wrap(err, "could not determine cluster version")
@@ -109,10 +146,13 @@ func OpenPgxAsTarget(
 		DB: db,
 		PoolInfo: types.PoolInfo{
 			ConnectionString: connectString,
+			ErrCode:          pgErrCode,
+			IsDeferrable:     pgErrDeferrable,
+			ShouldRetry:      pgErrRetryable,
 		},
 	}
 
-	if err := retry.Retry(ctx, func(ctx context.Context) error {
+	if err := retry.Retry(ctx, ret, func(ctx context.Context) error {
 		return ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version)
 	}); err != nil {
 		return nil, errors.Wrap(err, "could not determine cluster version")

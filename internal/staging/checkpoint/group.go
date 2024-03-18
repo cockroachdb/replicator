@@ -158,7 +158,7 @@ AND target_applied_at IS NULL
 // checkpoints in the open range [min,max). This will asynchronously
 // refresh the Group.
 func (r *Group) Commit(ctx context.Context, rng hlc.Range) error {
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, r.pool, func(ctx context.Context) error {
 		start := time.Now()
 		_, err := r.pool.Exec(ctx,
 			r.sql.record,
@@ -235,7 +235,7 @@ SELECT
 
 // refreshBounds synchronizes the in-memory bounds with the database.
 func (r *Group) refreshBounds(ctx context.Context) error {
-	return retry.Retry(ctx, func(ctx context.Context) error {
+	return retry.Retry(ctx, r.pool, func(ctx context.Context) error {
 		_, _, err := r.bounds.Update(func(old hlc.Range) (hlc.Range, error) {
 			start := time.Now()
 			var next hlc.Range

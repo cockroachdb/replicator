@@ -67,7 +67,7 @@ func (ti TableInfo[P]) String() string { return ti.name.String() }
 // GetRowCount returns the number of rows in the table.
 func GetRowCount[P types.AnyPool](ctx context.Context, db P, name ident.Table) (int, error) {
 	var count int
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, db, func(ctx context.Context) error {
 		switch t := any(db).(type) {
 		case *types.SourcePool:
 			return t.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", name)).Scan(&count)

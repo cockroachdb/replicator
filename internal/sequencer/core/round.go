@@ -20,7 +20,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/sequtil"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -99,7 +98,7 @@ func (r *round) scheduleCommit(
 		}
 
 		// Internally retry 40001, etc. errors.
-		err := retry.Retry(ctx, func(ctx context.Context) error {
+		err := retry.Retry(ctx, r.targetPool, func(ctx context.Context) error {
 			return r.tryCommit(ctx)
 		})
 
@@ -119,7 +118,7 @@ func (r *round) scheduleCommit(
 		// Give the keys in the batch a second chance to be applied if
 		// the initial error is an FK violation. If the keys can't be
 		// retried, mark them as poisoned.
-		if sequtil.IsDeferrableError(err) {
+		if r.targetPool.IsDeferrable(err) {
 			finalReport = false
 			return lockset.RetryAtHead(err).Or(func() {
 				r.poisoned.MarkPoisoned(r.batch)

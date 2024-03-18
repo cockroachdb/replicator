@@ -28,7 +28,8 @@ import (
 
 // Memo is a key store that persists a value associated to a key.
 type Memo struct {
-	sql struct {
+	stagingPool *types.StagingPool
+	sql         struct {
 		get    string
 		update string
 	}
@@ -49,7 +50,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 // Get retrieves a value given a key or nil if it does not exist.
 func (m *Memo) Get(ctx context.Context, tx types.StagingQuerier, key string) ([]byte, error) {
 	var ret []byte
-	err := retry.Retry(ctx, func(ctx context.Context) error {
+	err := retry.Retry(ctx, m.stagingPool, func(ctx context.Context) error {
 		err := tx.QueryRow(
 			ctx,
 			m.sql.get,
@@ -65,7 +66,7 @@ func (m *Memo) Get(ctx context.Context, tx types.StagingQuerier, key string) ([]
 
 // Put stores the key-value in the target database
 func (m *Memo) Put(ctx context.Context, tx types.StagingQuerier, key string, value []byte) error {
-	return retry.Retry(ctx, func(ctx context.Context) error {
+	return retry.Retry(ctx, m.stagingPool, func(ctx context.Context) error {
 		_, err := tx.Exec(
 			ctx,
 			m.sql.update,

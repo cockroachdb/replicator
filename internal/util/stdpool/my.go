@@ -23,6 +23,7 @@ import (
 	sqldriver "database/sql/driver"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,33 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
+
+// See also:
+// https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
+func myErrCode(err error) (string, bool) {
+	if myErr := (*mysql.MySQLError)(nil); errors.As(err, &myErr) {
+		return strconv.Itoa(int(myErr.Number)), true
+	}
+	return "", false
+}
+
+func myErrDeferrable(err error) bool {
+	code, ok := myErrCode(err)
+	if !ok {
+		return false
+	}
+	// Cannot add or update a child row: a foreign key constraint fails
+	return code == "1452"
+}
+
+func myErrRetryable(err error) bool {
+	code, ok := myErrCode(err)
+	if !ok {
+		return false
+	}
+	// Deadlock detected due to concurrent modification.
+	return code == "40001"
+}
 
 // tlsConfigNames assign new names to TLS configuration objects used by the driver.
 var tlsConfigNames = onomastic{}
@@ -90,6 +118,10 @@ func OpenMySQLAsTarget(
 			PoolInfo: types.PoolInfo{
 				ConnectionString: connectString,
 				Product:          types.ProductMySQL,
+
+				ErrCode:      myErrCode,
+				IsDeferrable: myErrDeferrable,
+				ShouldRetry:  myErrRetryable,
 			},
 		}
 		ctx.Defer(func() { _ = ret.Close() })
