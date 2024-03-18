@@ -24,54 +24,71 @@
 # as the values passed to sinktest.IntegrationMain.
 version: "3.9"
 services:
-  # These define the tested source databases. The network_mode is host
-  # so that outgoing changefeed network requests can connect to the test
-  # server.
-  cockroachdb-v20.2:
+  # These are older versions of CRDB that we want to support as sources,
+  # but not as staging or as a target. The network_mode is host so that
+  # outgoing changefeed network requests can connect to the test server.
+  source-cockroachdb-v20.1:
+    image: cockroachdb/cockroach:latest-v20.1
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v20.2:
     image: cockroachdb/cockroach:latest-v20.2
     network_mode: host
-    command: start-single-node --insecure --store type=mem,size=2G
-  cockroachdb-v21.1:
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v21.1:
     image: cockroachdb/cockroach:latest-v21.1
     network_mode: host
-    command: start-single-node --insecure --store type=mem,size=2G
-  cockroachdb-v21.2:
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v21.2:
     image: cockroachdb/cockroach:latest-v21.2
     network_mode: host
-    command: start-single-node --insecure --store type=mem,size=2G
-  cockroachdb-v22.1:
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v22.1:
     image: cockroachdb/cockroach:latest-v22.1
     network_mode: host
-    command: start-single-node --insecure --store type=mem,size=2G
-  cockroachdb-v22.2:
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v22.2:
     image: cockroachdb/cockroach:latest-v22.2
     network_mode: host
-    command: start-single-node --insecure --store type=mem,size=2G
-  cockroachdb-v23.1:
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v23.1:
     image: cockroachdb/cockroach:latest-v23.1
     network_mode: host
-    command: start-single-node --insecure --store type=mem,size=2G
-  cockroachdb-v23.2:
-    image: cockroachdb/cockroach:latest-v23.2
-    network_mode: host
-    command: start-single-node --insecure --store type=mem,size=2G
-
-  # These two services are used for testing split-mode operations. We
-  # need to bypass the usual entry-point script because it has a check
-  # to ensure that the process only listens on localhost and on the
-  # default port.
-  #
-  # https://github.com/cockroachdb/cockroach/issues/84166
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
   source-cockroachdb-v23.2:
     image: cockroachdb/cockroach:latest-v23.2
     network_mode: host
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
-  target-cockroachdb-v23.2:
+
+  # These versions of CRDB are supported for staging and target operations.
+  cockroachdb-v23.1:
+    image: cockroachdb/cockroach:latest-v23.1
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G
+
+  cockroachdb-v23.2:
     image: cockroachdb/cockroach:latest-v23.2
     network_mode: host
     entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G
+
+  # This target exists to verify split-mode operation, where staging is separate from the target.
+  target-cockroachdb-v23.2:
+    image: cockroachdb/cockroach:latest-v23.2
+    entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5401 --http-addr :8082
+    ports:
+      - "5401:5401"
+      - "8082:8082"
 
   mysql-v5.7:
     image: mysql:5.7

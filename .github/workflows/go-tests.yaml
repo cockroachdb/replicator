@@ -73,7 +73,7 @@ jobs:
   tests:
     name: Integration Tests
     runs-on: ${{ matrix.runs-on || 'ubuntu-latest-8-core' }}
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       # Refer to the CRDB support policy when determining how many
@@ -83,13 +83,40 @@ jobs:
       # This matrix is explicit, since we have a few axes (target vs
       # integration) that can't be expressed with the automatic
       # cross-product behavior provided by the matrix operator.
+      #
+      # It doesn't appear that substitution variables may be used in the
+      # matrix. If this changes, having a COCKROACH_CURRENT and
+      # COCKROACH_PREV would be nice-to-haves.
       matrix:
         include:
-          - cockroachdb: v21.1
-          - cockroachdb: v21.2
-          - cockroachdb: v22.1
-          - cockroachdb: v22.2
+          # These are our primary supported versions.
+          - cockroachdb: v23.2
           - cockroachdb: v23.1
+
+          # Run a test with a separate CockroachDB source and target
+          # instance to ensure there are no accidental dependencies
+          # between the source, staging, and target schemas.
+          - cockroachdb: v23.2
+            source: source-cockroachdb-v23.2
+            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+            target: target-cockroachdb-v23.2
+            targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
+
+          # Tests for older CockroachDB versions as a source.
+          - cockroachdb: v23.2
+            source: source-cockroachdb-v20.1
+            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+          - cockroachdb: v23.2
+            source: source-cockroachdb-v20.2
+            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+          - cockroachdb: v23.2
+            source: source-cockroachdb-v21.1
+            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+          - cockroachdb: v23.2
+            source: source-cockroachdb-v21.2
+            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+
+          # Tests for non-CRDB sources.
           - cockroachdb: v23.2
             integration: mysql-v8
           - cockroachdb: v23.2
@@ -108,22 +135,6 @@ jobs:
             integration: postgresql-v14
           - cockroachdb: v23.2
             integration: postgresql-v15
-          # Run a test with a separate CockroachDB source and target
-          # instance to ensure there are no accidental dependencies
-          # between the source, staging, and target schemas.
-          - cockroachdb: v23.2
-            source: source-cockroachdb-v23.2
-            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-            target: target-cockroachdb-v23.2
-            targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
-            # The Oracle 18 image doesn't come with a pre-built database, we need to do more work
-            # to allow this image to boot up fast enough for use in tests.
-#          - cockroachdb: v23.2
-#            target: oracle-v18.4
-#            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
-          - cockroachdb: v23.2
-            target: oracle-v21.3
-            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
 
           # Test CRDB -> PostgreSQL for migration backfill use cases.
           - cockroachdb: v23.2
@@ -141,14 +152,21 @@ jobs:
           - cockroachdb: v23.2
             target: postgresql-v15
             targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+
           # Test CRDB -> MySQL for migration backfill use cases.
           - cockroachdb: v23.2
             target: mysql-v8
             targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql?sslmode=require"
+
           # Test CRDB -> MariaDB for migration backfill use cases.
           - cockroachdb: v23.2
             target: mysql-mariadb-v10
             targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
+
+          # Test CRDB -> OracleDB for migration backfill use case.
+          - cockroachdb: v23.2
+            target: oracle-v21.3
+            targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
 
     env:
       COVER_OUT: coverage-${{ strategy.job-index }}.out
