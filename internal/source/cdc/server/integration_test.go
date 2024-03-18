@@ -42,6 +42,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/semver"
 )
 
 func TestMain(m *testing.M) {
@@ -141,13 +142,13 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	sourceFixture, err := base.NewFixture(t)
 	r.NoError(err)
 
-	version := sourceFixture.SourcePool.Version
-	supportsWebhook := supportsWebhook(version)
+	sourceVersion := sourceFixture.SourcePool.Version
+	supportsWebhook := supportsWebhook(sourceVersion)
 	if cfg.webhook && !supportsWebhook {
-		t.Skipf("Webhook is not compatible with %s version of cockroach.", version)
+		t.Skipf("Webhook is not compatible with %s version of cockroach.", sourceVersion)
 	}
-	if cfg.queries && !supportsQueries(version) {
-		t.Skipf("CDC queries are not compatible with %s version of cockroach", version)
+	if cfg.queries && !supportsQueries(sourceVersion) {
+		t.Skipf("CDC queries are not compatible with %s version of cockroach", sourceVersion)
 	}
 
 	ctx := sourceFixture.Context
@@ -279,7 +280,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	}
 	// Don't wait the entire 30s. This options was introduced in the
 	// same versions as webhooks.
-	if supportsMinCheckpoint(sourceFixture.TargetPool.Version) {
+	if supportsMinCheckpoint(sourceVersion) {
 		createStmt += ",min_checkpoint_frequency='1s'"
 	}
 	if cfg.queries {
@@ -372,29 +373,19 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	})
 }
 
+// Necessary for faster resolved timestamps.
 func supportsMinCheckpoint(version string) bool {
-	if strings.Contains(version, "v20.") || strings.Contains(version, "v21.") {
-		return false
-	}
-	return true
+	return semver.Compare(version, "v22.1") >= 0
 }
 
-func supportsWebhook(version string) bool {
-	// In older versions of CRDB, the webhook endpoint is not available so no
-	// self signed certificate is needed. This acts as a signal as to wether the
-	// webhook endpoint is available.
-	if strings.Contains(version, "v20.2.") || strings.Contains(version, "v21.1.") {
-		return false
-	}
-	return true
-}
-
+// While queries are supported in v22.2, they were in preview.
 func supportsQueries(version string) bool {
-	// While queries are supported in v22.2, they were in preview.
-	if strings.Contains(version, "v20.") ||
-		strings.Contains(version, "v21.") ||
-		strings.Contains(version, "v22.") {
-		return false
-	}
-	return true
+	return semver.Compare(version, "v23.1") >= 0
+}
+
+// In older versions of CRDB, the webhook endpoint is not available so
+// no self-signed certificate is needed. This acts as a signal whether
+// the webhook endpoint is available.
+func supportsWebhook(version string) bool {
+	return semver.Compare(version, "v21.2") >= 0
 }
