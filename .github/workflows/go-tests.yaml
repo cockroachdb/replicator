@@ -213,6 +213,7 @@ jobs:
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
+        continue-on-error: true # Sometimes CodeCov has a bad day.
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ${{ env.COVER_OUT }}
