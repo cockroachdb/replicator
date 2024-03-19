@@ -29,11 +29,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestConfigureTransport verifies that we can extract
+// TestParseTLSOptions verifies that we can extract
 // from a postgres-like connection string the various
 // options that we can use to set up a connection
 // with a database server.
-func TestConfigureTransport(t *testing.T) {
+func TestParseTLSOptions(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 	// Expected CA Pool.
@@ -132,19 +132,19 @@ func TestConfigureTransport(t *testing.T) {
 			name:   "verify-full-invalid-key",
 			url:    "db://localhost:1000?sslmode=verify-full&sslrootcert=./testdata/ca.crt&sslcert=./testdata/test.crt&sslkey=./testdata/not_there.key",
 			want:   nil,
-			errMsg: `unable to read private key`,
+			errMsg: `unable to read key pair`,
 		},
 		{
 			name:   "verify-full-invalid-cert",
 			url:    "db://localhost:1000?sslmode=verify-full&sslrootcert=./testdata/ca.crt&sslcert=./testdata/not_there.crt&sslkey=./testdata/test.key",
 			want:   nil,
-			errMsg: `unable to read certificate`,
+			errMsg: `unable to read key pair`,
 		},
 		{
 			name:   "verify-full-missing-key",
 			url:    "db://localhost:1000?sslmode=verify-full&sslrootcert=./testdata/ca.crt&sslcert=./testdata/test.crt",
 			want:   nil,
-			errMsg: `unable to read private key`,
+			errMsg: `unable to read key pair`,
 		},
 		{
 			name:   "invalid-mode",

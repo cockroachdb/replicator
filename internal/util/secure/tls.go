@@ -18,14 +18,41 @@
 package secure
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	cryptoRand "crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
+	"math/big"
+	"net"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/pkg/errors"
 )
+
+// GetCA retrieves the pool of CA certificates
+// from the system and the specified file.
+func GetCA(path string) (*x509.CertPool, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, errors.New("failed to get system certificates")
+	}
+	if path == "" {
+		return pool, nil
+	}
+	caPem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to read CA certificate")
+	}
+	if !pool.AppendCertsFromPEM(caPem) {
+		return nil, errors.New("failed to add CA")
+	}
+	return pool, nil
+}
 
 // ParseTLSOptions returns a slice of TLS configuration to try, based on the
 // sslmode specified in the connection URL
@@ -58,9 +85,9 @@ func ParseTLSOptions(url *url.URL) ([]*tls.Config, error) {
 		// the behavior of sslmode=require should be the same as that of verify-ca
 		fallthrough
 	case "verify-ca":
-		pool, err := getCa(params.Get("sslrootcert"))
+		pool, err := GetCA(params.Get("sslrootcert"))
 		if err != nil {
-			return nil, errors.Wrap(err, "unable to retrieve CA certificate")
+			return nil, errors.Wrap(err, "unable to read CA certificate")
 		}
 		// Adding CA, so certificate from the server can be verified.
 		// InsecureSkipVerify is true, because we are not checking
@@ -74,15 +101,15 @@ func ParseTLSOptions(url *url.URL) ([]*tls.Config, error) {
 			},
 		}, nil
 	case "verify-full":
-		pool, err := getCa(params.Get("sslrootcert"))
+		pool, err := GetCA(params.Get("sslrootcert"))
 		if err != nil {
-			return nil, errors.Wrap(err, "unable to retrieve CA certificate")
+			return nil, errors.Wrap(err, "unable to read CA certificate")
 		}
 		// Get the client key pair, if available, for optional
 		// certificate base authentication.
 		certs, err := getKeyPair(params.Get("sslcert"), params.Get("sslkey"))
 		if err != nil {
-			return nil, errors.Wrap(err, "unable to retrieve key pair")
+			return nil, errors.Wrap(err, "unable to read key pair")
 		}
 		// Verifying that certificate is trusted and the host matches.
 		// Optionally, use client certificate authentication, if provided.
@@ -96,24 +123,60 @@ func ParseTLSOptions(url *url.URL) ([]*tls.Config, error) {
 	}
 }
 
-// getCA retrieves the pool of CA certificates
-// from the system and the specified file.
-func getCa(path string) (*x509.CertPool, error) {
-	pool, err := x509.SystemCertPool()
+// TLSConfig loads the certificate and key
+// from disk, to generate a self-signed localhost certificate, or to
+// return nil if TLS has been disabled.
+func TLSConfig(certFile string, privateKey string, generateSelfSigned bool) (*tls.Config, error) {
+	if certFile != "" && privateKey != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, privateKey)
+		if err != nil {
+			return nil, err
+		}
+		return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+	}
+
+	if !generateSelfSigned {
+		return nil, nil
+	}
+
+	// Loosely based on https://golang.org/src/crypto/tls/generate_cert.go
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), cryptoRand.Reader)
 	if err != nil {
-		return nil, errors.New("failed to get system certificates")
+		return nil, errors.Wrap(err, "failed to generate private key")
 	}
-	if path == "" {
-		return pool, nil
-	}
-	caPem, err := os.ReadFile(path)
+
+	now := time.Now().UTC()
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := cryptoRand.Int(cryptoRand.Reader, serialNumberLimit)
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to read CA certificate")
+		return nil, errors.Wrap(err, "failed to generate serial number")
 	}
-	if !pool.AppendCertsFromPEM(caPem) {
-		return nil, errors.New("failed to add CA")
+
+	cert := x509.Certificate{
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		NotBefore:             now,
+		NotAfter:              now.AddDate(1, 0, 0),
+		SerialNumber:          serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Cockroach Labs"},
+		},
 	}
-	return pool, nil
+
+	bytes, err := x509.CreateCertificate(cryptoRand.Reader, &cert, &cert, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to generate certificate")
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{bytes},
+			PrivateKey:  priv,
+		}}}, nil
 }
 
 // getKeyPair retrieves the key pair from the files specified.
@@ -127,17 +190,9 @@ func getKeyPair(certPath string, keyPath string) ([]tls.Certificate, error) {
 		}
 		return nil, errors.New("private key provided without certificate")
 	}
-	certPem, err := os.ReadFile(certPath)
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to read certificate")
-	}
-	keyPem, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to read private key")
-	}
-	cert, err := tls.X509KeyPair(certPem, keyPem)
-	if err != nil {
-		return nil, errors.New("failed to parse certificate")
+		return nil, err
 	}
 	return []tls.Certificate{cert}, nil
 }
