@@ -249,10 +249,15 @@ The changefeed may create an event for a point delete of a
 row that doesn't exist. In this case `before` will be `null`. We need to discard
 this event to prevent an infinite loop.
 - discard any upsert that have in the `data._source` column the value of the destination.
-- if there is a conflict (e.g. there is already a row with the same key in the destination table),
-check if the `_timestamp` of the incoming row is newer:
-  - if it is, update the row;
-  - if not, send the row to the DLQ table.
+- in case of an update, check if the `_timestamp` of the incoming row is newer:
+  - if not, discard the update.
+  - if it is newer, perform a basic three-way merge between `before`, `after` and the current value
+in the `target` table. Update the row unless irreconcilable conflicts occur.
+In case of conflicts, send to a dead-letter-queue.
+
+Note: removing the `merge` will result in a simpler "last write wins" approach: the update will
+only be applied if there is no pre-existing row in the destination table, or if the update's
+`_timestamp` value is strictly greater than the existing row in the destination table.
 
 ### Changefeed
 
