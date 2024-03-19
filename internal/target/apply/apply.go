@@ -745,13 +745,13 @@ func toDBType(colData *types.ColData, value any) (any, error) {
 	}
 	if value != nil && colData.Parse != nil {
 		// Target-driver specific fixups.
-		var err error
-		value, err = colData.Parse(value)
+		next, err := colData.Parse(value)
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not parse %v as a %s",
 				value, colData.Type)
 
 		}
+		value = next
 	}
 	return value, nil
 }
