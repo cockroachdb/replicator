@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/secure"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
@@ -97,5 +98,5 @@ func ProvideServer(
 // from disk, to generate a self-signed localhost certificate, or to
 // return nil if TLS has been disabled.
 func ProvideTLSConfig(config *Config) (*tls.Config, error) {
-	return stdserver.TLSConfig(&config.HTTP)
+	return secure.TLSConfig(config.HTTP.TLSCertFile, config.HTTP.TLSPrivateKey, config.HTTP.GenerateSelfSigned)
 }
