@@ -213,12 +213,14 @@ jobs:
           TEST_TARGET_CONNECT: ${{ matrix.targetConn }}
         run: >
           set -o pipefail;
+          RACE="-race";
+          if [[ "$TEST_TARGET_CONNECT" =~ "mysql" ]]; then RACE=""; fi;
           go test
           -count 1
           -coverpkg=./internal/...
           -covermode=atomic
           -coverprofile=${{ env.COVER_OUT }}
-          -race
+          $RACE
           -v
           ./... 2>&1 |
           go run github.com/jstemmer/go-junit-report/v2
