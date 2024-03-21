@@ -199,5 +199,5 @@ func getConfig(fixture *base.Fixture, fc *fixtureConfig, tgt ident.Table) (*Conf
 			MainPath: "/testdata/logical_test.ts",
 		}
 	}
-	return config, config.Preflight()
+	return config, config.Preflight(fixture.Context)
 }

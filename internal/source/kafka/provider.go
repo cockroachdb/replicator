@@ -50,7 +50,7 @@ func ProvideConn(
 	targetPool *types.TargetPool,
 	watchers types.Watchers,
 ) (*Conn, error) {
-	if err := config.Preflight(); err != nil {
+	if err := config.Preflight(ctx); err != nil {
 		return nil, err
 	}
 	// ModeImmediate is the only mode supported for now.

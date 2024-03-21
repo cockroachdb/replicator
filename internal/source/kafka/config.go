@@ -17,7 +17,10 @@
 package kafka
 
 import (
+	"context"
+	"crypto/tls"
 	"math"
+	"net/url"
 
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -26,9 +29,11 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/secure"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 // EagerConfig is a hack to get Wire to move userscript evaluation to
@@ -54,13 +59,29 @@ type Config struct {
 	Strategy     string   // Kafka consumer group re-balance strategy
 	Topics       []string // The list of topics that the consumer should use.
 
+	// TLS
+	caCert     string
+	clientCert string
+	clientKey  string
+	skipVerify bool
+
+	// SASL
+	saslClientID     string
+	saslClientSecret string
+	saslGrantType    string
+	saslMechanism    string
+	saslScopes       []string
+	saslTokenURL     string
+	saslUser         string
+	saslPassword     string
+
 	// The following are computed.
 
 	// Timestamp range, computed based on minTimestamp and maxTimestamp.
 	timeRange hlc.Range
 
-	// Kafka consumer group re-balance strategy
-	rebalanceStrategy []sarama.BalanceStrategy
+	// The kafka connector configuration.
+	saramaConfig *sarama.Config
 }
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
@@ -82,12 +103,28 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"only accept unprocessed messages at or newer than this timestamp; this is an inclusive lower limit")
 	f.StringVar(&c.Strategy, "strategy", "sticky", "Kafka consumer group re-balance strategy")
 	f.StringArrayVar(&c.Topics, "topic", nil, "the topic(s) that the consumer should use")
+
+	// TLS
+	f.StringVar(&c.caCert, "caCert", "", "the path of the base64-encoded CA file")
+	f.StringVar(&c.clientCert, "clientCert", "", "the path of the base64-encoded client certificate file")
+	f.StringVar(&c.clientKey, "clientKey", "", "the path of the base64-encoded client private key")
+	f.BoolVar(&c.skipVerify, "insecureSkipVerify", false, "If true, disable client-side validation of responses")
+
+	// SASL
+	f.StringVar(&c.saslClientID, "saslClientId", "", "client ID for OAuth authentication from a third-party provider")
+	f.StringVar(&c.saslClientSecret, "saslClientSecret", "", "Client secret for OAuth authentication from a third-party provider")
+	f.StringVar(&c.saslGrantType, "saslGrantType", "", "Override the default OAuth client credentials grant type for other implementations")
+	f.StringVar(&c.saslMechanism, "saslMechanism", "", "Can be set to OAUTHBEARER, SCRAM-SHA-256, SCRAM-SHA-512, or PLAIN")
+	f.StringArrayVar(&c.saslScopes, "saslScope", nil, "Scopes that the OAuth token should have access for.")
+	f.StringVar(&c.saslTokenURL, "saslTokenURL", "", "Client token URL for OAuth authentication from a third-party provider")
+	f.StringVar(&c.saslUser, "saslUser", "", "SASL username")
+	f.StringVar(&c.saslPassword, "saslPassword", "", "SASL password")
 }
 
 // Preflight updates the configuration with sane defaults or returns an
 // error if there are missing options for which a default cannot be
 // provided.
-func (c *Config) Preflight() error {
+func (c *Config) Preflight(ctx context.Context) error {
 	if err := c.DLQ.Preflight(); err != nil {
 		return err
 	}
@@ -106,6 +143,10 @@ func (c *Config) Preflight() error {
 	if c.TargetSchema.Empty() {
 		return errors.New("no target schema specified")
 	}
+	return c.preflight(ctx)
+}
+
+func (c *Config) preflight(ctx context.Context) error {
 	if c.Group == "" {
 		return errors.New("no group was configured")
 	}
@@ -122,7 +163,7 @@ func (c *Config) Preflight() error {
 			return err
 		}
 	}
-	maxTimestamp := hlc.New(math.MaxInt64, math.MaxInt-1)
+	maxTimestamp := hlc.New(math.MaxInt64, math.MaxInt)
 	if len(c.MaxTimestamp) != 0 {
 		if maxTimestamp, err = hlc.Parse(c.MaxTimestamp); err != nil {
 			return err
@@ -133,15 +174,114 @@ func (c *Config) Preflight() error {
 	}
 	c.timeRange = hlc.RangeIncluding(minTimestamp, maxTimestamp)
 	log.Infof("Kafka time range %s", c.timeRange)
+	return c.buildSaramaConfig(ctx)
+}
+
+// buildSaramaConfig constructs a new Sarama configuration.
+
+func (c *Config) buildSaramaConfig(ctx context.Context) error {
+	sc := sarama.NewConfig()
 	switch c.Strategy {
 	case "sticky":
-		c.rebalanceStrategy = []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()}
+		sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()}
 	case "roundrobin":
-		c.rebalanceStrategy = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
+		sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
 	case "range":
-		c.rebalanceStrategy = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRange()}
+		sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRange()}
 	default:
-		return errors.Errorf("Unrecognized consumer rebalance strategy: %s", c.Strategy)
+		return errors.Errorf("unrecognized consumer rebalance strategy: %s", c.Strategy)
 	}
-	return nil
+
+	tlsConfig := &tls.Config{}
+	if c.clientCert != "" || c.clientKey != "" {
+		var err error
+		if c.clientCert == "" {
+			return errors.New("clientCert must specified if clientKey is present")
+		}
+		if c.clientKey == "" {
+			return errors.New("clientKey must specified if clientCert is present")
+		}
+		if tlsConfig, err = secure.TLSConfig(c.clientCert, c.clientKey, false); err != nil {
+			return errors.Wrap(err, "cannot load certificate or key")
+		}
+		sc.Net.TLS.Enable = true
+	}
+	if c.caCert != "" {
+		caPool, err := secure.GetCA(c.caCert)
+		if err != nil {
+			return errors.Wrap(err, "cannot load CA certificate")
+		}
+		tlsConfig.RootCAs = caPool
+
+		sc.Net.TLS.Enable = true
+	}
+	if c.skipVerify {
+		tlsConfig.InsecureSkipVerify = true
+		sc.Net.TLS.Enable = true
+	}
+	// sc.Net.TLS.Config must be nil if sc.Net.TLS.Enable=false
+	if sc.Net.TLS.Enable {
+		sc.Net.TLS.Config = tlsConfig
+	}
+	if c.saslMechanism != "" {
+		sc.Net.SASL.Enable = true
+		switch c.saslMechanism {
+		case sarama.SASLTypeSCRAMSHA512:
+			sc.Net.SASL.SCRAMClientGeneratorFunc = sha512ClientGenerator
+		case sarama.SASLTypeSCRAMSHA256:
+			sc.Net.SASL.SCRAMClientGeneratorFunc = sha256ClientGenerator
+		case sarama.SASLTypeOAuth:
+			var err error
+			sc.Net.SASL.TokenProvider, err = c.newTokenProvider(ctx)
+			if err != nil {
+				return err
+			}
+		}
+		sc.Net.SASL.Mechanism = sarama.SASLMechanism(c.saslMechanism)
+		sc.Net.SASL.User = c.saslUser
+		sc.Net.SASL.Password = c.saslPassword
+		log.Infof("Using SASL %s", c.saslMechanism)
+	}
+	sc.Consumer.Offsets.Initial = sarama.OffsetOldest
+	c.saramaConfig = sc
+	return sc.Validate()
+}
+
+func (c *Config) newTokenProvider(ctx context.Context) (sarama.AccessTokenProvider, error) {
+	// grant_type is by default going to be set to 'client_credentials' by the
+	// clientcredentials library as defined by the spec, however non-compliant
+	// auth server implementations may want a custom type
+	var endpointParams url.Values
+	if c.saslGrantType != `` {
+		endpointParams = url.Values{"grant_type": {c.saslGrantType}}
+	}
+	if c.saslTokenURL == "" {
+		return nil, errors.New("OAUTH2 requires a token URL")
+
+	}
+	tokenURL, err := url.Parse(c.saslTokenURL)
+	if err != nil {
+		return nil, errors.Wrap(err, "malformed token url")
+	}
+	if c.saslClientID == "" {
+		return nil, errors.New("OAUTH2 requires a client id")
+
+	}
+	if c.saslClientSecret == "" {
+		return nil, errors.New("OAUTH2 requires a client secret")
+	}
+	// the clientcredentials.Config's TokenSource method creates an
+	// oauth2.TokenSource implementation which returns tokens for the given
+	// endpoint, returning the same cached result until its expiration has been
+	// reached, and then once expired re-requesting a new token from the endpoint.
+	cfg := clientcredentials.Config{
+		ClientID:       c.saslClientID,
+		ClientSecret:   c.saslClientSecret,
+		TokenURL:       tokenURL.String(),
+		Scopes:         c.saslScopes,
+		EndpointParams: endpointParams,
+	}
+	return &tokenProvider{
+		tokenSource: cfg.TokenSource(ctx),
+	}, nil
 }
