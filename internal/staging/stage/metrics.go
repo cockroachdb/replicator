@@ -78,6 +78,10 @@ var (
 		Name: "stage_mutations_total",
 		Help: "the number of mutations staged for this table",
 	}, metrics.TableLabels)
+	stageDuplicateCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_duplicate_mutations_total",
+		Help: "the number of duplicate mutations received",
+	}, metrics.TableLabels)
 	stageDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stage_duration_seconds",
 		Help:    "the length of time it took to successfully stage mutations",
