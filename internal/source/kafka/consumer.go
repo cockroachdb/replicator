@@ -68,7 +68,7 @@ func (c *Handler) Setup(session sarama.ConsumerGroupSession) error {
 	// TODO (silvano): Should we have a --force option to restart from the provided minTimestamp?
 	//                 Using a different group id would have the same effect.
 	for _, marker := range c.fromState {
-		log.Infof("setup: marking offset %s@%d to %d", marker.topic, marker.partition, marker.offset)
+		log.Debugf("setup: marking offset %s@%d to %d", marker.topic, marker.partition, marker.offset)
 		session.MarkOffset(marker.topic, marker.partition, marker.offset, "start")
 	}
 	return nil
@@ -86,7 +86,7 @@ func (c *Handler) Cleanup(session sarama.ConsumerGroupSession) error {
 func (c *Handler) ConsumeClaim(
 	session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim,
 ) (err error) {
-	log.Infof("ConsumeClaim topic=%s partition=%d offset=%d", claim.Topic(), claim.Partition(), claim.InitialOffset())
+	log.Debugf("ConsumeClaim topic=%s partition=%d offset=%d", claim.Topic(), claim.Partition(), claim.InitialOffset())
 	// Aggregate the mutations by target table.
 	toProcess := &types.MultiBatch{}
 	// Track last message received for each topic/partition.
@@ -147,7 +147,7 @@ func (c *Handler) accept(ctx context.Context, toProcess *types.MultiBatch) error
 		// Nothing to do.
 		return nil
 	}
-	log.Debugf("flushing %d", toProcess.Count())
+	log.Tracef("flushing %d", toProcess.Count())
 	if err := c.acceptor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{}); err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func (c *Handler) accumulate(toProcess *types.MultiBatch, msg *sarama.ConsumerMe
 		return errors.Wrap(err, "could not decode payload")
 	}
 	if payload.Resolved != "" {
-		log.Debugf("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
+		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
 		return nil
 	}
 	log.Tracef("Mutation %s %d [%s@%d]", string(msg.Key), msg.Timestamp.Unix(), msg.Topic, msg.Partition)

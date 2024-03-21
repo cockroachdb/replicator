@@ -53,8 +53,6 @@ type Conn struct {
 	handler sarama.ConsumerGroupHandler
 	// The switcher mode
 	mode *notify.Var[switcher.Mode]
-	// The kafka connector configuration.
-	saramaConfig *sarama.Config
 	// Access to the target database.
 	targetDB *types.TargetPool
 	// Access to the target schema.
@@ -66,14 +64,6 @@ type Conn struct {
 // If more that one processes is started, the partitions within the topics
 // are allocated to each process based on the chosen rebalance strategy.
 func (c *Conn) Start(ctx *stopper.Context) (err error) {
-
-	// Construct a new Sarama configuration.
-	c.saramaConfig = sarama.NewConfig()
-	c.saramaConfig.Consumer.Group.Rebalance.GroupStrategies = c.config.rebalanceStrategy
-
-	// Start from the oldest timestamp available in Kafka.
-	// If the user provided a minTimestamp, it will be used instead.
-	c.saramaConfig.Consumer.Offsets.Initial = sarama.OffsetOldest
 	var start []*partitionState
 	if c.config.MinTimestamp != "" {
 		start, err = c.getOffsets(c.config.timeRange.Min().Nanos())
@@ -81,11 +71,10 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 			return errors.Wrap(err, "cannot get offsets")
 		}
 	}
-	c.group, err = sarama.NewConsumerGroup(c.config.Brokers, c.config.Group, c.saramaConfig)
+	c.group, err = sarama.NewConsumerGroup(c.config.Brokers, c.config.Group, c.config.saramaConfig)
 	if err != nil {
-		return errors.Wrap(err, "error creating consumer group client")
+		return errors.WithStack(err)
 	}
-
 	c.handler = &Handler{
 		acceptor:  c.acceptor,
 		batchSize: c.config.BatchSize,
@@ -124,7 +113,7 @@ func (c *Conn) copyMessages(ctx *stopper.Context) error {
 // https://github.com/cockroachdb/cdc-sink/issues/779
 func (c *Conn) getOffsets(nanos int64) ([]*partitionState, error) {
 	res := make([]*partitionState, 0)
-	client, err := sarama.NewClient(c.config.Brokers, c.saramaConfig)
+	client, err := sarama.NewClient(c.config.Brokers, c.config.saramaConfig)
 	if err != nil {
 		return nil, err
 	}
