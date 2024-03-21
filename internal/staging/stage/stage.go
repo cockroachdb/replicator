@@ -66,6 +66,7 @@ type stage struct {
 	selectError    prometheus.Counter
 	staleCount     prometheus.Gauge
 	stageCount     prometheus.Counter
+	stageDupes     prometheus.Counter
 	stageDuration  prometheus.Observer
 	stageError     prometheus.Counter
 
@@ -146,6 +147,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 		selectError:    stageSelectErrors.WithLabelValues(labels...),
 		staleCount:     stageStaleMutations.WithLabelValues(labels...),
 		stageCount:     stageCount.WithLabelValues(labels...),
+		stageDupes:     stageDuplicateCount.WithLabelValues(labels...),
 		stageDuration:  stageDuration.WithLabelValues(labels...),
 		stageError:     stageErrors.WithLabelValues(labels...),
 	}
@@ -224,8 +226,9 @@ func (s *stage) GetTable() ident.Table { return s.stage }
 // The byte-array casts on $4 and $5 are because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468
 const stageTemplate = `
-UPSERT INTO %s (nanos, logical, key, mut, before)
-SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[]), unnest($5::BYTES[])`
+INSERT INTO %s (nanos, logical, key, mut, before)
+SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[]), unnest($5::BYTES[])
+ON CONFLICT DO NOTHING`
 
 // Stage implements [types.Stager].
 func (s *stage) Stage(
@@ -394,8 +397,18 @@ func (s *stage) stageOneBatch(
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(ctx, s.sql.stage, nanos, logical, keys, jsons, befores)
-	return errors.Wrap(err, s.sql.stage)
+	tag, err := db.Exec(ctx, s.sql.stage, nanos, logical, keys, jsons, befores)
+	if err != nil {
+		return errors.Wrap(err, s.sql.stage)
+	}
+
+	// Track re-delivered mutations. Some small number are normal since
+	// changefeeds guarantee at-least-once delivery of data.
+	if dupCount := int64(len(mutations)) - tag.RowsAffected(); dupCount > 0 {
+		s.stageDupes.Add(float64(dupCount))
+		log.Tracef("stage: received %d duplication mutations for %s", dupCount, s.stage)
+	}
+	return nil
 }
 
 const markAppliedTemplate = `
