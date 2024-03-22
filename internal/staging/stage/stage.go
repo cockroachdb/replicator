@@ -171,10 +171,13 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 			// instance of cdc-sink that holds the resolver lease.
 			from, _ := s.retireFrom.Get()
 			ct, err := s.CountUnapplied(ctx, db, from, true /* AOST */)
-			if code, ok := s.stagingDB.ErrCode(err); ok && code == "3D000" {
-				// This prevents log spam during testing, since the AOST
-				// query may push the read behind the database time at
-				// which the table or database was created.
+			if code, ok := s.stagingDB.ErrCode(err); ok &&
+				(code == "3D000" /* invalid_catalog_name */ ||
+					code == "42P01" /* undefined_table */) {
+				// This prevents log spam during testing or initial
+				// startup, since the AOST query may push the read
+				// behind the database time at which the table or
+				// database was created.
 			} else if err != nil {
 				log.WithError(err).Warnf(
 					"could not count unapplied mutations for target: %s", target)
