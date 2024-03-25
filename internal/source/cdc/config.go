@@ -51,6 +51,9 @@ type Config struct {
 	// changefeed throughput without considering cdc-sink performance.
 	Discard bool
 
+	// If non-zero, wait half before and after consuming the payload.
+	DiscardDelay time.Duration
+
 	// Write directly to staging tables. May limit compatibility with
 	// schemas that contain foreign keys.
 	Immediate bool
@@ -78,6 +81,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"eventually-consistent mode; useful for high throughput, skew-tolerant schemas with FKs")
 	f.BoolVar(&c.Discard, "discard", false,
 		"(dangerous) discard all incoming HTTP requests; useful for changefeed throughput testing")
+	f.DurationVar(&c.DiscardDelay, "discardDelay", 0,
+		"adds additional delay in discard mode; useful for gauging the impact of changefeed RTT")
 	f.BoolVar(&c.Immediate, "immediate", false,
 		"bypass staging tables and write directly to target; "+
 			"recommended only for KV-style workloads with no FKs")

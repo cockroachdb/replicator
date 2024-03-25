@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/httpauth"
@@ -80,7 +81,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	).Trace("request")
 
 	if h.Config.Discard {
+		time.Sleep(h.Config.DiscardDelay / 2)
 		_, err := io.Copy(io.Discard, r.Body)
+		time.Sleep(h.Config.DiscardDelay / 2)
 		sendErr(err)
 		return
 	}
