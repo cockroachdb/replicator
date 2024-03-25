@@ -169,6 +169,8 @@ github.com/go-sql-driver/mysql v1.8.0 h1:UtktXaU2Nb64z/pLiGIxY4431SJ4/dR5cjMmlVH
 github.com/go-sql-driver/mysql v1.8.0/go.mod h1:wEBSXgmK//2ZFJyE+qWnIsVGmvmEKlqwuVSjsCm7DZg=
 github.com/go-sql-driver/mysql v1.8.1-0.20240317050433-65395d853d2c h1:oCLNJYPr2xNTnHhZNMMKlLZa8nJl1GaITjrPe4NAiHg=
 github.com/go-sql-driver/mysql v1.8.1-0.20240317050433-65395d853d2c/go.mod h1:wEBSXgmK//2ZFJyE+qWnIsVGmvmEKlqwuVSjsCm7DZg=
+github.com/go-sql-driver/mysql v1.8.1-0.20240322155724-d7ddb8b9e324 h1:kCDOkbWk9BwXUSGYuQJRod9FE6ZbUsBkh+fc2zOmPSo=
+github.com/go-sql-driver/mysql v1.8.1-0.20240322155724-d7ddb8b9e324/go.mod h1:NEqU+Nldu1dDr01HgNmH7Vdn92OUzRjq3sVEU8SQXzo=
 github.com/gofrs/uuid v4.4.0+incompatible h1:3qXRTX8/NbyulANqlc0lchS1gqAVxRgsuW1YrTJupqA=
 github.com/gofrs/uuid v4.4.0+incompatible/go.mod h1:b2aQJv3Z4Fp6yNu3cdSllBxTCLRxnplIgP/c0N/04lM=
 github.com/golang-jwt/jwt/v4 v4.5.0 h1:7cYmW1XlMY7h7ii7UhUyChSgS5wUJEnm9uZVTGqOWzg=
