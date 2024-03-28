@@ -45,7 +45,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetStatements, err := sinkprod.ProvideStatementCache(targetConfig, targetPool, diagnostics)
+	targetStatements, err := sinkprod.ProvideStatementCache(context, targetConfig, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}

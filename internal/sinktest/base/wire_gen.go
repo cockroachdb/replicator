@@ -37,7 +37,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetStatements := ProvideTargetStatements(targetPool)
+	targetStatements := ProvideTargetStatements(context, targetPool)
 	targetSchema, err := ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
 	if err != nil {
 		return nil, err

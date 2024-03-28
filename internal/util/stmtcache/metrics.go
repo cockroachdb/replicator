@@ -22,6 +22,10 @@ import (
 )
 
 var (
+	stmtCacheDrops = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "stmtcache_drops_total",
+		Help: "the number of prepared statements that could not be cleanly released",
+	})
 	stmtCacheHits = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "stmtcache_hits_total",
 		Help: "the number of prepared-statement cache hits",
@@ -29,5 +33,9 @@ var (
 	stmtCacheMisses = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "stmtcache_misses_total",
 		Help: "the number of prepared-statement cache misses",
+	})
+	stmtCacheReleases = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "stmtcache_releases_total",
+		Help: "the number of prepared statements released by the cache",
 	})
 )
