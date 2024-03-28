@@ -148,7 +148,12 @@ func (a *acceptor) doMap(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
 	target, ok := a.userScript.Targets.Get(batch.Table)
-	if ok && target.Map != nil {
+	if !ok {
+		// No target configuration.
+		return a.delegate.AcceptTableBatch(ctx, batch, opts)
+	}
+
+	if target.Map != nil {
 		mapped := batch.Empty()
 		mapped.Data = make([]types.Mutation, 0, len(batch.Data))
 		for _, mut := range batch.Data {
