@@ -45,7 +45,7 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetStatements, err := sinkprod.ProvideStatementCache(targetConfig, targetPool, diagnostics)
+	targetStatements, err := sinkprod.ProvideStatementCache(ctx, targetConfig, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}

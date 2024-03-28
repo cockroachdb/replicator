@@ -75,7 +75,7 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 	if err != nil {
 		return nil, err
 	}
-	targetStatements, err := sinkprod.ProvideStatementCache(targetConfig, targetPool, diagnostics)
+	targetStatements, err := sinkprod.ProvideStatementCache(ctx, targetConfig, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	targetStatements, err := sinkprod.ProvideStatementCache(targetConfig, targetPool, diagnostics)
+	targetStatements, err := sinkprod.ProvideStatementCache(context, targetConfig, targetPool, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}

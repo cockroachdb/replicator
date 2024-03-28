@@ -22,9 +22,9 @@ import (
 	"database/sql"
 	"sync"
 
+	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/golang/groupcache/lru"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // stmtAdopter is implemented by *sql.Tx. We'll prepare the statements
@@ -39,10 +39,8 @@ type stmtAdopter interface {
 // limited resource in the target database, so we want the Cache to have
 // a one-to-one lifetime with the underlying database pool.
 type Cache[T comparable] struct {
-	db *sql.DB
-
-	hits   prometheus.Counter
-	misses prometheus.Counter
+	db      *sql.DB
+	toClose chan *sql.Stmt
 
 	mu struct {
 		sync.Mutex // Not RW since the LRU list moves elements.
@@ -51,17 +49,33 @@ type Cache[T comparable] struct {
 }
 
 // New constructs a Cache for the pool.
-func New[T comparable](db *sql.DB, size int) *Cache[T] {
+func New[T comparable](ctx *stopper.Context, db *sql.DB, size int) *Cache[T] {
 	ret := &Cache[T]{
-		db:     db,
-		hits:   stmtCacheHits,
-		misses: stmtCacheMisses,
+		db:      db,
+		toClose: make(chan *sql.Stmt, size),
 	}
 	ret.mu.cache = lru.New(size)
 	ret.mu.cache.OnEvicted = func(_ lru.Key, value interface{}) {
-		_ = value.(*sql.Stmt).Close()
+		select {
+		case ret.toClose <- value.(*sql.Stmt):
+		default:
+			// Not great, but we don't want to block. Anything we might
+			// leak will be cleared when the relevant connection ages
+			// out of the pool.
+			stmtCacheDrops.Inc()
+		}
 	}
-
+	ctx.Go(func() error {
+		for {
+			select {
+			case stmt := <-ret.toClose:
+				_ = stmt.Close()
+				stmtCacheReleases.Inc()
+			case <-ctx.Stopping():
+				return nil
+			}
+		}
+	})
 	return ret
 }
 
@@ -97,14 +111,14 @@ func (c *Cache[T]) get(ctx context.Context, key T, gen func() (string, error)) (
 	found, ok := c.mu.cache.Get(key)
 	c.mu.Unlock()
 	if ok {
-		c.hits.Inc()
+		stmtCacheHits.Inc()
 		return found.(*sql.Stmt), nil
 	}
 
 	// We'll generate and prepare the statement outside a critical
 	// region, since this can take an arbitrarily long amount of time.
 	// If we prepare the same statement twice, that's OK.
-	c.misses.Inc()
+	stmtCacheMisses.Inc()
 	q, err := gen()
 	if err != nil {
 		return nil, err

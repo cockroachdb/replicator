@@ -91,9 +91,9 @@ func ProvideTargetPool(
 // prepared-statement cache. Anywhere the associated TargetPool is
 // reused should also reuse the cache.
 func ProvideStatementCache(
-	config *TargetConfig, pool *types.TargetPool, diags *diag.Diagnostics,
+	ctx *stopper.Context, config *TargetConfig, pool *types.TargetPool, diags *diag.Diagnostics,
 ) (*types.TargetStatements, error) {
-	ret := stmtcache.New[string](pool.DB, config.StatementCacheSize)
+	ret := stmtcache.New[string](ctx, pool.DB, config.StatementCacheSize)
 	if err := diags.Register("targetStatements", ret); err != nil {
 		return nil, err
 	}
