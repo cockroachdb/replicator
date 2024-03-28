@@ -722,12 +722,15 @@ type asyncTracker interface {
 func (s *UserScript) execTrackedJS(
 	tracker asyncTracker, fn func(rt *goja.Runtime) error,
 ) (err error) {
+	start := time.Now()
 	s.rtMu.Lock()
+	scriptEntryWait.Observe(time.Since(start).Seconds())
 	s.rt.ClearInterrupt()
 	defer func() {
 		s.rt.Interrupt(errUseExec)
 		s.rtMu.Unlock()
 		s.rtExit.Notify()
+		scriptExecTime.Observe(time.Since(start).Seconds())
 	}()
 
 	if tracker != nil {
