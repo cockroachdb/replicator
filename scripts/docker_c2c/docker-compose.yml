@@ -22,6 +22,9 @@ volumes:
   roach_target: {}
   grafana_data: {}
 
+include:
+  - ../dashboard/docker-compose.yaml
+
 services:
 
  roach_source:
@@ -47,29 +50,6 @@ services:
      - 'roach_target:/cockroach/cockroach-data'
      - 'backup:/backup'
    restart: always
-
- prometheus:
-   hostname: prometheus
-   image: prom/prometheus
-   ports:
-     - "9090:9090"
-   command: 
-   volumes:
-     - './prometheus:/etc/prometheus'
-   restart: always
-
- grafana:
-   hostname: grafana
-   image: grafana/grafana-oss:latest
-   depends_on:
-     prometheus:
-       condition: service_started
-   ports:
-     - "3000:3000"
-   volumes:
-    - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-    - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
-   restart: unless-stopped
 
  roach_target_initsleep:
    hostname: roach_target_initsleep
