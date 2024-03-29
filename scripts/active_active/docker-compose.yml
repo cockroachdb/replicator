@@ -30,7 +30,9 @@ volumes:
   backup: {}
   east: {}
   west: {}
-  grafana_data: {}
+
+include:
+  - ../dashboard/docker-compose.yaml
 
 services:
 
@@ -118,33 +120,6 @@ services:
         condition: service_healthy
    command: start ${CDC_ARGS:-} --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@east:26257/?sslmode=disable' --userscript west_east.ts 
    restart: always
-
-  # Monitoring
- prometheus:
-    hostname: prometheus
-    image: prom/prometheus
-    volumes:
-      - './prometheus:/etc/prometheus'
-    restart: always
-    healthcheck:
-      test: wget -q -O - http://localhost:9090/-/healthy
-      interval: 1s
-    profiles:
-        - monitor
-
- grafana:
-    hostname: grafana
-    image: grafana/grafana-oss:latest
-    depends_on:
-      prometheus:
-        condition: service_healthy
-    ports:
-      - :3000
-    volumes:
-      - ./grafana:/etc/grafana
-    restart: unless-stopped
-    profiles:
-        - monitor
 
 # workloads
  east_workload:
