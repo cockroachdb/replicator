@@ -20,9 +20,12 @@ package metrics
 
 import (
 	"math"
+	"runtime/debug"
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 const (
@@ -42,6 +45,33 @@ var (
 	// vector metrics.
 	TableLabels = []string{schemaLabel, tableLabel}
 )
+
+// init publishes a build-info metric and start time.
+func init() {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		labels := prometheus.Labels{
+			"go_version": bi.GoVersion,
+			"module":     bi.Path,
+		}
+		for _, setting := range bi.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				labels["commit"] = setting.Value
+			case "vcs.time":
+				labels["build_time"] = setting.Value
+			}
+		}
+		promauto.NewGauge(prometheus.GaugeOpts{
+			Name:        "cdc_sink_info",
+			Help:        "information about the cdc-sink binary",
+			ConstLabels: labels,
+		}).Set(1)
+	}
+	promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cdc_sink_start_seconds",
+		Help: "the wall time at which cdc-sink was started",
+	}).SetToCurrentTime()
+}
 
 // Buckets computes a linear log10 sequence of buckets, starting
 // from the base unit, up to the specified maximum.
