@@ -3,7 +3,7 @@ module github.com/cockroachdb/cdc-sink
 go 1.22
 
 require (
-	github.com/IBM/sarama v1.43.0
+	github.com/IBM/sarama v1.43.1
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.0.0-20230505164321-461e8663b4b4
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
