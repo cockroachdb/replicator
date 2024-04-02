@@ -3662,7 +3662,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "d10d997e-936c-4bfb-97ba-067687459fee"
+          "uid": "${DS_PROMETHEUS}"
         },
         "filters": [],
         "hide": 0,
