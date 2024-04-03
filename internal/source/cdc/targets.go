@@ -31,8 +31,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -120,6 +118,9 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 		return nil, err
 	}
 
+	// Add top-of-funnel reporting.
+	ret.acceptor = newCountingAcceptor(ret.acceptor, ret.target)
+
 	// Advance the stored resolved timestamps.
 	t.updateResolved(ret)
 
@@ -132,25 +133,6 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 	t.mu.targets.Put(schema, ret)
 	return ret, nil
 }
-
-var (
-	sourceLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_source_lag_seconds",
-		Help: "the age of the data received from the source changefeed",
-	}, []string{"target"})
-	targetLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_lag_seconds",
-		Help: "the age of the data applied to the table",
-	}, []string{"target"})
-	resolvedMinTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_applied_timestamp_seconds",
-		Help: "the wall time of the most recent applied resolved timestamp",
-	}, []string{"target"})
-	resolvedMaxTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_pending_timestamp_seconds",
-		Help: "the wall time of the most recently received resolved timestamp",
-	}, []string{"target"})
-)
 
 func (t *Targets) metrics(info *targetInfo) {
 	// We use an interval to ensure that this metric will tick at a
