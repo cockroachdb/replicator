@@ -19,10 +19,10 @@ SELECT
  data."enum",
  data."has_default"
 FROM data
-LEFT JOIN  "database"."schema"."table" as current
+LEFT JOIN  "database"."schema"."table"@{NO_FULL_SCAN} as current
 USING ("pk0","pk1"))
 
-UPSERT INTO "database"."schema"."table" (
+UPSERT INTO "database"."schema"."table"@{NO_FULL_SCAN} (
 "pk0","pk1","val0","val1","geom","geog","enum","has_default"
 )
 SELECT "pk0","pk1","val0","val1","geom","geog","enum","has_default"  FROM action

@@ -129,7 +129,9 @@ ping:
 	if err := ret.QueryRow("SELECT banner FROM V$VERSION").Scan(&ret.Version); err != nil {
 		return nil, errors.Wrap(err, "could not query version")
 	}
-
+	if err := setTableHint(ret.Info()); err != nil {
+		return nil, err
+	}
 	if err := attachOptions(ctx, ret.DB, options); err != nil {
 		return nil, err
 	}

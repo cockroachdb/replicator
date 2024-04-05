@@ -47,7 +47,7 @@ type apply struct {
 	cache   *types.TargetStatements
 	dlqs    types.DLQs
 	product types.Product
-	target  ident.Table
+	target  *ident.Hinted[ident.Table]
 
 	ages      prometheus.Observer
 	conflicts prometheus.Counter
@@ -74,7 +74,7 @@ const (
 
 // newApply constructs an apply by inspecting the target table.
 func (f *factory) newApply(
-	ctx *stopper.Context, product types.Product, inTarget ident.Table,
+	ctx *stopper.Context, poolInfo *types.PoolInfo, inTarget ident.Table,
 ) (*apply, error) {
 	w, err := f.watchers.Get(inTarget.Schema())
 	if err != nil {
@@ -92,8 +92,8 @@ func (f *factory) newApply(
 	a := &apply{
 		cache:   f.cache,
 		dlqs:    f.dlqs,
-		product: product,
-		target:  target,
+		product: poolInfo.Product,
+		target:  poolInfo.HintNoFTS(target),
 
 		ages:      applyMutationAge.WithLabelValues(labelValues...),
 		conflicts: applyConflicts.WithLabelValues(labelValues...),
@@ -612,7 +612,7 @@ func (a *apply) upsertBagsLocked(
 			// No action needed.
 		case resolution.DLQ != "":
 			// Locate the requested DLQ and add the mutation.
-			q, err := a.dlqs.Get(ctx, a.target.Schema(), resolution.DLQ)
+			q, err := a.dlqs.Get(ctx, a.target.Base.Schema(), resolution.DLQ)
 			if err != nil {
 				return err
 			}

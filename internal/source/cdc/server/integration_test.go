@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
 	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	joonix "github.com/joonix/log"
@@ -42,7 +43,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/mod/semver"
 )
 
 func TestMain(m *testing.M) {
@@ -143,11 +143,14 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	r.NoError(err)
 
 	sourceVersion := sourceFixture.SourcePool.Version
-	supportsWebhook := supportsWebhook(sourceVersion)
+	supportsWebhook, err := supportsWebhook(sourceVersion)
+	r.NoError(err)
 	if cfg.webhook && !supportsWebhook {
 		t.Skipf("Webhook is not compatible with %s version of cockroach.", sourceVersion)
 	}
-	if cfg.queries && !supportsQueries(sourceVersion) {
+	supportsQueries, err := supportsQueries(sourceVersion)
+	r.NoError(err)
+	if cfg.queries && !supportsQueries {
 		t.Skipf("CDC queries are not compatible with %s version of cockroach", sourceVersion)
 	}
 
@@ -280,7 +283,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	}
 	// Don't wait the entire 30s. This options was introduced in the
 	// same versions as webhooks.
-	if supportsMinCheckpoint(sourceVersion) {
+	if ok, err := supportsMinCheckpoint(sourceVersion); a.NoError(err) && ok {
 		createStmt += ",min_checkpoint_frequency='1s'"
 	}
 	if cfg.queries {
@@ -374,18 +377,18 @@ func testIntegration(t *testing.T, cfg testConfig) {
 }
 
 // Necessary for faster resolved timestamps.
-func supportsMinCheckpoint(version string) bool {
-	return semver.Compare(version, "v22.1") >= 0
+func supportsMinCheckpoint(version string) (bool, error) {
+	return stdpool.CockroachMinVersion(version, "v22.1")
 }
 
 // While queries are supported in v22.2, they were in preview.
-func supportsQueries(version string) bool {
-	return semver.Compare(version, "v23.1") >= 0
+func supportsQueries(version string) (bool, error) {
+	return stdpool.CockroachMinVersion(version, "v23.1")
 }
 
 // In older versions of CRDB, the webhook endpoint is not available so
 // no self-signed certificate is needed. This acts as a signal whether
 // the webhook endpoint is available.
-func supportsWebhook(version string) bool {
-	return semver.Compare(version, "v21.2") >= 0
+func supportsWebhook(version string) (bool, error) {
+	return stdpool.CockroachMinVersion(version, "v21.2")
 }

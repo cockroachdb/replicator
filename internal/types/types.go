@@ -390,6 +390,15 @@ type PoolInfo struct {
 	// ErrCode returns a database error code, if err is of the pool's
 	// underlying driver error type.
 	ErrCode func(err error) (string, bool) `json:"-"`
+	// HintNoFTS decorates the table name to prevent CockroachDB from
+	// generating an UPSERT (or other) plan that may involve a full
+	// table scan. For other databases or versions of CockroachDB that
+	// do not support this hint, this function returns an unhinted table
+	// name.
+	//
+	// https://www.cockroachlabs.com/docs/stable/table-expressions#prevent-full-scan
+	// https://github.com/cockroachdb/cockroach/issues/98211
+	HintNoFTS func(table ident.Table) *ident.Hinted[ident.Table] `json:"-"`
 	// IsDeferrable returns true if the error might clear if the work is
 	// tried at a future point in time (e.g.: foreign key dependencies).
 	IsDeferrable func(err error) bool `json:"-"`

@@ -44,7 +44,7 @@ func ProvideAcceptor(
 		cache:    cache,
 		configs:  configs,
 		dlqs:     dlqs,
-		product:  target.Product,
+		poolInfo: target.Info(),
 		stop:     ctx,
 		watchers: watchers,
 	}

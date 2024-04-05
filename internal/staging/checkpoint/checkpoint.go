@@ -61,9 +61,11 @@ func (r *Checkpoints) Start(
 	ret.metrics.proposedTime = proposedTime.With(labels)
 	ret.metrics.refreshDuration = refreshDuration.With(labels)
 
+	// This query may indeed require a full table scan.
 	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable)
-	ret.sql.mark = fmt.Sprintf(advanceTemplate, r.metaTable)
-	ret.sql.record = fmt.Sprintf(applyTemplate, r.metaTable)
+	hinted := r.pool.HintNoFTS(r.metaTable)
+	ret.sql.mark = fmt.Sprintf(advanceTemplate, hinted)
+	ret.sql.record = fmt.Sprintf(applyTemplate, hinted)
 
 	// Populate data immediately.
 	if err := ret.refreshBounds(ctx); err != nil {

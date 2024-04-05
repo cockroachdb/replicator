@@ -77,6 +77,8 @@ var (
 			switch t := prefix.(type) {
 			case string:
 				id = t
+			case *ident.Hinted[ident.Table]:
+				id = t.Base.Table().String() + t.Hint
 			case ident.Ident:
 				id = t.String()
 			case ident.Table:

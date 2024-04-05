@@ -473,7 +473,12 @@ func checkTemplate(t *testing.T, global *templateGlobal, tc *templateTestCase) {
 		cfg.Patch(tc.cfg)
 	}
 
-	mapping, err := newColumnMapping(cfg, global.cols, global.product, global.tableID)
+	var hint string
+	if global.product == types.ProductCockroachDB {
+		hint = "@{NO_FULL_SCAN}"
+	}
+
+	mapping, err := newColumnMapping(cfg, global.cols, global.product, ident.WithHint(global.tableID, hint))
 	r.NoError(err)
 
 	tmpls, err := newTemplates(mapping)
