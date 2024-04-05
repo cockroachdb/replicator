@@ -5,8 +5,8 @@ VALUES
 data AS (SELECT (row_number() OVER () - 1) __idx__, * FROM raw_data),
 deadlined AS (SELECT * FROM data WHERE("val0">now()-'1h0m0s'::INTERVAL)AND("val1">now()-'1s'::INTERVAL)),
 current AS (
-SELECT "pk0","pk1", "table"."val1","table"."val0"
-FROM "database"."schema"."table"
+SELECT "pk0","pk1", "table"@{NO_FULL_SCAN}."val1","table"@{NO_FULL_SCAN}."val0"
+FROM "database"."schema"."table"@{NO_FULL_SCAN}
 JOIN deadlined
 USING ("pk0","pk1")),
 action AS (
@@ -16,10 +16,10 @@ USING ("pk0","pk1")
 WHERE current."pk0" IS NULL OR
 (deadlined."val1",deadlined."val0") > (current."val1",current."val0")),
 upserted AS (
-UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum","has_default")
+UPSERT INTO "database"."schema"."table"@{NO_FULL_SCAN} ("pk0","pk1","val0","val1","geom","geog","enum","has_default")
 SELECT "pk0","pk1","val0","val1","geom","geog","enum","has_default" FROM action
 RETURNING "pk0","pk1")
-SELECT data.__idx__, t."pk0",t."pk1",t."val0",t."val1",t."geom",t."geog",t."enum",t."has_default" FROM "database"."schema"."table" t
+SELECT data.__idx__, t."pk0",t."pk1",t."val0",t."val1",t."geom",t."geog",t."enum",t."has_default" FROM "database"."schema"."table"@{NO_FULL_SCAN} t
 JOIN data USING ("pk0","pk1")
 LEFT JOIN upserted USING ("pk0","pk1")
 WHERE upserted."pk0" IS NULL

@@ -119,7 +119,9 @@ func OpenPgxAsStaging(
 	if !strings.HasPrefix(ret.Version, "CockroachDB") {
 		return nil, errors.Errorf("only CockroachDB is supported as a staging server; saw %q", ret.Version)
 	}
-
+	if err := setTableHint(ret.Info()); err != nil {
+		return nil, err
+	}
 	if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
 		return nil, err
 	}
@@ -156,6 +158,9 @@ func OpenPgxAsTarget(
 		return ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version)
 	}); err != nil {
 		return nil, errors.Wrap(err, "could not determine cluster version")
+	}
+	if err := setTableHint(ret.Info()); err != nil {
+		return nil, err
 	}
 
 	switch {

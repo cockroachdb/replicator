@@ -55,7 +55,7 @@ func stagingTable(stagingDB ident.Schema, target ident.Table) ident.Table {
 // Mutation instances.
 type stage struct {
 	// The staging table that holds the mutations.
-	stage      ident.Table
+	stage      *ident.Hinted[ident.Table]
 	stagingDB  *types.StagingPool
 	retireFrom notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
 
@@ -138,7 +138,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 
 	labels := metrics.TableValues(target)
 	s := &stage{
-		stage:          table,
+		stage:          db.HintNoFTS(table),
 		stagingDB:      db,
 		retireDuration: stageRetireDurations.WithLabelValues(labels...),
 		retireError:    stageRetireErrors.WithLabelValues(labels...),
@@ -152,12 +152,15 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 		stageError:     stageErrors.WithLabelValues(labels...),
 	}
 
-	s.sql.markApplied = fmt.Sprintf(markAppliedTemplate, table)
-	s.sql.retire = fmt.Sprintf(retireTemplate, table)
-	s.sql.stage = fmt.Sprintf(stageTemplate, table)
-	s.sql.stageExists = fmt.Sprintf(stageIfExistsTemplate, table)
-	s.sql.unapplied = fmt.Sprintf(countTemplate, table, "")
-	s.sql.unappliedAOST = fmt.Sprintf(countTemplate, table,
+	// Prevent these hot-path queries from being planned with a full
+	// table scan if statistics are stale.
+	tableHinted := db.HintNoFTS(table)
+	s.sql.markApplied = fmt.Sprintf(markAppliedTemplate, tableHinted)
+	s.sql.retire = fmt.Sprintf(retireTemplate, tableHinted)
+	s.sql.stage = fmt.Sprintf(stageTemplate, tableHinted)
+	s.sql.stageExists = fmt.Sprintf(stageIfExistsTemplate, tableHinted)
+	s.sql.unapplied = fmt.Sprintf(countTemplate, tableHinted, "")
+	s.sql.unappliedAOST = fmt.Sprintf(countTemplate, tableHinted,
 		"AS OF SYSTEM TIME follower_read_timestamp()")
 
 	// Report unapplied mutations on a periodic basis.
@@ -224,7 +227,7 @@ func (s *stage) CountUnapplied(
 }
 
 // GetTable returns the table that the stage is storing into.
-func (s *stage) GetTable() ident.Table { return s.stage }
+func (s *stage) GetTable() ident.Table { return s.stage.Base }
 
 // The byte-array casts on $4 and $5 are because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468

@@ -32,7 +32,7 @@ type factory struct {
 	cache    *types.TargetStatements
 	configs  *applycfg.Configs
 	dlqs     types.DLQs
-	product  types.Product
+	poolInfo *types.PoolInfo
 	stop     *stopper.Context
 	watchers types.Watchers
 	mu       struct {
@@ -67,18 +67,18 @@ func (f *factory) Get(_ context.Context, table ident.Table) (*apply, error) {
 		return ret, nil
 	}
 	// Fall back to write-locked get-or-create.
-	return f.getOrCreateUnlocked(f.product, table)
+	return f.getOrCreateUnlocked(f.poolInfo, table)
 }
 
 // getOrCreateUnlocked takes a write-lock.
-func (f *factory) getOrCreateUnlocked(product types.Product, table ident.Table) (*apply, error) {
+func (f *factory) getOrCreateUnlocked(poolInfo *types.PoolInfo, table ident.Table) (*apply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if ret := f.mu.instances.GetZero(table); ret != nil {
 		return ret, nil
 	}
-	ret, err := f.newApply(f.stop, product, table)
+	ret, err := f.newApply(f.stop, poolInfo, table)
 	if err == nil {
 		f.mu.instances.Put(table, ret)
 	}

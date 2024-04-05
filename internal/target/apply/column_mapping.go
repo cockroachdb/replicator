@@ -49,7 +49,7 @@ type columnMapping struct {
 	PK                   []types.ColData              // The names of the PK columns.
 	PKDelete             []types.ColData              // The names of the PK columns to delete.
 	Renames              *ident.Map[ident.Ident]      // External (source) names to target names.
-	TableName            ident.Table                  // The target table.
+	TableName            *ident.Hinted[ident.Table]   // The target table.
 	UpsertParameterCount int                          // The number of SQL arguments.
 }
 
@@ -63,7 +63,10 @@ type positionalColumn struct {
 }
 
 func newColumnMapping(
-	cfg *applycfg.Config, cols []types.ColData, product types.Product, table ident.Table,
+	cfg *applycfg.Config,
+	cols []types.ColData,
+	product types.Product,
+	table *ident.Hinted[ident.Table],
 ) (*columnMapping, error) {
 	ret := &columnMapping{
 		Conditions:   make([]types.ColData, len(cfg.CASColumns)),

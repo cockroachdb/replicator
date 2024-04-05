@@ -151,6 +151,9 @@ func OpenMySQLAsTarget(
 		if strings.Contains(ret.Version, "MariaDB") {
 			ret.PoolInfo.Product = types.ProductMariaDB
 		}
+		if err := setTableHint(ret.Info()); err != nil {
+			return nil, err
+		}
 		// If debug is enabled we print sql mode and ssl info.
 		if log.IsLevelEnabled(log.DebugLevel) {
 			var mode string
