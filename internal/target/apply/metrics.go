@@ -17,6 +17,8 @@
 package apply
 
 import (
+	"time"
+
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -39,6 +41,12 @@ var (
 	applyErrors = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "apply_errors_total",
 		Help: "the number of times an error was encountered while applying mutations",
+	}, metrics.TableLabels)
+	applyMutationAge = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "apply_mutation_age_seconds",
+		Help: "the age of the mutation when it was applied; " +
+			"the difference between the current wall time and the mutation's MVCC timestamp",
+		Buckets: metrics.Buckets(1.0, 24*time.Hour.Seconds()),
 	}, metrics.TableLabels)
 	applyResolves = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "apply_resolves_total",
