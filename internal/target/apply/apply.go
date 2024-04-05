@@ -49,6 +49,7 @@ type apply struct {
 	product types.Product
 	target  ident.Table
 
+	ages      prometheus.Observer
 	conflicts prometheus.Counter
 	deletes   prometheus.Counter
 	durations prometheus.Observer
@@ -94,6 +95,7 @@ func (f *factory) newApply(
 		product: product,
 		target:  target,
 
+		ages:      applyMutationAge.WithLabelValues(labelValues...),
 		conflicts: applyConflicts.WithLabelValues(labelValues...),
 		deletes:   applyDeletes.WithLabelValues(labelValues...),
 		durations: applyDurations.WithLabelValues(labelValues...),
@@ -224,7 +226,12 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 	if err := a.upsertLocked(ctx, tx, upserts, ""); err != nil {
 		return countError(err)
 	}
-	a.durations.Observe(time.Since(start).Seconds())
+
+	endNanos := time.Now().UnixNano()
+	a.durations.Observe(time.Duration(endNanos - start.UnixNano()).Seconds())
+	for _, mut := range muts {
+		a.ages.Observe(time.Duration(endNanos - mut.Time.Nanos()).Seconds())
+	}
 	return nil
 }
 
