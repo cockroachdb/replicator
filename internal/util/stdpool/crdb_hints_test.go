@@ -38,6 +38,7 @@ func TestFTSHintSupported(t *testing.T) {
 		{"v23.2.2", false},
 		{"v23.2.3", true},
 		{"v23.2.4", true},
+		{"v24.1.0-alpha.5-dev-d45a65e08d45383aade2bcffdcdbe72a0cc279b1", true},
 		{"v24.1.0", true},
 	}
 

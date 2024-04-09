@@ -28,7 +28,8 @@ import (
 // For example:
 //
 //	CockroachDB CCL v23.1.17 (aarch64-apple-darwin21.2, ....)
-var roachVerPattern = regexp.MustCompile(`^CockroachDB.* (v\d+\.\d+.\d+) `)
+//	CockroachDB CCL v24.1.0-alpha.5-dev-d45a65e08d45383aade2bcffdcdbe72a0cc279b1 (....)
+var roachVerPattern = regexp.MustCompile(`^CockroachDB.* (v\d+\.\d+.\d+(-[^ ]+)?) `)
 
 // CockroachSemver extracts the semantic version string from a cluster's
 // reported version.
