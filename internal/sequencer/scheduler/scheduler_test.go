@@ -50,7 +50,9 @@ func TestScheduler(t *testing.T) {
 
 	block := make(chan struct{})
 	var seen []string
-	var s Scheduler
+	locks, err := lockset.New[string](lockset.GoRunner(ctx), "testing")
+	r.NoError(err)
+	s := &Scheduler{locks}
 
 	// This single task executes first, and blocks the following tasks.
 	singleStatus := s.Singleton(table, lastMut, func() error {

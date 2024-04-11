@@ -22,8 +22,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // RetryAtHead returns an error that tasks can use to be retried later,
@@ -55,11 +58,23 @@ func (e *RetryAtHeadErr) Unwrap() error { return e.cause }
 // A Callback is provided to [Set.Schedule].
 type Callback[K any] func(keys []K) error
 
-// A Runner can be provided to Set to control the execution of scheduled
-// tatks.
+// A Runner is passed to New to begin the execution of tasks.
 type Runner interface {
 	// Go should execute the function in a non-blocking fashion.
 	Go(func(context.Context)) error
+}
+
+// GoRunner returns a Runner that executes tasks using the go keyword
+// and the specified context.
+func GoRunner(ctx context.Context) Runner { return &goRunner{ctx} }
+
+type goRunner struct {
+	ctx context.Context
+}
+
+func (r *goRunner) Go(fn func(context.Context)) error {
+	go fn(r.ctx)
+	return nil
 }
 
 // Status is returned by [Set.Schedule].
@@ -147,26 +162,27 @@ func (s *Status) String() string {
 // keys. Instances of this type should only be accessed while
 // holding the lock on the parent Set.
 type waiter[K any] struct {
-	fn        Callback[K]         // nil if already executed.
-	headCount int                 // The number of keys where this waiter is head of queue.
-	keys      []K                 // Desired key set.
-	next      *waiter[K]          // The waiter that was scheduled next.
-	result    notify.Var[*Status] // The outbox for the waiter.
+	fn            Callback[K]         // nil if already executed.
+	headCount     int                 // The number of keys where this waiter is head of queue.
+	keys          []K                 // Desired key set.
+	next          *waiter[K]          // The waiter that was scheduled next.
+	result        notify.Var[*Status] // The outbox for the waiter.
+	scheduleStart time.Time           // The time at which Schedule was called.
 }
 
 // Set implements an in-order admission queue for actors requiring
 // exclusive access to a set of keys.
 //
 // A Set is internally synchronized and is safe for concurrent use. A
-// zero-valued Set is ready to use. A Set should not be copied after it
-// has been created.
+// Set should not be copied after it has been created.
 type Set[K comparable] struct {
-	// If non-nil, execute goroutines through this [Runner] instead of
-	// using the go keyword. This allows callers to provide their own
-	// concurrency control. If the [Runner] rejects a scheduled task,
-	// the rejection will be available from the [notify.Var] returned
-	// from [Set.Schedule].
-	Runner Runner
+	runner Runner
+
+	deferredStart    prometheus.Counter
+	execCompleteTime prometheus.Observer
+	execWaitTime     prometheus.Observer
+	immediateStart   prometheus.Counter
+	retriedTasks     prometheus.Counter
 
 	mu struct {
 		sync.Mutex
@@ -182,6 +198,29 @@ type Set[K comparable] struct {
 		// executed, since it will be at the head of all its key queues.
 		queues map[K][]*waiter[K]
 	}
+}
+
+// New construct a Set that executes tasks using the given runner.
+//
+// See [GoRunner]
+func New[K comparable](runner Runner, metricsLabel string) (*Set[K], error) {
+	if runner == nil {
+		return nil, errors.New("runner must not be nil")
+	}
+	if metricsLabel == "" {
+		return nil, errors.New("metrics label must not be empty")
+	}
+	ret := &Set[K]{
+		runner: runner,
+
+		deferredStart:    deferredStart.WithLabelValues(metricsLabel),
+		execCompleteTime: execCompleteTime.WithLabelValues(metricsLabel),
+		execWaitTime:     execWaitTime.WithLabelValues(metricsLabel),
+		immediateStart:   immediateStart.WithLabelValues(metricsLabel),
+		retriedTasks:     retriedTasks.WithLabelValues(metricsLabel),
+	}
+	ret.mu.queues = make(map[K][]*waiter[K])
+	return ret, nil
 }
 
 // Schedule executes the Callback once all keys have been locked.
@@ -206,11 +245,13 @@ type Set[K comparable] struct {
 // cancel the callback. If the callback has already started executing,
 // the cancel callback will have no effect.
 func (s *Set[K]) Schedule(keys []K, fn Callback[K]) (outcome Outcome, cancel func()) {
+	scheduleStart := time.Now()
 	keys = dedup(keys)
 
 	w := &waiter[K]{
-		fn:   fn,
-		keys: keys,
+		fn:            fn,
+		keys:          keys,
+		scheduleStart: scheduleStart,
 	}
 	w.result.Set(queued)
 	s.enqueue(w)
@@ -349,7 +390,9 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 			err = context.Canceled
 		} else {
 			w.result.Set(executing)
+			s.execWaitTime.Observe(time.Since(w.scheduleStart).Seconds())
 			err = tryCall(fn, w.keys)
+			s.execCompleteTime.Observe(time.Since(w.scheduleStart).Seconds())
 		}
 
 		// Once the waiter has been called, update its status and call
@@ -374,6 +417,8 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 					w.result.Set(&Status{err: retryErr})
 				}
 			} else {
+				s.retriedTasks.Inc()
+
 				// Otherwise, re-enable the waiter. The status will be
 				// set to retryRequested for later re-dispatching by the
 				// dispose method.
@@ -408,12 +453,7 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 		}
 	}
 
-	if s.Runner == nil {
-		go work(context.Background())
-		return
-	}
-
-	if err := s.Runner.Go(work); err != nil {
+	if err := s.runner.Go(work); err != nil {
 		w.result.Set(&Status{err: err})
 	}
 }
@@ -423,10 +463,6 @@ func (s *Set[K]) dispose(w *waiter[K], cancel bool) {
 func (s *Set[K]) enqueue(w *waiter[K]) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.mu.queues == nil {
-		s.mu.queues = make(map[K][]*waiter[K])
-	}
 
 	// Insert the waiter into the global queue.
 	if s.mu.tail == nil {
@@ -449,7 +485,10 @@ func (s *Set[K]) enqueue(w *waiter[K]) {
 
 	// This will also be satisfied if the waiter has an empty key set.
 	if w.headCount == len(w.keys) {
+		s.immediateStart.Inc()
 		s.dispose(w, false)
+	} else {
+		s.deferredStart.Inc()
 	}
 }
 

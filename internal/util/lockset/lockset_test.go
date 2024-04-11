@@ -53,7 +53,9 @@ func TestSerial(t *testing.T) {
 		}
 	}
 
-	var s Set[struct{}]
+	s, err := New[struct{}](GoRunner(ctx), "test")
+	r.NoError(err)
+
 	outcomes := make([]*notify.Var[*Status], numWaiters)
 	for i := 0; i < numWaiters; i++ {
 		outcomes[i], _ = s.Schedule([]struct{}{{}}, checker(i))
@@ -120,9 +122,8 @@ func TestSmoke(t *testing.T) {
 		return nil
 	}
 
-	s := Set[int]{
-		Runner: workgroup.WithSize(ctx, numWaiters/2, numResources),
-	}
+	s, err := New[int](workgroup.WithSize(ctx, numWaiters/2, numResources), "test")
+	r.NoError(err)
 
 	expectedOrder := make([][]int, numResources)
 	var expectedOrderMu sync.Mutex
@@ -171,7 +172,8 @@ func TestCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var s Set[int]
+	s, err := New[int](GoRunner(ctx), "test")
+	r.NoError(err)
 
 	// Schedule a blocker first so we can control execution flow.
 	blockCh := make(chan struct{})
@@ -213,9 +215,8 @@ func TestRunnerRejection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := Set[int]{
-		Runner: workgroup.WithSize(ctx, 1, 0),
-	}
+	s, err := New[int](workgroup.WithSize(ctx, 1, 0), "test")
+	r.NoError(err)
 
 	block := make(chan struct{})
 
@@ -239,8 +240,11 @@ func TestRunnerRejection(t *testing.T) {
 
 func TestPanic(t *testing.T) {
 	r := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	var s Set[int]
+	s, err := New[int](GoRunner(ctx), "test")
+	r.NoError(err)
 
 	outcome, _ := s.Schedule(nil, func(keys []int) error {
 		panic("boom")
@@ -275,7 +279,8 @@ func TestRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	var s Set[int]
+	s, err := New[int](GoRunner(ctx), "test")
+	r.NoError(err)
 
 	// This task will be at the head of the queue.
 	block := make(chan struct{})
@@ -351,7 +356,8 @@ func TestRetryAfterPromotion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	var s Set[int]
+	s, err := New[int](GoRunner(ctx), "test")
+	r.NoError(err)
 
 	blockPromoter := make(chan struct{})
 	promoterOutcome, _ := s.Schedule(nil, func(keys []int) error {
