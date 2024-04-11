@@ -30,7 +30,7 @@ import (
 // A Scheduler is shared across Sequencer implementations to limit
 // overall parallelism and to ensure ordered access to target rows.
 type Scheduler struct {
-	set lockset.Set[string]
+	set *lockset.Set[string]
 }
 
 // Batch executes the callback when it has clear access to apply
