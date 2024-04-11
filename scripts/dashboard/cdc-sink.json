@@ -664,7 +664,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 2
           },
           "id": 14,
           "options": {
@@ -778,7 +778,8 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "green"
+                    "color": "green",
+                    "value": null
                   }
                 ]
               },
@@ -828,7 +829,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 2
           },
           "id": 15,
           "options": {
@@ -939,7 +940,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 21
+            "y": 10
           },
           "id": 16,
           "options": {
@@ -1017,7 +1018,8 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "purple"
+                    "color": "purple",
+                    "value": null
                   }
                 ]
               },
@@ -1029,7 +1031,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 21
+            "y": 10
           },
           "id": 17,
           "options": {
@@ -1107,7 +1109,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 14
+            "y": 38
           },
           "id": 10,
           "options": {
@@ -1275,7 +1277,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 14
+            "y": 38
           },
           "id": 11,
           "options": {
@@ -1390,7 +1392,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 22
+            "y": 46
           },
           "id": 9,
           "options": {
@@ -1463,7 +1465,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 28
+            "y": 52
           },
           "id": 32,
           "options": {
@@ -1531,7 +1533,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 34
+            "y": 58
           },
           "id": 12,
           "options": {
@@ -1599,7 +1601,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 40
+            "y": 64
           },
           "id": 21,
           "options": {
@@ -1690,7 +1692,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 15
+            "y": 39
           },
           "id": 30,
           "options": {
@@ -1817,7 +1819,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 15
+            "y": 39
           },
           "id": 33,
           "options": {
@@ -1952,7 +1954,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 23
+            "y": 47
           },
           "id": 36,
           "options": {
@@ -2079,7 +2081,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 23
+            "y": 47
           },
           "id": 37,
           "options": {
@@ -2194,7 +2196,7 @@
             "h": 5,
             "w": 24,
             "x": 0,
-            "y": 31
+            "y": 55
           },
           "id": 38,
           "options": {
@@ -2266,7 +2268,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 36
+            "y": 60
           },
           "id": 35,
           "options": {
@@ -2333,7 +2335,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 42
+            "y": 66
           },
           "id": 34,
           "options": {
@@ -2994,7 +2996,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 17
+            "y": 41
           },
           "id": 19,
           "options": {
@@ -3062,7 +3064,7 @@
             "h": 6,
             "w": 24,
             "x": 0,
-            "y": 23
+            "y": 47
           },
           "id": 20,
           "options": {
@@ -3177,7 +3179,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 18
+            "y": 42
           },
           "id": 27,
           "options": {
@@ -3285,7 +3287,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 18
+            "y": 42
           },
           "id": 26,
           "options": {
@@ -3419,7 +3421,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 26
+            "y": 50
           },
           "id": 24,
           "options": {
@@ -3581,7 +3583,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 26
+            "y": 50
           },
           "id": 25,
           "options": {
@@ -3673,7 +3675,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 34
+            "y": 58
           },
           "id": 28,
           "options": {
@@ -3711,9 +3713,331 @@
       ],
       "title": "DB Pool",
       "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 41,
+      "panels": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Tasks that write to the target database may execute concurrently only if they would not modify the same row. Tasks that have overlapping row sets must be executed serially in order to guarantee data consistency.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "axisSoftMax": 0.1,
+                "axisSoftMin": 0,
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "linear",
+                "lineStyle": {
+                  "fill": "solid"
+                },
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              },
+              "unit": "s"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "/Rate/"
+                },
+                "properties": [
+                  {
+                    "id": "custom.axisPlacement",
+                    "value": "right"
+                  },
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "unit",
+                    "value": "eps"
+                  },
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "purple",
+                      "mode": "shades"
+                    }
+                  },
+                  {
+                    "id": "custom.axisColorMode",
+                    "value": "series"
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 51
+          },
+          "id": 42,
+          "options": {
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.50, sum(rate(lockset_exec_wait_seconds_bucket{set=\"scheduler\"}[$__rate_interval])) by (le))",
+              "format": "heatmap",
+              "instant": false,
+              "legendFormat": "P50 {{schema}}",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.75, sum(rate(lockset_exec_wait_seconds_bucket{set=\"scheduler\"}[$__rate_interval])) by (le))",
+              "hide": false,
+              "instant": false,
+              "legendFormat": "P75 {{schema}}",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.95, sum(rate(lockset_exec_wait_seconds_bucket{set=\"scheduler\"}[$__rate_interval])) by (le))",
+              "hide": false,
+              "instant": false,
+              "legendFormat": "P95 {{schema}}",
+              "range": true,
+              "refId": "C"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "histogram_quantile(0.99, sum(rate(lockset_exec_wait_seconds_bucket{set=\"scheduler\"}[$__rate_interval])) by (le))",
+              "hide": false,
+              "instant": false,
+              "legendFormat": "P99 {{schema}}",
+              "range": true,
+              "refId": "D"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "exemplar": false,
+              "expr": "rate(lockset_exec_wait_seconds_count{set=\"scheduler\"}[$__rate_interval])",
+              "hide": false,
+              "instant": false,
+              "legendFormat": "Task Rate",
+              "range": true,
+              "refId": "E"
+            }
+          ],
+          "title": "Task Wait Latency P50, P75, P95, P99 vs Task Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "description": "Tasks that have no dependencies on other tasks will be executed immediately, otherwise they are deferred until eligible to run. A task that is executed may be retried if it discovers an ordering requirement that could not be detected during scheduling (e.g. Foreign Key constraints).",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "axisSoftMin": 0,
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              },
+              "unit": "eps"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 51
+          },
+          "id": 43,
+          "options": {
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "sum(rate(lockset_immediate_start_count{set=\"scheduler\"}[$__rate_interval]))",
+              "instant": false,
+              "legendFormat": "Immediate",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "sum(rate(lockset_deferred_start_count{set=\"scheduler\"}[$__rate_interval]))",
+              "hide": false,
+              "instant": false,
+              "legendFormat": "Deferred",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+              },
+              "editorMode": "code",
+              "expr": "sum(rate(lockset_retried_tasks_count{set=\"scheduler\"}[$__rate_interval]))",
+              "hide": false,
+              "instant": false,
+              "legendFormat": "Retried",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "Task Events",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Scheduler Performance",
+      "type": "row"
     }
   ],
-  "refresh": "5s",
+  "refresh": "auto",
   "schemaVersion": 38,
   "style": "dark",
   "tags": [],
@@ -3740,6 +4064,6 @@
   "timezone": "",
   "title": "cdc-sink",
   "uid": "uuu",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

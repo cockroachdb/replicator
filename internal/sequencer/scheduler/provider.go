@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
+	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
 	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
@@ -34,9 +35,13 @@ func ProvideScheduler(ctx context.Context, cfg *sequencer.Config) (*Scheduler, e
 	if p <= 0 {
 		return nil, errors.Errorf("cannot schedule work on %d workers", p)
 	}
-	ret := &Scheduler{}
+
 	// The queue depth is sufficiently large that other things
 	// should catch fire before we can't admit more work.
-	ret.set.Runner = workgroup.WithSize(ctx, p, 10_000*p)
-	return ret, nil
+	locks, err := lockset.New[string](workgroup.WithSize(ctx, p, 10_000*p), "scheduler")
+	if err != nil {
+		return nil, err
+	}
+
+	return &Scheduler{locks}, nil
 }

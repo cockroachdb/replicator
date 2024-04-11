@@ -107,6 +107,7 @@ func Loop(
 
 		if !info.Info().ShouldRetry(err) {
 			abortedCount.WithLabelValues(code).Inc()
+			return err
 		}
 
 		attempt++
