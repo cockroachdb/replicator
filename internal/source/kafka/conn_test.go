@@ -126,14 +126,15 @@ func TestConn(t *testing.T) {
 
 	addr := mb.Addr()
 	config := &Config{
-		BatchSize:     1,
-		Brokers:       []string{addr},
-		Group:         "my-group",
-		Strategy:      "sticky",
-		Topics:        []string{"my-topic"},
-		saslMechanism: sarama.SASLTypePlaintext,
-		saslUser:      "user",
-		saslPassword:  "test",
+		BatchSize:        1,
+		Brokers:          []string{addr},
+		Group:            "my-group",
+		ResolvedInterval: time.Second,
+		Strategy:         "sticky",
+		Topics:           []string{"my-topic"},
+		saslMechanism:    sarama.SASLTypePlaintext,
+		saslUser:         "user",
+		saslPassword:     "test",
 	}
 	err := config.preflight(ctx)
 	a.NoError(err)

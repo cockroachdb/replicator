@@ -17,11 +17,9 @@
 package kafka
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
+	"strconv"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -29,7 +27,6 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -52,15 +49,9 @@ type Handler struct {
 	fromState []*partitionState
 }
 
-type payload struct {
-	After    json.RawMessage `json:"after"`
-	Before   json.RawMessage `json:"before"`
-	Resolved string          `json:"resolved"`
-	Updated  string          `json:"updated"`
-}
-
 // Setup is run at the beginning of a new session, before ConsumeClaim
 func (c *Handler) Setup(session sarama.ConsumerGroupSession) error {
+
 	// If the startup option provide a minTimestamp we mark the offset to the provided
 	// timestamp or the latest read message, whichever is later, for each topic and partition.
 	// In case we restart the process, we are able to resume from the latest committed message
@@ -102,9 +93,13 @@ func (c *Handler) ConsumeClaim(
 				log.Debugf("message channel for topic=%s partition=%d was closed", claim.Topic(), claim.Partition())
 				return nil
 			}
+			partition := strconv.Itoa(int(claim.Partition()))
+			mutationsReceivedCount.WithLabelValues(claim.Topic(), partition).Inc()
 			if err = c.accumulate(toProcess, message); err != nil {
+				mutationsErrorCount.WithLabelValues(claim.Topic(), partition).Inc()
 				return err
 			}
+			mutationsSuccessCount.WithLabelValues(claim.Topic(), partition).Inc()
 			consumed[fmt.Sprintf("%s@%d", message.Topic, message.Partition)] = message
 			// Flush a batch, and mark the latest message for each topic/partition as read.
 			if toProcess.Count() > c.batchSize {
@@ -157,15 +152,9 @@ func (c *Handler) accept(ctx context.Context, toProcess *types.MultiBatch) error
 // accumulate adds the message to the batch, after converting it to a types.Mutation.
 // Resolved messages are skipped.
 func (c *Handler) accumulate(toProcess *types.MultiBatch, msg *sarama.ConsumerMessage) error {
-	var payload payload
-	dec := json.NewDecoder(bytes.NewReader(msg.Value))
-	dec.UseNumber()
-	if err := dec.Decode(&payload); err != nil {
-		// Empty input is a no-op.
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return errors.Wrap(err, "could not decode payload")
+	payload, err := asPayload(msg)
+	if err != nil {
+		return err
 	}
 	if payload.Resolved != "" {
 		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
@@ -185,7 +174,7 @@ func (c *Handler) accumulate(toProcess *types.MultiBatch, msg *sarama.ConsumerMe
 		table = ident.NewTable(c.target.Schema(), table.Table())
 	}
 	if !c.timeRange.Contains(timestamp) {
-		log.Debugf("skipping mutation %s %s %s", string(msg.Key), timestamp, c.timeRange)
+		log.Debugf("skipping mutation %s@%d %s %s", string(msg.Key), msg.Offset, timestamp, c.timeRange)
 		return nil
 	}
 	mut := types.Mutation{
