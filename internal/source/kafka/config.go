@@ -20,6 +20,7 @@ import (
 	"context"
 	"math"
 	"net/url"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -51,13 +52,14 @@ type Config struct {
 	TargetSchema ident.Schema
 	TLS          secure.Config
 
-	BatchSize    int      // How many messages to accumulate before committing to the target
-	Brokers      []string // The address of the Kafka brokers
-	Group        string   // the Kafka consumer group id.
-	MaxTimestamp string   // Only accept messages at or older than this timestamp
-	MinTimestamp string   // Only accept messages at or newer than this timestamp
-	Strategy     string   // Kafka consumer group re-balance strategy
-	Topics       []string // The list of topics that the consumer should use.
+	BatchSize        int           // How many messages to accumulate before committing to the target
+	Brokers          []string      // The address of the Kafka brokers
+	Group            string        // the Kafka consumer group id.
+	MaxTimestamp     string        // Only accept messages at or older than this timestamp
+	MinTimestamp     string        // Only accept messages at or newer than this timestamp
+	ResolvedInterval time.Duration // Minimal duration between resolved timestamps.
+	Strategy         string        // Kafka consumer group re-balance strategy
+	Topics           []string      // The list of topics that the consumer should use.
 
 	// SASL
 	saslClientID     string
@@ -95,6 +97,18 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"only accept messages older than this timestamp; this is an exclusive upper limit")
 	f.StringVar(&c.MinTimestamp, "minTimestamp", "",
 		"only accept unprocessed messages at or newer than this timestamp; this is an inclusive lower limit")
+	f.DurationVar(&c.ResolvedInterval, "resolvedInterval", 5*time.Second, `interval between two resolved timestamps.
+Only used when minTimestamp is specified.
+It serves as a hint to seek the offset of a resolved timestamp message
+that is strictly less than the minTimestamp in the Kafka feed.
+Note:
+The optimal value for resolvedInterval is the same as the resolved
+interval specified in the CREATE CHANGEFEED command.
+The resolved messages will not be emitted more frequently than
+the configured min_checkpoint_frequency specified in CREATE CHANGEFEED
+command (but may be emitted less frequently).
+Please see the CREATE CHANGEFEED documentation for details.
+`)
 	f.StringVar(&c.Strategy, "strategy", "sticky", "Kafka consumer group re-balance strategy")
 	f.StringArrayVar(&c.Topics, "topic", nil, "the topic(s) that the consumer should use")
 
@@ -157,10 +171,16 @@ func (c *Config) preflight(ctx context.Context) error {
 			return err
 		}
 	}
+	// We use ResolvedInterval when seeking the offset of resolved timestamps.
+	// It should match the interval set when creating the changefeed, to minimize
+	// the number of messages that we need to read in the Kafka feed.
+	if c.ResolvedInterval < time.Millisecond {
+		return errors.New("resolved interval must be at least 1 millisecond")
+	}
 	if hlc.Compare(minTimestamp, maxTimestamp) > 0 {
 		return errors.New("minTimestamp must be before maxTimestamp")
 	}
-	c.timeRange = hlc.RangeIncluding(minTimestamp, maxTimestamp)
+	c.timeRange = hlc.RangeExcluding(minTimestamp, maxTimestamp)
 	log.Infof("Kafka time range %s", c.timeRange)
 	sc := sarama.NewConfig()
 	switch c.Strategy {
