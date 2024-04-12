@@ -20,6 +20,7 @@ import (
 	"context"
 	"math"
 	"net/url"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/cdc-sink/internal/script"
@@ -51,13 +52,14 @@ type Config struct {
 	TargetSchema ident.Schema
 	TLS          secure.Config
 
-	BatchSize    int      // How many messages to accumulate before committing to the target
-	Brokers      []string // The address of the Kafka brokers
-	Group        string   // the Kafka consumer group id.
-	MaxTimestamp string   // Only accept messages at or older than this timestamp
-	MinTimestamp string   // Only accept messages at or newer than this timestamp
-	Strategy     string   // Kafka consumer group re-balance strategy
-	Topics       []string // The list of topics that the consumer should use.
+	BatchSize        int           // How many messages to accumulate before committing to the target
+	Brokers          []string      // The address of the Kafka brokers
+	ResolvedInterval time.Duration // Minimal duration between resolved timestamps.
+	Group            string        // the Kafka consumer group id.
+	MaxTimestamp     string        // Only accept messages at or older than this timestamp
+	MinTimestamp     string        // Only accept messages at or newer than this timestamp
+	Strategy         string        // Kafka consumer group re-balance strategy
+	Topics           []string      // The list of topics that the consumer should use.
 
 	// SASL
 	saslClientID     string
@@ -91,6 +93,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.IntVar(&c.BatchSize, "batchSize", 100, "messages to accumulate before committing to the target")
 	f.StringArrayVar(&c.Brokers, "broker", nil, "address of Kafka broker(s)")
 	f.StringVar(&c.Group, "group", "", "the Kafka consumer group id")
+	f.DurationVar(&c.ResolvedInterval, "resolvedInterval", 5*time.Second, "interval between two resolved timestamps")
 	f.StringVar(&c.MaxTimestamp, "maxTimestamp", "",
 		"only accept messages older than this timestamp; this is an exclusive upper limit")
 	f.StringVar(&c.MinTimestamp, "minTimestamp", "",
@@ -156,6 +159,12 @@ func (c *Config) preflight(ctx context.Context) error {
 		if maxTimestamp, err = hlc.Parse(c.MaxTimestamp); err != nil {
 			return err
 		}
+	}
+	// We use ResolvedInterval when seeking the offset of resolved timestamps.
+	// It should match the interval set when creating the changefeed, to minimize
+	// the number of messages that we need to read in the Kafka feed.
+	if c.ResolvedInterval < time.Millisecond {
+		return errors.New("resolved interval must be at least 1 millisecond")
 	}
 	if hlc.Compare(minTimestamp, maxTimestamp) > 0 {
 		return errors.New("minTimestamp must be before maxTimestamp")

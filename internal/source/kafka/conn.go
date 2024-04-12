@@ -22,6 +22,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
@@ -59,6 +60,11 @@ type Conn struct {
 	watchers types.Watchers
 }
 
+type offsetRange struct {
+	min int64
+	max int64
+}
+
 // Start the replication loop. Connect to the Kafka cluster and process events
 // from the given topics.
 // If more that one processes is started, the partitions within the topics
@@ -66,7 +72,7 @@ type Conn struct {
 func (c *Conn) Start(ctx *stopper.Context) (err error) {
 	var start []*partitionState
 	if c.config.MinTimestamp != "" {
-		start, err = c.getOffsets(c.config.timeRange.Min().Nanos())
+		start, err = c.getOffsets(c.config.timeRange.Min())
 		if err != nil {
 			return errors.Wrap(err, "cannot get offsets")
 		}
@@ -107,45 +113,12 @@ func (c *Conn) copyMessages(ctx *stopper.Context) error {
 	return c.group.Consume(ctx, c.config.Topics, c.handler)
 }
 
-// getOffsets get the most recent offsets at the given time
-// for all the topics and partitions.
-// TODO (silvano) : add testing
-// https://github.com/cockroachdb/cdc-sink/issues/779
-func (c *Conn) getOffsets(nanos int64) ([]*partitionState, error) {
-	res := make([]*partitionState, 0)
-	client, err := sarama.NewClient(c.config.Brokers, c.config.saramaConfig)
+// getOffsets finds the offsets based on resolved timestamp messages
+func (c *Conn) getOffsets(min hlc.Time) ([]*partitionState, error) {
+	seeker, err := NewOffsetSeeker(c.config)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
-	for _, topic := range c.config.Topics {
-		partitions, err := client.Partitions(topic)
-		if err != nil {
-			return nil, err
-		}
-		for _, partition := range partitions {
-			// Get the offset at log head.
-			loghead, err := client.GetOffset(topic, partition, sarama.OffsetNewest)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			// Get the most recent available offset at the given time.
-			offset, err := client.GetOffset(topic, partition, int64(nanos/1000000))
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			// Use log head offset if there isn't a message at or after the given time.
-			if offset == sarama.OffsetNewest {
-				offset = loghead
-			}
-			log.Debugf("offset for %s@%d = %d (latest %d)", topic, partition, offset, loghead)
-			res = append(res, &partitionState{
-				topic:     topic,
-				partition: partition,
-				offset:    offset,
-			})
-
-		}
-	}
-	return res, nil
+	defer seeker.Close()
+	return seeker.GetOffsets(c.config.Topics, min)
 }
