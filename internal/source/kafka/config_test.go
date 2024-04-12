@@ -21,6 +21,7 @@ import (
 	"math"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
@@ -29,7 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var maxRange = hlc.RangeIncluding(hlc.New(0, 0), hlc.New(math.MaxInt64, math.MaxInt))
+var maxRange = hlc.RangeExcluding(hlc.New(0, 0), hlc.New(math.MaxInt64, math.MaxInt))
 
 // TestPreflight verifies that the kafka configuration can be validated
 // before we start the service.
@@ -55,43 +56,48 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "no group",
 			in: &Config{
-				Brokers: []string{"mybroker"},
-				Topics:  []string{"mytopic"},
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
 			},
 			wantErr: "no group was configured",
 		},
 		{
 			name: "no brokers",
 			in: &Config{
-				Group:  "mygroup",
-				Topics: []string{"mytopic"},
+				Group:            "mygroup",
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
 			},
 			wantErr: "no brokers were configured",
 		},
 		{
 			name: "no topics",
 			in: &Config{
-				Group:   "mygroup",
-				Brokers: []string{"mybroker"},
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
 			},
 			wantErr: "no topics were configured",
 		},
 		{
 			name: "no strategy",
 			in: &Config{
-				Group:   "mygroup",
-				Brokers: []string{"mybroker"},
-				Topics:  []string{"mytopic"},
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
 			},
 			wantErr: "unrecognized consumer rebalance strategy",
 		},
 		{
 			name: "sticky",
 			in: &Config{
-				Group:    "mygroup",
-				Brokers:  []string{"mybroker"},
-				Topics:   []string{"mytopic"},
-				Strategy: "sticky",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -99,10 +105,11 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "roundrobin",
 			in: &Config{
-				Group:    "mygroup",
-				Brokers:  []string{"mybroker"},
-				Topics:   []string{"mytopic"},
-				Strategy: "roundrobin",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "roundrobin",
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()},
 			timeRange: maxRange,
@@ -110,10 +117,11 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "range",
 			in: &Config{
-				Group:    "mygroup",
-				Brokers:  []string{"mybroker"},
-				Topics:   []string{"mytopic"},
-				Strategy: "range",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "range",
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategyRange()},
 			timeRange: maxRange,
@@ -121,24 +129,39 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "time range",
 			in: &Config{
-				Group:        "mygroup",
-				Brokers:      []string{"mybroker"},
-				Topics:       []string{"mytopic"},
-				Strategy:     "sticky",
-				MinTimestamp: "1.0",
-				MaxTimestamp: "2.0",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				ResolvedInterval: time.Second,
+				MinTimestamp:     "1.0",
+				MaxTimestamp:     "2.0",
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
-			timeRange: hlc.RangeIncluding(hlc.New(1, 0), hlc.New(2, 0)),
+			timeRange: hlc.RangeExcluding(hlc.New(1, 0), hlc.New(2, 0)),
+		},
+		{
+			name: "interval too small",
+			in: &Config{
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				ResolvedInterval: time.Nanosecond,
+				MinTimestamp:     "1.0",
+				MaxTimestamp:     "2.0",
+			},
+			wantErr: "resolved interval must be at least 1 millisecond",
 		},
 		{
 			name: "tls",
 			in: &Config{
-				Group:    "mygroup",
-				Brokers:  []string{"mybroker"},
-				Topics:   []string{"mytopic"},
-				Strategy: "sticky",
-				TLS:      tlsConfig,
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				TLS:              tlsConfig,
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -147,26 +170,28 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "missing user",
 			in: &Config{
-				Group:         "mygroup",
-				Brokers:       []string{"mybroker"},
-				Topics:        []string{"mytopic"},
-				Strategy:      "sticky",
-				TLS:           tlsConfig,
-				saslMechanism: sarama.SASLTypePlaintext,
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				TLS:              tlsConfig,
+				saslMechanism:    sarama.SASLTypePlaintext,
 			},
 			wantErr: "invalid configuration (Net.SASL.User must not be empty when SASL is enabled)",
 		},
 		{
 			name: "plain",
 			in: &Config{
-				Group:         "mygroup",
-				Brokers:       []string{"mybroker"},
-				Topics:        []string{"mytopic"},
-				Strategy:      "sticky",
-				TLS:           tlsConfig,
-				saslMechanism: sarama.SASLTypePlaintext,
-				saslUser:      "user",
-				saslPassword:  "pass",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				TLS:              tlsConfig,
+				saslMechanism:    sarama.SASLTypePlaintext,
+				saslUser:         "user",
+				saslPassword:     "pass",
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -177,14 +202,15 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "scram256",
 			in: &Config{
-				Group:         "mygroup",
-				Brokers:       []string{"mybroker"},
-				Topics:        []string{"mytopic"},
-				Strategy:      "sticky",
-				TLS:           tlsConfig,
-				saslMechanism: sarama.SASLTypeSCRAMSHA256,
-				saslUser:      "user",
-				saslPassword:  "pass",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				TLS:              tlsConfig,
+				saslMechanism:    sarama.SASLTypeSCRAMSHA256,
+				saslUser:         "user",
+				saslPassword:     "pass",
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -195,14 +221,15 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "scram512",
 			in: &Config{
-				Group:         "mygroup",
-				Brokers:       []string{"mybroker"},
-				Topics:        []string{"mytopic"},
-				Strategy:      "sticky",
-				TLS:           tlsConfig,
-				saslMechanism: sarama.SASLTypeSCRAMSHA512,
-				saslUser:      "user",
-				saslPassword:  "pass",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				TLS:              tlsConfig,
+				saslMechanism:    sarama.SASLTypeSCRAMSHA512,
+				saslUser:         "user",
+				saslPassword:     "pass",
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -215,6 +242,7 @@ func TestPreflight(t *testing.T) {
 			in: &Config{
 				Group:            "mygroup",
 				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
@@ -234,6 +262,7 @@ func TestPreflight(t *testing.T) {
 			in: &Config{
 				Group:            "mygroup",
 				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
@@ -246,14 +275,15 @@ func TestPreflight(t *testing.T) {
 		{
 			name: "oath2 no client",
 			in: &Config{
-				Group:         "mygroup",
-				Brokers:       []string{"mybroker"},
-				Topics:        []string{"mytopic"},
-				Strategy:      "sticky",
-				TLS:           tlsConfig,
-				saslMechanism: sarama.SASLTypeOAuth,
-				saslTokenURL:  "http://example.com",
-				saslClientID:  "myclient",
+				Group:            "mygroup",
+				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
+				Topics:           []string{"mytopic"},
+				Strategy:         "sticky",
+				TLS:              tlsConfig,
+				saslMechanism:    sarama.SASLTypeOAuth,
+				saslTokenURL:     "http://example.com",
+				saslClientID:     "myclient",
 			},
 			wantErr: "OAUTH2 requires a client secret",
 		},
@@ -262,6 +292,7 @@ func TestPreflight(t *testing.T) {
 			in: &Config{
 				Group:            "mygroup",
 				Brokers:          []string{"mybroker"},
+				ResolvedInterval: time.Second,
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,

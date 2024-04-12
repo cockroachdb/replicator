@@ -184,11 +184,12 @@ func getConfig(fixture *base.Fixture, fc *fixtureConfig, tgt ident.Table) (*Conf
 		},
 		TargetSchema: dbName,
 
-		BatchSize: 100,
-		Brokers:   []string{broker},
-		Group:     dbName.Raw(),
-		Strategy:  "sticky",
-		Topics:    []string{tgt.Raw()},
+		BatchSize:        100,
+		Brokers:          []string{broker},
+		Group:            dbName.Raw(),
+		ResolvedInterval: time.Second,
+		Strategy:         "sticky",
+		Topics:           []string{tgt.Raw()},
 	}
 	if fc.chaos {
 		config.Sequencer.Chaos = 0.0005
