@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -385,7 +386,7 @@ func (a *apply) upsertArgsLocked(bags []*merge.Bag) ([]any, error) {
 			// payload, so we can just set the validity flag (if any) to
 			// a non-null value.
 			if entry.Valid && targetColumn.ValidityIndex >= 0 {
-				allArgs[argIdx+targetColumn.ValidityIndex] = true
+				allArgs[argIdx+targetColumn.ValidityIndex] = 1
 			}
 
 			// Assign the value to the relevant offset in the args.
@@ -729,15 +730,40 @@ func toColumns(columns, rows int, data []any) ([]any, error) {
 	if rows*columns != len(data) {
 		return nil, errors.Errorf("expecting %d*%d elements, had %d", columns, rows, data)
 	}
-	colData := make([]any, columns)
-	for colIdx := range colData {
-		rowData := make([]any, rows)
+
+	// Each element is a slice of the column's values.
+	colData := make([]reflect.Value, columns)
+	ret := make([]any, columns)
+
+	// We want to create typed column slices to hold each element.
+	for colIdx := range columns {
+		var eltType reflect.Type
+		for rowIdx := range rows {
+			if elt := data[rowIdx*columns+colIdx]; elt != nil {
+				eltType = reflect.TypeOf(elt)
+				break
+			}
+		}
+		// If every element was nil, we'll send an array of null
+		// strings.
+		if eltType == nil {
+			eltType = reflect.TypeFor[string]()
+		}
+		sliceType := reflect.SliceOf(eltType)
+		rowData := reflect.MakeSlice(sliceType, rows, rows)
 		colData[colIdx] = rowData
-		for rowIdx := range rowData {
-			rowData[rowIdx] = data[rowIdx*columns+colIdx]
+		ret[colIdx] = rowData.Interface()
+	}
+
+	for colIdx, colSlice := range colData {
+		// The inner slice should have the same type as the element.
+		for rowIdx := range rows {
+			if elt := data[rowIdx*columns+colIdx]; elt != nil {
+				colSlice.Index(rowIdx).Set(reflect.ValueOf(elt))
+			}
 		}
 	}
-	return colData, nil
+	return ret, nil
 }
 
 // toDBType returns a replacement value if needed to pass the reified

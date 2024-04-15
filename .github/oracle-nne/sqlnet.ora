@@ -7,3 +7,8 @@ SQLNET.CRYPTO_CHECKSUM_TYPES_SERVER = SHA256
 SQLNET.CRYPTO_CHECKSUM_TYPES_CLIENT = SHA256
 SQLNET.CRYPTO_CHECKSUM_CLIENT  = REQUIRED
 SQLNET.EXPIRE_TIME = 10
+
+# When we're hosting inside of Docker, we don't have arbitrary network
+# connectivity, so out-of-band messages can't be sent over separate
+# network sockets. Not setting this prevents e.g. pings from working.
+DISABLE_OOB=ON

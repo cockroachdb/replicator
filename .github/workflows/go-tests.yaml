@@ -191,6 +191,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # This uses a copy of the libraries stashed in our bucket.
+      - name: Install Oracle Instant Client
+        if: ${{ startsWith(matrix.target, 'oracle') }}
+        run: |
+          set -e
+          sudo apt-get install -yqq --no-install-recommends libaio1
+          curl -o /tmp/ora-libs.zip https://storage.googleapis.com/cdc-sink-binaries/third_party/instantclient-basiclite-linux-amd64.zip
+          unzip -d /tmp /tmp/ora-libs.zip
+          sudo mv /tmp/instantclient_21_13/* /usr/lib
+
       - name: Start Containers
         working-directory: .github
         run: >
@@ -214,13 +224,14 @@ jobs:
           TEST_SOURCE_CONNECT: ${{ matrix.sourceConn }}
           TEST_TARGET_CONNECT: ${{ matrix.targetConn }}
         run: >
-          set -o pipefail;
+          set -e -o pipefail;
           go test
           -count 1
           -coverpkg=./internal/...
           -covermode=atomic
           -coverprofile=${{ env.COVER_OUT }}
           -race
+          -tags target_all
           -v
           ./internal/... 2>&1 |
           go run github.com/jstemmer/go-junit-report/v2

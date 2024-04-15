@@ -14,6 +14,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build cgo && linux && (target_oracle || target_all)
+
 package stdpool
 
 import (
@@ -23,15 +25,14 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/godror/godror"
 	"github.com/pkg/errors"
-	ora "github.com/sijms/go-ora/v2"
-	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
 )
 
 func oraErrorCode(err error) (string, bool) {
-	if oraErr := (*network.OracleError)(nil); errors.As(err, &oraErr) {
-		return strconv.Itoa(oraErr.ErrCode), true
+	if oraErr := (*godror.OraErr)(nil); errors.As(err, &oraErr) {
+		return strconv.Itoa(oraErr.Code()), true
 	}
 	return "", false
 }
@@ -84,11 +85,13 @@ func OpenOracleAsTarget(
 		return nil, err
 	}
 
-	connector := ora.NewConnector(connectString)
-
-	if err := attachOptions(ctx, connector.(*ora.OracleConnector), options); err != nil {
+	params, err := godror.ParseDSN(connectString)
+	if err != nil {
 		return nil, err
 	}
+	// Use go's pool, instead of the C library's pool.
+	params.StandaloneConnection = true
+	connector := godror.NewConnector(params)
 
 	ret := &types.TargetPool{
 		DB: sql.OpenDB(connector),
@@ -101,16 +104,7 @@ func OpenOracleAsTarget(
 			ShouldRetry:  oraErrorRetryable,
 		},
 	}
-	ctx.Defer(func() {
-		// It can take a non-trivial amount of time for this close to
-		// happen, since it waits for any in-flight requests to finish
-		// as opposed to terminating them early. This slowness
-		// complicates test cleanup, since the test can't finish until
-		// the pool has closed.
-		go func() {
-			_ = ret.Close()
-		}()
-	})
+	ctx.Defer(func() { _ = ret.Close() })
 
 ping:
 	if err := ret.Ping(); err != nil {
@@ -143,17 +137,17 @@ ping:
 }
 
 // These have been enumerated through trial and error.
-var oracleStartupErrors = map[int]bool{
-	1017:  true, // Invalid username/password
-	1109:  true, // Database not open
-	12514: true, // TNS listener doesn't know about the service
-	28000: true, // The account is locked
+var oracleStartupErrors = map[string]bool{
+	"1017":  true, // Invalid username/password
+	"1109":  true, // Database not open
+	"12514": true, // TNS listener doesn't know about the service
+	"28000": true, // The account is locked
 }
 
 func isOracleStartupError(err error) bool {
-	var oErr *network.OracleError
-	if !errors.As(err, &oErr) {
+	code, ok := oraErrorCode(err)
+	if !ok {
 		return false
 	}
-	return oracleStartupErrors[oErr.ErrCode]
+	return oracleStartupErrors[code]
 }

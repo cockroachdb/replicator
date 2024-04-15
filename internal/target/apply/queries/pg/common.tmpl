@@ -25,7 +25,7 @@ The validity check allows us to distinguish null vs. unset in the payload.
             {{- if $pairIdx -}},{{- end -}}
 
             {{- if $pair.ValidityParam -}}
-                CASE WHEN ${{ $pair.ValidityParam }}::BOOLEAN THEN {{- sp -}}
+                CASE WHEN ${{ $pair.ValidityParam }}::INT = 1 THEN {{- sp -}}
             {{- end -}}
 
             {{- if $pair.Expr -}}

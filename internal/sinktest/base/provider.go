@@ -350,7 +350,8 @@ func provideSchema[P types.AnyPool](
 		}
 
 		ctx.Defer(func() {
-			err := retry.Execute(ctx, pool, fmt.Sprintf("DROP USER %s CASCADE", name))
+			// Use background since stopper context has stopped.
+			err := retry.Execute(context.Background(), pool, fmt.Sprintf("DROP USER %s CASCADE", name))
 			if err != nil {
 				log.WithError(err).Warnf("could not clean up schema %s", name)
 			}
