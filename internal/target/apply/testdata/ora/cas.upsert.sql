@@ -1,6 +1,6 @@
 MERGE INTO "schema"."table" USING (
 WITH data ("pk0","pk1","val0","val1","has_default") AS (
-SELECT CAST(:p1 AS VARCHAR(256)), CAST(:p2 AS INT), CAST(:p3 AS VARCHAR(256)), CAST(:p4 AS VARCHAR(256)), CASE WHEN :p5 IS NOT NULL THEN CAST(:p6 AS INT8) ELSE expr() END FROM DUAL
+SELECT CAST(:1 AS VARCHAR(256)), CAST(:2 AS INT), CAST(:3 AS VARCHAR(256)), CAST(:4 AS VARCHAR(256)), CASE WHEN :5 = 1 THEN CAST(:6 AS INT8) ELSE expr() END FROM DUAL
 ),
 active AS (
 SELECT "pk0","pk1", "table"."val1","table"."val0"

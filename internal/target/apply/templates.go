@@ -197,8 +197,7 @@ func newTemplates(mapping *columnMapping) (*templates, error) {
 		ret.tmpl = tmplMy
 
 	case types.ProductOracle:
-		// Bulk execution of DELETE not supported. See:
-		// github.com/sijms/go-ora/v2/command.go
+		ret.BulkDelete = true
 		ret.BulkUpsert = true
 		ret.delete = tmplOra.Lookup("delete.tmpl")
 		ret.upsert = tmplOra.Lookup("upsert.tmpl")

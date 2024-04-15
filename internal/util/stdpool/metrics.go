@@ -28,8 +28,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	ora "github.com/sijms/go-ora/v2"
-	"github.com/sijms/go-ora/v2/network"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -94,33 +92,6 @@ func WithMetrics(pool string) Option {
 type withMetrics struct{ labels prometheus.Labels }
 
 func (o *withMetrics) option() {}
-
-func (o *withMetrics) oraConnector(_ context.Context, conn *ora.OracleConnector) error {
-	dialErrors := poolDialErrors.With(o.labels)
-	dialLatency := poolDialLatency.With(o.labels)
-	dialSuccesses := poolDialSuccesses.With(o.labels)
-	// TODO(bob): See if there's a way to implement readyLatency a-la
-	// pgx below. May need to use the Context object to look up a
-	// pointer into which to store the start time. Wrap the
-	// OracleConnector in a facade that measures how long it ultimately
-	// takes for the call to Connect to succeed.
-
-	conn.Dialer(&funcDialerContext{
-		func(ctx context.Context, network, addr string) (net.Conn, error) {
-			start := time.Now()
-			conn, err := metricsDialer.DialContext(ctx, network, addr)
-			if err == nil {
-				dialSuccesses.Inc()
-				dialLatency.Observe(time.Since(start).Seconds())
-			} else {
-				dialErrors.Inc()
-			}
-			return conn, err
-		},
-	})
-
-	return nil
-}
 
 // pgxPoolConfig provides metrics around database connections. We use a
 // standard net.Dialer (per defaults from pgx) and measure both how long
@@ -231,17 +202,4 @@ func (o *withMetrics) poolMetrics(ctx context.Context, pool any) {
 			}
 		}
 	})
-}
-
-// funcDialerContext exports a function as a [network.DialerContext].
-type funcDialerContext struct {
-	dial func(ctx context.Context, network, address string) (net.Conn, error)
-}
-
-var _ network.DialerContext = (*funcDialerContext)(nil)
-
-func (d *funcDialerContext) DialContext(
-	ctx context.Context, network, address string,
-) (net.Conn, error) {
-	return d.dial(ctx, network, address)
 }

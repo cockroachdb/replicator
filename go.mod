@@ -9,6 +9,7 @@ require (
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
 	github.com/evanw/esbuild v0.20.2
 	github.com/go-mysql-org/go-mysql v1.6.0
+	github.com/godror/godror v0.42.1
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
@@ -22,7 +23,6 @@ require (
 	github.com/jstemmer/go-junit-report/v2 v2.1.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.19.0
-	github.com/sijms/go-ora/v2 v2.8.7
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/pflag v1.0.5
@@ -42,6 +42,8 @@ require (
 	github.com/eapache/go-resiliency v1.6.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
+	github.com/go-logfmt/logfmt v0.6.0 // indirect
+	github.com/godror/knownpb v0.1.1 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
@@ -56,6 +58,7 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
+	golang.org/x/exp v0.0.0-20240318143956-a85f2c67cd81 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 )
 

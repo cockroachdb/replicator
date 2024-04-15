@@ -42,6 +42,13 @@ on:
 jobs:
   docker:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+          - platform: linux/amd64
+            target: "oracle"
+          - platform: linux/arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,11 +57,17 @@ jobs:
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
+        env:
+          TAG_PREFIX: ${{ matrix.target && format('{0}-', matrix.target) || '' }}
         with:
           images: cockroachdb/cdc-sink
           labels: |
             org.opencontainers.image.title=CDC Sink
             org.opencontainers.image.vendor=Cockroach Labs Inc.
+          tags: |
+            type=ref,prefix=${{ env.TAG_PREFIX }},event=branch
+            type=ref,prefix=${{ env.TAG_PREFIX }},event=tag
+            type=ref,prefix=${{ env.TAG_PREFIX }},event=pr
       - name: Login to DockerHub
         if: ${{ inputs.push }}
         uses: docker/login-action@v3
@@ -64,10 +77,11 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          target: ${{ matrix.target }}

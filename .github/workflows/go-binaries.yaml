@@ -45,6 +45,10 @@ jobs:
           - os: linux
             arch: amd64
           - os: linux
+            arch: amd64
+            cgo: 1
+            target: oracle
+          - os: linux
             arch: arm64
           - os: darwin
             arch: arm64
@@ -64,7 +68,7 @@ jobs:
       - id: names
         name: Determine versions and names
         run: |
-          BUILDNAME="cdc-sink-${{ matrix.os }}-${{ matrix.arch }}"   # cdc-sink-linux-amd64
+          BUILDNAME="cdc-sink-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.target && format('-{0}', matrix.target) || '' }}"   # cdc-sink-linux-amd64[-target]
           OUTPUT="cdc-sink${{ matrix.ext }}"                         # cdc-sink(.exe)
           VERSION=$(git describe --tags --always --dirty)            # Tag name or SHA 
           SYMBOLIC_NAME=$(                                           # Tag, branch, or SHA.
@@ -114,10 +118,11 @@ jobs:
           build
           -v
           -ldflags="-s -w"
+          ${{ matrix.target && format('-tags target_{0}', matrix.target) || '' }}
           -o $OUTPUT
           .
         env:
-          CGO_ENABLED: 0
+          CGO_ENABLED: ${{ matrix.cgo || '0' }}
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
 
