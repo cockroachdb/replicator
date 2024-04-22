@@ -222,6 +222,14 @@ declare module "cdc-sink@v1" {
          * Enables a user-defined, two- or three-way merge function.
          */
         merge: MergeFunction | StandardMerge;
+        /**
+          * This is a tuning parameter which allows the maximum number
+          * of rows in a single UPSERT or DELETE statement to be
+          * limited. This is mainly needed for ultra-wide tables and
+          * databases with a relatively small number of available bind
+          * variables. If unset, a reasonable value will be chosen.
+         */
+        rowLimit: number;
     };
 
     /**

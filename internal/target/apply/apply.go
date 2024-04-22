@@ -30,7 +30,6 @@ import (
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
-	"github.com/cockroachdb/cdc-sink/internal/util/batches"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
@@ -158,10 +157,6 @@ func (f *factory) newApply(
 // Apply applies the mutations to the target table.
 func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.Mutation) error {
 	start := time.Now()
-	deletes, r := batches.Mutation()
-	defer r()
-	upserts, r := batches.Mutation()
-	defer r()
 
 	// We want to ensure that we achieve a last-one-wins behavior within
 	// an immediate-mode batch. This does perform unnecessary work
@@ -183,6 +178,22 @@ func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.
 
 	if a.mu.templates.Positions.Len() == 0 {
 		return errors.Errorf("no ColumnData available for %s", a.target)
+	}
+
+	// If the generated SQL doesn't depend on the number of rows being
+	// inserted, we don't need to do any incremental batching.
+	var deletes []types.Mutation
+	if a.mu.templates.BulkDelete {
+		deletes = make([]types.Mutation, 0, len(muts))
+	} else {
+		deletes = make([]types.Mutation, 0, applycfg.DefaultRowLimit)
+	}
+
+	var upserts []types.Mutation
+	if a.mu.templates.BulkUpsert {
+		upserts = make([]types.Mutation, 0, len(muts))
+	} else {
+		upserts = make([]types.Mutation, 0, applycfg.DefaultRowLimit)
 	}
 
 	// Accumulate mutations and flush incrementally.
