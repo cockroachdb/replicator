@@ -20,6 +20,9 @@ package hlc
 
 // The code in this file is reworked from sink_table.go.
 import (
+	"bytes"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -37,6 +40,11 @@ type Time struct {
 	nanos   int64
 	logical int
 }
+
+var (
+	_ driver.Valuer = Time{}
+	_ sql.Scanner   = (*Time)(nil)
+)
 
 // Compare two timestamps.
 func Compare(a, b Time) int {
@@ -102,13 +110,47 @@ func (t Time) Next() Time {
 	return Time{t.nanos, t.logical + 1}
 }
 
+// Value implements [driver.Valuer], which allows the time to be
+// represented as a decimal string.
+func (t Time) Value() (driver.Value, error) {
+	return t.String(), nil
+}
+
 // MarshalJSON represents the time as a JSON string. This is used when
 // logging timestamps.
 func (t Time) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.String())
 }
 
-// String returns the Time as a
+// Scan implements [sql.Scanner] and attempts to parse the input as
+// a decimal-formatted string. This method also has a special case
+// to handle a single "0" as input.
+func (t *Time) Scan(src any) error {
+	var parsed Time
+	var err error
+	switch src := src.(type) {
+	case []byte:
+		if bytes.Equal(src, []byte("0")) {
+			*t = Zero()
+			return nil
+		}
+		parsed, err = Parse(string(src))
+	case string:
+		if src == "0" {
+			*t = Zero()
+			return nil
+		}
+		parsed, err = Parse(src)
+	default:
+		return errors.Errorf("cannot scan %T as an hlc.Time", src)
+	}
+	if err == nil {
+		*t = parsed
+	}
+	return err
+}
+
+// String returns the Time as a decimal-formatted string.
 func (t Time) String() string {
 	return fmt.Sprintf("%d.%010d", t.nanos, t.logical)
 }
