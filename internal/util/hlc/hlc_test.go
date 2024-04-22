@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBefore(t *testing.T) {
@@ -152,4 +153,18 @@ func TestParse(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSQLHelpers(t *testing.T) {
+	r := require.New(t)
+
+	now := New(100, 200)
+
+	value, err := now.Value()
+	r.NoError(err)
+	r.Equal("100.0000000200", value)
+
+	var next Time
+	r.NoError(next.Scan(value))
+	r.Equal(now, next)
 }

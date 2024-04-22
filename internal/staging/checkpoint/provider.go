@@ -19,7 +19,6 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -34,16 +33,16 @@ var Set = wire.NewSet(ProvideCheckpoints)
 func ProvideCheckpoints(
 	ctx context.Context, pool *types.StagingPool, meta ident.StagingSchema,
 ) (*Checkpoints, error) {
-	// We could change this table name by probing for old vs. new table.
-	// It's an implementation detail and the interesting questions are
-	// already answered by the prometheus metrics.
-	metaTable := ident.NewTable(meta.Schema(), ident.New("resolved_timestamps"))
-	ddl := schema
-	if strings.Contains(pool.Version, "v21.") || strings.Contains(pool.Version, "v22.1.") {
-		ddl = schemaNoTimestamp
-	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf(ddl, metaTable)); err != nil {
+	metaTable := ident.NewTable(meta.Schema(), ident.New("checkpoints"))
+	if _, err := pool.Exec(ctx, fmt.Sprintf(schema, metaTable)); err != nil {
 		return nil, errors.WithStack(err)
+	}
+
+	// Perform migration from old resolved_timestamps schema.
+	if err := migrate(ctx, pool,
+		ident.NewTable(meta.Schema(), ident.New("resolved_timestamps")),
+		metaTable); err != nil {
+		return nil, err
 	}
 
 	return &Checkpoints{
