@@ -264,6 +264,7 @@ func (s *UserScript) bind(loader *Loader) error {
 				tgt.Ignore.Put(ident.New(k), true)
 			}
 		}
+		tgt.RowLimit = bag.RowLimit
 	}
 
 	return nil

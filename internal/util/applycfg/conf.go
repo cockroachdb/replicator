@@ -24,6 +24,15 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/merge"
 )
 
+// DefaultRowLimit limits the number of rows to be sent in a single
+// statement for targets that do not have a bulk-transfer mechanism. If
+// the target doesn't have a bulk-transfer method, then the generated
+// SQL depends on the number of rows being sent, i.e. a bind variable
+// per column per row. This flush size will place an upper bound on the
+// length of the generated SQL and may need to be tuned for hyper-wide
+// tables.
+const DefaultRowLimit = 100
+
 // SubstitutionToken contains the string that we'll use to substitute in
 // the actual parameter index into the generated SQL.
 const SubstitutionToken = "$0"
@@ -49,6 +58,7 @@ type Config struct {
 	Extras      TargetColumn              // JSONB column to store unmapped values in.
 	Ignore      *ident.Map[bool]          // Source column names to ignore.
 	Merger      merge.Merger              // Conflict resolution.
+	RowLimit    int                       // Adjust if hitting limits on bind variables.
 	SourceNames *ident.Map[SourceColumn]  // Look for alternate name in the incoming data.
 }
 
@@ -71,6 +81,7 @@ func (c *Config) Copy() *Config {
 	ret.Extras = c.Extras
 	c.Ignore.CopyInto(ret.Ignore)
 	ret.Merger = c.Merger
+	ret.RowLimit = c.RowLimit
 	c.SourceNames.CopyInto(ret.SourceNames)
 
 	return ret
@@ -92,6 +103,7 @@ func (c *Config) Equal(o *Config) bool {
 			ident.Equal(c.Extras, o.Extras) &&
 			c.Ignore.Equal(o.Ignore, cmap.Comparator[bool]()) &&
 			// Not all implementations of Merger are comparable: merge.Func or similar.
+			c.RowLimit == o.RowLimit &&
 			c.SourceNames.Equal(o.SourceNames, ident.Comparator[ident.Ident]())
 }
 
@@ -104,6 +116,7 @@ func (c *Config) IsZero() bool {
 		c.Extras.Empty() &&
 		c.Ignore.Len() == 0 &&
 		c.Merger == nil &&
+		c.RowLimit == 0 &&
 		c.SourceNames.Len() == 0
 }
 
@@ -125,6 +138,9 @@ func (c *Config) Patch(other *Config) *Config {
 	}
 	if other.Merger != nil {
 		c.Merger = other.Merger
+	}
+	if other.RowLimit != 0 {
+		c.RowLimit = other.RowLimit
 	}
 	if other.SourceNames != nil {
 		other.SourceNames.CopyInto(c.SourceNames)

@@ -125,6 +125,9 @@ type targetJS struct {
 	// Two- or three-way merge operator. The bindMerge method will
 	// validate the type of value.
 	Merge goja.Value `goja:"merge"`
+	// For targets without a bulk-transfer mechanism, the maximum number
+	// of rows to send in a single statement.
+	RowLimit int `goja:"rowLimit"`
 }
 
 // Loader is responsible for the first-pass execution of the user

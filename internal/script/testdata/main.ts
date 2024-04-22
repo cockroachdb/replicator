@@ -102,6 +102,11 @@ api.configureTable("all_features", {
         })
         return {apply: op.target};
     }),
+    // This is a tuning parameter which allows the maximum number of
+    // rows in a single UPSERT or DELETE statement to be limited. This
+    // is mainly needed for ultra-wide tables and databases with a
+    // relatively small number of available bind variables.
+    rowLimit: 99,
 });
 
 // Elide all deletes for the table, e.g.: for archival use cases.
