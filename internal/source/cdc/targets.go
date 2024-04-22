@@ -38,6 +38,7 @@ type targetInfo struct {
 	acceptor       types.MultiAcceptor         // Possibly-async writes to the target.
 	checkpoint     *checkpoint.Group           // Persistence of checkpoint (fka. resolved) timestamps
 	mode           notify.Var[switcher.Mode]   // Switchable strategies.
+	partition      ident.Ident                 // For future configuration.
 	resolvingRange notify.Var[hlc.Range]       // Range of resolved timestamps to be processed.
 	stat           *notify.Var[sequencer.Stat] // Processing status.
 	target         ident.Schema                // Identify for logging.
@@ -95,8 +96,9 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 	}
 
 	ret := &targetInfo{
-		target:  schema,
-		watcher: w,
+		partition: ident.New(schema.Canonical().Raw()),
+		target:    schema,
+		watcher:   w,
 	}
 
 	ret.checkpoint, err = t.checkpoints.Start(t.stopper, tableGroup, &ret.resolvingRange)

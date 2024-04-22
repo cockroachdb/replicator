@@ -14,13 +14,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package checkpoint_test
+package checkpoint
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -33,22 +34,25 @@ import (
 func TestResolved(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := base.NewFixture(t)
 	r.NoError(err)
 
 	ctx := fixture.Context
 
+	chk, err := ProvideCheckpoints(ctx, fixture.StagingPool, fixture.StagingDB)
+	r.NoError(err)
+
 	// We're going to test that two independent groups operating on the
 	// same name are able to coordinate.
 	bounds1 := &notify.Var[hlc.Range]{}
-	g1, err := fixture.Checkpoints.Start(ctx,
+	g1, err := chk.Start(ctx,
 		&types.TableGroup{Name: ident.New("fake")},
 		bounds1,
 	)
 	r.NoError(err)
 
 	bounds2 := &notify.Var[hlc.Range]{}
-	g2, err := fixture.Checkpoints.Start(ctx,
+	g2, err := chk.Start(ctx,
 		&types.TableGroup{Name: ident.New("fake")},
 		bounds2,
 	)
@@ -57,16 +61,17 @@ func TestResolved(t *testing.T) {
 
 	const minNanos = int64(1)
 	const maxNanos = int64(1_000)
+	part := ident.New("partition")
 
 	t.Run("advance-and-bootstrap", func(t *testing.T) {
 		r := require.New(t)
 		start := time.Now()
 		for i := minNanos; i <= maxNanos; i++ {
-			r.NoError(g1.Advance(ctx, hlc.New(i, 0)))
+			r.NoError(g1.Advance(ctx, part, hlc.New(i, 0)))
 
 			// Accept cases where a duplicate message is received, as
 			// long as it's the tail.
-			r.NoError(g1.Advance(ctx, hlc.New(i, 0)))
+			r.NoError(g1.Advance(ctx, part, hlc.New(i, 0)))
 		}
 		log.Infof("inserted rows in %s", time.Since(start))
 
@@ -85,7 +90,7 @@ func TestResolved(t *testing.T) {
 
 	t.Run("scan", func(t *testing.T) {
 		r := require.New(t)
-		found, err := fixture.Checkpoints.ScanForTargetSchemas(ctx)
+		found, err := chk.ScanForTargetSchemas(ctx)
 		r.NoError(err)
 		r.Equal([]ident.Schema{ident.MustSchema(ident.New("fake"))}, found)
 	})
@@ -126,53 +131,92 @@ func TestResolved(t *testing.T) {
 
 	t.Run("scan-empty", func(t *testing.T) {
 		r := require.New(t)
-		found, err := fixture.Checkpoints.ScanForTargetSchemas(ctx)
+		found, err := chk.ScanForTargetSchemas(ctx)
 		r.NoError(err)
 		r.Len(found, 0)
 	})
 
 	t.Run("no-going-back", func(t *testing.T) {
 		r := require.New(t)
-		r.ErrorContains(g1.Advance(ctx, hlc.New(1, 1)), "is going backwards")
+		r.ErrorContains(g1.Advance(ctx, part, hlc.New(1, 1)), "is going backwards")
 	})
 }
 
-func TestTransitions(t *testing.T) {
+func TestTransitionsInSinglePartition(t *testing.T) {
+	testTransitions(t, 1)
+}
+
+func TestTransitionsInMultiplePartitions(t *testing.T) {
+	testTransitions(t, 16)
+}
+
+func testTransitions(t *testing.T, partitionCount int) {
+	t.Helper()
 	r := require.New(t)
+	lastPart := partitionCount - 1
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := base.NewFixture(t)
 	r.NoError(err)
-
 	ctx := fixture.Context
 
-	bounds := &notify.Var[hlc.Range]{}
+	chk, err := ProvideCheckpoints(ctx, fixture.StagingPool, fixture.StagingDB)
+	r.NoError(err)
+
+	partIdent := func(part int) ident.Ident {
+		return ident.New(fmt.Sprintf("part_%d", part))
+	}
+
+	group := chk.newGroup(
+		&types.TableGroup{
+			Name:      ident.New("my_group"),
+			Enclosing: fixture.TargetSchema.Schema(),
+		},
+		notify.VarOf(hlc.RangeEmpty()),
+	)
+
 	expect := func(low, high int) {
 		lo := hlc.New(int64(low), low)
 		hi := hlc.New(int64(high), high)
 		rng := hlc.RangeIncluding(lo, hi)
-		log.Infof("waiting for %s", rng)
-		r.NoError(stopvar.WaitForValue(ctx, rng, bounds))
+
+		found, err := group.refreshQuery(ctx, hlc.Zero())
+		r.NoError(err)
+		r.Equal(rng, found)
 	}
 
-	group, err := fixture.Checkpoints.Start(ctx,
-		&types.TableGroup{Name: ident.New("fake")},
-		bounds,
-	)
-	r.NoError(err)
-	advance := func(ts int) {
-		r.NoError(group.Advance(ctx, hlc.New(int64(ts), ts)))
+	advance := func(part, ts int) {
+		r.NoError(group.Advance(ctx,
+			partIdent(part),
+			hlc.New(int64(ts), ts)))
 	}
+	var previousCommit hlc.Time
 	commit := func(ts int) {
+		h := hlc.New(int64(ts), ts)
+		r.NoError(group.Commit(ctx, hlc.RangeIncluding(previousCommit, h)))
+		previousCommit = h
+	}
+	commitExactly := func(ts int) {
 		h := hlc.New(int64(ts), ts)
 		r.NoError(group.Commit(ctx, hlc.RangeIncluding(h, h)))
 	}
 
 	expect(0, 0)
 
-	// Add a timestamp and expect the exclusive end point to advance
-	// beyond the end time.
-	advance(2)
-	expect(0, 2)
+	// Bootstrap case to establish all partitions.
+	for part := range partitionCount {
+		advance(part, 0)
+	}
+	expect(0, 0)
+
+	// Ensure that the timestamp doesn't advance until all partitons have advanced.
+	for part := range partitionCount {
+		advance(part, 2)
+		if part == lastPart {
+			expect(0, 2)
+		} else {
+			expect(0, 0)
+		}
+	}
 
 	// Commit the timestamp and expect an empty range that does not
 	// overlap the committed time.
@@ -180,8 +224,14 @@ func TestTransitions(t *testing.T) {
 	expect(2, 2)
 
 	// Extend the end time, the min bound should not change.
-	advance(5)
-	expect(2, 5)
+	for part := range partitionCount {
+		advance(part, 5)
+		if part == lastPart {
+			expect(2, 5)
+		} else {
+			expect(2, 2)
+		}
+	}
 
 	// Same test as committing 2 above.
 	commit(5)
@@ -190,10 +240,11 @@ func TestTransitions(t *testing.T) {
 	// Stack up additional timestamps that we'll incrementally commit.
 	// We expect to advance incrementally as the timestamps are
 	// committed.
-	advance(10)
-	advance(15)
-	advance(20)
-	advance(25)
+	for part := range partitionCount {
+		for _, ts := range []int{10, 15, 20, 25} {
+			advance(part, ts)
+		}
+	}
 
 	expect(5, 25)
 	commit(10)
@@ -209,12 +260,31 @@ func TestTransitions(t *testing.T) {
 	// We do have guards for ensuring that a resolved timestamp always
 	// goes forward, however we do want to verify that we get reasonable
 	// answers if there's a gap in the history.
-	advance(100)
-	advance(105)
-	advance(110)
+	for part := range partitionCount {
+		for _, ts := range []int{100, 105, 107, 110} {
+			advance(part, ts)
+		}
+	}
+
 	commit(100)
-	commit(110)
+	commitExactly(110)
+	expect(100, 107)
+	commitExactly(105)
+	expect(105, 107)
+	commitExactly(107)
 	expect(110, 110)
-	commit(105)
+
+	// This shouldn't change the final outcome.
+	for part := range partitionCount {
+		r.NoError(group.Ensure(ctx, []ident.Ident{partIdent(part)}))
+	}
+	expect(110, 110)
+
+	// As a final check, introduce a new partition and ensure that the
+	// window rolls backward and can be rolled forward again.
+	another := ident.New("another")
+	r.NoError(group.Ensure(ctx, []ident.Ident{another}))
+	expect(1, 1)
+	r.NoError(group.Advance(ctx, another, hlc.New(110, 110)))
 	expect(110, 110)
 }

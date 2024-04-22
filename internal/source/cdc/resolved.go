@@ -67,5 +67,5 @@ func (h *Handler) resolved(ctx context.Context, req *request) error {
 	if err != nil {
 		return err
 	}
-	return target.checkpoint.Advance(ctx, req.timestamp)
+	return target.checkpoint.Advance(ctx, target.partition, req.timestamp)
 }

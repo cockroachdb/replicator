@@ -45,6 +45,18 @@ type Checkpoints struct {
 func (r *Checkpoints) Start(
 	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range],
 ) (*Group, error) {
+	ret := r.newGroup(group, bounds)
+	// Populate data immediately.
+	if err := ret.refreshBounds(ctx); err != nil {
+		return nil, err
+	}
+	ret.refreshJob(ctx)
+	ret.reportMetrics(ctx)
+
+	return ret, nil
+}
+
+func (r *Checkpoints) newGroup(group *types.TableGroup, bounds *notify.Var[hlc.Range]) *Group {
 	ret := &Group{
 		bounds: bounds,
 		pool:   r.pool,
@@ -64,21 +76,14 @@ func (r *Checkpoints) Start(
 	// This query may indeed require a full table scan.
 	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable)
 	hinted := r.pool.HintNoFTS(r.metaTable)
-	ret.sql.mark = fmt.Sprintf(advanceTemplate, hinted)
-	ret.sql.record = fmt.Sprintf(applyTemplate, hinted)
-
-	// Populate data immediately.
-	if err := ret.refreshBounds(ctx); err != nil {
-		return nil, err
-	}
-	ret.refreshJob(ctx)
-	ret.reportMetrics(ctx)
-
-	return ret, nil
+	ret.sql.advance = fmt.Sprintf(advanceTemplate, hinted)
+	ret.sql.ensure = fmt.Sprintf(ensureTemplate, hinted)
+	ret.sql.commit = fmt.Sprintf(commitTemplate, hinted)
+	return ret
 }
 
 const scanForTargetTemplate = `
-SELECT DISTINCT target_schema
+SELECT DISTINCT group_name
 FROM %[1]s
 WHERE target_applied_at IS NULL
 `
