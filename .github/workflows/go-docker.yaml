@@ -45,10 +45,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - platform: linux/amd64
-          - platform: linux/amd64
+          - platforms: linux/amd64,linux/arm64
+          - platforms: linux/amd64
             target: "oracle"
-          - platform: linux/arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,7 +79,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           context: .
-          platforms: ${{ matrix.platform }}
+          platforms: ${{ matrix.platforms }}
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
