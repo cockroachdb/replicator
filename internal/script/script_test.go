@@ -176,6 +176,7 @@ CREATE TABLE %s.skewed_merge_times(
 			),
 			// SourceName not used; that can be handled by the function.
 			SourceNames: &ident.Map[applycfg.SourceColumn]{},
+			RowLimit:    99,
 		}
 		a.True(expectedApply.Equal(&cfg.Config))
 

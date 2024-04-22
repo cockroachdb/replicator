@@ -49,6 +49,7 @@ type columnMapping struct {
 	PK                   []types.ColData              // The names of the PK columns.
 	PKDelete             []types.ColData              // The names of the PK columns to delete.
 	Renames              *ident.Map[ident.Ident]      // External (source) names to target names.
+	RowLimit             int                          // Limits number of generated bind variables.
 	TableName            *ident.Hinted[ident.Table]   // The target table.
 	UpsertParameterCount int                          // The number of SQL arguments.
 }
@@ -76,7 +77,12 @@ func newColumnMapping(
 		Positions:    &ident.Map[positionalColumn]{},
 		Product:      product,
 		Renames:      &ident.Map[ident.Ident]{},
+		RowLimit:     cfg.RowLimit,
 		TableName:    table,
+	}
+
+	if ret.RowLimit <= 0 {
+		ret.RowLimit = applycfg.DefaultRowLimit
 	}
 
 	// Ensure that merge behavior is enabled only if there's something

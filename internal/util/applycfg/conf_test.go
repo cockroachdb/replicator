@@ -34,6 +34,7 @@ func TestCopyEquals(t *testing.T) {
 		Deadlines:  ident.MapOf[time.Duration](ident.New("dl"), time.Hour),
 		Exprs:      ident.MapOf[string]("expr", "foo"),
 		Extras:     ident.New("extras"),
+		RowLimit:   42,
 		Ignore:     ident.MapOf[bool]("ign", true),
 		Merger: merge.Func(func(context.Context, *merge.Conflict) (*merge.Resolution, error) {
 			panic("unused")
