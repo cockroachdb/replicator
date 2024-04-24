@@ -24,18 +24,6 @@ import (
 // TODO (silvano) Provide a grafana dashboard for kafka connector.
 // https://github.com/cockroachdb/cdc-sink/issues/829
 var (
-	mutationsErrorCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kafka_mutations_error_count",
-		Help: "the total number of mutations that encountered an error during processing",
-	}, []string{"topic", "partition"})
-	mutationsReceivedCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kafka_mutations_received_count",
-		Help: "the total number of mutations received from the source",
-	}, []string{"topic", "partition"})
-	mutationsSuccessCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "kafka_mutations_success_count",
-		Help: "the total number of mutations that were successfully processed",
-	}, []string{"topic", "partition"})
 	seekMessagesCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kafka_seeks_count",
 		Help: "the total of messages read seeking a minimum resolved timestamp",
