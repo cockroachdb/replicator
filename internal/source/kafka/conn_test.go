@@ -25,52 +25,76 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var _ types.MultiAcceptor = &mockAcceptor{}
-
-type mockAcceptor struct {
+type mockConveyor struct {
 	mu struct {
 		sync.Mutex
-		done bool
+		done       bool
+		timestamps ident.Map[hlc.Time]
+		ensure     ident.Map[bool]
 	}
 }
 
-func (a *mockAcceptor) done() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.mu.done
-}
+var _ Conveyor = &mockConveyor{}
+var sentinel = hlc.New(9999, 0)
 
-// AcceptMultiBatch implements types.MultiAcceptor.
-func (a *mockAcceptor) AcceptMultiBatch(
+// AcceptMultiBatch implements Target.
+func (a *mockConveyor) AcceptMultiBatch(
 	_ context.Context, batch *types.MultiBatch, _ *types.AcceptOptions,
 ) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if batch.ByTime[hlc.New(9999, 0)] != nil {
+	if batch.ByTime[sentinel] != nil {
 		a.mu.done = true
 		log.Info("AcceptMultiBatch found sentinel")
 	}
 	return nil
 }
 
-// AcceptTableBatch implements types.MultiAcceptor.
-func (a *mockAcceptor) AcceptTableBatch(
-	context.Context, *types.TableBatch, *types.AcceptOptions,
-) error {
+// Advance implements Target.
+func (a *mockConveyor) Advance(_ context.Context, partition ident.Ident, ts hlc.Time) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mu.timestamps.Put(partition, ts)
 	return nil
 }
 
-// AcceptTemporalBatch implements types.MultiAcceptor.
-func (a *mockAcceptor) AcceptTemporalBatch(
-	context.Context, *types.TemporalBatch, *types.AcceptOptions,
-) error {
+// Ensure implements Target.
+func (a *mockConveyor) Ensure(_ context.Context, partitions []ident.Ident) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, p := range partitions {
+		a.mu.ensure.Put(p, true)
+	}
 	return nil
+}
+
+// Watcher implements Target. Not used in this test.
+func (a *mockConveyor) Watcher() types.Watcher {
+	return nil
+}
+
+func (a *mockConveyor) done() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.mu.done
+}
+
+func (a *mockConveyor) getEnsured(partition ident.Ident) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.mu.ensure.GetZero(partition)
+}
+func (a *mockConveyor) getTimestamp(partition ident.Ident) hlc.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.mu.timestamps.GetZero(partition)
 }
 
 // TestConn verifies that we can process messages using a simple mock broker.
@@ -86,10 +110,10 @@ func TestConn(t *testing.T) {
 			sarama.NewMockSaslAuthenticateResponse(t)),
 		"MetadataRequest": sarama.NewMockMetadataResponse(t).
 			SetBroker(mb.Addr(), mb.BrokerID()).
-			SetLeader("my-topic", 0, mb.BrokerID()),
+			SetLeader("my-topic", 31, mb.BrokerID()),
 		"OffsetRequest": sarama.NewMockOffsetResponse(t).
-			SetOffset("my-topic", 0, sarama.OffsetOldest, 0).
-			SetOffset("my-topic", 0, sarama.OffsetNewest, 1),
+			SetOffset("my-topic", 31, sarama.OffsetOldest, 0).
+			SetOffset("my-topic", 31, sarama.OffsetNewest, 1),
 		"FindCoordinatorRequest": sarama.NewMockFindCoordinatorResponse(t).
 			SetCoordinator(sarama.CoordinatorGroup, "my-group", mb),
 		"HeartbeatRequest": sarama.NewMockHeartbeatResponse(t),
@@ -103,24 +127,24 @@ func TestConn(t *testing.T) {
 				&sarama.ConsumerGroupMemberAssignment{
 					Version: 0,
 					Topics: map[string][]int32{
-						"my-topic": {0},
+						"my-topic": {31},
 					},
 				}),
 		),
 		"OffsetFetchRequest": sarama.NewMockOffsetFetchResponse(t).SetOffset(
-			"my-group", "my-topic", 0, 0, "", sarama.ErrNoError,
+			"my-group", "my-topic", 31, 0, "", sarama.ErrNoError,
 		).SetError(sarama.ErrNoError),
 		"FetchRequest": sarama.NewMockSequence(
 			sarama.NewMockFetchResponse(t, 1).
-				SetMessage("my-topic", 0, 0, sarama.StringEncoder(`{"resolved":"1.0"}`)),
+				SetMessage("my-topic", 31, 0, sarama.StringEncoder(`{"resolved":"1.0"}`)),
 			sarama.NewMockFetchResponse(t, 1).
-				SetMessage("my-topic", 0, 1, sarama.StringEncoder(`{"after": {"k":1, "v": "a"},"updated":"2.0"}`)),
+				SetMessage("my-topic", 31, 1, sarama.StringEncoder(`{"after": {"k":1, "v": "a"},"updated":"2.0"}`)),
 			sarama.NewMockFetchResponse(t, 1).
-				SetMessage("my-topic", 0, 2, sarama.StringEncoder(`{"after": {"k":2, "v": "a"},"updated":"2.0"}`)),
+				SetMessage("my-topic", 31, 2, sarama.StringEncoder(`{"after": {"k":2, "v": "a"},"updated":"2.0"}`)),
 			sarama.NewMockFetchResponse(t, 1).
-				SetMessage("my-topic", 0, 3, sarama.StringEncoder(`{"resolved":"2.0"}`)),
+				SetMessage("my-topic", 31, 3, sarama.StringEncoder(`{"resolved":"2.0"}`)),
 			sarama.NewMockFetchResponse(t, 1).
-				SetMessage("my-topic", 0, 4, sarama.StringEncoder(`{"after": {"k":2, "v": "a"},"updated":"9999.0"}`)),
+				SetMessage("my-topic", 31, 4, sarama.StringEncoder(`{"after": {"k":2, "v": "a"},"updated":"9999.0"}`)),
 		),
 	})
 
@@ -138,15 +162,20 @@ func TestConn(t *testing.T) {
 	}
 	err := config.preflight(ctx)
 	a.NoError(err)
-	acceptor := &mockAcceptor{}
+	conv := &mockConveyor{}
+
 	conn := &Conn{
-		acceptor: acceptor,
 		config:   config,
+		conveyor: conv,
 	}
 	err = conn.Start(ctx)
 	r.NoError(err)
-	for !acceptor.done() {
+	for !conv.done() {
 		time.Sleep(1 * time.Second)
 	}
+	part := ident.New("my-topic@31")
+	a.Equal(true, conv.getEnsured(part))
+	a.Equal(hlc.New(2, 0), conv.getTimestamp(part))
+
 	mb.Close()
 }
