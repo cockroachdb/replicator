@@ -22,11 +22,13 @@ package kafka
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	scriptRuntime "github.com/cockroachdb/cdc-sink/internal/script"
+	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
 	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
+	tgt "github.com/cockroachdb/cdc-sink/internal/target"
 	"github.com/cockroachdb/cdc-sink/internal/util/diag"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
@@ -46,6 +48,8 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 		scriptRuntime.Set,
 		sinkprod.Set,
 		staging.Set,
-		target.Set,
+		tgt.Set,
+		retire.Set,
+		conveyor.Set,
 	))
 }

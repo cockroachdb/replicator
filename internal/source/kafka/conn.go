@@ -20,10 +20,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
-	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -32,32 +29,17 @@ import (
 // Conn encapsulates all wire-connection behavior. It is
 // responsible for receiving replication messages and replying with
 // status updates.
-// TODO (silvano) : support transactional mode
-// https://github.com/cockroachdb/cdc-sink/issues/777
-// note: we get resolved timestamps on all the partitions,
-// so we should be able to leverage that.
-//
 // TODO (silvano): support Avro format, schema registry.
 // https://github.com/cockroachdb/cdc-sink/issues/776
-//
-// TODO (silvano): add metrics.
-// https://github.com/cockroachdb/cdc-sink/issues/778
 type Conn struct {
-	// The destination for writes.
-	acceptor types.MultiAcceptor
 	// The connector configuration.
 	config *Config
-
+	// Delivers mutation to the target database.
+	conveyor Conveyor
 	// The group id used when connecting to the broker.
 	group sarama.ConsumerGroup
-	// The handler that processes the events.
-	handler sarama.ConsumerGroupHandler
-	// The switcher mode
-	mode *notify.Var[switcher.Mode]
-	// Access to the target database.
-	targetDB *types.TargetPool
-	// Access to the target schema.
-	watchers types.Watchers
+	// The consumer that processes the events.
+	consumer sarama.ConsumerGroupHandler
 }
 
 type offsetRange struct {
@@ -81,11 +63,11 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	c.handler = &Handler{
-		acceptor:  c.acceptor,
+
+	c.consumer = &Consumer{
+		conveyor:  c.conveyor,
 		batchSize: c.config.BatchSize,
-		target:    c.config.TargetSchema,
-		watchers:  c.watchers,
+		schema:    c.config.TargetSchema,
 		timeRange: c.config.timeRange,
 		fromState: start,
 	}
@@ -110,7 +92,7 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 // copyMessages is the main replication loop. It will open a connection
 // to the source, accumulate messages, and commit data to the target.
 func (c *Conn) copyMessages(ctx *stopper.Context) error {
-	return c.group.Consume(ctx, c.config.Topics, c.handler)
+	return c.group.Consume(ctx, c.config.Topics, c.consumer)
 }
 
 // getOffsets finds the offsets based on resolved timestamp messages

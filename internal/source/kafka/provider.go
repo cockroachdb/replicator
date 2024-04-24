@@ -17,15 +17,8 @@
 package kafka
 
 import (
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
@@ -34,58 +27,39 @@ import (
 var Set = wire.NewSet(
 	ProvideConn,
 	ProvideEagerConfig,
+	ProvideConveyorConfig,
 )
-
-// ProvideConn is called by Wire to construct this package's
-// logical.Dialect implementation. There's a fake dependency on
-// the script loader so that flags can be evaluated first.
-func ProvideConn(
-	ctx *stopper.Context,
-	acc *apply.Acceptor,
-	sw *switcher.Switcher,
-	chaos *chaos.Chaos,
-	config *Config,
-	memo types.Memo,
-	stagingPool *types.StagingPool,
-	targetPool *types.TargetPool,
-	watchers types.Watchers,
-) (*Conn, error) {
-	if err := config.Preflight(ctx); err != nil {
-		return nil, err
-	}
-	// ModeImmediate is the only mode supported for now.
-	mode := notify.VarOf(switcher.ModeImmediate)
-	sw = sw.WithMode(mode)
-	seq, err := chaos.Wrap(ctx, sw) // No-op if probability is 0.
-	if err != nil {
-		return nil, err
-	}
-	connAcceptor, _, err := seq.Start(ctx, &sequencer.StartOptions{
-		Delegate: types.OrderedAcceptorFrom(acc, watchers),
-		Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
-		Group: &types.TableGroup{
-			Name:      ident.New(config.TargetSchema.Raw()),
-			Enclosing: config.TargetSchema,
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	ret := &Conn{
-		acceptor: connAcceptor,
-		config:   config,
-		mode:     mode,
-		targetDB: targetPool,
-		watchers: watchers,
-	}
-
-	return (*Conn)(ret), ret.Start(ctx)
-}
 
 // ProvideEagerConfig is a hack to move up the evaluation of the user
 // script so that the options callbacks can set any non-script-related
 // CLI flags.
 func ProvideEagerConfig(cfg *Config, _ *script.Loader) *EagerConfig {
 	return (*EagerConfig)(cfg)
+}
+
+// ProvideConveyorConfig is called by Wire.
+func ProvideConveyorConfig(cfg *Config) *conveyor.Config {
+	return &cfg.ConveyorConfig
+}
+
+// ProvideConn is called by Wire to construct this package's
+// logical.Dialect implementation. There's a fake dependency on
+// the script loader so that flags can be evaluated first.
+func ProvideConn(ctx *stopper.Context, config *Config, conv *conveyor.Conveyors) (*Conn, error) {
+	if err := config.Preflight(ctx); err != nil {
+		return nil, err
+	}
+	conveyors := conv.WithKind("kafka")
+	if err := conveyors.Bootstrap(); err != nil {
+		return nil, err
+	}
+	conveyor, err := conveyors.Get(config.TargetSchema)
+	if err != nil {
+		return nil, err
+	}
+	conn := &Conn{
+		config:   config,
+		conveyor: conveyor,
+	}
+	return (*Conn)(conn), conn.Start(ctx)
 }

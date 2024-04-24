@@ -148,18 +148,19 @@ func TestAccumulate(t *testing.T) {
 		},
 	}
 	toProcess := &types.MultiBatch{}
-	consumer := &Handler{
+	consumer := &Consumer{
 		timeRange: hlc.RangeIncluding(hlc.New(10, 0), hlc.New(13, 0)),
-		target:    ident.MustSchema(ident.New("db"), ident.New("public")),
+		schema:    ident.MustSchema(ident.New("db"), ident.New("public")),
 	}
 	for _, test := range tests {
-		err := consumer.accumulate(toProcess, test.msg)
+		_, err := consumer.accumulate(toProcess, test.msg)
 		if test.wantErr != "" {
 			a.Error(err)
 			a.ErrorContains(err, test.wantErr)
 		} else {
 			r.NoError(err)
 		}
+
 	}
 	// Verify the we accumulated all the messages within the time range.
 	a.Equal(3, len(toProcess.Data))
