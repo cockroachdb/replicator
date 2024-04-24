@@ -161,7 +161,7 @@ func (o *offsetSeeker) getPartitionOffset(
 func (o *offsetSeeker) seekResolved(
 	min hlc.Time, topic string, partition int32, offsets offsetRange,
 ) (int64, error) {
-	log.Debugf("seekResolved: finding a message earlier than %s within [%d - %d]", min, offsets.min, offsets.max)
+	log.Tracef("seekResolved: finding a message earlier than %s within [%d - %d]", min, offsets.min, offsets.max)
 	partConsumer, err := o.consumer.ConsumePartition(topic, partition, offsets.min)
 	if err != nil {
 		return 0, err

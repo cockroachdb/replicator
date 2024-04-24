@@ -22,11 +22,13 @@ package kafka
 import (
 	"context"
 
+	"github.com/cockroachdb/replicator/internal/conveyor"
 	scriptRuntime "github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/staging"
-	"github.com/cockroachdb/replicator/internal/target"
+	tgt "github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
@@ -46,6 +48,8 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 		scriptRuntime.Set,
 		sinkprod.Set,
 		staging.Set,
-		target.Set,
+		tgt.Set,
+		retire.Set,
+		conveyor.Set,
 	))
 }
