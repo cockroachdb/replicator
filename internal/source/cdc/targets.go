@@ -119,7 +119,7 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 	}
 
 	// Add top-of-funnel reporting.
-	ret.acceptor = newCountingAcceptor(ret.acceptor, ret.target)
+	ret.acceptor = types.CountingAcceptor(ret.acceptor, ret.target)
 
 	// Advance the stored resolved timestamps.
 	t.updateResolved(ret)

@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package cdc
+package types
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
@@ -22,20 +22,16 @@ import (
 )
 
 var (
-	sourceLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_source_lag_seconds",
-		Help: "the age of the data received from the source changefeed",
+	mutationsErrorCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "mutations_error_count",
+		Help: "the total number of mutations that encountered an error during processing",
 	}, []string{"target"})
-	targetLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_lag_seconds",
-		Help: "the age of the data applied to the table",
+	mutationsReceivedCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "mutations_received_count",
+		Help: "the total number of mutations received from the source",
 	}, []string{"target"})
-	resolvedMinTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_applied_timestamp_seconds",
-		Help: "the wall time of the most recent applied resolved timestamp",
-	}, []string{"target"})
-	resolvedMaxTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_pending_timestamp_seconds",
-		Help: "the wall time of the most recently received resolved timestamp",
+	mutationsSuccessCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "mutations_success_count",
+		Help: "the total number of mutations that were successfully processed",
 	}, []string{"target"})
 )
