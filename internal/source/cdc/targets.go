@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
@@ -118,8 +119,13 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 		return nil, err
 	}
 
+	labels := metrics.SchemaValues(schema)
 	// Add top-of-funnel reporting.
-	ret.acceptor = newCountingAcceptor(ret.acceptor, ret.target)
+	ret.acceptor = types.CountingAcceptor(ret.acceptor,
+		mutationsErrorCount.WithLabelValues(labels...),
+		mutationsReceivedCount.WithLabelValues(labels...),
+		mutationsSuccessCount.WithLabelValues(labels...),
+	)
 
 	// Advance the stored resolved timestamps.
 	t.updateResolved(ret)

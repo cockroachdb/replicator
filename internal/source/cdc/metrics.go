@@ -17,11 +17,6 @@
 package cdc
 
 import (
-	"context"
-
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -56,66 +51,3 @@ var (
 		Help: "the wall time of the most recently received resolved timestamp",
 	}, []string{"target"})
 )
-
-// A countingAcceptor records top-of-funnel mutations counts and further
-// classifies them based on success or failure.
-type countingAcceptor struct {
-	delegate  types.MultiAcceptor
-	errors    prometheus.Counter
-	received  prometheus.Counter
-	successes prometheus.Counter
-}
-
-func newCountingAcceptor(delegate types.MultiAcceptor, target ident.Schema) *countingAcceptor {
-	labels := metrics.SchemaValues(target)
-	return &countingAcceptor{
-		delegate:  delegate,
-		errors:    mutationsErrorCount.WithLabelValues(labels...),
-		received:  mutationsReceivedCount.WithLabelValues(labels...),
-		successes: mutationsSuccessCount.WithLabelValues(labels...),
-	}
-}
-
-var _ types.MultiAcceptor = (*countingAcceptor)(nil)
-
-func (c *countingAcceptor) AcceptMultiBatch(
-	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
-) error {
-	count := float64(batch.Count())
-	c.received.Add(count)
-	err := c.delegate.AcceptMultiBatch(ctx, batch, opts)
-	if err == nil {
-		c.successes.Add(count)
-	} else {
-		c.errors.Add(count)
-	}
-	return err
-}
-
-func (c *countingAcceptor) AcceptTableBatch(
-	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
-) error {
-	count := float64(batch.Count())
-	c.received.Add(count)
-	err := c.delegate.AcceptTableBatch(ctx, batch, opts)
-	if err == nil {
-		c.successes.Add(count)
-	} else {
-		c.errors.Add(count)
-	}
-	return err
-}
-
-func (c *countingAcceptor) AcceptTemporalBatch(
-	ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions,
-) error {
-	count := float64(batch.Count())
-	c.received.Add(count)
-	err := c.delegate.AcceptTemporalBatch(ctx, batch, opts)
-	if err == nil {
-		c.successes.Add(count)
-	} else {
-		c.errors.Add(count)
-	}
-	return err
-}
