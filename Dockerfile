@@ -40,12 +40,12 @@ RUN curl -o ora-libs.zip https://storage.googleapis.com/cdc-sink-binaries/third_
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=1 go build -v -ldflags="-s -w" -o /usr/bin/cdc-sink .
+    GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=1 go build -v -ldflags="-s -w" -tags target_oracle -o /usr/bin/cdc-sink .
 
 # Create an image that supports the Oracle Database targets.
 FROM alpine:latest AS oracle
 ENTRYPOINT ["/usr/bin/cdc-sink"]
-RUN apk --no-cache add libaio libnsl libc6-compat
+RUN apk --no-cache add gcompat libaio
 COPY --from=builder-cgo /tmp/compile/ora-libs/instantclient_*/ /usr/lib
 COPY --from=builder-cgo /usr/bin/cdc-sink /usr/bin/
 
