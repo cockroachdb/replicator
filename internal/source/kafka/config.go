@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
@@ -44,13 +45,14 @@ type EagerConfig Config
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
-	DLQ          dlq.Config
-	Script       script.Config
-	Sequencer    sequencer.Config
-	Staging      sinkprod.StagingConfig
-	Target       sinkprod.TargetConfig
-	TargetSchema ident.Schema
-	TLS          secure.Config
+	DLQ            dlq.Config
+	Script         script.Config
+	Sequencer      sequencer.Config
+	Staging        sinkprod.StagingConfig
+	Target         sinkprod.TargetConfig
+	TargetSchema   ident.Schema
+	TLS            secure.Config
+	ConveyorConfig conveyor.Config
 
 	BatchSize        int           // How many messages to accumulate before committing to the target
 	Brokers          []string      // The address of the Kafka brokers
@@ -61,7 +63,7 @@ type Config struct {
 	Strategy         string        // Kafka consumer group re-balance strategy
 	Topics           []string      // The list of topics that the consumer should use.
 
-	// SASL
+	// SASL parameters
 	saslClientID     string
 	saslClientSecret string
 	saslGrantType    string
@@ -73,11 +75,10 @@ type Config struct {
 
 	// The following are computed.
 
-	// Timestamp range, computed based on minTimestamp and maxTimestamp.
-	timeRange hlc.Range
-
 	// The kafka connector configuration.
 	saramaConfig *sarama.Config
+	// Timestamp range, computed based on minTimestamp and maxTimestamp.
+	timeRange hlc.Range
 }
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
@@ -112,7 +113,7 @@ Please see the CREATE CHANGEFEED documentation for details.
 	f.StringVar(&c.Strategy, "strategy", "sticky", "Kafka consumer group re-balance strategy")
 	f.StringArrayVar(&c.Topics, "topic", nil, "the topic(s) that the consumer should use")
 
-	// SASL
+	// SASL configuration
 	f.StringVar(&c.saslClientID, "saslClientId", "", "client ID for OAuth authentication from a third-party provider")
 	f.StringVar(&c.saslClientSecret, "saslClientSecret", "", "Client secret for OAuth authentication from a third-party provider")
 	f.StringVar(&c.saslGrantType, "saslGrantType", "", "Override the default OAuth client credentials grant type for other implementations")
