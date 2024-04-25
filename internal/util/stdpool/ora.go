@@ -91,6 +91,10 @@ func OpenOracleAsTarget(
 	}
 	// Use go's pool, instead of the C library's pool.
 	params.StandaloneConnection = true
+	// If unset, the driver would otherwise use the local system timezone.
+	if params.Timezone == nil {
+		params.Timezone = time.UTC
+	}
 	connector := godror.NewConnector(params)
 
 	ret := &types.TargetPool{
