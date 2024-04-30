@@ -274,10 +274,36 @@ func TestGetColumns(t *testing.T) {
 			dataCols:    []string{"c", "d", "e"},
 			types: ident.MapOf[string](
 				"a", "NUMBER",
-				"b", "VARCHAR2(42)",
+				"b", "VARCHAR2(42 CHAR)",
 				"c", "FLOAT(8)",
 				"d", "RAW(55)",
 				"e", "NUMBER(4,2)",
+			),
+		},
+		// Ensure that we can work with the byte vs char length semantics.
+		{
+			products:    []types.Product{types.ProductOracle},
+			tableSchema: "a INT, b CHAR(1), c CHAR(1 BYTE), d CHAR(1 CHAR), PRIMARY KEY (a,b)",
+			primaryKeys: []string{"a", "b"},
+			dataCols:    []string{"c", "d"},
+			types: ident.MapOf[string](
+				"a", "NUMBER",
+				"b", "CHAR(1 CHAR)", // We set nls_length_semantics in the session.
+				"c", "CHAR(1 BYTE)",
+				"d", "CHAR(1 CHAR)",
+			),
+		},
+		// Ensure that we can work with the byte vs char length semantics.
+		{
+			products:    []types.Product{types.ProductOracle},
+			tableSchema: "a INT, b VARCHAR2(1), c VARCHAR2(1 BYTE), d VARCHAR2(1 CHAR), PRIMARY KEY (a,b)",
+			primaryKeys: []string{"a", "b"},
+			dataCols:    []string{"c", "d"},
+			types: ident.MapOf[string](
+				"a", "NUMBER",
+				"b", "VARCHAR2(1 CHAR)", // We set nls_length_semantics in the session.
+				"c", "VARCHAR2(1 BYTE)",
+				"d", "VARCHAR2(1 CHAR)",
 			),
 		},
 		// Check default value extraction
