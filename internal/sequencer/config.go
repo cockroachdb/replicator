@@ -24,7 +24,7 @@ import (
 
 // Defaults for flag bindings.
 const (
-	DefaultFlushPeriod     = 1 * time.Millisecond
+	DefaultFlushPeriod     = 1 * time.Second
 	DefaultFlushSize       = 1_000
 	DefaultParallelism     = 16
 	DefaultQuiescentPeriod = 10 * time.Second
