@@ -284,10 +284,18 @@ func TestApply(t *testing.T) {
 	t.Run("concurrent_apply", func(t *testing.T) {
 		r := require.New(t)
 		const batchSize = 1_000
-		const distinctKeys = 10_000
 		const numUpserts = 100_000
 		const numWorkers = 10
 		const upsertsPerWorker = numUpserts / numWorkers
+
+		// We're sending a workload to Oracle without using the lockset
+		// scheduler. This can cause Oracle's deadlock detector to fire
+		// because multiple merge statements may indeed have overlapping
+		// key sets.
+		distinctKeys := 10_000
+		if fixture.TargetPool.Product == types.ProductOracle {
+			distinctKeys = numUpserts
+		}
 
 		// Clean up data.
 		_, err := fixture.TargetPool.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE 1=1", tbl.Name()))
@@ -301,14 +309,14 @@ func TestApply(t *testing.T) {
 		for i := 0; i < numWorkers; i++ {
 			eg.Go(func() error {
 				remaining := upsertsPerWorker
-				for remaining > 0 {
+				for remaining > 0 && egCtx.Err() == nil {
 					currentBatchSize := remaining
 					if currentBatchSize > batchSize {
 						currentBatchSize = batchSize
 					}
 					muts := make([]types.Mutation, currentBatchSize)
 					for i := range muts {
-						key := nextKey.Add(1) % distinctKeys
+						key := int(nextKey.Add(1)) % distinctKeys
 						p := Payload{Pk0: int(key), Pk1: fmt.Sprintf("X%dX", key)}
 						dataBytes, err := json.Marshal(p)
 						a.NoError(err)
@@ -317,17 +325,8 @@ func TestApply(t *testing.T) {
 
 						muts[i] = types.Mutation{Data: dataBytes, Key: keyBytes}
 					}
-					if err := retry.Retry(egCtx, fixture.TargetPool, func(retryCtx context.Context) error {
-						tx, err := fixture.TargetPool.BeginTx(retryCtx, nil)
-						if err != nil {
-							return errors.WithStack(err)
-						}
-						defer tx.Rollback()
-
-						if err := apply(muts); err != nil {
-							return err
-						}
-						return errors.WithStack(tx.Commit())
+					if err := retry.Retry(egCtx, fixture.TargetPool, func(_ context.Context) error {
+						return apply(muts)
 					}); err != nil {
 						return err
 					}
