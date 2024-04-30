@@ -25,17 +25,27 @@ import (
 	"github.com/pkg/errors"
 )
 
-// payload is the encoding of a mutation in a Kafka message.
-type payload struct {
+// Payload is the encoding of a mutation in a Kafka message.
+type Payload struct {
+	Key      json.RawMessage
 	After    json.RawMessage `json:"after"`
 	Before   json.RawMessage `json:"before"`
 	Resolved string          `json:"resolved"`
 	Updated  string          `json:"updated"`
 }
+type jsonDecoder struct {
+}
 
-// asPayload extracts the mutation payload from a Kafka consumer message.
-func asPayload(msg *sarama.ConsumerMessage) (*payload, error) {
-	payload := &payload{}
+// Decoder converts a ConsumerMessage to a payload
+type Decoder interface {
+	Decode(*sarama.ConsumerMessage) (*Payload, error)
+}
+
+var _ Decoder = &jsonDecoder{}
+
+// Decode extracts the mutation payload from a Kafka consumer message.
+func (*jsonDecoder) Decode(msg *sarama.ConsumerMessage) (*Payload, error) {
+	payload := &Payload{}
 	dec := json.NewDecoder(bytes.NewReader(msg.Value))
 	dec.UseNumber()
 	if err := dec.Decode(payload); err != nil {
@@ -45,5 +55,11 @@ func asPayload(msg *sarama.ConsumerMessage) (*payload, error) {
 		}
 		return nil, errors.Wrap(err, "could not decode payload")
 	}
+	payload.Key = msg.Key
 	return payload, nil
 }
+
+// log.Infof("in %s", string(message.Value))
+// 			if message, err = c.registry.decodeMessage(message); err != nil {
+// 				return err
+// 			}

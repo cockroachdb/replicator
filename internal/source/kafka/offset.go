@@ -39,11 +39,12 @@ type OffsetSeeker interface {
 type offsetSeeker struct {
 	client                 sarama.Client
 	consumer               sarama.Consumer
+	decoder                Decoder
 	resolvedIntervalMillis int64
 }
 
 // NewOffsetSeeker instantiates an offsetManager.
-func NewOffsetSeeker(config *Config) (OffsetSeeker, error) {
+func NewOffsetSeeker(config *Config, decoder Decoder) (OffsetSeeker, error) {
 	cl, err := sarama.NewClient(config.Brokers, config.saramaConfig)
 	if err != nil {
 		return nil, err
@@ -179,7 +180,7 @@ func (o *offsetSeeker) seekResolved(
 				// we reached the end of the offset range without finding the resolved timestamp.
 				return sarama.OffsetOldest, nil
 			}
-			payload, err := asPayload(msg)
+			payload, err := o.decoder.Decode(msg)
 			if err != nil {
 				return 0, err
 			}

@@ -71,10 +71,17 @@ func ProvideConn(
 	if err != nil {
 		return nil, err
 	}
-
+	var decoder Decoder
+	if config.SchemaRegistry == nil {
+		decoder = &jsonDecoder{}
+	} else {
+		decoder = newRegistry(config.SchemaRegistry)
+	}
 	ret := &Conn{
 		acceptor: connAcceptor,
 		config:   config,
+		// TODO (silvano): add avro
+		decoder:  decoder,
 		mode:     mode,
 		targetDB: targetPool,
 		watchers: watchers,

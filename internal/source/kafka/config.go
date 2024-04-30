@@ -58,6 +58,7 @@ type Config struct {
 	MaxTimestamp     string        // Only accept messages at or older than this timestamp
 	MinTimestamp     string        // Only accept messages at or newer than this timestamp
 	ResolvedInterval time.Duration // Minimal duration between resolved timestamps.
+	SchemaRegistry   []string      // The url of the schema registries.
 	Strategy         string        // Kafka consumer group re-balance strategy
 	Topics           []string      // The list of topics that the consumer should use.
 

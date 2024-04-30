@@ -30,7 +30,7 @@ func TestAsPayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		msg     *sarama.ConsumerMessage
-		want    *payload
+		want    *Payload
 		wantErr string
 	}{
 		{
@@ -42,9 +42,10 @@ func TestAsPayload(t *testing.T) {
 				Key:       []byte(`[0]`),
 				Value:     []byte(`{"after": {"k":0, "v": "a"}, "updated":"1.0"}`),
 			},
-			want: &payload{
+			want: &Payload{
 				After:    []byte(`{"k":0, "v": "a"}`),
 				Before:   nil,
+				Key:      []byte(`[0]`),
 				Resolved: "",
 				Updated:  "1.0",
 			},
@@ -58,9 +59,10 @@ func TestAsPayload(t *testing.T) {
 				Key:       []byte(`[0]`),
 				Value:     []byte(`{"after": {"k":0, "v": "a"}, "updated":"1.0"}`),
 			},
-			want: &payload{
+			want: &Payload{
 				After:    []byte(`{"k":0, "v": "a"}`),
 				Before:   nil,
+				Key:      []byte(`[0]`),
 				Resolved: "",
 				Updated:  "1.0",
 			},
@@ -74,9 +76,10 @@ func TestAsPayload(t *testing.T) {
 				Key:       []byte(`[0]`),
 				Value:     []byte(`{"after": {"k":0, "v": "b"},"before": {"k":0, "v": "a"}, "updated":"2.0"}`),
 			},
-			want: &payload{
+			want: &Payload{
 				After:    []byte(`{"k":0, "v": "b"}`),
 				Before:   []byte(`{"k":0, "v": "a"}`),
+				Key:      []byte(`[0]`),
 				Resolved: "",
 				Updated:  "2.0",
 			},
@@ -90,9 +93,10 @@ func TestAsPayload(t *testing.T) {
 				Key:       []byte(`[0]`),
 				Value:     []byte(`{"before": {"k":0, "v": "a"}, "updated":"5.0"}`),
 			},
-			want: &payload{
+			want: &Payload{
 				After:    nil,
 				Before:   []byte(`{"k":0, "v": "a"}`),
+				Key:      []byte(`[0]`),
 				Resolved: "",
 				Updated:  "5.0",
 			},
@@ -106,9 +110,10 @@ func TestAsPayload(t *testing.T) {
 				Key:       []byte(`[0]`),
 				Value:     []byte(`{"resolved":"11.0"}`),
 			},
-			want: &payload{
+			want: &Payload{
 				After:    nil,
 				Before:   nil,
+				Key:      []byte(`[0]`),
 				Resolved: "11.0",
 				Updated:  "",
 			},
@@ -128,7 +133,8 @@ func TestAsPayload(t *testing.T) {
 	for _, tt := range tests {
 		a := assert.New(t)
 		r := require.New(t)
-		got, err := asPayload(tt.msg)
+		decoder := &jsonDecoder{}
+		got, err := decoder.Decode(tt.msg)
 		if tt.wantErr != "" {
 			a.Error(err)
 			a.ErrorContains(err, tt.wantErr)

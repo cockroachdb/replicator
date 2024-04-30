@@ -47,7 +47,8 @@ type Conn struct {
 	acceptor types.MultiAcceptor
 	// The connector configuration.
 	config *Config
-
+	// Decoder for the incoming message
+	decoder Decoder
 	// The group id used when connecting to the broker.
 	group sarama.ConsumerGroup
 	// The handler that processes the events.
@@ -70,9 +71,10 @@ type offsetRange struct {
 // If more that one processes is started, the partitions within the topics
 // are allocated to each process based on the chosen rebalance strategy.
 func (c *Conn) Start(ctx *stopper.Context) (err error) {
+
 	var start []*partitionState
 	if c.config.MinTimestamp != "" {
-		start, err = c.getOffsets(c.config.timeRange.Min())
+		start, err = c.getOffsets(c.decoder, c.config.timeRange.Min())
 		if err != nil {
 			return errors.Wrap(err, "cannot get offsets")
 		}
@@ -88,6 +90,7 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 		watchers:  c.watchers,
 		timeRange: c.config.timeRange,
 		fromState: start,
+		decoder:   c.decoder,
 	}
 
 	// Start a process to copy data to the target.
@@ -114,8 +117,8 @@ func (c *Conn) copyMessages(ctx *stopper.Context) error {
 }
 
 // getOffsets finds the offsets based on resolved timestamp messages
-func (c *Conn) getOffsets(min hlc.Time) ([]*partitionState, error) {
-	seeker, err := NewOffsetSeeker(c.config)
+func (c *Conn) getOffsets(decoder Decoder, min hlc.Time) ([]*partitionState, error) {
+	seeker, err := NewOffsetSeeker(c.config, decoder)
 	if err != nil {
 		return nil, err
 	}

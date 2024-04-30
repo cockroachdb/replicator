@@ -47,6 +47,7 @@ type Handler struct {
 	watchers  types.Watchers
 	timeRange hlc.Range
 	fromState []*partitionState
+	decoder   Decoder
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
@@ -152,10 +153,11 @@ func (c *Handler) accept(ctx context.Context, toProcess *types.MultiBatch) error
 // accumulate adds the message to the batch, after converting it to a types.Mutation.
 // Resolved messages are skipped.
 func (c *Handler) accumulate(toProcess *types.MultiBatch, msg *sarama.ConsumerMessage) error {
-	payload, err := asPayload(msg)
+	payload, err := c.decoder.Decode(msg)
 	if err != nil {
 		return err
 	}
+	log.Info(msg.Value, payload)
 	if payload.Resolved != "" {
 		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
 		return nil
@@ -180,7 +182,7 @@ func (c *Handler) accumulate(toProcess *types.MultiBatch, msg *sarama.ConsumerMe
 	mut := types.Mutation{
 		Before: payload.Before,
 		Data:   payload.After,
-		Key:    msg.Key,
+		Key:    payload.Key,
 		Time:   timestamp,
 	}
 	script.AddMeta("kafka", table, &mut)
