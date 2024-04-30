@@ -301,7 +301,7 @@ func TestApply(t *testing.T) {
 		for i := 0; i < numWorkers; i++ {
 			eg.Go(func() error {
 				remaining := upsertsPerWorker
-				for remaining > 0 {
+				for remaining > 0 && egCtx.Err() == nil {
 					currentBatchSize := remaining
 					if currentBatchSize > batchSize {
 						currentBatchSize = batchSize
@@ -317,17 +317,8 @@ func TestApply(t *testing.T) {
 
 						muts[i] = types.Mutation{Data: dataBytes, Key: keyBytes}
 					}
-					if err := retry.Retry(egCtx, fixture.TargetPool, func(retryCtx context.Context) error {
-						tx, err := fixture.TargetPool.BeginTx(retryCtx, nil)
-						if err != nil {
-							return errors.WithStack(err)
-						}
-						defer tx.Rollback()
-
-						if err := apply(muts); err != nil {
-							return err
-						}
-						return errors.WithStack(tx.Commit())
+					if err := retry.Retry(egCtx, fixture.TargetPool, func(_ context.Context) error {
+						return apply(muts)
 					}); err != nil {
 						return err
 					}
