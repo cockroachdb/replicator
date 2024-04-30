@@ -221,12 +221,17 @@ ORDER BY ordered.ordinal_position, column_name
 //
 // List of data types from:
 // https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Data-Types.html
+//
+// See also:
+// https://docs.oracle.com/en/database/oracle/oracle-database/19/refrn/ALL_TAB_COLS.html
 const sqlColumnsQueryOra = `
 WITH atc AS (
   SELECT OWNER, TABLE_NAME, COLUMN_NAME,
   CASE
-    WHEN CHAR_COL_DECL_LENGTH IS NOT NULL AND DATA_TYPE NOT LIKE '%LOB%' THEN
-      DATA_TYPE || '(' || CHAR_COL_DECL_LENGTH || ')'
+    WHEN CHAR_USED = 'B' THEN
+      DATA_TYPE || '(' || CHAR_COL_DECL_LENGTH || ' BYTE)'
+    WHEN CHAR_USED = 'C' THEN
+      DATA_TYPE || '(' || CHAR_LENGTH || ' CHAR)'
     WHEN DATA_PRECISION IS NOT NULL AND DATA_SCALE IS NOT NULL THEN
       DATA_TYPE || '(' || DATA_PRECISION || ',' || DATA_SCALE || ')'
     WHEN DATA_PRECISION IS NOT NULL THEN

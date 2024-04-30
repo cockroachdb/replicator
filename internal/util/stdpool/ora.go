@@ -89,6 +89,10 @@ func OpenOracleAsTarget(
 	if err != nil {
 		return nil, err
 	}
+	// Ensure consistent behavior, where CHAR(1) => CHAR(1 CHAR).
+	params.AlterSession = [][2]string{
+		{"NLS_LENGTH_SEMANTICS", "CHAR"},
+	}
 	// Use go's pool, instead of the C library's pool.
 	params.StandaloneConnection = true
 	// If unset, the driver would otherwise use the local system timezone.
