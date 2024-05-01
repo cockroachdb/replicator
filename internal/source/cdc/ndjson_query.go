@@ -53,11 +53,11 @@ func (h *Handler) getPrimaryKey(req *request) (*ident.Map[int], error) {
 	if !ok {
 		return nil, errors.Errorf("expecting ident.Table, got %T", req.target)
 	}
-	target, err := h.Targets.getTarget(table.Schema())
+	target, err := h.Conveyors.Get(table.Schema())
 	if err != nil {
 		return nil, err
 	}
-	columns, ok := target.watcher.Get().Columns.Get(table)
+	columns, ok := target.Watcher().Get().Columns.Get(table)
 	if !ok {
 		return nil, errors.Errorf("table %q not found", table)
 	}

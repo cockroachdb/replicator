@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/httpauth"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -44,8 +45,8 @@ var sanitizer = strings.NewReplacer("\n", " ", "\r", " ")
 type Handler struct {
 	Authenticator types.Authenticator // Access checks.
 	Config        *Config             // Runtime options.
+	Conveyors     *conveyor.Conveyors // Mutation delivery to the target.
 	TargetPool    *types.TargetPool   // Access to the target cluster.
-	Targets       *Targets            // Access to target schemas.
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

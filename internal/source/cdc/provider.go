@@ -17,26 +17,28 @@
 package cdc
 
 import (
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
-	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
 	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/google/wire"
 )
 
 // Set is used by Wire.
 var Set = wire.NewSet(
-	wire.Struct(new(Handler), "*"), // Handler is itself trivial.
+	ProvideHandler,
+	ProvideConveyorConfig,
 	ProvideDLQConfig,
 	ProvideScriptConfig,
 	ProvideSequencerConfig,
-	ProvideTargets,
+	conveyor.Set,
 )
+
+// ProvideConveyorConfig is called by Wire.
+func ProvideConveyorConfig(cfg *Config) *conveyor.Config {
+	return &cfg.ConveyorConfig
+}
 
 // ProvideDLQConfig is called by Wire.
 func ProvideDLQConfig(cfg *Config) *dlq.Config {
@@ -53,42 +55,14 @@ func ProvideSequencerConfig(cfg *Config) *sequencer.Config {
 	return &cfg.SequencerConfig
 }
 
-// ProvideTargets is called by Wire.
-func ProvideTargets(
-	ctx *stopper.Context,
-	acc *apply.Acceptor,
-	cfg *Config,
-	checkpoints *checkpoint.Checkpoints,
-	retire *retire.Retire,
-	staging *types.StagingPool,
-	sw *switcher.Switcher,
-	watchers types.Watchers,
-) (*Targets, error) {
-	if err := cfg.Preflight(); err != nil {
-		return nil, err
+// ProvideHandler is called by Wire.
+func ProvideHandler(
+	auth types.Authenticator, cfg *Config, conv *conveyor.Conveyors, pool *types.TargetPool,
+) *Handler {
+	return &Handler{
+		Authenticator: auth,
+		Conveyors:     conv.WithKind("cdc"),
+		Config:        cfg,
+		TargetPool:    pool,
 	}
-	targets := &Targets{
-		cfg:           cfg,
-		checkpoints:   checkpoints,
-		retire:        retire,
-		staging:       staging,
-		stopper:       ctx,
-		switcher:      sw,
-		tableAcceptor: acc,
-		watchers:      watchers,
-	}
-
-	// Bootstrap existing schemas for recovery cases.
-	schemas, err := checkpoints.ScanForTargetSchemas(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, sch := range schemas {
-		_, err := targets.getTarget(sch)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return targets, nil
 }
