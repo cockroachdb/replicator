@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
@@ -92,9 +93,11 @@ func createFixture(
 	r.NoError(err)
 
 	cfg := &Config{
-		BestEffortWindow: math.MaxInt64,
-		Discard:          htc.discard,
-		Immediate:        htc.immediate,
+		ConveyorConfig: conveyor.Config{
+			BestEffortWindow: math.MaxInt64,
+			Immediate:        htc.immediate,
+		},
+		Discard: htc.discard,
 		SequencerConfig: sequencer.Config{
 			RetireOffset:    time.Hour, // Enable post-hoc inspection.
 			QuiescentPeriod: time.Second,
@@ -123,13 +126,13 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
 	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
-		cdcTarget, err := h.Targets.getTarget(target.Schema())
+		conveyor, err := h.Conveyors.Get(target.Schema())
 		if err != nil {
 			return err
 		}
 		// Wait for minimum timestamp to advance to desired.
 		for {
-			bounds, boundsChanged := cdcTarget.resolvingRange.Get()
+			bounds, boundsChanged := conveyor.Range().Get()
 			if hlc.Compare(bounds.Min(), expect) >= 0 {
 				return nil
 			}
@@ -322,14 +325,14 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 	// In async mode, we want to reach into the implementation to
 	// force the marked, resolved timestamp to be operated on.
 	maybeFlush := func(target ident.Schematic, expect hlc.Time) error {
-		cdcTarget, err := h.Targets.getTarget(target.Schema())
+		conveyor, err := h.Conveyors.Get(target.Schema())
 		if err != nil {
 			return err
 		}
-		cdcTarget.checkpoint.Refresh()
+		conveyor.Refresh()
 		// Wait for minimum timestamp to advance to desired.
 		for {
-			bounds, boundsChanged := cdcTarget.resolvingRange.Get()
+			bounds, boundsChanged := conveyor.Range().Get()
 			if hlc.Compare(bounds.Min(), expect) >= 0 {
 				return nil
 			}

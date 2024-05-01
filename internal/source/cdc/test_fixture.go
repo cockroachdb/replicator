@@ -22,6 +22,7 @@ package cdc
 import (
 	"context"
 
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
@@ -40,8 +41,8 @@ import (
 type testFixture struct {
 	*all.Fixture
 	BestEffort *besteffort.BestEffort
+	Conveyors  *conveyor.Conveyors
 	Handler    *Handler
-	Targets    *Targets
 }
 
 func newTestFixture(*all.Fixture, *Config) (*testFixture, error) {

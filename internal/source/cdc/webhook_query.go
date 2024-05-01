@@ -32,7 +32,7 @@ import (
 // envelope="wrapped",format="json",diff
 func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	table := req.target.(ident.Table)
-	target, err := h.Targets.getTarget(table.Schema())
+	conveyor, err := h.Conveyors.Get(table.Schema())
 	if err != nil {
 		return err
 	}
@@ -94,5 +94,5 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 			return err
 		}
 	}
-	return target.acceptor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{})
+	return conveyor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{})
 }
