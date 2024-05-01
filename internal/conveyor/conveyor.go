@@ -14,9 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package cdc
+// Package conveyor delivers mutations to target.
+package conveyor
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -28,59 +30,49 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
 	"github.com/cockroachdb/cdc-sink/internal/util/notify"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
 	"github.com/cockroachdb/cdc-sink/internal/util/stopvar"
 	log "github.com/sirupsen/logrus"
 )
 
-type targetInfo struct {
-	acceptor       types.MultiAcceptor         // Possibly-async writes to the target.
-	checkpoint     *checkpoint.Group           // Persistence of checkpoint (fka. resolved) timestamps
-	mode           notify.Var[switcher.Mode]   // Switchable strategies.
-	partition      ident.Ident                 // For future configuration.
-	resolvingRange notify.Var[hlc.Range]       // Range of resolved timestamps to be processed.
-	stat           *notify.Var[sequencer.Stat] // Processing status.
-	target         ident.Schema                // Identify for logging.
-	watcher        types.Watcher               // Schema info.
-}
-
-// Targets manages the plumbing necessary to deliver changefeed messages
-// to a target schema. It is also responsible for mode-switching.
-type Targets struct {
-	cfg           *Config
-	checkpoints   *checkpoint.Checkpoints
-	retire        *retire.Retire
-	staging       *types.StagingPool
-	stopper       *stopper.Context
-	switcher      *switcher.Switcher
-	tableAcceptor *apply.Acceptor
-	watchers      types.Watchers
+// Conveyors manages the plumbing necessary to deliver mutations
+// to a target schema across multiple partitions.
+// It is also responsible for mode-switching.
+type Conveyors struct {
+	Cfg           *Config
+	Checkpoints   *checkpoint.Checkpoints
+	Kind          string
+	Retire        *retire.Retire
+	Stopper       *stopper.Context
+	Switcher      *switcher.Switcher
+	TableAcceptor *apply.Acceptor
+	Watchers      types.Watchers
 
 	mu struct {
 		sync.RWMutex
-		targets ident.SchemaMap[*targetInfo]
+		targets ident.SchemaMap[*Conveyor]
 	}
 }
 
-func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
-	t.mu.RLock()
-	found, ok := t.mu.targets.Get(schema)
-	t.mu.RUnlock()
+// Get returns a conveyor for a specific schema.
+func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
+	c.mu.RLock()
+	found, ok := c.mu.targets.Get(schema)
+	c.mu.RUnlock()
 	if ok {
 		return found, nil
 	}
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Double-check.
-	if found, ok := t.mu.targets.Get(schema); ok {
+	if found, ok := c.mu.targets.Get(schema); ok {
 		return found, nil
 	}
 
-	w, err := t.watchers.Get(schema)
+	w, err := c.Watchers.Get(schema)
 	if err != nil {
 		return nil, err
 	}
@@ -96,33 +88,33 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 		Tables:    tables,
 	}
 
-	ret := &targetInfo{
-		partition: ident.New(schema.Canonical().Raw()),
-		target:    schema,
-		watcher:   w,
+	ret := &Conveyor{
+		factory: c,
+		target:  schema,
+		watcher: w,
 	}
 
-	ret.checkpoint, err = t.checkpoints.Start(t.stopper, tableGroup, &ret.resolvingRange)
+	ret.checkpoint, err = c.Checkpoints.Start(c.Stopper, tableGroup, &ret.resolvingRange)
 	if err != nil {
 		return nil, err
 	}
 
 	// Set the mode before starting the switcher.
-	t.modeSelector(ret)
+	ret.modeSelector(c.Stopper)
 
-	ret.acceptor, ret.stat, err = t.switcher.WithMode(&ret.mode).Start(
-		t.stopper,
+	ret.acceptor, ret.stat, err = c.Switcher.WithMode(&ret.mode).Start(
+		c.Stopper,
 		&sequencer.StartOptions{
 			Bounds:   &ret.resolvingRange,
-			Delegate: types.OrderedAcceptorFrom(t.tableAcceptor, t.watchers),
+			Delegate: types.OrderedAcceptorFrom(c.TableAcceptor, c.Watchers),
 			Group:    tableGroup,
 		})
 	if err != nil {
 		return nil, err
 	}
 
-	labels := metrics.SchemaValues(schema)
 	// Add top-of-funnel reporting.
+	labels := []string{c.Kind, schema.Raw()}
 	ret.acceptor = types.CountingAcceptor(ret.acceptor,
 		mutationsErrorCount.WithLabelValues(labels...),
 		mutationsReceivedCount.WithLabelValues(labels...),
@@ -130,19 +122,65 @@ func (t *Targets) getTarget(schema ident.Schema) (*targetInfo, error) {
 	)
 
 	// Advance the stored resolved timestamps.
-	t.updateResolved(ret)
+	ret.updateResolved(c.Stopper)
 
 	// Allow old staged mutations to be retired.
-	t.retire.Start(t.stopper, tableGroup, &ret.resolvingRange)
+	c.Retire.Start(c.Stopper, tableGroup, &ret.resolvingRange)
 
 	// Report timestamps and lag.
-	t.metrics(ret)
+	ret.metrics(c.Stopper)
 
-	t.mu.targets.Put(schema, ret)
+	c.mu.targets.Put(schema, ret)
 	return ret, nil
 }
 
-func (t *Targets) metrics(info *targetInfo) {
+// A Conveyor delivers mutations to a target, possibly asynchronously.
+// It provides an abstraction over various delivery strategies
+// and it manages checkpoints across multiple partitions for a table group.
+type Conveyor struct {
+	factory        *Conveyors                  // Factory that created this conveyor.
+	acceptor       types.MultiAcceptor         // Possibly-async writes to the target.
+	checkpoint     *checkpoint.Group           // Persistence of checkpoint (fka. resolved) timestamps
+	mode           notify.Var[switcher.Mode]   // Switchable strategies.
+	resolvingRange notify.Var[hlc.Range]       // Range of resolved timestamps to be processed.
+	stat           *notify.Var[sequencer.Stat] // Processing status.
+	target         ident.Schema                // Identify for logging.
+	watcher        types.Watcher               // Schema info.
+}
+
+// AcceptMultiBatch transmits the batch. The options may be nil.
+func (c *Conveyor) AcceptMultiBatch(
+	ctx context.Context, batch *types.MultiBatch, options *types.AcceptOptions,
+) error {
+	return c.acceptor.AcceptMultiBatch(ctx, batch, options)
+}
+
+// Advance the checkpoint for all the named partitions.
+func (c *Conveyor) Advance(ctx context.Context, partition ident.Ident, ts hlc.Time) error {
+	return c.checkpoint.Advance(ctx, partition, ts)
+}
+
+// Ensure that a checkpoint exists for all named partitions.
+func (c *Conveyor) Ensure(ctx context.Context, partitions []ident.Ident) error {
+	return c.checkpoint.Ensure(ctx, partitions)
+}
+
+// Range returns the range of resolved timestamps to be processed.
+func (c *Conveyor) Range() *notify.Var[hlc.Range] {
+	return &c.resolvingRange
+}
+
+// Refresh is used for testing to refresh the checkpoint.
+func (c *Conveyor) Refresh() {
+	c.checkpoint.Refresh()
+}
+
+// Watcher is used for testing to gain access to the underlying schema.
+func (c *Conveyor) Watcher() types.Watcher {
+	return c.watcher
+}
+
+func (c *Conveyor) metrics(ctx *stopper.Context) {
 	// We use an interval to ensure that this metric will tick at a
 	// reasonable rate in the idle condition.
 	const tick = 1 * time.Second
@@ -150,13 +188,14 @@ func (t *Targets) metrics(info *targetInfo) {
 	// Export the min and max resolved timestamps that we see and
 	// include lag computations. This happens on each node, regardless
 	// of whether it holds a lease.
-	t.stopper.Go(func() error {
-		min := resolvedMinTimestamp.WithLabelValues(info.target.Raw())
-		max := resolvedMaxTimestamp.WithLabelValues(info.target.Raw())
-		sourceLag := sourceLagDuration.WithLabelValues(info.target.Raw())
-		targetLag := targetLagDuration.WithLabelValues(info.target.Raw())
-		_, err := stopvar.DoWhenChangedOrInterval(t.stopper,
-			hlc.RangeEmpty(), &info.resolvingRange, tick,
+	ctx.Go(func() error {
+		labels := []string{c.factory.Kind, c.target.Raw()}
+		min := resolvedMinTimestamp.WithLabelValues(labels...)
+		max := resolvedMaxTimestamp.WithLabelValues(labels...)
+		sourceLag := sourceLagDuration.WithLabelValues(labels...)
+		targetLag := targetLagDuration.WithLabelValues(labels...)
+		_, err := stopvar.DoWhenChangedOrInterval(ctx,
+			hlc.RangeEmpty(), &c.resolvingRange, tick,
 			func(ctx *stopper.Context, _, new hlc.Range) error {
 				min.Set(float64(new.Min().Nanos()) / 1e9)
 				targetLag.Set(float64(time.Now().UnixNano()-new.Min().Nanos()) / 1e9)
@@ -168,20 +207,20 @@ func (t *Targets) metrics(info *targetInfo) {
 	})
 }
 
-func (t *Targets) modeSelector(info *targetInfo) {
-	if t.cfg.Immediate {
-		info.mode.Set(switcher.ModeImmediate)
+func (c *Conveyor) modeSelector(ctx *stopper.Context) {
+	if c.factory.Cfg.Immediate {
+		c.mode.Set(switcher.ModeImmediate)
 		return
-	} else if t.cfg.BestEffortOnly {
-		info.mode.Set(switcher.ModeBestEffort)
+	} else if c.factory.Cfg.BestEffortOnly {
+		c.mode.Set(switcher.ModeBestEffort)
 		return
 	}
 	// The initial update will be async, so wait for it.
-	_, initialSet := info.mode.Get()
-	t.stopper.Go(func() error {
-		_, err := stopvar.DoWhenChangedOrInterval(t.stopper,
+	_, initialSet := c.mode.Get()
+	ctx.Go(func() error {
+		_, err := stopvar.DoWhenChangedOrInterval(ctx,
 			hlc.RangeEmptyAt(hlc.New(-1, -1)), // Pick a non-zero time so the callback fires.
-			&info.resolvingRange,
+			&c.resolvingRange,
 			10*time.Second, // Re-evaluate to allow un-jamming big serial transactions.
 			func(ctx *stopper.Context, _, bounds hlc.Range) error {
 				minTime := time.Unix(0, bounds.Min().Nanos())
@@ -189,18 +228,18 @@ func (t *Targets) modeSelector(info *targetInfo) {
 
 				// Sometimes you don't know what you want.
 				want := switcher.ModeUnknown
-				if t.cfg.BestEffortWindow <= 0 {
+				if c.factory.Cfg.BestEffortWindow <= 0 {
 					// Force a consistent mode.
 					want = switcher.ModeConsistent
-				} else if lag >= t.cfg.BestEffortWindow {
+				} else if lag >= c.factory.Cfg.BestEffortWindow {
 					// Fallen behind, switch to best-effort.
 					want = switcher.ModeBestEffort
-				} else if lag <= t.cfg.BestEffortWindow/4 {
+				} else if lag <= c.factory.Cfg.BestEffortWindow/4 {
 					// Caught up close-enough to the current time.
 					want = switcher.ModeConsistent
 				}
 
-				_, _, _ = info.mode.Update(func(current switcher.Mode) (switcher.Mode, error) {
+				_, _, _ = c.mode.Update(func(current switcher.Mode) (switcher.Mode, error) {
 					// Pick a reasonable default for uninitialized case.
 					// Choosing BestEffort here allows us to optimize
 					// for the case where a user creates a changefeed
@@ -212,7 +251,7 @@ func (t *Targets) modeSelector(info *targetInfo) {
 						return current, notify.ErrNoUpdate
 					}
 
-					log.Tracef("setting group %s mode to %s", info.target, want)
+					log.Tracef("setting group %s mode to %s", c.target, want)
 					return want, nil
 				})
 				return nil
@@ -224,11 +263,11 @@ func (t *Targets) modeSelector(info *targetInfo) {
 
 // updateResolved will monitor the timestamp to which tables in the
 // group have advanced and update the resolved timestamp table.
-func (t *Targets) updateResolved(info *targetInfo) {
-	t.stopper.Go(func() error {
-		_, err := stopvar.DoWhenChanged(t.stopper,
+func (c *Conveyor) updateResolved(ctx *stopper.Context) {
+	ctx.Go(func() error {
+		_, err := stopvar.DoWhenChanged(ctx,
 			nil,
-			info.stat,
+			c.stat,
 			func(ctx *stopper.Context, old, new sequencer.Stat) error {
 				oldMin := sequencer.CommonProgress(old)
 				newMin := sequencer.CommonProgress(new)
@@ -239,10 +278,10 @@ func (t *Targets) updateResolved(info *targetInfo) {
 				}
 
 				// Mark the range as being complete.
-				if err := info.checkpoint.Commit(ctx, newMin); err != nil {
+				if err := c.checkpoint.Commit(ctx, newMin); err != nil {
 					log.WithError(err).Warnf(
 						"could not store updated resolved timestamp for %s; will continue",
-						info.target,
+						c.target,
 					)
 				}
 				return nil

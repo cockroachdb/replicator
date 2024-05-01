@@ -51,7 +51,7 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 		}
 		return errors.Wrap(err, "could not decode payload")
 	}
-	target, err := h.Targets.getTarget(req.target.Schema())
+	target, err := h.Conveyors.Get(req.target.Schema())
 	if err != nil {
 		return err
 	}
@@ -96,5 +96,5 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 		}
 	}
 
-	return target.acceptor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{})
+	return target.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{})
 }

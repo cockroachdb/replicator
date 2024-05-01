@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
+	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
 )
 
@@ -63,9 +64,10 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 
 // resolved acts upon a resolved timestamp message.
 func (h *Handler) resolved(ctx context.Context, req *request) error {
-	target, err := h.Targets.getTarget(req.target.Schema())
+	schema := req.target.Schema()
+	target, err := h.Conveyors.Get(schema)
 	if err != nil {
 		return err
 	}
-	return target.checkpoint.Advance(ctx, target.partition, req.timestamp)
+	return target.Advance(ctx, ident.New(schema.Canonical().Raw()), req.timestamp)
 }

@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package cdc
+package conveyor
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,31 +23,31 @@ import (
 
 var (
 	mutationsErrorCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "cdc_mutations_error_count",
+		Name: "mutations_error_count",
 		Help: "the total number of mutations that encountered an error during processing",
-	}, []string{"target"})
+	}, []string{"kind", "target"})
 	mutationsReceivedCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "cdc_mutations_received_count",
+		Name: "mutations_received_count",
 		Help: "the total number of mutations received from the source",
-	}, []string{"target"})
+	}, []string{"kind", "target"})
 	mutationsSuccessCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "cdc_mutations_success_count",
+		Name: "mutations_success_count",
 		Help: "the total number of mutations that were successfully processed",
-	}, []string{"target"})
+	}, []string{"kind", "target"})
 	sourceLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_source_lag_seconds",
+		Name: "source_lag_seconds",
 		Help: "the age of the data received from the source changefeed",
-	}, []string{"target"})
+	}, []string{"kind", "target"})
 	targetLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_lag_seconds",
+		Name: "target_lag_seconds",
 		Help: "the age of the data applied to the table",
-	}, []string{"target"})
+	}, []string{"kind", "target"})
 	resolvedMinTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_applied_timestamp_seconds",
+		Name: "target_applied_timestamp_seconds",
 		Help: "the wall time of the most recent applied resolved timestamp",
-	}, []string{"target"})
+	}, []string{"kind", "target"})
 	resolvedMaxTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "cdc_target_pending_timestamp_seconds",
+		Name: "target_pending_timestamp_seconds",
 		Help: "the wall time of the most recently received resolved timestamp",
-	}, []string{"target"})
+	}, []string{"kind", "target"})
 )

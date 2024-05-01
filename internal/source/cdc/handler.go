@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/types"
 	"github.com/cockroachdb/cdc-sink/internal/util/httpauth"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
@@ -45,7 +46,7 @@ type Handler struct {
 	Authenticator types.Authenticator // Access checks.
 	Config        *Config             // Runtime options.
 	TargetPool    *types.TargetPool   // Access to the target cluster.
-	Targets       *Targets            // Access to target schemas.
+	Conveyors     *conveyor.Conveyors // Mutation delivery to the cluster.
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

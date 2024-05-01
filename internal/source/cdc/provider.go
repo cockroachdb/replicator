@@ -17,6 +17,7 @@
 package cdc
 
 import (
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
@@ -35,7 +36,7 @@ var Set = wire.NewSet(
 	ProvideDLQConfig,
 	ProvideScriptConfig,
 	ProvideSequencerConfig,
-	ProvideTargets,
+	ProvideConveyors,
 )
 
 // ProvideDLQConfig is called by Wire.
@@ -53,8 +54,8 @@ func ProvideSequencerConfig(cfg *Config) *sequencer.Config {
 	return &cfg.SequencerConfig
 }
 
-// ProvideTargets is called by Wire.
-func ProvideTargets(
+// ProvideConveyors is called by Wire.
+func ProvideConveyors(
 	ctx *stopper.Context,
 	acc *apply.Acceptor,
 	cfg *Config,
@@ -63,19 +64,19 @@ func ProvideTargets(
 	staging *types.StagingPool,
 	sw *switcher.Switcher,
 	watchers types.Watchers,
-) (*Targets, error) {
+) (*conveyor.Conveyors, error) {
 	if err := cfg.Preflight(); err != nil {
 		return nil, err
 	}
-	targets := &Targets{
-		cfg:           cfg,
-		checkpoints:   checkpoints,
-		retire:        retire,
-		staging:       staging,
-		stopper:       ctx,
-		switcher:      sw,
-		tableAcceptor: acc,
-		watchers:      watchers,
+	conveyors := &conveyor.Conveyors{
+		Cfg:           &cfg.ConveyorConfig,
+		Checkpoints:   checkpoints,
+		Kind:          "cdc",
+		Retire:        retire,
+		Stopper:       ctx,
+		Switcher:      sw,
+		TableAcceptor: acc,
+		Watchers:      watchers,
 	}
 
 	// Bootstrap existing schemas for recovery cases.
@@ -84,11 +85,11 @@ func ProvideTargets(
 		return nil, err
 	}
 	for _, sch := range schemas {
-		_, err := targets.getTarget(sch)
+		_, err := conveyors.Get(sch)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return targets, nil
+	return conveyors, nil
 }
