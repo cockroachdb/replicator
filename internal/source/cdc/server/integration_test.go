@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	stagingProd "github.com/cockroachdb/cdc-sink/internal/sinkprod"
 	"github.com/cockroachdb/cdc-sink/internal/sinktest"
@@ -165,10 +166,12 @@ func testIntegration(t *testing.T, cfg testConfig) {
 
 	serverCfg := &Config{
 		CDC: cdc.Config{
+			ConveyorConfig: conveyor.Config{
+				Immediate: cfg.immediate,
+			},
 			SequencerConfig: sequencer.Config{
 				RetireOffset: time.Hour, // Allow post-hoc inspection of staged data.
 			},
-			Immediate: cfg.immediate,
 		},
 		HTTP: stdserver.Config{
 			BindAddr:           "127.0.0.1:0",

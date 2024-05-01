@@ -99,10 +99,10 @@ func (h *Handler) ndjson(ctx context.Context, req *request, parser parseMutation
 		return err
 	}
 
-	target, err := h.Targets.getTarget(table.Schema())
+	conveyor, err := h.Conveyors.Get(table.Schema())
 	if err != nil {
 		return err
 	}
 
-	return target.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{})
+	return conveyor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{})
 }

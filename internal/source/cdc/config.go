@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"time"
 
+	"github.com/cockroachdb/cdc-sink/internal/conveyor"
 	"github.com/cockroachdb/cdc-sink/internal/script"
 	"github.com/cockroachdb/cdc-sink/internal/sequencer"
 	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
@@ -35,28 +36,16 @@ const (
 
 // Config adds CDC-specific configuration to the core logical loop.
 type Config struct {
+	ConveyorConfig  conveyor.Config
 	DLQConfig       dlq.Config
 	SequencerConfig sequencer.Config
 	ScriptConfig    script.Config
-
-	// Switch between BestEffort mode and Core if the applied resolved
-	// timestamp is older than this threshold. A negative or zero value
-	// will disable BestEffort switching.
-	BestEffortWindow time.Duration
-
-	// Force the use of BestEffort mode.
-	BestEffortOnly bool
-
 	// Discard all incoming HTTP payloads. This is useful for tuning
 	// changefeed throughput without considering cdc-sink performance.
 	Discard bool
 
 	// If non-zero, wait half before and after consuming the payload.
 	DiscardDelay time.Duration
-
-	// Write directly to staging tables. May limit compatibility with
-	// schemas that contain foreign keys.
-	Immediate bool
 
 	// The maximum amount of data to buffer when reading a single line
 	// of ndjson input. This can be increased if the source cluster
@@ -70,22 +59,15 @@ type Config struct {
 
 // Bind adds configuration flags to the set.
 func (c *Config) Bind(f *pflag.FlagSet) {
+	c.ConveyorConfig.Bind(f)
 	c.DLQConfig.Bind(f)
 	c.SequencerConfig.Bind(f)
 	c.ScriptConfig.Bind(f)
 
-	f.DurationVar(&c.BestEffortWindow, "bestEffortWindow", defaultBackfillWindow,
-		"use an eventually-consistent mode for initial backfill or when replication "+
-			"is behind; 0 to disable")
-	f.BoolVar(&c.BestEffortOnly, "bestEffortOnly", false,
-		"eventually-consistent mode; useful for high throughput, skew-tolerant schemas with FKs")
 	f.BoolVar(&c.Discard, "discard", false,
 		"(dangerous) discard all incoming HTTP requests; useful for changefeed throughput testing")
 	f.DurationVar(&c.DiscardDelay, "discardDelay", 0,
 		"adds additional delay in discard mode; useful for gauging the impact of changefeed RTT")
-	f.BoolVar(&c.Immediate, "immediate", false,
-		"bypass staging tables and write directly to target; "+
-			"recommended only for KV-style workloads with no FKs")
 	f.IntVar(&c.NDJsonBuffer, "ndjsonBufferSize", defaultNDJsonBuffer,
 		"the maximum amount of data to buffer while reading a single line of ndjson input; "+
 			"increase when source cluster has large blob values")
@@ -95,6 +77,9 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 
 // Preflight implements logical.Config.
 func (c *Config) Preflight() error {
+	if err := c.ConveyorConfig.Preflight(); err != nil {
+		return err
+	}
 	if err := c.DLQConfig.Preflight(); err != nil {
 		return err
 	}

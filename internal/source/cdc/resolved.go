@@ -63,9 +63,9 @@ func parseResolvedTimestamp(timestamp string, logical string) (hlc.Time, error) 
 
 // resolved acts upon a resolved timestamp message.
 func (h *Handler) resolved(ctx context.Context, req *request) error {
-	target, err := h.Targets.getTarget(req.target.Schema())
+	conveyor, err := h.Conveyors.Get(req.target.Schema())
 	if err != nil {
 		return err
 	}
-	return target.checkpoint.Advance(ctx, target.partition, req.timestamp)
+	return conveyor.Advance(ctx, conveyor.TableGroup().Name, req.timestamp)
 }
