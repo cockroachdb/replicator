@@ -43,13 +43,13 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 		wire.FieldsOf(new(*Config), "Script"),
 		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Staging", "Target"),
 		Set,
-		switcher.Set,
+		conveyor.Set,
 		diag.New,
+		retire.Set,
 		scriptRuntime.Set,
 		sinkprod.Set,
 		staging.Set,
+		switcher.Set,
 		tgt.Set,
-		retire.Set,
-		conveyor.Set,
 	))
 }
