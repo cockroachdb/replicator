@@ -42,9 +42,9 @@ type partitionState struct {
 type Consumer struct {
 	batchSize int               // Batch size for writes.
 	conveyor  Conveyor          // The destination for writes.
+	fromState []*partitionState // The initial offsets for each partitions.
 	schema    ident.Schema      // The target schema.
 	timeRange hlc.Range         // The time range for incoming mutations.
-	fromState []*partitionState // The initial offsets for each partitions.
 	mu        struct {
 		sync.Mutex
 		done map[string]bool
@@ -66,6 +66,8 @@ func (c *Consumer) Setup(session sarama.ConsumerGroupSession) error {
 		log.Debugf("setup: marking offset %s@%d to %d", marker.topic, marker.partition, marker.offset)
 		session.MarkOffset(marker.topic, marker.partition, marker.offset, "start")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.mu.done = make(map[string]bool)
 	return nil
 }
@@ -107,7 +109,7 @@ func (c *Consumer) ConsumeClaim(
 			}
 			payload, err := c.accumulate(toProcess, message)
 			if err != nil {
-				log.Error(err)
+				log.WithError(err).Error("failed to add messages to a batch")
 				return err
 			}
 			if payload.Resolved != "" {

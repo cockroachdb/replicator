@@ -26,8 +26,8 @@ import (
 // Set is used by Wire.
 var Set = wire.NewSet(
 	ProvideConn,
-	ProvideEagerConfig,
 	ProvideConveyorConfig,
+	ProvideEagerConfig,
 )
 
 // ProvideEagerConfig is a hack to move up the evaluation of the user
