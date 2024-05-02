@@ -176,7 +176,9 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypePlaintext,
+				SASL: SASLConfig{
+					Mechanism: sarama.SASLTypePlaintext,
+				},
 			},
 			wantErr: "invalid configuration (Net.SASL.User must not be empty when SASL is enabled)",
 		},
@@ -189,9 +191,11 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypePlaintext,
-				saslUser:         "user",
-				saslPassword:     "pass",
+				SASL: SASLConfig{
+					Mechanism: sarama.SASLTypePlaintext,
+					User:      "user",
+					Password:  "pass",
+				},
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -208,9 +212,11 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypeSCRAMSHA256,
-				saslUser:         "user",
-				saslPassword:     "pass",
+				SASL: SASLConfig{
+					Mechanism: sarama.SASLTypeSCRAMSHA256,
+					User:      "user",
+					Password:  "pass",
+				},
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -227,9 +233,11 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypeSCRAMSHA512,
-				saslUser:         "user",
-				saslPassword:     "pass",
+				SASL: SASLConfig{
+					Mechanism: sarama.SASLTypeSCRAMSHA512,
+					User:      "user",
+					Password:  "pass",
+				},
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -246,10 +254,12 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypeOAuth,
-				saslTokenURL:     "http://example.com",
-				saslClientID:     "myclient",
-				saslClientSecret: "mysecret",
+				SASL: SASLConfig{
+					Mechanism:    sarama.SASLTypeOAuth,
+					TokenURL:     "http://example.com",
+					ClientID:     "myclient",
+					ClientSecret: "mysecret",
+				},
 			},
 			strategy:  []sarama.BalanceStrategy{sarama.NewBalanceStrategySticky()},
 			timeRange: maxRange,
@@ -266,14 +276,16 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypeOAuth,
-				saslClientID:     "myclient",
-				saslClientSecret: "mysecret",
+				SASL: SASLConfig{
+					Mechanism:    sarama.SASLTypeOAuth,
+					ClientID:     "myclient",
+					ClientSecret: "mysecret",
+				},
 			},
 			wantErr: "OAUTH2 requires a token URL",
 		},
 		{
-			name: "oath2 no client",
+			name: "oath2 no client secret",
 			in: &Config{
 				Group:            "mygroup",
 				Brokers:          []string{"mybroker"},
@@ -281,14 +293,16 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypeOAuth,
-				saslTokenURL:     "http://example.com",
-				saslClientID:     "myclient",
+				SASL: SASLConfig{
+					Mechanism: sarama.SASLTypeOAuth,
+					TokenURL:  "http://example.com",
+					ClientID:  "myclient",
+				},
 			},
 			wantErr: "OAUTH2 requires a client secret",
 		},
 		{
-			name: "oath2",
+			name: "oath2 no client id",
 			in: &Config{
 				Group:            "mygroup",
 				Brokers:          []string{"mybroker"},
@@ -296,9 +310,11 @@ func TestPreflight(t *testing.T) {
 				Topics:           []string{"mytopic"},
 				Strategy:         "sticky",
 				TLS:              tlsConfig,
-				saslMechanism:    sarama.SASLTypeOAuth,
-				saslTokenURL:     "http://example.com",
-				saslClientSecret: "mysecret",
+				SASL: SASLConfig{
+					Mechanism:    sarama.SASLTypeOAuth,
+					TokenURL:     "http://example.com",
+					ClientSecret: "mysecret",
+				},
 			},
 			wantErr: "OAUTH2 requires a client id",
 		},
@@ -337,8 +353,8 @@ func TestPreflight(t *testing.T) {
 				case sarama.SASLTypeOAuth:
 					a.IsType(&tokenProvider{},
 						config.saramaConfig.Net.SASL.TokenProvider)
-					a.NotEmpty(config.saslTokenURL)
-					_, err := url.Parse(config.saslTokenURL)
+					a.NotEmpty(config.SASL.TokenURL)
+					_, err := url.Parse(config.SASL.TokenURL)
 					a.NoError(err)
 					a.Empty(config.saramaConfig.Net.SASL.SCRAMClientGeneratorFunc)
 				default:
