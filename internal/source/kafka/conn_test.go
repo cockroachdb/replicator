@@ -156,9 +156,11 @@ func TestConn(t *testing.T) {
 		ResolvedInterval: time.Second,
 		Strategy:         "sticky",
 		Topics:           []string{"my-topic"},
-		saslMechanism:    sarama.SASLTypePlaintext,
-		saslUser:         "user",
-		saslPassword:     "test",
+		SASL: SASLConfig{
+			Mechanism: sarama.SASLTypePlaintext,
+			User:      "user",
+			Password:  "test",
+		},
 	}
 	err := config.preflight(ctx)
 	a.NoError(err)
