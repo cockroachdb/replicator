@@ -45,6 +45,7 @@ type EagerConfig Config
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
+	ConveyorConfig conveyor.Config
 	DLQ            dlq.Config
 	Script         script.Config
 	Sequencer      sequencer.Config
@@ -52,7 +53,6 @@ type Config struct {
 	Target         sinkprod.TargetConfig
 	TargetSchema   ident.Schema
 	TLS            secure.Config
-	ConveyorConfig conveyor.Config
 
 	BatchSize        int           // How many messages to accumulate before committing to the target
 	Brokers          []string      // The address of the Kafka brokers
@@ -60,18 +60,9 @@ type Config struct {
 	MaxTimestamp     string        // Only accept messages at or older than this timestamp
 	MinTimestamp     string        // Only accept messages at or newer than this timestamp
 	ResolvedInterval time.Duration // Minimal duration between resolved timestamps.
+	SASL             SASLConfig    // SASL parameters
 	Strategy         string        // Kafka consumer group re-balance strategy
 	Topics           []string      // The list of topics that the consumer should use.
-
-	// SASL parameters
-	saslClientID     string
-	saslClientSecret string
-	saslGrantType    string
-	saslMechanism    string
-	saslScopes       []string
-	saslTokenURL     string
-	saslUser         string
-	saslPassword     string
 
 	// The following are computed.
 
@@ -79,6 +70,18 @@ type Config struct {
 	saramaConfig *sarama.Config
 	// Timestamp range, computed based on minTimestamp and maxTimestamp.
 	timeRange hlc.Range
+}
+
+// SASLConfig defines the SASL parameters.
+type SASLConfig struct {
+	ClientID     string
+	ClientSecret string
+	GrantType    string
+	Mechanism    string
+	Password     string
+	Scopes       []string
+	TokenURL     string
+	User         string
 }
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
@@ -114,14 +117,14 @@ Please see the CREATE CHANGEFEED documentation for details.
 	f.StringArrayVar(&c.Topics, "topic", nil, "the topic(s) that the consumer should use")
 
 	// SASL configuration
-	f.StringVar(&c.saslClientID, "saslClientId", "", "client ID for OAuth authentication from a third-party provider")
-	f.StringVar(&c.saslClientSecret, "saslClientSecret", "", "Client secret for OAuth authentication from a third-party provider")
-	f.StringVar(&c.saslGrantType, "saslGrantType", "", "Override the default OAuth client credentials grant type for other implementations")
-	f.StringVar(&c.saslMechanism, "saslMechanism", "", "Can be set to OAUTHBEARER, SCRAM-SHA-256, SCRAM-SHA-512, or PLAIN")
-	f.StringArrayVar(&c.saslScopes, "saslScope", nil, "Scopes that the OAuth token should have access for.")
-	f.StringVar(&c.saslTokenURL, "saslTokenURL", "", "Client token URL for OAuth authentication from a third-party provider")
-	f.StringVar(&c.saslUser, "saslUser", "", "SASL username")
-	f.StringVar(&c.saslPassword, "saslPassword", "", "SASL password")
+	f.StringVar(&c.SASL.ClientID, "ClientId", "", "client ID for OAuth authentication from a third-party provider")
+	f.StringVar(&c.SASL.ClientSecret, "ClientSecret", "", "Client secret for OAuth authentication from a third-party provider")
+	f.StringVar(&c.SASL.GrantType, "GrantType", "", "Override the default OAuth client credentials grant type for other implementations")
+	f.StringVar(&c.SASL.Mechanism, "Mechanism", "", "Can be set to OAUTHBEARER, SCRAM-SHA-256, SCRAM-SHA-512, or PLAIN")
+	f.StringArrayVar(&c.SASL.Scopes, "Scope", nil, "Scopes that the OAuth token should have access for.")
+	f.StringVar(&c.SASL.TokenURL, "TokenURL", "", "Client token URL for OAuth authentication from a third-party provider")
+	f.StringVar(&c.SASL.User, "User", "", "SASL username")
+	f.StringVar(&c.SASL.Password, "Password", "", "SASL password")
 }
 
 // Preflight updates the configuration with sane defaults or returns an
@@ -200,10 +203,10 @@ func (c *Config) preflight(ctx context.Context) error {
 	}
 	sc.Net.TLS.Config = c.TLS.AsTLSConfig()
 	sc.Net.TLS.Enable = sc.Net.TLS.Config != nil
-	// if saslMechanism is not null, then authentication is done via SASL.
-	if c.saslMechanism != "" {
+	// if Mechanism is not null, then authentication is done via SASL.
+	if c.SASL.Mechanism != "" {
 		sc.Net.SASL.Enable = true
-		switch c.saslMechanism {
+		switch c.SASL.Mechanism {
 		case sarama.SASLTypeSCRAMSHA512:
 			sc.Net.SASL.SCRAMClientGeneratorFunc = sha512ClientGenerator
 		case sarama.SASLTypeSCRAMSHA256:
@@ -215,10 +218,10 @@ func (c *Config) preflight(ctx context.Context) error {
 				return err
 			}
 		}
-		sc.Net.SASL.Mechanism = sarama.SASLMechanism(c.saslMechanism)
-		sc.Net.SASL.User = c.saslUser
-		sc.Net.SASL.Password = c.saslPassword
-		log.Infof("Using SASL %s", c.saslMechanism)
+		sc.Net.SASL.Mechanism = sarama.SASLMechanism(c.SASL.Mechanism)
+		sc.Net.SASL.User = c.SASL.User
+		sc.Net.SASL.Password = c.SASL.Password
+		log.Infof("Using SASL %s", c.SASL.Mechanism)
 	}
 	sc.Consumer.Offsets.Initial = sarama.OffsetOldest
 	c.saramaConfig = sc
@@ -230,22 +233,22 @@ func (c *Config) newTokenProvider(ctx context.Context) (sarama.AccessTokenProvid
 	// clientcredentials library as defined by the spec, however non-compliant
 	// auth server implementations may want a custom type
 	var endpointParams url.Values
-	if c.saslGrantType != `` {
-		endpointParams = url.Values{"grant_type": {c.saslGrantType}}
+	if c.SASL.GrantType != `` {
+		endpointParams = url.Values{"grant_type": {c.SASL.GrantType}}
 	}
-	if c.saslTokenURL == "" {
+	if c.SASL.TokenURL == "" {
 		return nil, errors.New("OAUTH2 requires a token URL")
 
 	}
-	tokenURL, err := url.Parse(c.saslTokenURL)
+	tokenURL, err := url.Parse(c.SASL.TokenURL)
 	if err != nil {
 		return nil, errors.Wrap(err, "malformed token url")
 	}
-	if c.saslClientID == "" {
+	if c.SASL.ClientID == "" {
 		return nil, errors.New("OAUTH2 requires a client id")
 
 	}
-	if c.saslClientSecret == "" {
+	if c.SASL.ClientSecret == "" {
 		return nil, errors.New("OAUTH2 requires a client secret")
 	}
 	// the clientcredentials.Config's TokenSource method creates an
@@ -253,10 +256,10 @@ func (c *Config) newTokenProvider(ctx context.Context) (sarama.AccessTokenProvid
 	// endpoint, returning the same cached result until its expiration has been
 	// reached, and then once expired re-requesting a new token from the endpoint.
 	cfg := clientcredentials.Config{
-		ClientID:       c.saslClientID,
-		ClientSecret:   c.saslClientSecret,
+		ClientID:       c.SASL.ClientID,
+		ClientSecret:   c.SASL.ClientSecret,
 		TokenURL:       tokenURL.String(),
-		Scopes:         c.saslScopes,
+		Scopes:         c.SASL.Scopes,
 		EndpointParams: endpointParams,
 	}
 	return &tokenProvider{
