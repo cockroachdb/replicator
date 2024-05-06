@@ -30,7 +30,7 @@ require (
 	github.com/xdg-go/scram v1.1.2
 	golang.org/x/lint v0.0.0-20210508222113-6edffad5e616
 	golang.org/x/net v0.24.0
-	golang.org/x/oauth2 v0.19.0
+	golang.org/x/oauth2 v0.20.0
 	golang.org/x/sync v0.7.0
 	golang.org/x/tools v0.20.0
 	honnef.co/go/tools v0.4.7
