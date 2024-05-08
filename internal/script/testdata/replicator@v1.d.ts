@@ -18,12 +18,12 @@
 
 
 /**
- * The user-script API provided by cdc-sink.
+ * The user-script API provided by Replicator.
  *
  * The contents of this file can be retrieved by running
- * `cdc-sink userscript --api`.
+ * `replicator userscript --api`.
  */
-declare module "cdc-sink@v1" {
+declare module "replicator@v1" {
     /**
      * The name of a SQL column.
      */
@@ -133,7 +133,7 @@ declare module "cdc-sink@v1" {
      *
      * @param tableName - The name of the table.
      * @param props - Properties to configure the table.
-     * @see https://github.com/cockroachdb/cdc-sink#data-application-behaviors
+     * @see https://github.com/cockroachdb/replicator#data-application-behaviors
      */
     function configureTable(
         tableName: Table,
@@ -167,7 +167,7 @@ declare module "cdc-sink@v1" {
      */
     type ConfigureTableOptions = {
         /**
-         * Override cdc-sink's default apply behavior. The userscript
+         * Override Replicator's default apply behavior. The userscript
          * assumes responsibility for interacting with the target
          * database. Access to the target database is provided via
          * {@link getTX}.
@@ -295,7 +295,7 @@ declare module "cdc-sink@v1" {
     type StandardMerge = {};
 
     /**
-     * A TargetColumn provides a view of cdc-sink's introspection of a
+     * A TargetColumn provides a view of Replicator's introspection of a
      * table in the destination database.
      */
     type TargetColumn = {
@@ -304,7 +304,7 @@ declare module "cdc-sink@v1" {
          */
         defaultExpr?: string;
         /**
-         * True if the column wouldn't normally be operated on by cdc-sink.
+         * True if the column wouldn't normally be operated on by Replicator.
          */
         ignored: boolean;
         /**
@@ -328,7 +328,7 @@ declare module "cdc-sink@v1" {
     type TargetTX = {
         /**
          * Apply the operations to the target table. This allows the
-         * userscript to invoke cdc-sink's default apply pipeline (with
+         * userscript to invoke Replicator's default apply pipeline (with
          * all data behaviors).
          */
         apply(ops: ApplyOp[]): Promise<void>;

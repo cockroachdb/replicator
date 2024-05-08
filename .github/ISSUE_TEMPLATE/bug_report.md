@@ -34,7 +34,7 @@ Please connect to the cdc-sink diagnostic endpoint at `/_/diag` and include the 
 If running a custom user-script, please add it here:
 
 ```
-import * as api from "cdc-sink@v1";
+import * as api from "replicator@v1";
 ....
 ```
 

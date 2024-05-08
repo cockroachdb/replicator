@@ -138,7 +138,7 @@ type targetJS struct {
 // target schema, call [Loader.Bind] to return a [UserScript] that
 // operates within the given target schema.
 type Loader struct {
-	apiModule    *goja.Object          // The imported cdc-sink module.
+	apiModule    *goja.Object          // The imported replicator module.
 	applyConfigs *applycfg.Configs     // Injected.
 	diags        *diag.Diagnostics     // Injected.
 	fs           fs.FS                 // Used by require.

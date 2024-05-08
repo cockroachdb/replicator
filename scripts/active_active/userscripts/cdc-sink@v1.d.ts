@@ -1,1 +1,0 @@
-../../../internal/script/testdata/cdc-sink@v1.d.ts

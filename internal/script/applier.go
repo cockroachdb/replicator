@@ -51,9 +51,9 @@ func notInTransaction() error {
 	return errors.New("no transaction is currently open")
 }
 
-// applier implements [types.TableAcceptor] to allow user-defined functions to
-// be used to interact with the database, rather than using cdc-sink's
-// built-in SQL.
+// applier implements [types.TableAcceptor] to allow user-defined
+// functions to be used to interact with the database, rather than using
+// Replicator's built-in SQL.
 type applier struct {
 	apply  applyJS
 	parent *UserScript

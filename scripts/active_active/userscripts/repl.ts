@@ -16,8 +16,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-import * as api from "cdc-sink@v1";
-import { ApplyOp } from "cdc-sink@v1";
+import * as api from "replicator@v1";
+import { ApplyOp } from "replicator@v1";
 
  /**
  * Configure a replication flow. It assumes that each incoming
