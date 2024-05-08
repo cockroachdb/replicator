@@ -78,7 +78,7 @@ func testUserScriptSequencer(t *testing.T, baseMode switcher.Mode) {
 		MainPath: "/main.ts",
 		FS: &fstest.MapFS{
 			"main.ts": &fstest.MapFile{Data: []byte(`
-import * as api from "cdc-sink@v1";
+import * as api from "replicator@v1";
 api.configureSource("src1", {
   dispatch: (doc) => ({
     "T_1": [ doc ], // Note upper-case table name.

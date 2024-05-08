@@ -122,7 +122,7 @@ type UserScript struct {
 	Sources  *ident.Map[*Source]
 	Targets  *ident.TableMap[*Target]
 
-	apiModule *goja.Object         // The cdc-sink JS module.
+	apiModule *goja.Object         // The replicator JS module.
 	rt        *goja.Runtime        // The JavaScript VM. See execJS.
 	rtExit    notify.Var[struct{}] // Forms an ersatz event loop for checking promise status.
 	rtMu      *sync.RWMutex        // Serialize access to the VM or its side-effects.

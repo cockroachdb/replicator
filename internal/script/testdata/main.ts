@@ -16,8 +16,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as api from "cdc-sink@v1"; // Well-known module name
-import {ApplyOp} from "cdc-sink@v1"; // Verify additional code imports.
+import * as api from "replicator@v1"; // Well-known module name
+import {ApplyOp} from "replicator@v1"; // Verify additional code imports.
 import externalData from "./data.txt"; // Can import additional files from disk.
 import * as lib from "./lib";
 // import * as something from "https://some.cdn/package@1" is viable
@@ -172,8 +172,8 @@ api.configureTable("skewed_merge_times", {
 // copied into a replacement upsert operation.
 //
 // The ergonomics of this could be improved by one or both of:
-// https://github.com/cockroachdb/cdc-sink/issues/704
-// https://github.com/cockroachdb/cdc-sink/issues/705
+// https://github.com/cockroachdb/replicator/issues/704
+// https://github.com/cockroachdb/replicator/issues/705
 api.configureTable("soft_deletes", {
     apply: async (ops: ApplyOp[]): Promise<any> => {
         ops = ops.map((op: ApplyOp) => {
