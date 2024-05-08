@@ -17,6 +17,7 @@
 package sinkprod
 
 import (
+	"context"
 	"time"
 
 	"github.com/cockroachdb/replicator/internal/types"
@@ -24,7 +25,14 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/cockroachdb/replicator/internal/util/stopper"
+	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
+)
+
+// These are default names for the staging database schema.
+var (
+	StagingSchemaDefault = ident.MustSchema(ident.New("_replicator"), ident.Public)
+	StagingSchemaLegacy  = ident.MustSchema(ident.New("_cdc_sink"), ident.Public)
 )
 
 // StagingConfig defines staging-database connection behaviors.
@@ -39,7 +47,7 @@ type StagingConfig struct {
 func (c *StagingConfig) Bind(f *pflag.FlagSet) {
 	c.CommonConfig.bind(f, "staging")
 
-	c.Schema = ident.MustSchema(ident.New("_cdc_sink"), ident.Public)
+	c.Schema = StagingSchemaDefault
 	f.Var(ident.NewSchemaFlag(&c.Schema), "stagingSchema",
 		"a SQL database schema to store metadata in")
 }
@@ -52,15 +60,34 @@ func (c *StagingConfig) Preflight() error {
 		return err
 	}
 	if c.Schema.Empty() {
-		c.Schema = ident.MustSchema(ident.New("_cdc_sink"), ident.Public)
+		c.Schema = StagingSchemaDefault
 	}
 	return nil
 }
 
 // ProvideStagingDB is called by Wire to retrieve the name of the
-// _cdc_sink SQL DATABASE.
-func ProvideStagingDB(config *StagingConfig) (ident.StagingSchema, error) {
-	return ident.StagingSchema(config.Schema), nil
+// staging SQL DATABASE. If [StagingSchemaDefault] does not exist, but
+// [StagingSchemaLegacy] does, then the latter will be returned.
+func ProvideStagingDB(
+	ctx context.Context, config *StagingConfig, pool *types.StagingPool,
+) (ident.StagingSchema, error) {
+	// Respect user override.
+	if !config.Schema.Empty() && !ident.Equal(config.Schema, StagingSchemaDefault) {
+		return ident.StagingSchema(config.Schema), nil
+	}
+
+	// Check for existence of legacy schema.
+	var exists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT datname FROM pg_database WHERE datname = $1)`,
+		StagingSchemaLegacy.Idents(nil)[0].Raw(),
+	).Scan(&exists); err != nil {
+		return ident.StagingSchema{}, errors.WithStack(err)
+	}
+	if exists {
+		return ident.StagingSchema(StagingSchemaLegacy), nil
+	}
+	return ident.StagingSchema(StagingSchemaDefault), nil
 }
 
 // ProvideStagingPool is called by Wire to create a connection pool that

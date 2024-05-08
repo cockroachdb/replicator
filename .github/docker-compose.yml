@@ -115,7 +115,7 @@ services:
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
-      MYSQL_DATABASE: _cdc_sink
+      MYSQL_DATABASE: _replicator
     command:
       --default-authentication-plugin=mysql_native_password
       --gtid-mode=on
@@ -130,7 +130,7 @@ services:
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
-      MYSQL_DATABASE: _cdc_sink
+      MYSQL_DATABASE: _replicator
     command:
       --default-authentication-plugin=mysql_native_password
       --gtid-mode=on
@@ -147,7 +147,7 @@ services:
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
-      MYSQL_DATABASE: _cdc_sink
+      MYSQL_DATABASE: _replicator
     command:
       --default-authentication-plugin=mysql_native_password
       --gtid-mode=on
@@ -160,7 +160,7 @@ services:
     platform: linux/x86_64
     environment:
       MARIADB_ROOT_PASSWORD: SoupOrSecret
-      MARIADB_DATABASE: _cdc_sink
+      MARIADB_DATABASE: _replicator
     command:
       --log-bin
       --server_id=1

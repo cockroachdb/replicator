@@ -63,7 +63,7 @@ cockroach sql -e "INSERT INTO %s.%s (public_key) VALUES ('$(cat ec.pub)')"
 
 # Reload configuration, or wait a minute.
 killall -HUP cdc-sink
-`, "_cdc_sink", jwtAuth.PublicKeysTable.Raw())),
+`, "_replicator", jwtAuth.PublicKeysTable.Raw())),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(allow) == 0 {
 				return errors.New("no schemas specified")

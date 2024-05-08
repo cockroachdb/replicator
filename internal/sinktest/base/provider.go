@@ -108,8 +108,8 @@ type Fixture struct {
 	Context      *stopper.Context        // The context for the test.
 	SourcePool   *types.SourcePool       // Access to user-data tables and changefeed creation.
 	SourceSchema sinktest.SourceSchema   // A container for tables within SourcePool.
-	StagingPool  *types.StagingPool      // Access to __cdc_sink database.
-	StagingDB    ident.StagingSchema     // The _cdc_sink SQL DATABASE.
+	StagingPool  *types.StagingPool      // Access to _replicator database.
+	StagingDB    ident.StagingSchema     // The _replicator SQL DATABASE.
 	TargetCache  *types.TargetStatements // Prepared statements.
 	TargetPool   *types.TargetPool       // Access to the destination.
 	TargetSchema sinktest.TargetSchema   // A container for tables within TargetPool.
