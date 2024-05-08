@@ -18,7 +18,7 @@
 
 . ./crdb_env
 
-cockroach sql --insecure --url 'postgresql://root@roach_target:26257/?sslmode=disable' --insecure --execute 'create database if not exists _cdc_sink' 
+cockroach sql --insecure --url 'postgresql://root@roach_target:26257/?sslmode=disable' --insecure --execute 'create database if not exists _replicator'
 
 cockroach sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING enterprise.license = '${COCKROACH_DEV_LICENSE}';"
 cockroach sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "SET CLUSTER SETTING cluster.organization = '${COCKROACH_DEV_ORGANIZATION}';"

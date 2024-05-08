@@ -68,7 +68,7 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	if err != nil {
 		return nil, err
 	}
-	stagingSchema, err := sinkprod.ProvideStagingDB(stagingConfig)
+	stagingSchema, err := sinkprod.ProvideStagingDB(ctx, stagingConfig, stagingPool)
 	if err != nil {
 		return nil, err
 	}

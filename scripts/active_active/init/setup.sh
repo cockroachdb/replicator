@@ -22,7 +22,7 @@ cockroach sql --url "postgresql://root@${TARGET}:26257/?sslmode=disable" --insec
 cockroach sql --url "postgresql://root@${TARGET}:26257/?sslmode=disable" --insecure --execute "SET CLUSTER SETTING cluster.organization = '${COCKROACH_DEV_ORGANIZATION}';"
 cockroach sql --url "postgresql://root@${TARGET}:26257/?sslmode=disable" --insecure --execute 'SET CLUSTER SETTING kv.rangefeed.enabled = true;'
 
-cockroach sql --insecure --url "postgresql://root@${TARGET}:26257/?sslmode=disable" --insecure --execute 'create database if not exists _cdc_sink' 
+cockroach sql --insecure --url "postgresql://root@${TARGET}:26257/?sslmode=disable" --insecure --execute 'create database if not exists _replicator'
 cockroach sql --insecure --url "postgresql://root@${TARGET}:26257/?sslmode=disable" --insecure --execute 'create database if not exists kv' 
 
 # We are adding 2 columns to each table that we need to replicate.
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS kv.kv (
 
 # Table to collect unresolved conflicts.
 cockroach sql --insecure --url "postgresql://root@${TARGET}:26257/?sslmode=disable" --insecure  <<!
-CREATE TABLE IF NOT EXISTS kv.cdc_sink_dlq (
+CREATE TABLE IF NOT EXISTS kv.replicator_dlq (
 event UUID DEFAULT gen_random_uuid() PRIMARY KEY,
 dlq_name TEXT NOT NULL,
 source_nanos INT8 NOT NULL,

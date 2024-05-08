@@ -127,7 +127,7 @@ root@west:26257/defaultdb> SELECT *,_source,_timestamp from kv.kv limit 10
 To check the content of the DLQ table:
 
 ```sql
-root@west:26257/defaultdb> select * from kv.cdc_sink_dlq limit 10;
+root@west:26257/defaultdb> select * from kv.replicator_dlq limit 10;
 ```
 
 ## Clean up
@@ -147,16 +147,16 @@ two clusters as `east` and `west`.
 
 ### Schema requirements
 
-To set up the `cdc-sink` environment, create a `_cdc_sink` database on both clusters,
+To set up the Replicator environment, create a `_replicator` database on both clusters,
 and a table in each destination database to collect any conflicts that may arise:
 
 ```sql
 -- Database used by cdc-sink to stage mutation and maintain replication state.
-CREATE DATABASE if NOT EXISTS _cdc_sink
+CREATE DATABASE if NOT EXISTS _replicator
 
 -- DLQ table in the database being replicated:
 
-CREATE TABLE IF NOT EXISTS cdc_sink_dlq (
+CREATE TABLE IF NOT EXISTS replicator_dlq (
 event UUID DEFAULT gen_random_uuid() PRIMARY KEY,
 dlq_name TEXT NOT NULL,
 source_nanos INT8 NOT NULL,

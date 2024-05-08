@@ -16,7 +16,7 @@
 
 package ident
 
-// StagingSchema is a type alias for the name of the "_cdc_sink.public"
+// StagingSchema is a type alias for the name of the "_replicator.public"
 // table schema. It serves as an injection point for uniquely naming the
 // staging database in test cases.
 type StagingSchema Schema

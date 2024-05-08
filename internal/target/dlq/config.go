@@ -21,7 +21,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-const defaultTableName = "cdc_sink_dlq"
+const defaultTableName = "replicator_dlq"
 
 // Config controls the DLQ behavior.
 type Config struct {

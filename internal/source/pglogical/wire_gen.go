@@ -69,7 +69,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	if err != nil {
 		return nil, err
 	}
-	stagingSchema, err := sinkprod.ProvideStagingDB(stagingConfig)
+	stagingSchema, err := sinkprod.ProvideStagingDB(context, stagingConfig, stagingPool)
 	if err != nil {
 		return nil, err
 	}
