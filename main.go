@@ -24,22 +24,23 @@ import (
 	golog "log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/cmd/dumphelp"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/dumptemplates"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/kafka"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/licenses"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/mkjwt"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/mylogical"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/pglogical"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/preflight"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/start"
-	"github.com/cockroachdb/cdc-sink/internal/cmd/version"
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/util/logfmt"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/cmd/dumphelp"
+	"github.com/cockroachdb/replicator/internal/cmd/dumptemplates"
+	"github.com/cockroachdb/replicator/internal/cmd/kafka"
+	"github.com/cockroachdb/replicator/internal/cmd/licenses"
+	"github.com/cockroachdb/replicator/internal/cmd/mkjwt"
+	"github.com/cockroachdb/replicator/internal/cmd/mylogical"
+	"github.com/cockroachdb/replicator/internal/cmd/pglogical"
+	"github.com/cockroachdb/replicator/internal/cmd/preflight"
+	"github.com/cockroachdb/replicator/internal/cmd/start"
+	"github.com/cockroachdb/replicator/internal/cmd/version"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/util/logfmt"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	joonix "github.com/joonix/log"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -51,7 +52,7 @@ func main() {
 	var logFormat, logDestination string
 	var verbosity int
 	root := &cobra.Command{
-		Use:           "cdc-sink",
+		Use:           filepath.Base(os.Args[0]),
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

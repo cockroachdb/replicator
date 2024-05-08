@@ -17,8 +17,8 @@
 package script
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/merge"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/merge"
 	"github.com/dop251/goja"
 )
 

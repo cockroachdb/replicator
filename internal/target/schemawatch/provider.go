@@ -17,10 +17,10 @@
 package schemawatch
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

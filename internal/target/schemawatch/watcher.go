@@ -26,10 +26,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/retry"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

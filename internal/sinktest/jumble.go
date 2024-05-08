@@ -21,7 +21,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
 // JumbleIdent returns a case-jumbled version of the Ident.

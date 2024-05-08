@@ -7,17 +7,17 @@
 package seqtest
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/core"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
-	script2 "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
+	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
+	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	"github.com/cockroachdb/replicator/internal/sequencer/retire"
+	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
+	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
 )
 
 // Injectors from injector.go:

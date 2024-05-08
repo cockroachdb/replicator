@@ -19,9 +19,9 @@
 package target
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
+	"github.com/cockroachdb/replicator/internal/target/apply"
+	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/google/wire"
 )
 

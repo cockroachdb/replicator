@@ -22,10 +22,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/recorder"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/sinktest/recorder"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/stretchr/testify/require"
 )
 

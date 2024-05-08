@@ -23,7 +23,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 )
 

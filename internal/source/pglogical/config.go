@@ -19,11 +19,11 @@ package pglogical
 import (
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
-	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )

@@ -20,8 +20,8 @@ package memo
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 )

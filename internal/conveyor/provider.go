@@ -17,12 +17,12 @@
 package conveyor
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/retire"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
-	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/sequencer/retire"
+	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
+	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
+	"github.com/cockroachdb/replicator/internal/target/apply"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

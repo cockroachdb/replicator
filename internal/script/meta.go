@@ -17,8 +17,8 @@
 package script
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
 // AddMeta decorates the mutation with a standard set of properties.

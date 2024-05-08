@@ -19,7 +19,7 @@ package apply
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 )
 
 // Acceptor writes batches of mutations into their target tables.

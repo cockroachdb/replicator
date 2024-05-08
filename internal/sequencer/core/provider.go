@@ -17,9 +17,9 @@
 package core
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/google/wire"
 )
 

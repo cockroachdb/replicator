@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"

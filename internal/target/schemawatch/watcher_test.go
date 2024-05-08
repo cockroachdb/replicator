@@ -21,12 +21,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/replicator/internal/sinktest"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/stretchr/testify/require"
 )
 

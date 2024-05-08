@@ -24,11 +24,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/mutations"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
+	"github.com/cockroachdb/replicator/internal/sinktest/mutations"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/notify"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )

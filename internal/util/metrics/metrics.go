@@ -23,7 +23,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )

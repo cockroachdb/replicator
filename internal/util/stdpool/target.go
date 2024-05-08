@@ -20,8 +20,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 

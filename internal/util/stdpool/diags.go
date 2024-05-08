@@ -19,8 +19,8 @@ package stdpool
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/diag"
 )
 
 // WithDiagnostics attaches information about the pool to the given

@@ -22,8 +22,8 @@ package dumptemplates
 import (
 	"fmt"
 
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/util/fscopy"
+	"github.com/cockroachdb/replicator/internal/target/apply"
+	"github.com/cockroachdb/replicator/internal/util/fscopy"
 	"github.com/spf13/cobra"
 )
 

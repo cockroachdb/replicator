@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

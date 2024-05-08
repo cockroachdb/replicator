@@ -19,7 +19,7 @@ package stdpool_test
 import (
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/stretchr/testify/require"
 )
 

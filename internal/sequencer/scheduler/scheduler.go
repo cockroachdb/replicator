@@ -21,10 +21,10 @@ package scheduler
 import (
 	"fmt"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/lockset"
+	"github.com/cockroachdb/replicator/internal/util/notify"
 )
 
 // A Scheduler is shared across Sequencer implementations to limit

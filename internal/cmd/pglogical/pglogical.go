@@ -19,9 +19,9 @@
 package pglogical
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/source/pglogical"
-	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/source/pglogical"
+	"github.com/cockroachdb/replicator/internal/util/stdlogical"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/spf13/cobra"
 )
 

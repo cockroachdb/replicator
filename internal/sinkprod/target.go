@@ -19,11 +19,11 @@ package sinkprod
 import (
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/stdpool"
-	"github.com/cockroachdb/cdc-sink/internal/util/stmtcache"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
+	"github.com/cockroachdb/replicator/internal/util/stmtcache"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/spf13/pflag"
 )
 

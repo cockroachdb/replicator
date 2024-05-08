@@ -20,9 +20,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/pjson"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/pjson"
 	"github.com/dop251/goja"
 	"github.com/pkg/errors"
 )

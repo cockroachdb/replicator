@@ -23,10 +23,10 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 )
 
 // ErrChaos can be used in tests to differentiate intentionally injected

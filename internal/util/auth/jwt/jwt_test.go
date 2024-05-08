@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
 

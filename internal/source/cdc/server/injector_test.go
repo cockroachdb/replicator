@@ -21,9 +21,9 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
+	"github.com/cockroachdb/replicator/internal/source/cdc"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
 )

@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/crep"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/crep"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/stretchr/testify/assert"
 )
 

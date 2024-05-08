@@ -22,13 +22,13 @@ package kafka
 import (
 	"context"
 
-	scriptRuntime "github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
-	"github.com/cockroachdb/cdc-sink/internal/sinkprod"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	scriptRuntime "github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
+	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/staging"
+	"github.com/cockroachdb/replicator/internal/target"
+	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

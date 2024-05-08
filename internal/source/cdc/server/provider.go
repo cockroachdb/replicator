@@ -23,14 +23,14 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/secure"
-	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/source/cdc"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/secure"
+	"github.com/cockroachdb/replicator/internal/util/stdserver"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

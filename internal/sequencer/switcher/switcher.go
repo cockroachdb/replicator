@@ -21,15 +21,15 @@ package switcher
 import (
 	"fmt"
 
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/core"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
+	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	"github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 

@@ -17,7 +17,7 @@
 package applycfg
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/google/wire"
 )
 

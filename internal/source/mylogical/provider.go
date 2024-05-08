@@ -17,17 +17,17 @@
 package mylogical
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
-	scriptSeq "github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
+	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	scriptSeq "github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/target/apply"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/google/wire"
 )

@@ -17,14 +17,14 @@
 package switcher
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/besteffort"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/chaos"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/core"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/immediate"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/scheduler"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/script"
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
+	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
+	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
+	"github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/google/wire"
 )
 

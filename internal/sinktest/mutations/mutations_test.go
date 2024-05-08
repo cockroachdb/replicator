@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/stretchr/testify/assert"
 )
 

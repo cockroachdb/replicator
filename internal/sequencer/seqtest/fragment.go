@@ -17,8 +17,8 @@
 package seqtest
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
 // Fragment breaks a batch up into a number of minimum-sized batches

@@ -25,9 +25,9 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/applycfg"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

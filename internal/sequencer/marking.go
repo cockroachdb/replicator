@@ -16,7 +16,7 @@
 
 package sequencer
 
-import "github.com/cockroachdb/cdc-sink/internal/types"
+import "github.com/cockroachdb/replicator/internal/types"
 
 // MarkingAcceptor is a marker interface to indicate that a
 // [types.MultiAcceptor] will assume responsibility for calling

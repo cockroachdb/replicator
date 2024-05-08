@@ -20,10 +20,10 @@ import (
 	"bufio"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/conveyor"
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/conveyor"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/target/dlq"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 )

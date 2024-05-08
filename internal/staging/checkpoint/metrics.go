@@ -17,7 +17,7 @@
 package checkpoint
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
+	"github.com/cockroachdb/replicator/internal/util/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )

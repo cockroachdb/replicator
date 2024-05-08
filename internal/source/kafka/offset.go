@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

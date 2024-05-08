@@ -19,8 +19,8 @@ package stdpool
 import (
 	"regexp"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	"golang.org/x/mod/semver"
 )
