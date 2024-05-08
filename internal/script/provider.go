@@ -89,7 +89,8 @@ func ProvideLoader(
 	// Populate an object that represents the API used by scripts.
 	apiModule := l.rt.NewObject()
 	l.apiModule = apiModule
-	l.requireCache["cdc-sink@v1"] = apiModule
+	l.requireCache["cdc-sink@v1"] = apiModule // Legacy compatibility.
+	l.requireCache["replicator@v1"] = apiModule
 	if err := apiModule.Set("configureSource", l.configureSource); err != nil {
 		return nil, err
 	}

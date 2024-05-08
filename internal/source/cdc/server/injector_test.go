@@ -37,7 +37,7 @@ func TestScriptConfigureTarget(t *testing.T) {
 	r.NoError(err)
 
 	tsFile := fmt.Sprintf(`
-import * as api from "cdc-sink@v1";
+import * as api from "replicator@v1";
 api.setOptions({
   "bindAddr": "127.0.0.1:0",
   "stagingSchema": %q,

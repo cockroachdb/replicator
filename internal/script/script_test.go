@@ -302,7 +302,7 @@ CREATE TABLE %s.skewed_merge_times(
 		// the script to be able to load individual records using only
 		// the PK would improve the ergonomics.
 		//
-		// https://github.com/cockroachdb/cdc-sink/issues/705
+		// https://github.com/cockroachdb/replicator/issues/705
 		tx, err := fixture.TargetPool.BeginTx(ctx, nil)
 		r.NoError(err)
 		defer func() { _ = tx.Rollback() }()
@@ -415,4 +415,22 @@ CREATE TABLE %s.skewed_merge_times(
 			))
 		}
 	})
+}
+
+// This test ensures that the old name continues to function.
+func TestLegacyImport(t *testing.T) {
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+	var opts mapOptions
+	cfg := &Config{
+		Options:        &opts,
+		UserScriptPath: "./testdata/legacy_import.ts",
+	}
+	_, err = ProvideLoader(ctx, fixture.Configs, cfg, fixture.Diagnostics)
+	r.NoError(err)
+	r.Equal(map[string]string{"old": "world"}, opts.data)
 }

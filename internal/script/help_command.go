@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	//go:embed testdata/cdc-sink@v1.d.ts
+	//go:embed testdata/replicator@v1.d.ts
 	bindings string
 	//go:embed testdata/main.ts
 	example string
@@ -32,7 +32,7 @@ var (
 
 const help = `
 A userscript is a JavaScript / TypeScript program that allows arbitrary
-logic to be injected into cdc-sink. It is especially useful in cases
+logic to be injected into Replicator. It is especially useful in cases
 where the source data does not map directly onto SQL tables (e.g.
 migrations from a document store).
 
@@ -61,7 +61,7 @@ func HelpCommand() *cobra.Command {
 				return
 			}
 			fmt.Print(help)
-			fmt.Print("\n\n===== VVV cdc-sink@v1.d.ts VVV =====\n\n")
+			fmt.Print("\n\n===== VVV replicator@v1.d.ts VVV =====\n\n")
 			fmt.Print(bindings)
 			fmt.Print("\n\n===== VVV example-userscript.ts VVV ===== \n\n")
 			fmt.Print(example)

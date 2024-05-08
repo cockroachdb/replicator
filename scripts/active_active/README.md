@@ -216,8 +216,8 @@ The `repl.ts` module, used by `west.ts` (both script must be in the same directo
 `cdc-sink` is started):
 
 ```javascript
-import * as api from "cdc-sink@v1";
-import { ApplyOp } from "cdc-sink@v1";
+import * as api from "replicator@v1";
+import { ApplyOp } from "replicator@v1";
 export function replicateTo(target: string, tables: string[]) {
     for (let table of tables) {
         console.log("Configuring replication for " + table)

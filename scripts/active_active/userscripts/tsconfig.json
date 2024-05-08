@@ -9,7 +9,7 @@
       "moduleResolution": "node",
       "baseUrl": ".",
       "paths": {
-          "cdc-sink@v1": ["cdc-sink@v1.d.ts"]
+          "replicator@v1": ["replicator@v1.d.ts"]
         }
     }
 }
