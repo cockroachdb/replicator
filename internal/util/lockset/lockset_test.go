@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
-	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
+	"github.com/cockroachdb/replicator/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/util/workgroup"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )

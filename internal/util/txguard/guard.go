@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"

@@ -19,8 +19,8 @@ package immediate
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/retry"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/retry"
 )
 
 // acceptor adds a retry loop around a delegate. This provides better

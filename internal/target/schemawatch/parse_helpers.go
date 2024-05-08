@@ -33,7 +33,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 )

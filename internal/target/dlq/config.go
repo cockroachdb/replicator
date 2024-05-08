@@ -17,7 +17,7 @@
 package dlq
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/spf13/pflag"
 )
 

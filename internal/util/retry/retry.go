@@ -23,7 +23,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/pkg/errors"
 )
 

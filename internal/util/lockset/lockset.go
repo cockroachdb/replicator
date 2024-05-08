@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/util/notify"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 )

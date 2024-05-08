@@ -17,9 +17,9 @@
 package server
 
 import (
-	stagingProd "github.com/cockroachdb/cdc-sink/internal/sinkprod"
-	"github.com/cockroachdb/cdc-sink/internal/source/cdc"
-	"github.com/cockroachdb/cdc-sink/internal/util/stdserver"
+	stagingProd "github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/source/cdc"
+	"github.com/cockroachdb/replicator/internal/util/stdserver"
 	"github.com/spf13/pflag"
 )
 

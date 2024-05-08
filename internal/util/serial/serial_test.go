@@ -19,7 +19,7 @@ package serial
 import (
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pkg/errors"

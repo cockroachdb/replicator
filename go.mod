@@ -1,4 +1,4 @@
-module github.com/cockroachdb/cdc-sink
+module github.com/cockroachdb/replicator
 
 go 1.22
 

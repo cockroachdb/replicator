@@ -7,7 +7,7 @@
 package base
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/diag"
 	"testing"
 )
 

@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
+	"github.com/cockroachdb/replicator/internal/util/cmap"
 	"github.com/pkg/errors"
 )
 

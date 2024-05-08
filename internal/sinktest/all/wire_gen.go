@@ -7,16 +7,16 @@
 package all
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
-	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
-	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
-	"github.com/cockroachdb/cdc-sink/internal/staging/version"
-	"github.com/cockroachdb/cdc-sink/internal/target/apply"
-	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
-	"github.com/cockroachdb/cdc-sink/internal/target/schemawatch"
-	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
+	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
+	"github.com/cockroachdb/replicator/internal/staging/memo"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
+	"github.com/cockroachdb/replicator/internal/staging/version"
+	"github.com/cockroachdb/replicator/internal/target/apply"
+	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
+	"github.com/cockroachdb/replicator/internal/util/applycfg"
+	"github.com/cockroachdb/replicator/internal/util/diag"
 	"testing"
 )
 

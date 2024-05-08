@@ -19,12 +19,12 @@
 package staging
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/staging/checkpoint"
-	"github.com/cockroachdb/cdc-sink/internal/staging/leases"
-	"github.com/cockroachdb/cdc-sink/internal/staging/memo"
-	"github.com/cockroachdb/cdc-sink/internal/staging/stage"
-	"github.com/cockroachdb/cdc-sink/internal/staging/version"
-	"github.com/cockroachdb/cdc-sink/internal/util/applycfg"
+	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
+	"github.com/cockroachdb/replicator/internal/staging/leases"
+	"github.com/cockroachdb/replicator/internal/staging/memo"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
+	"github.com/cockroachdb/replicator/internal/staging/version"
+	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/google/wire"
 )
 

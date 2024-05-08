@@ -20,7 +20,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/stamp"
+	"github.com/cockroachdb/replicator/internal/util/stamp"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/pkg/errors"
 )

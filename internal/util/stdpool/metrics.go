@@ -22,8 +22,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/metrics"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/util/metrics"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"

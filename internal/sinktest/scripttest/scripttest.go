@@ -23,8 +23,8 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/subfs"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/subfs"
 )
 
 // ScriptFS contains the contents of the testdata directory.

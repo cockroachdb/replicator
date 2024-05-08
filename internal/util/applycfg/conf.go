@@ -19,9 +19,9 @@ package applycfg
 import (
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/cmap"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
-	"github.com/cockroachdb/cdc-sink/internal/util/merge"
+	"github.com/cockroachdb/replicator/internal/util/cmap"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/merge"
 )
 
 // DefaultRowLimit limits the number of rows to be sent in a single

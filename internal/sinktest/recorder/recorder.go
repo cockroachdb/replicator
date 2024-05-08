@@ -22,7 +22,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 )
 
 // Call is a union struct that retains the batch that was passed in.

@@ -17,8 +17,8 @@
 package dlq
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
 // cdc-sink doesn't create the DLQ table. Instead, we just validate that

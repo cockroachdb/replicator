@@ -22,12 +22,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/seqtest"
-	"github.com/cockroachdb/cdc-sink/internal/sequencer/switcher"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/seqtest"
+	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/notify"
 )
 
 func TestSwitcher(t *testing.T) {

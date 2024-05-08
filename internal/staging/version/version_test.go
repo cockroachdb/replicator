@@ -19,8 +19,8 @@ package version_test
 import (
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
-	"github.com/cockroachdb/cdc-sink/internal/staging/version"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/stretchr/testify/require"
 )
 

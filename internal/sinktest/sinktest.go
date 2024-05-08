@@ -17,7 +17,7 @@
 // Package sinktest contains utility types for writing cdc-sink tests.
 package sinktest
 
-import "github.com/cockroachdb/cdc-sink/internal/util/ident"
+import "github.com/cockroachdb/replicator/internal/util/ident"
 
 // SourceSchema is an injection point that holds the name of a unique
 // table schema in the source database in which to store user data.

@@ -17,8 +17,8 @@
 package script
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/script"
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/google/wire"
 )
 

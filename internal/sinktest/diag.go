@@ -20,7 +20,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/diag"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )

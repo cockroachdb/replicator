@@ -19,7 +19,7 @@ package memo_test
 import (
 	"testing"
 
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/stretchr/testify/assert"
 )
 

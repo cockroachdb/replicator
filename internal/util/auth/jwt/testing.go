@@ -26,8 +26,8 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
-	"github.com/cockroachdb/cdc-sink/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/pkg/errors"
 )

@@ -21,8 +21,8 @@ package stopvar
 import (
 	"time"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/notify"
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/util/notify"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 

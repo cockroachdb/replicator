@@ -17,8 +17,8 @@
 package mylogical
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/util/diag"
-	"github.com/cockroachdb/cdc-sink/internal/util/stdlogical"
+	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/stdlogical"
 )
 
 // MYLogical is a MySQL/MariaDB logical replication loop.

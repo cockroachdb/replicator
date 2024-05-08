@@ -21,7 +21,7 @@ import (
 	"database/sql"
 	"sync"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/dop251/goja"
 	"github.com/pkg/errors"
 )

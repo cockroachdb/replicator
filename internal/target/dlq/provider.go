@@ -17,7 +17,7 @@
 package dlq
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/google/wire"
 )
 

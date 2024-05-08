@@ -22,7 +22,7 @@ import (
 	"flag"
 	"sync"
 
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/types"
 )
 
 const defaultSize = 100

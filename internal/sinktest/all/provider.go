@@ -18,12 +18,12 @@
 package all
 
 import (
-	"github.com/cockroachdb/cdc-sink/internal/sinktest"
-	"github.com/cockroachdb/cdc-sink/internal/sinktest/base"
-	"github.com/cockroachdb/cdc-sink/internal/staging"
-	"github.com/cockroachdb/cdc-sink/internal/target"
-	"github.com/cockroachdb/cdc-sink/internal/target/dlq"
-	"github.com/cockroachdb/cdc-sink/internal/types"
+	"github.com/cockroachdb/replicator/internal/sinktest"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
+	"github.com/cockroachdb/replicator/internal/staging"
+	"github.com/cockroachdb/replicator/internal/target"
+	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/google/wire"
 )
 

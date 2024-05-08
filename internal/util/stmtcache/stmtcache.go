@@ -22,7 +22,7 @@ import (
 	"database/sql"
 	"sync"
 
-	"github.com/cockroachdb/cdc-sink/internal/util/stopper"
+	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/golang/groupcache/lru"
 	"github.com/pkg/errors"
 )

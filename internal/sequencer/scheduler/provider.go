@@ -19,9 +19,9 @@ package scheduler
 import (
 	"context"
 
-	"github.com/cockroachdb/cdc-sink/internal/sequencer"
-	"github.com/cockroachdb/cdc-sink/internal/util/lockset"
-	"github.com/cockroachdb/cdc-sink/internal/util/workgroup"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/util/lockset"
+	"github.com/cockroachdb/replicator/internal/util/workgroup"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 )
