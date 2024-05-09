@@ -14,26 +14,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Binaries will build cdc-sink for a variety of common platforms and
+# Binaries will build Replicator for a variety of common platforms and
 # optionally push the results to a GCP bucket.
 name: Golang Binaries
 permissions:
   contents: read
+  id-token: write
   statuses: write
 on:
   workflow_call:
-    inputs:
-      push:
-        default: false
-        description: Upload binaries to GCP bucket
-        required: true
-        type: boolean
   workflow_dispatch:
-    inputs:
-      push:
-        default: true
-        description: Upload binaries to GCP bucket
-        type: boolean
 
 jobs:
   binaries:
@@ -65,100 +55,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pick up a symbolic name for the build (e.g. "v1.0.1") and a guaranteed SHA or tag value.
-      - id: names
-        name: Determine versions and names
-        run: |
-          BUILDNAME="cdc-sink-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.target && format('-{0}', matrix.target) || '' }}"   # cdc-sink-linux-amd64[-target]
-          OUTPUT="cdc-sink${{ matrix.ext }}"                         # cdc-sink(.exe)
-          VERSION=$(git describe --tags --always --dirty)            # Tag name or SHA 
-          SYMBOLIC_NAME=$(                                           # Tag, branch, or SHA.
-            git describe --tags --exact-match HEAD 2> /dev/null ||
-            git symbolic-ref -q --short HEAD ||
-            echo "$VERSION")
-          SYMBOLIC_NAME=$(echo $SYMBOLIC_NAME | tr / -) # Replaces slashes in branch name
-          
-          # These are file globs to be included in the tarball.
-          DISTRO_PATHS=$(cat << EOF
-          $OUTPUT
-          README.md
-          VERSION.txt
-          licenses/*.txt
-          EOF)
-          
-          # Write a build-marker file for convenience.
-          echo "$VERSION" > VERSION.txt
-
-          # Export values into next build steps.          
-          echo "BUILDNAME=$BUILDNAME" >> $GITHUB_ENV
-          echo "DISTRO_NAME=$BUILDNAME-$SYMBOLIC_NAME" >> $GITHUB_ENV          
-          echo "OUTPUT=$OUTPUT" >> $GITHUB_ENV
-          echo "SYMBOLIC_NAME=$SYMBOLIC_NAME" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          
-          # Special handling since this is a multiline string
-          # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#multiline-strings
-          echo "DISTRO_PATHS<<EOF" >> $GITHUB_ENV
-          echo "$DISTRO_PATHS" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
       - id: setup_go
         name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
-      - id: licenses
-        name: Bundle license files
-        run: go generate ./internal/cmd/licenses
-
-      - id: build
-        name: Build
-        run: >
-          go
-          build
-          -v
-          -ldflags="-s -w"
-          ${{ matrix.target && format('-tags target_{0}', matrix.target) || '' }}
-          -o $OUTPUT
-          .
+      - id: package
         env:
-          CGO_ENABLED: ${{ matrix.cgo || '0' }}
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-
-      - id: tarball
-        name: Create distribution tarball
-        run: |
-          # Expand globs with the find command. The output from find
-          # will have a ./ at the beginning.  We'll replace that when
-          # packing the archive with the distribution name.
-          echo "${{ env.DISTRO_PATHS }}" |
-          xargs -rIQ find . -path ./Q  -print0 |
-          xargs -r0 tar zcvf ${{ env.DISTRO_NAME }}.tgz --transform 's|^./|${{ env.DISTRO_NAME }}/|'
+          # replicator-linux-amd64[-target]
+          PACKAGE_NAME: "replicator-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.target && format('-{0}', matrix.target) || '' }}"
+          PACKAGE_BIN_NAME: "replicator${{ matrix.ext }}" # replicator.exe
+          PACKAGE_BUILD_FLAGS: ${{ matrix.target && format('-tags target_{0}', matrix.target) || '' }}
+          PACKAGE_CGO_ENABLED: ${{ matrix.cgo || '0' }}
+          PACKAGE_GOOS: ${{ matrix.os }}
+          PACKAGE_GOARCH: ${{ matrix.arch }}
+          UPLOAD_DIR: upload
+        run: ./.github/workflows/package.sh
 
       - id: auth
         name: Authenticate to GCP
         # Only authenticate if we're on the main repo (i.e. have access
-        # to the secret) and we're pushing to a branch. Manual runs are
-        # also allowed as a convenience.
-        if: ${{ inputs.push }}
+        # to the secret).
+        if: "${{ vars.GCP_SERVICE_ACCOUNT }}"
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.CDC_SINK_BINARIES_KEY }}
+          workload_identity_provider: "${{ vars.WORKLOAD_IDENTITY_PROVIDER }}"
+          service_account: "${{ vars.GCP_SERVICE_ACCOUNT }}"
 
       - id: upload
         uses: google-github-actions/upload-cloud-storage@v2
-        if: ${{ inputs.push }}
+        if: "${{ steps.auth.outputs.auth_token }}"
         with:
-          path: ${{ env.DISTRO_NAME }}.tgz
-          destination: ${{ vars.CDC_SINK_BUCKET }}/
+          path: "upload/"
+          parent: false # Don't include the upload directory name
+          destination: ${{ vars.REPLICATOR_BUCKET }}/
           process_gcloudignore: false # Suppress warning about missing .gcloudignore file
 
       - id: link
         name: Summary link
-        if: ${{ inputs.push }}
-        run: echo "[${{ env.BUILDNAME }}](https://storage.googleapis.com/${{ vars.CDC_SINK_BUCKET }}/${{ env.DISTRO_NAME }}.tgz)" >> $GITHUB_STEP_SUMMARY
+        if: "${{ steps.upload.outputs.uploaded }}"
+        run: |
+          for f in "${{ steps.upload.outputs.uploaded }}"; do
+            echo "[$(basename $f)](https://replicator.cockroachdb.com/$f)" >> $GITHUB_STEP_SUMMARY
+          done
 
   # Aggregate the results of multiple jobs within this workflow into a
   # single status object that we can use for branch protection.
