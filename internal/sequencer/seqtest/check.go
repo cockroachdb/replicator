@@ -179,10 +179,9 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
 			}))
 		}
 	} else {
-		// We're going to fragment the batch to simulate data being
-		// received piecemeal by multiple instances of cdc-sink. We
-		// ensure that the child fragments must be processed before
-		// the parent fragments.
+		// We're going to fragment the batch to simulate data being received
+		// piecemeal by multiple instances of Replicator. We ensure that the child
+		// fragments must be processed before the parent fragments.
 		fragments, err := Fragment(testData)
 		r.NoError(err)
 		r.Len(fragments, 2)

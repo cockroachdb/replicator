@@ -21,11 +21,11 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
-// cdc-sink doesn't create the DLQ table. Instead, we just validate that
-// it contains a minimum set of expected columns. As a rule, cdc-sink
-// does not create or modify schema elements in the target database.
-// Futhermore, the DLQ-processing workflow can be arbitrarily complex
-// and we can't predict how the user intends to operate on this data.
+// Replicator doesn't create the DLQ table. Instead, we just validate that it
+// contains a minimum set of expected columns. As a rule, Replicator does not
+// create or modify schema elements in the target database. Futhermore, the
+// DLQ-processing workflow can be arbitrarily complex and we can't predict how
+// the user intends to operate on this data.
 var expectedColumns = []ident.Ident{
 	ident.New("dlq_name"),
 	ident.New("source_nanos"),

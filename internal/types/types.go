@@ -14,10 +14,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package types contains data types and interfaces that define the
-// major functional blocks of code within cdc-sink. The goal of placing
-// the types into this package is to make it easy to compose
-// functionality as the cdc-sink project evolves.
+// Package types contains data types and interfaces that define the major
+// functional blocks of code within Replicator. The goal of placing the types
+// into this package is to make it easy to compose functionality as the
+// Replicator project evolves.
 package types
 
 import (
@@ -90,7 +90,7 @@ func IsLeaseBusy(err error) (busy *LeaseBusyError, ok bool) {
 	return busy, errors.As(err, &busy)
 }
 
-// Leases coordinates behavior across multiple instances of cdc-sink.
+// Leases coordinates behavior across multiple instances of Replicator.
 type Leases interface {
 	// Acquire the named lease. A [LeaseBusyError] will be returned if
 	// another caller has already acquired the lease.

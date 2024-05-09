@@ -41,7 +41,7 @@ type Config struct {
 	SequencerConfig sequencer.Config
 	ScriptConfig    script.Config
 	// Discard all incoming HTTP payloads. This is useful for tuning
-	// changefeed throughput without considering cdc-sink performance.
+	// changefeed throughput without considering Replicator performance.
 	Discard bool
 
 	// If non-zero, wait half before and after consuming the payload.

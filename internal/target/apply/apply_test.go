@@ -1790,7 +1790,7 @@ func TestRenamedColumns(t *testing.T) {
 	}}))
 }
 
-// This tests a case in which cdc-sink does not upsert all columns in
+// This tests a case in which Replicator does not upsert all columns in
 // the target table and where multiple updates to the same key are
 // contained in the batch (which can happen in immediate mode). In this
 // case, we'll see an error message that UPSERT cannot affect the same

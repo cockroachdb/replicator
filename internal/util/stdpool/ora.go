@@ -50,7 +50,7 @@ func oraErrorDeferrable(err error) bool {
 		return true
 	case "60": // ORA-00060: Deadlock detected
 		// Our attempt to insert ran into another transaction, possibly
-		// from a different cdc-sink instance. This can happen since a
+		// from a different Replicator instance. This can happen since a
 		// MERGE operation reads before it starts writing and the order
 		// in which locks are acquired may vary.
 		return true
