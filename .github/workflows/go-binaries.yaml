@@ -95,8 +95,10 @@ jobs:
       - id: link
         name: Summary link
         if: "${{ steps.upload.outputs.uploaded }}"
+        env:
+          UPLOAD_PATHS: ${{ steps.upload.outputs.uploaded }}
         run: |
-          for f in "${{ steps.upload.outputs.uploaded }}"; do
+          for f in ${UPLOAD_PATHS//,/ }; do # Split comma-separated list
             echo "[$(basename $f)](https://replicator.cockroachdb.com/$f)" >> $GITHUB_STEP_SUMMARY
           done
 
