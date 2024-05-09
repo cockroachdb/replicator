@@ -44,11 +44,9 @@ jobs:
       - go-build-cache
     permissions:
       contents: read
+      id-token: write
       statuses: write
     secrets: inherit
-    with:
-      # Push if we're in the main repo and are pushing to a branch selected above.
-      push: ${{ !github.event.pull_request.head.repo.fork && github.event_name == 'push' }}
 
   go-codeql:
     uses: ./.github/workflows/go-codeql.yaml
@@ -90,5 +88,5 @@ jobs:
       contents: write
     secrets: inherit
     with:
-      # Only update the wiki if we're pushing to the master branch.
-      push: ${{ github.event.push.ref == 'refs/heads/master' }}
+      # Only update the wiki if we're merging into the master branch.
+      push: ${{ github.event.merge_group.base_ref == 'refs/heads/master' }}

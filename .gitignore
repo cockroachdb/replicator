@@ -20,3 +20,7 @@ replicator
 cockroach-data/
 goroutine_dump/
 heap_profiler/
+
+# Package working directory
+upload/
+
