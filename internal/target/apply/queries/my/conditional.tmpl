@@ -1,4 +1,4 @@
-{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+{{- /*gotype: github.com/cockroachdb/replicator/internal/target/apply.templates*/ -}}
 {{- /*
 This template implements the conditional update flow (compare-and-set,
 deadlines). For expanded examples, see the templates_test.go file.
@@ -96,7 +96,7 @@ WHERE current.{{ (index .PK 0).Name }} IS NULL OR
 {{- end -}}{{- /* .Conditions */ -}}
 
 {{- /*
-The last clause is to select the actionable rows 
+The last clause is to select the actionable rows
 to be upserted into the target table.
 SELECT * FROM dataSource
 ON DUPLICATE KEY UPDATE ts=VALUES(ts),  ver=VALUES(ver);
@@ -105,7 +105,7 @@ ON DUPLICATE KEY UPDATE ts=VALUES(ts),  ver=VALUES(ver);
 SELECT * FROM {{ $dataSource }}
 {{- nl -}}
 {{- if .Data -}}
-ON DUPLICATE KEY UPDATE 
+ON DUPLICATE KEY UPDATE
 {{ template "valuelist" .Data }}
 {{- end -}}
 {{- /* Trim whitespace */ -}}

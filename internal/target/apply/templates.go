@@ -39,8 +39,8 @@ const (
 	// TemplateOverrideEnv is the name of an environment variable that
 	// overrides the [fs.FS] from which the query templates are loaded.
 	// This facilitates ad-hoc debugging of queries, without the need to
-	// recompile the cdc-sink binary.
-	TemplateOverrideEnv = "CDC_SINK_TEMPLATES"
+	// recompile the Replicator binary.
+	TemplateOverrideEnv = "REPLICATOR_TEMPLATES"
 )
 
 var (

@@ -1,4 +1,4 @@
-{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+{{- /*gotype: github.com/cockroachdb/replicator/internal/target/apply.templates*/ -}}
 
 {{- /* names produces a comma-separated list of column names: foo, bar, baz*/ -}}
 {{- define "names" -}}
@@ -23,7 +23,7 @@ pairExprs produces a comma-separated list of positional arguments.
 pairExpr emits a type-cast SQL expression for a single positional argument.
 */ -}}
 {{- define "pairExpr" -}}
-    {{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.varPair*/ -}}
+    {{- /*gotype: github.com/cockroachdb/replicator/internal/target/apply.varPair*/ -}}
     {{- $pair := . -}}
     {{- if $pair.Expr -}}
         CAST({{ $pair.Expr }} AS {{ $pair.Column.Type }})

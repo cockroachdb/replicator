@@ -3,5 +3,5 @@ INSERT INTO "schema"."table"
 VALUES
 (?,?,CASE WHEN ? THEN ? ELSE expr() END),
 (?,?,CASE WHEN ? THEN ? ELSE expr() END)
-ON DUPLICATE KEY UPDATE 
+ON DUPLICATE KEY UPDATE
 "has_default"=VALUES("has_default")

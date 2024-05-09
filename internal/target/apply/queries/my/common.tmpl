@@ -1,4 +1,4 @@
-{{- /*gotype: github.com/cockroachdb/cdc-sink/internal/target/apply.templates*/ -}}
+{{- /*gotype: github.com/cockroachdb/replicator/internal/target/apply.templates*/ -}}
 
 {{- /* names produces a comma-separated list of column names: foo, bar, baz*/ -}}
 {{- define "names" -}}
@@ -41,7 +41,7 @@
                 CASE WHEN ? THEN {{- sp -}}
               {{- end -}}
             {{- if $pair.Expr -}}
-                ({{ $pair.Expr }}) 
+                ({{ $pair.Expr }})
             {{- else if eq $pair.Column.Type "geometry" -}}
                 st_geomfromgeojson(?)
             {{- else -}}
