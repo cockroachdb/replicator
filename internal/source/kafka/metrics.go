@@ -22,7 +22,7 @@ import (
 )
 
 // TODO (silvano) Provide a grafana dashboard for kafka connector.
-// https://github.com/cockroachdb/cdc-sink/issues/829
+// https://github.com/cockroachdb/replicator/issues/829
 var (
 	mutationsErrorCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kafka_mutations_error_count",

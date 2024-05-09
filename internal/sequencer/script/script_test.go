@@ -187,7 +187,7 @@ api.configureTable("t_2", {
 			search = "llebwoc"
 		}
 
-		// https://github.com/cockroachdb/cdc-sink/issues/689
+		// https://github.com/cockroachdb/replicator/issues/689
 		var q string
 		switch fixture.TargetPool.Product {
 		case types.ProductCockroachDB, types.ProductPostgreSQL:

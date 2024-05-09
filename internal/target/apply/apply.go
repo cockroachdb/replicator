@@ -819,7 +819,7 @@ func toDBTypes(colData []types.ColData, values []any) error {
 // IsMergeSupported returns true if the applier supports three-way
 // merges for the given product.
 //
-// Work items in https://github.com/cockroachdb/cdc-sink/issues/487
+// Work items in https://github.com/cockroachdb/replicator/issues/487
 func IsMergeSupported(product types.Product) bool {
 	switch product {
 	case types.ProductCockroachDB, types.ProductPostgreSQL:

@@ -64,7 +64,7 @@ var _ OffsetSeeker = &offsetSeeker{}
 // GetOffsets implements OffsetSeeker.
 func (o *offsetSeeker) GetOffsets(topics []string, min hlc.Time) ([]*partitionState, error) {
 	res := make([]*partitionState, 0)
-	// TODO (silvano): make this parallel https://github.com/cockroachdb/cdc-sink/issues/830
+	// TODO (silvano): make this parallel https://github.com/cockroachdb/replicator/issues/830
 	for _, topic := range topics {
 		partitions, err := o.client.Partitions(topic)
 		if err != nil {
