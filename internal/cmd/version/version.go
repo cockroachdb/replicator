@@ -19,6 +19,8 @@
 package version
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 
@@ -43,7 +45,7 @@ func Command() *cobra.Command {
 				for _, setting := range bi.Settings {
 					fields[setting.Key] = setting.Value
 				}
-				log.WithFields(fields).Info("cdc-sink")
+				log.WithFields(fields).Info(filepath.Base(os.Args[0]))
 
 				for _, m := range bi.Deps {
 					for m.Replace != nil {
