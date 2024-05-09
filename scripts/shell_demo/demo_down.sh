@@ -20,6 +20,6 @@
 
 
 ## CLEAN UP - Remove and put into demo_cleanup.sh
-pkill -9 cockroach cdc-sink
+pkill -9 cockroach replicator
 rm -Rf ./cockroach_sink
 rm -Rf ./cockroach_source

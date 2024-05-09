@@ -31,7 +31,7 @@ export SINK_PORT=26258
 export SINK_HOST=127.0.0.1
 export CDC_PORT=26259
 
-echo ">>> Build CDC Sink..."
+echo ">>> Build Replicator..."
 go build ../
 
 echo ">>> Start Source with Movr..."
@@ -45,9 +45,9 @@ cockroach workload init movr --num-histories=9 --num-promo-codes=9 --num-rides=9
 cockroach sql --insecure --port=$SINK_SQL_PORT -e="TRUNCATE TABLE MOVR.RIDES CASCADE; TRUNCATE TABLE MOVR.USERS CASCADE; TRUNCATE MOVR.VEHICLES CASCADE; TRUNCATE MOVR.VEHICLE_LOCATION_HISTORIES CASCADE; TRUNCATE TABLE MOVR.PROMO_CODES; TRUNCATE TABLE MOVR.USER_PROMO_CODES;"
 
 ###TODO(Chris): Creat logic to create config for multiple tables
-echo ">>> Create CDC Sink"
+echo ">>> Create Replicator"
 config="$(echo [{\"endpoint\":\"${SRC_TABLES}.sql\", \"source_table\":\"${SRC_TABLES}\", \"destination_database\":\"${SRC_DB}\", \"destination_table\":\"${SRC_TABLES}\"}])"
-cdc-sink --conn=postgresql://root@${SINK_HOST}:${SINK_SQL_PORT}/${SRC_DB}?sslmode=disable --port=${CDC_PORT} --config="$config" > cdc-sink.log 2>&1 &
+replicator --conn=postgresql://root@${SINK_HOST}:${SINK_SQL_PORT}/${SRC_DB}?sslmode=disable --port=${CDC_PORT} --config="$config" > replicator.log 2>&1 &
 
 echo ">>> Create Changefeeds on Source..."
 cockroach sql --insecure --port=${SRC_PORT} -e="CREATE CHANGEFEED FOR TABLE ${SRC_DB}.${SRC_TABLES} INTO \"experimental-http://${SINK_HOST}:${CDC_PORT}/promo_codes.sql\" WITH updated,resolved;"
