@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package sinktest contains utility types for writing cdc-sink tests.
+// Package sinktest contains utility types for writing Replicator tests.
 package sinktest
 
 import "github.com/cockroachdb/replicator/internal/util/ident"

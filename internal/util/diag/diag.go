@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package diag contains a mechanism for cdc-sink components to report
+// Package diag contains a mechanism for Replicator components to report
 // structured diagnostic information.
 package diag
 

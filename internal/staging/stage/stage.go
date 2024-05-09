@@ -171,7 +171,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 		for {
 			// We don't want to select on the notification channel,
 			// since this value may be updated at a high rate on the
-			// instance of cdc-sink that holds the resolver lease.
+			// instance of Replicator that holds the resolver lease.
 			from, _ := s.retireFrom.Get()
 			ct, err := s.CountUnapplied(ctx, db, from, true /* AOST */)
 			if code, ok := s.stagingDB.ErrCode(err); ok &&
@@ -193,7 +193,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 				return nil
 			case <-ticker.C:
 				// Ensure that values get reset if this instance of
-				// cdc-sink isn't the one that's actively resolving or
+				// Replicator isn't the one that's actively resolving or
 				// retiring mutations.
 			}
 		}

@@ -198,7 +198,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	}
 	r.NoError(serverCfg.Preflight())
 
-	// The target fixture contains the cdc-sink server.
+	// The target fixture contains the Replicator server.
 	targetFixture, cancel, err := newTestFixture(stopper.WithContext(ctx), serverCfg)
 	r.NoError(err)
 	defer cancel()
