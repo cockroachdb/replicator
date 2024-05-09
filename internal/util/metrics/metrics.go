@@ -63,13 +63,13 @@ func init() {
 		}
 		promauto.NewGauge(prometheus.GaugeOpts{
 			Name:        "cdc_sink_info",
-			Help:        "information about the cdc-sink binary",
+			Help:        "information about the Replicator binary",
 			ConstLabels: labels,
 		}).Set(1)
 	}
 	promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "cdc_sink_start_seconds",
-		Help: "the wall time at which cdc-sink was started",
+		Help: "the wall time at which Replicator was started",
 	}).SetToCurrentTime()
 }
 
