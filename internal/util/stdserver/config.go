@@ -41,7 +41,7 @@ func (c *Config) Bind(flags *pflag.FlagSet) {
 		&c.DisableAuth,
 		"disableAuthentication",
 		false,
-		"disable authentication of incoming cdc-sink requests; not recommended for production.")
+		"disable authentication of incoming Replicator requests; not recommended for production.")
 	flags.BoolVar(
 		&c.GenerateSelfSigned,
 		"tlsSelfSigned",
