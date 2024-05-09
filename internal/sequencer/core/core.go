@@ -61,8 +61,7 @@ func (s *Core) Start(
 	// Acquire a lease on the group name to prevent multiple sweepers
 	// from operating.
 	sequtil.LeaseGroup(ctx, s.leases, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
-		// Report which instance of cdc-sink is processing the tables
-		// within the group.
+		// Report which instance of Replicator is processing the tables within the group.
 		activeGauges := make([]prometheus.Gauge, len(group.Tables))
 		for idx, tbl := range group.Tables {
 			activeGauges[idx] = sweepActive.WithLabelValues(metrics.TableValues(tbl)...)
