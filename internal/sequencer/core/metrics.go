@@ -25,7 +25,7 @@ import (
 var (
 	sweepActive = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "core_sweep_active_bool",
-		Help: "non-zero if this instance of cdc-sink is processing the schema",
+		Help: "non-zero if this instance of Replicator is processing the schema",
 	}, metrics.TableLabels)
 	sweepAppliedCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "core_sweep_apply_count",
