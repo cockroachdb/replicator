@@ -192,7 +192,7 @@ func openPgx[P attachable](
 	}
 	// Identify traffic.
 	if _, found := cfg.ConnConfig.RuntimeParams["application_name"]; !found {
-		cfg.ConnConfig.RuntimeParams["application_name"] = "cdc-sink"
+		cfg.ConnConfig.RuntimeParams["application_name"] = "replicator"
 	}
 	if err := attachOptions(ctx, cfg, options); err != nil {
 		return *new(P), err
