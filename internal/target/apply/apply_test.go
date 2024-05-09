@@ -88,7 +88,7 @@ func TestApply(t *testing.T) {
 	}
 
 	// A helper to count the number of rows where has_default = lookFor.
-	// https://github.com/cockroachdb/cdc-sink/issues/689
+	// https://github.com/cockroachdb/replicator/issues/689
 	countHasDefault := func(lookFor string) (ct int, err error) {
 		var q string
 		switch fixture.TargetPool.Product {

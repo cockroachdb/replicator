@@ -33,15 +33,15 @@ import (
 // responsible for receiving replication messages and replying with
 // status updates.
 // TODO (silvano) : support transactional mode
-// https://github.com/cockroachdb/cdc-sink/issues/777
+// https://github.com/cockroachdb/replicator/issues/777
 // note: we get resolved timestamps on all the partitions,
 // so we should be able to leverage that.
 //
 // TODO (silvano): support Avro format, schema registry.
-// https://github.com/cockroachdb/cdc-sink/issues/776
+// https://github.com/cockroachdb/replicator/issues/776
 //
 // TODO (silvano): add metrics.
-// https://github.com/cockroachdb/cdc-sink/issues/778
+// https://github.com/cockroachdb/replicator/issues/778
 type Conn struct {
 	// The destination for writes.
 	acceptor types.MultiAcceptor
