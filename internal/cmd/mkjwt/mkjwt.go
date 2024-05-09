@@ -56,13 +56,13 @@ openssl ec -in ec.key -pubout -out ec.pub
 
 # Generate a token which can write to the ycsb.public schema.
 # The key can be decoded using the debugger at https://jwt.io
-cdc-sink make-jwt -k ec.key -a ycsb.public -o out.jwt
+replicator make-jwt -k ec.key -a ycsb.public -o out.jwt
 
-# Upload the public key for cdc-sink to find it.
+# Upload the public key for Replicator to find it.
 cockroach sql -e "INSERT INTO %s.%s (public_key) VALUES ('$(cat ec.pub)')"
 
 # Reload configuration, or wait a minute.
-killall -HUP cdc-sink
+killall -HUP replicator
 `, "_replicator", jwtAuth.PublicKeysTable.Raw())),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(allow) == 0 {
