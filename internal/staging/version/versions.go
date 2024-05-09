@@ -37,7 +37,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Versions contains breaking changes to the cdc-sink metadata tables.
+// Versions contains breaking changes to the Replicator metadata tables.
 var Versions = []Version{
 	{"Add versions table", 400},
 	{"Support single-level schema namespaces", 389},
@@ -45,8 +45,7 @@ var Versions = []Version{
 	{"Migrate resolved_timestamps to checkpoints", 828},
 }
 
-// A Version describes a breaking change in the cdc-sink metadata
-// tables.
+// A Version describes a breaking change in the Replicator metadata tables.
 type Version struct {
 	Info string // A short string for human consumption.
 	PR   int    // The pull request number which introduces the incompatible change.
@@ -66,14 +65,14 @@ func (v *Version) Warning() string {
 const (
 	appliedState    = "applied"
 	versionKey      = "version-%d"
-	warningTemplate = `Manual schema change required to upgrade to this version of cdc-sink.
+	warningTemplate = `Manual schema change required to upgrade to this version of Replicator.
 %s
-See https://github.com/cockroachdb/cdc-sink/pull/%d for additional details.`
+See https://github.com/cockroachdb/replicator/pull/%d for additional details.`
 )
 
 // Checker ensures that a set of version entries exists in the memo
 // table so that we can provide useful messages to users on how to
-// perform cdc-sink metadata schema fixups.
+// perform Replicator metadata schema fixups.
 type Checker struct {
 	Memo        types.Memo
 	StagingPool *types.StagingPool
