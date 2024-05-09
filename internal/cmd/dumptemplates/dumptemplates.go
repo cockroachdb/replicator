@@ -37,12 +37,12 @@ func Command() *cobra.Command {
 		Short:  "write the query templates to disk (debugging use only)",
 		Long: fmt.Sprintf(`This command writes the apply templates to disk.
 
-When running cdc-sink, set the %[1]s environment variable to the directory
+When running Replicator, set the %[1]s environment variable to the directory
 that is passed to the --path flag. The indicated directory must contain
 a subdirectory named %[2]s.
 
-cdc-sink dumptemplates --path .
-%[1]s=. cdc-sink start ....
+replicator dumptemplates --path .
+%[1]s=. replicator start ....
 `, apply.TemplateOverrideEnv, apply.QueryDir),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fscopy.Copy(apply.EmbeddedTemplates, path)

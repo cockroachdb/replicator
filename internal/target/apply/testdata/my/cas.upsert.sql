@@ -16,5 +16,5 @@ USING ("pk0","pk1")
 WHERE current."pk0" IS NULL OR
 (data."val1",data."val0") > (current."val1",current."val0"))
 SELECT * FROM action
-ON DUPLICATE KEY UPDATE 
+ON DUPLICATE KEY UPDATE
 "val0"=VALUES("val0"),"val1"=VALUES("val1"),"has_default"=VALUES("has_default")
