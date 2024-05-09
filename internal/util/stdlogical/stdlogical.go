@@ -105,7 +105,7 @@ func New(t *Template) *cobra.Command {
 				for _, s := range bi.Settings {
 					info[s.Key] = s.Value
 				}
-				log.WithFields(info).Info("cdc-sink starting")
+				log.WithFields(info).Info("Replicator starting")
 			}
 
 			// Delegate startup. main.go provides a stopper.
