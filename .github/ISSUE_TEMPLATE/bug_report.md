@@ -9,7 +9,7 @@ assignees: ''
 
 **Environment**
 
-- First line of `cdc-sink version` (specifically the git SHA):
+- First line of `replicator version` (specifically the git SHA):
 - Source DB and version:
 - Target DB and version:
 - Staging DB and version, if separate from TargetDB:
@@ -23,7 +23,7 @@ A clear and concise description of what you expected to happen versus what you o
 
 **Diagnostic info**
 
-Please connect to the cdc-sink diagnostic endpoint at `/_/diag` and include the JSON blob below.
+Please connect to the Replicator diagnostic endpoint at `/_/diag` and include the JSON blob below.
 
 ```
 { ... DIAG DATA ... }
