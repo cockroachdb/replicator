@@ -26,13 +26,13 @@ type ClaimData struct {
 	Schemas []ident.Schema `json:"schemas,omitempty"`
 }
 
-// Claims extends the core JWT Claims with elements specific to
-// cdc-sink.
+// Claims extends the core JWT Claims with elements specific to Replicator.
 type Claims struct {
 	jwt.RegisteredClaims
 	// Place our extension in a proper namespace, for compatibility with
 	// e.g. Auth0.
-	Ext ClaimData `json:"https://github.com/cockroachdb/cdc-sink,omitempty"`
+	Ext       ClaimData `json:"https://github.com/cockroachdb/replicator,omitempty"`
+	LegacyExt ClaimData `json:"https://github.com/cockroachdb/cdc-sink,omitempty"`
 }
 
 var _ jwt.Claims = (*Claims)(nil)
@@ -43,8 +43,8 @@ func (c Claims) Valid() error {
 	if c.ID == "" {
 		return jwt.NewValidationError("id field is required", jwt.ValidationErrorId)
 	}
-	if len(c.Ext.Schemas) == 0 {
-		return jwt.NewValidationError("no cdc-sink.schemas defined", jwt.ValidationErrorClaimsInvalid)
+	if len(c.Ext.Schemas) == 0 && len(c.LegacyExt.Schemas) == 0 {
+		return jwt.NewValidationError("no replicator.schemas defined", jwt.ValidationErrorClaimsInvalid)
 	}
 	return c.RegisteredClaims.Valid()
 }

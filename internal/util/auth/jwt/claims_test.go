@@ -34,14 +34,14 @@ func TestClaims(t *testing.T) {
 		},
 		{
 			json: `{"jti": "foobar"}`,
-			err:  "no cdc-sink.schemas defined",
+			err:  "no replicator.schemas defined",
 		},
 		// Smoke-test a valid claim.
 		{
 			json: `
 {
 	"jti": "foobar",
-	"https://github.com/cockroachdb/cdc-sink": {
+	"https://github.com/cockroachdb/replicator": {
 		"schemas": [ ["db", "schema" ]]
 	}
 }`,
@@ -51,12 +51,44 @@ func TestClaims(t *testing.T) {
 			json: `
 {
 	"jti": "foobar",
-	"https://github.com/cockroachdb/cdc-sink": {
+	"https://github.com/cockroachdb/replicator": {
 		"schemas": [ ["one_segment" ]]
 	}
 }`,
 		},
 		// Bad expiration date
+		{
+			json: `
+{
+	"jti": "foobar",
+	"exp": 0,
+	"https://github.com/cockroachdb/replicator": {
+		"schemas": [ ["db", "schema" ]]
+	}
+}`,
+			err: "token is expired",
+		},
+		// Legacy - Smoke-test a valid claim.
+		{
+			json: `
+{
+	"jti": "foobar",
+	"https://github.com/cockroachdb/cdc-sink": {
+		"schemas": [ ["db", "schema" ]]
+	}
+}`,
+		},
+		// Legacy - As previous, but only a single-part schema name.
+		{
+			json: `
+{
+	"jti": "foobar",
+	"https://github.com/cockroachdb/cdc-sink": {
+		"schemas": [ ["one_segment" ]]
+	}
+}`,
+		},
+		// Legacy - Bad expiration date
 		{
 			json: `
 {
