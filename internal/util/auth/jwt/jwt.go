@@ -29,7 +29,7 @@
 //
 //	{
 //	   "jti": "a25dac04-9f3e-49c1-a068-ee0a2abbd7df",
-//	   "https://github.com/cockroachdb/cdc-sink": {
+//	   "https://github.com/cockroachdb/replicator": {
 //	     "sch": [
 //	       [ "database", "schema" ],
 //	       [ "another_database", "*" ],
@@ -130,6 +130,15 @@ func (a *authenticator) Check(
 			return false, nil
 		}
 		for _, allowed := range claims.Ext.Schemas {
+			if matches(allowed, schema) {
+				log.WithFields(log.Fields{
+					"id":     claims.ID,
+					"schema": schema,
+				}).Debug("successful authorization")
+				return true, nil
+			}
+		}
+		for _, allowed := range claims.LegacyExt.Schemas {
 			if matches(allowed, schema) {
 				log.WithFields(log.Fields{
 					"id":     claims.ID,
