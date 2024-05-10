@@ -36,7 +36,7 @@ func NewClaim(schemas []ident.Schema) (Claims, error) {
 	cl := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:     uuid.String(),
-			Issuer: "cdc-sink",
+			Issuer: "replicator",
 		},
 		Ext: ClaimData{
 			Schemas: schemas,
@@ -45,7 +45,7 @@ func NewClaim(schemas []ident.Schema) (Claims, error) {
 	return cl, nil
 }
 
-// Sign generates a new JWT that is compatible with cdc-sink. This
+// Sign generates a new JWT that is compatible with Replicator. This
 // method is used for testing and for the example quickstart.
 func Sign(
 	method jwt.SigningMethod, key crypto.PrivateKey, schemas []ident.Schema,

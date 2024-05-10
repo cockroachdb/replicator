@@ -29,7 +29,7 @@
 //
 //	{
 //	   "jti": "a25dac04-9f3e-49c1-a068-ee0a2abbd7df",
-//	   "https://github.com/cockroachdb/cdc-sink": {
+//	   "https://github.com/cockroachdb/replicator": {
 //	     "sch": [
 //	       [ "database", "schema" ],
 //	       [ "another_database", "*" ],

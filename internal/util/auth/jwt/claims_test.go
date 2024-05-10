@@ -34,14 +34,14 @@ func TestClaims(t *testing.T) {
 		},
 		{
 			json: `{"jti": "foobar"}`,
-			err:  "no cdc-sink.schemas defined",
+			err:  "no replicator.schemas defined",
 		},
 		// Smoke-test a valid claim.
 		{
 			json: `
 {
 	"jti": "foobar",
-	"https://github.com/cockroachdb/cdc-sink": {
+	"https://github.com/cockroachdb/replicator": {
 		"schemas": [ ["db", "schema" ]]
 	}
 }`,
@@ -51,7 +51,7 @@ func TestClaims(t *testing.T) {
 			json: `
 {
 	"jti": "foobar",
-	"https://github.com/cockroachdb/cdc-sink": {
+	"https://github.com/cockroachdb/replicator": {
 		"schemas": [ ["one_segment" ]]
 	}
 }`,
@@ -62,7 +62,7 @@ func TestClaims(t *testing.T) {
 {
 	"jti": "foobar",
 	"exp": 0,
-	"https://github.com/cockroachdb/cdc-sink": {
+	"https://github.com/cockroachdb/replicator": {
 		"schemas": [ ["db", "schema" ]]
 	}
 }`,
