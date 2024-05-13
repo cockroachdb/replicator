@@ -62,10 +62,10 @@ jobs:
     # Doesn't need the build cache
     permissions:
       contents: read
+      packages: write
     secrets: inherit
     with:
-      # Push if we're in the main repo and are pushing to a branch selected above.
-      push: ${{ !github.event.pull_request.head.repo.fork && github.event_name == 'push' }}
+      enable_docker_hub: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref=='refs/heads/master' }}
 
   go-tests:
     uses: ./.github/workflows/go-tests.yaml
