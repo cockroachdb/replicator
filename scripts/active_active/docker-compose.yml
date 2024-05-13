@@ -102,14 +102,14 @@ services:
      west:
         condition: service_healthy
 
- # cdc-sink
+ # replicator
  east_west:
    hostname: east_west
    build: ./userscripts
    depends_on:
       west_init:
         condition: service_healthy
-   command: start ${CDC_ARGS:-} --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@west:26257/?sslmode=disable' --userscript east_west.ts 
+   command: start ${REPLICATOR_ARGS:-} --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@west:26257/?sslmode=disable' --userscript east_west.ts
    restart: always
 
  west_east:
@@ -118,7 +118,7 @@ services:
    depends_on:
       east_init:
         condition: service_healthy
-   command: start ${CDC_ARGS:-} --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@east:26257/?sslmode=disable' --userscript west_east.ts 
+   command: start ${REPLICATOR_ARGS:-} --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@east:26257/?sslmode=disable' --userscript west_east.ts
    restart: always
 
 # workloads

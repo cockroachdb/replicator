@@ -1,6 +1,6 @@
 # Docker demo of active-active replication
 
-This demo sets up 2 single node clusters and 2 cdc-sink instances to replicate data two ways,
+This demo sets up 2 single node clusters and 2 replicator instances to replicate data two ways,
 as shown in the diagram.
 
 ![active active setup](active-active.png "Demo setup")
@@ -23,19 +23,19 @@ Alternatively, create a `.env` file to set the values of the variables.
 
 ## Starting the services
 
-Starting the Cockroach clusters, cdc-sink processes and initializing the environment:
+Starting the Cockroach clusters, replicator processes and initializing the environment:
 
 ```bash
 docker compose up -d
 ```
 
-To pass additional arguments to cdc-sink use the `CDC_ARGS` env variable.
-`CDC_ARGS` can be also set in the `.env` file.
+To pass additional arguments to replicator use the `REPLICATOR_ARGS` env variable.
+`REPLICATOR_ARGS` can be also set in the `.env` file.
 
-For instance, to enable debugging on cdc-sink:
+For instance, to enable debugging on replicator:
 
 ```bash
-CDC_ARGS=-v docker compose up -d
+REPLICATOR_ARGS=-v docker compose up -d
 ```
 
 To access the DB console, you can find out the local port of each cluster by running:
@@ -58,15 +58,15 @@ docker compose --profile monitor up -d
 ```
 
 Docker will start Prometheus and Grafana and initialize the monitoring environment to
-connect to the Cockroach Clusters and the cdc-sink processes.
+connect to the Cockroach Clusters and the replicator processes.
 To find out on which port the Grafana dashboard is available use:
 
 ```bash
 docker compose port grafana 3000
 ```
 
-The default user,password is `admin`/`cdc-sink`.
-Using the `PORT` returned by the command above, open a browser to http://localhost:PORT/d/cdc-sink
+The default user,password is `admin`/`replicator`.
+Using the `PORT` returned by the command above, open a browser to http://localhost:PORT/d/replicator
 
 ## Running the workload
 
@@ -118,7 +118,7 @@ or `west_sql` services.
 docker compose run --rm -it west_sql 
 ```
 
-To view the content of the kv table, including the columns used by the cdc-sink to perform replication:
+To view the content of the kv table, including the columns used by the replicator to perform replication:
 
 ```sql
 root@west:26257/defaultdb> SELECT *,_source,_timestamp from kv.kv limit 10
@@ -151,7 +151,7 @@ To set up the Replicator environment, create a `_replicator` database on both cl
 and a table in each destination database to collect any conflicts that may arise:
 
 ```sql
--- Database used by cdc-sink to stage mutation and maintain replication state.
+-- Database used by replicator to stage mutation and maintain replication state.
 CREATE DATABASE if NOT EXISTS _replicator
 
 -- DLQ table in the database being replicated:
@@ -167,7 +167,7 @@ data_before JSONB NOT NULL
 
 ```
 
-In order for the `cdc-sink` process to correctly process updates, we need to provide
+In order for the `replicator` process to correctly process updates, we need to provide
 information on the origin of each mutation, so we avoid replication infinite loops.
 We also keep track of timestamps, to resolve conflicts.
 This is accomplished by adding 2 hidden columns (`_source` and `_timestamp`) to each
@@ -186,20 +186,20 @@ ALTER TABLE kv.kv
 We add one second to the current timestamp, to account for a window of uncertainty. This can
 be adjusted, depending on the network latency between the two clusters.
 
-### Running cdc-sink
+### Running replicator
 
 The flow control and conflict resolution are implemented by providing a user script
-to cdc-sink. As a convenience, we provide a module `repl.ts` to setup the replication
-logic on each `cdc-sink` process.
-We recommend to start a `cdc-sink` process on each node of the target (`west`) cluster, and
+to replicator. As a convenience, we provide a module `repl.ts` to setup the replication
+logic on each `replicator` process.
+We recommend to start a `replicator` process on each node of the target (`west`) cluster, and
 configure a layer 7 HTTP/2 load balancer to receive changefeed events from the
 source (`east`) cluster. The same setup is needed for the `west` to `east` flow.
 
-For instance, starting a `cdc-sink` process on each `west` nodes
+For instance, starting a `replicator` process on each `west` nodes
 will receive `east` traffic and apply it to the local CockroachDB node:
 
 ```bash
-cdc-sink start --bindAddr :30004 --metricsAddr :30005 \
+replicator start --bindAddr :30004 --metricsAddr :30005 \
                --tlsSelfSigned --disableAuthentication \
                --targetConn 'postgresql://root@local:26257/?sslmode=disable' \
                --userscript west.ts
@@ -213,7 +213,7 @@ replicateTo('west', ['kv.public.kv'])
 ```
 
 The `repl.ts` module, used by `west.ts` (both script must be in the same directory where
-`cdc-sink` is started):
+`replicator` is started):
 
 ```javascript
 import * as api from "replicator@v1";
@@ -240,7 +240,7 @@ function replicateTable(target: string, table: string) {
 }
 ```
 
-Once configured, cdc-sink will:
+Once configured, replicator will:
 
 - discard any delete that have a null `before` field.
 This assumes that the changefeed is created with the `diff` option. With `diff`, the
