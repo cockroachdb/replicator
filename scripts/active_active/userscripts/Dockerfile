@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-FROM cockroachdb/cdc-sink:master
+FROM cockroachdb/replicator:master
 WORKDIR .
 COPY west_east.ts west_east.ts
 COPY east_west.ts east_west.ts
