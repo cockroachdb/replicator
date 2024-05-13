@@ -211,6 +211,11 @@ func (c *Conveyor) Refresh() {
 	c.checkpoint.Refresh()
 }
 
+// Stat returns the progress of all tables being managed.
+func (c *Conveyor) Stat() *notify.Var[sequencer.Stat] {
+	return c.stat
+}
+
 // TableGroup returns the TableGroup associated to this conveyor.
 func (c *Conveyor) TableGroup() *types.TableGroup {
 	return c.checkpoint.TableGroup()

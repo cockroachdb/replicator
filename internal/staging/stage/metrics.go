@@ -23,6 +23,11 @@ import (
 )
 
 var (
+	stageMarkDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "stage_mark_duration_seconds",
+		Help:    "the amount of time it took to mark a mutation as applied",
+		Buckets: metrics.LatencyBuckets,
+	}, metrics.TableLabels)
 	stageMergeLag = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "stage_merge_lag_seconds",
 		Help: "the difference between wall time and the table merge operator progress",

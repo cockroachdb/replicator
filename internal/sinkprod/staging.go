@@ -18,6 +18,7 @@ package sinkprod
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cockroachdb/replicator/internal/types"
@@ -38,6 +39,8 @@ var (
 // StagingConfig defines staging-database connection behaviors.
 type StagingConfig struct {
 	CommonConfig
+	// Create the destination schema.
+	CreateSchema bool
 	// The name of a SQL schema in the staging cluster to store
 	// metadata in.
 	Schema ident.Schema
@@ -46,8 +49,9 @@ type StagingConfig struct {
 // Bind adds flags to the set.
 func (c *StagingConfig) Bind(f *pflag.FlagSet) {
 	c.CommonConfig.bind(f, "staging")
-
 	c.Schema = StagingSchemaDefault
+	f.BoolVar(&c.CreateSchema, "stagingCreateSchema", false,
+		"automatically create the staging schema if it does not exist")
 	f.Var(ident.NewSchemaFlag(&c.Schema), "stagingSchema",
 		"a SQL database schema to store metadata in")
 }
@@ -123,6 +127,20 @@ func ProvideStagingPool(
 		return nil, err
 	}
 	config.Schema = sch
+
+	if config.CreateSchema {
+		if _, err := ret.Exec(ctx, fmt.Sprintf(
+			"CREATE DATABASE IF NOT EXISTS %s",
+			config.Schema.Idents(nil)[0])); err != nil {
+			return nil, err
+		}
+
+		if _, err := ret.Exec(ctx, fmt.Sprintf(
+			"CREATE SCHEMA IF NOT EXISTS %s",
+			config.Schema)); err != nil {
+			return nil, err
+		}
+	}
 
 	return ret, err
 }

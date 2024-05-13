@@ -59,6 +59,7 @@ type stage struct {
 	stagingDB  *types.StagingPool
 	retireFrom notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
 
+	markDuration   prometheus.Observer
 	retireDuration prometheus.Observer
 	retireError    prometheus.Counter
 	selectCount    prometheus.Counter
@@ -140,6 +141,7 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 	s := &stage{
 		stage:          db.HintNoFTS(table),
 		stagingDB:      db,
+		markDuration:   stageMarkDuration.WithLabelValues(labels...),
 		retireDuration: stageRetireDurations.WithLabelValues(labels...),
 		retireError:    stageRetireErrors.WithLabelValues(labels...),
 		selectCount:    stageSelectCount.WithLabelValues(labels...),
@@ -437,7 +439,9 @@ func (s *stage) MarkApplied(
 		logical[idx] = mut.Time.Logical()
 	}
 	return retry.Retry(ctx, s.stagingDB, func(ctx context.Context) error {
+		start := time.Now()
 		tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
+		s.markDuration.Observe(time.Since(start).Seconds())
 		log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
 		return errors.WithMessage(err, s.sql.markApplied)
 	})
