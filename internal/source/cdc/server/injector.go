@@ -30,7 +30,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging"
 	"github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"github.com/cockroachdb/replicator/internal/util/stdserver"
 	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
@@ -47,11 +46,12 @@ var completeSet = wire.NewSet(
 	target.Set,
 )
 
-func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) {
+func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	panic(wire.Build(
 		completeSet,
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.FieldsOf(new(*Config), "CDC"),
 		wire.FieldsOf(new(*EagerConfig), "Staging", "Target"),
+		wire.Struct(new(Server), "*"),
 	))
 }

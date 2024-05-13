@@ -25,6 +25,7 @@ import (
 
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
+	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -43,6 +44,16 @@ var Set = wire.NewSet(
 	ProvideServer,
 	ProvideTLSConfig,
 )
+
+// Server is returned from NewServer. It exposes some implementation
+// details to aid in embedding cases.
+type Server struct {
+	*stdserver.Server
+	Checkpoints   *checkpoint.Checkpoints
+	StagingSchema ident.StagingSchema
+	StagingPool   *types.StagingPool
+	TargetPool    *types.TargetPool
+}
 
 // ProvideAuthenticator is called by Wire to construct a JWT-based
 // authenticator, or a no-op authenticator if Config.DisableAuth has

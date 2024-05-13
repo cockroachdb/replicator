@@ -56,6 +56,18 @@ func (r Range) Contains(t Time) bool {
 // Max value.
 func (r Range) Empty() bool { return Compare(r[0], r[1]) >= 0 }
 
+// Extend returns a range that contains the given time by adjusting
+// either the minimum or the maximum time as necessary.
+func (r Range) Extend(include Time) Range {
+	if Compare(include, r[0]) < 0 {
+		return Range{include, r[1]}
+	}
+	if Compare(include, r[1]) >= 0 {
+		return Range{r[0], include.Next()}
+	}
+	return r
+}
+
 // Min returns the inclusive, minimum value.
 func (r Range) Min() Time { return r[0] }
 
