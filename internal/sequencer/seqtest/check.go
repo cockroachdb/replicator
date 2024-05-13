@@ -134,7 +134,7 @@ type Check struct {
 	// Access to test services.
 	Fixture *all.Fixture
 	// Populated by Check.
-	Generator *Generator
+	Generator *all.Workload
 	// Populated by Check.
 	Group *types.TableGroup
 	// The Sequencer under test.
@@ -148,7 +148,7 @@ type Check struct {
 func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
 	r := require.New(t)
 
-	generator, group, err := NewGenerator(ctx, c.Fixture)
+	generator, group, err := c.Fixture.NewWorkload(ctx)
 	r.NoError(err)
 	c.Group = group
 

@@ -38,6 +38,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/cmd/preflight"
 	"github.com/cockroachdb/replicator/internal/cmd/start"
 	"github.com/cockroachdb/replicator/internal/cmd/version"
+	"github.com/cockroachdb/replicator/internal/cmd/workload"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/util/logfmt"
 	"github.com/cockroachdb/replicator/internal/util/stopper"
@@ -115,6 +116,7 @@ func main() {
 		preflight.Command(),
 		script.HelpCommand(),
 		start.Command(),
+		workload.Command(),
 		version.Command(),
 	)
 

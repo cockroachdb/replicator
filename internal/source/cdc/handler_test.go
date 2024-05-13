@@ -17,6 +17,8 @@
 package cdc
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -685,4 +687,53 @@ func TestRejectedAuth(t *testing.T) {
 			a.Equal(tc.code, w.Code)
 		})
 	}
+}
+
+// TestSyntheticWebhooks verifies that our test helpers work correctly.
+func TestSyntheticWebhooks(t *testing.T) {
+	const batches = 1024
+	r := require.New(t)
+	fixture, _ := createFixture(t, &fixtureConfig{})
+	ctx := fixture.Context
+
+	gen, _, err := fixture.NewWorkload(ctx)
+	r.NoError(err)
+
+	batch := &types.MultiBatch{}
+	for i := range batches {
+		gen.GenerateInto(batch, hlc.New(int64(i+1), i+1))
+	}
+
+	requestPath := "/" + ident.Join(fixture.TargetSchema, ident.Raw, '/')
+
+	// Send data.
+	{
+		payload, err := NewWebhookPayload(batch)
+		r.NoError(err)
+		payloadBytes, err := json.Marshal(payload)
+		r.NoError(err)
+		req := httptest.NewRequest("POST", requestPath,
+			bytes.NewReader(payloadBytes)).WithContext(ctx)
+		resp := httptest.NewRecorder()
+		fixture.Handler.ServeHTTP(resp, req)
+		r.Equal(http.StatusOK, resp.Code)
+	}
+
+	// Send resolved timestamp.
+	{
+		payload, err := NewWebhookResolved(hlc.New(batches+2, 0))
+		r.NoError(err)
+		payloadBytes, err := json.Marshal(payload)
+		r.NoError(err)
+		req := httptest.NewRequest("POST", requestPath,
+			bytes.NewReader(payloadBytes)).WithContext(ctx)
+		resp := httptest.NewRecorder()
+		fixture.Handler.ServeHTTP(resp, req)
+		r.Equal(http.StatusOK, resp.Code)
+	}
+
+	targetInfo, err := fixture.Handler.Conveyors.Get(fixture.TargetSchema.Schema())
+	r.NoError(err)
+	r.NoError(gen.WaitForCatchUp(ctx, targetInfo.Stat()))
+	gen.CheckConsistent(fixture.Context, t)
 }

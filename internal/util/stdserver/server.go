@@ -36,9 +36,10 @@ import (
 // A Server receives incoming messages and
 // applies them to a target cluster.
 type Server struct {
-	auth  types.Authenticator
-	diags *diag.Diagnostics
-	mux   *http.ServeMux
+	auth     types.Authenticator
+	diags    *diag.Diagnostics
+	listener net.Listener
+	mux      *http.ServeMux
 }
 
 var (
@@ -55,6 +56,11 @@ func (s *Server) GetAuthenticator() types.Authenticator {
 // GetDiagnostics implements [stdlogical.HasDiagnostics].
 func (s *Server) GetDiagnostics() *diag.Diagnostics {
 	return s.diags
+}
+
+// GetListener returns the network listener for the HTTP server.
+func (s *Server) GetListener() net.Listener {
+	return s.listener
 }
 
 // GetServeMux implements [stdlogical.HasServeMux].
@@ -101,7 +107,7 @@ func New(
 		return nil
 	})
 
-	return &Server{auth, diags, mux}
+	return &Server{auth, diags, listener, mux}
 }
 
 // Mux constructs the http.ServeMux that routes requests.
