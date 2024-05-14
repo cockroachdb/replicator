@@ -360,6 +360,12 @@ func (l *leases) acquire(
 	return
 }
 
+// copy is used by test code to return a shallow copy of the receiver.
+func (l *leases) copy() *leases {
+	cpy := *l
+	return &cpy
+}
+
 // SQL template to claim a lease
 //
 //	$1 = name

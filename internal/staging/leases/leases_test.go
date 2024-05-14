@@ -145,9 +145,8 @@ func TestLeases(t *testing.T) {
 		a := assert.New(t)
 
 		// Increase polling rate for this test.
-		oldCfg := l.cfg
+		l := l.copy()
 		l.cfg.Poll = 10 * time.Millisecond
-		defer func() { l.cfg = oldCfg }()
 
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -207,10 +206,9 @@ func TestLeases(t *testing.T) {
 		a := assert.New(t)
 
 		// Increase polling rate.
-		oldCfg := l.cfg
+		l := l.copy()
 		l.cfg.Lifetime = 100 * time.Millisecond
 		l.cfg.Poll = 5 * time.Millisecond
-		defer func() { l.cfg = oldCfg }()
 
 		initial, ok, err := l.acquire(ctx, t.Name())
 		a.NoError(err)
@@ -243,13 +241,11 @@ func TestLeases(t *testing.T) {
 	t.Run("singleton", func(t *testing.T) {
 		a := assert.New(t)
 
-		oldCfg := l.cfg
 		// Ensure that cancel and cleanup are working; the lease
 		// lifetime will be longer than that of the test.
+		l := l.copy()
 		l.cfg.Lifetime = time.Hour
-		// Increase polling rate.
 		l.cfg.Poll = 5 * time.Millisecond
-		defer func() { l.cfg = oldCfg }()
 
 		ctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
