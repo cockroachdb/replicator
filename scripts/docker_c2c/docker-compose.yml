@@ -31,7 +31,7 @@ services:
    hostname: roach_source
    image: cockroachdb/cockroach:latest-v23.1
    ports:
-     - "26257:26257" 
+     - "26257:26257"
      - "8080:8080"
    command: start-single-node --insecure --external-io-dir /backup
    volumes:
@@ -66,15 +66,15 @@ services:
      roach_target_initsleep:
        condition: service_completed_successfully
 
- cdc-sink:
-   hostname: cdc-sink
-   image: cockroachdb/cdc-sink:master
+ replicator:
+   hostname: replicator
+   image: cockroachdb/replicator:master
    ports:
      - "30005:30005"
    depends_on:
       roach_scripts:
         condition: service_completed_successfully
-   command: start --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@roach_target:26257/?sslmode=disable'  --selectBatchSize 100 --foreignKeys 
+   command: start --bindAddr :30004 --metricsAddr :30005 --tlsSelfSigned --disableAuthentication --targetConn 'postgresql://root@roach_target:26257/?sslmode=disable'  --selectBatchSize 100 --foreignKeys
    restart: always
 
  roach_source_create_feed:
@@ -83,7 +83,7 @@ services:
    depends_on:
      roach_scripts:
        condition: service_completed_successfully
-   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "CREATE CHANGEFEED FOR TABLE movr.users,movr.vehicles,movr.rides,movr.vehicle_location_histories,movr.promo_codes,movr.user_promo_codes INTO 'webhook-https://cdc-sink:30004/movr/public?insecure_tls_skip_verify=true' WITH updated, resolved='10s';"
+   command: sql --url 'postgresql://root@roach_source:26257/?sslmode=disable' --insecure --execute "CREATE CHANGEFEED FOR TABLE movr.users,movr.vehicles,movr.rides,movr.vehicle_location_histories,movr.promo_codes,movr.user_promo_codes INTO 'webhook-https://replicator:30004/movr/public?insecure_tls_skip_verify=true' WITH updated, resolved='10s';"
    restart: on-failure
 
  roach_source_movr_run:
