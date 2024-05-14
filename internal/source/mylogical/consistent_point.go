@@ -40,7 +40,7 @@ func newConsistentPoint(flavor string) *consistentPoint {
 	case mysql.MariaDBFlavor:
 		return &consistentPoint{
 			ma: &mysql.MariadbGTIDSet{
-				Sets: make(map[uint32]*mysql.MariadbGTID),
+				Sets: make(map[uint32]map[uint32]*mysql.MariadbGTID),
 			},
 		}
 
