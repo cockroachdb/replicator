@@ -68,7 +68,7 @@ jobs:
 
       - name: Prebuild
         # Keep options in sync with golang.yaml
-        # The extra . is to build the cdc-sink binary itself.
+        # The extra . is to build the Replicator binary itself.
         run: |
           go build . ./...
           CGO_ENABLED=0 go build . ./...

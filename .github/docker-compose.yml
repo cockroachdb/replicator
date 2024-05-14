@@ -16,7 +16,7 @@
 
 # This compose file contains recipes that are called from the GitHub
 # Actions workflows. Host networking is used, because it simplifies
-# the connectivity from the cockroach process back to the cdc-sink
+# the connectivity from the cockroach process back to the Replicator
 # test rig.
 #
 # Note that the names of the services in this file must align with
