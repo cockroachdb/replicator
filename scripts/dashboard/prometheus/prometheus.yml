@@ -28,17 +28,17 @@ scrape_configs:
     static_configs:
       - targets: [ "prometheus:9090" ]
 
-  - job_name: 'cdc-sink'
+  - job_name: 'replicator'
     metrics_path: '/_/varz'
     scheme: 'https'
     tls_config:
       insecure_skip_verify: true # Required for --tlsSelfSigned option
     static_configs:
-      - targets: [ 'cdc-sink:30005' ]
+      - targets: [ 'replicator:30005' ]
 
   # ===== Below here are for other demos =====
 
-  - job_name: 'cdc-sink-on-host'
+  - job_name: 'replicator-on-host'
     metrics_path: '/_/varz'
     scheme: 'https'
     tls_config:
@@ -98,10 +98,10 @@ scrape_configs:
     static_configs:
       - targets: [ 'roach_target:8080' ]
 
-  - job_name: 'cdc-sink-docker'
+  - job_name: 'replicator-docker'
     metrics_path: '/_/varz'
     scheme: 'http'
     tls_config:
       insecure_skip_verify: true
     static_configs:
-      - targets: [ 'cdc-sink:30005' ]
+      - targets: [ 'replicator:30005' ]
