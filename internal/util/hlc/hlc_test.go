@@ -45,6 +45,36 @@ func TestCompare(t *testing.T) {
 	a.True(Compare(Time{1, 1}, Time{1, 2}) < 0)
 }
 
+func TestExtend(t *testing.T) {
+	a := assert.New(t)
+
+	hundred := New(100, 100)
+
+	rng := RangeEmptyAt(hundred)
+	a.False(rng.Contains(hundred))
+
+	rng = rng.Extend(hundred)
+	a.True(rng.Contains(hundred))
+	a.Equal(RangeIncluding(hundred, hundred), rng)
+
+	one := New(1, 1)
+	a.False(rng.Contains(one))
+
+	rng = rng.Extend(one)
+	a.True(rng.Contains(one))
+	a.Equal(RangeIncluding(one, hundred), rng)
+
+	thousand := New(1000, 1000)
+	a.False(rng.Contains(thousand))
+
+	rng = rng.Extend(thousand)
+	a.True(rng.Contains(thousand))
+	a.Equal(RangeIncluding(one, thousand), rng)
+
+	// No-op.
+	a.Equal(rng, rng.Extend(New(500, 500)))
+}
+
 func TestNext(t *testing.T) {
 	a := assert.New(t)
 

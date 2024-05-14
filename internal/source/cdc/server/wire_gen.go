@@ -38,7 +38,7 @@ import (
 
 // Injectors from injector.go:
 
-func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) {
+func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	diagnostics := diag.New(ctx)
 	configs, err := applycfg.ProvideConfigs(diagnostics)
 	if err != nil {
@@ -125,7 +125,14 @@ func NewServer(ctx *stopper.Context, config *Config) (*stdserver.Server, error) 
 		return nil, err
 	}
 	server := ProvideServer(ctx, authenticator, diagnostics, listener, serveMux, tlsConfig)
-	return server, nil
+	serverServer := &Server{
+		Server:        server,
+		Checkpoints:   checkpoints,
+		StagingSchema: stagingSchema,
+		StagingPool:   stagingPool,
+		TargetPool:    targetPool,
+	}
+	return serverServer, nil
 }
 
 // Injectors from test_fixture.go:

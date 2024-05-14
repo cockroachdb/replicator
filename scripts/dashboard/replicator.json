@@ -90,7 +90,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "This value compares the source cluster wall time of the incoming resolved timestamp (checkpoint) versus the current wall time. This represents the lag of the data which is actionable by cdc-sink.\n\nNote that if multiple instances of cdc-sink are present, they may have slightly different views of this lag, based on sampling rate. In all cases, they should agree within one second.",
+      "description": "This value compares the source cluster wall time of the incoming resolved timestamp (checkpoint) versus the current wall time. This represents the lag of the data which is actionable by Replciator.\n\nNote that if multiple instances of Replicator are present, they may have slightly different views of this lag, based on sampling rate. In all cases, they should agree within one second.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -443,7 +443,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "A list of monitored instances of cdc-sink. The instance name is taken from the Prometheus scraper and can be used to refine the dashboard views.",
+      "description": "A list of monitored instances of Replicator. The instance name is taken from the Prometheus scraper and can be used to refine the dashboard views.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -644,7 +644,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "description": "This heatmap shows the number of HTTP requests made to cdc-sink and how long they took.\n\nSlowness in the HTTP endpoints will reflect performance of the staging database in consistent modes and performance of the target database in immedate or best-effort modes.",
+          "description": "This heatmap shows the number of HTTP requests made to Replicator and how long they took.\n\nSlowness in the HTTP endpoints will reflect performance of the staging database in consistent modes and performance of the target database in immedate or best-effort modes.",
           "fieldConfig": {
             "defaults": {
               "custom": {
@@ -1659,7 +1659,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "description": "This table shows which instance of cdc-sink is sweeping any given table.",
+          "description": "This table shows which instance of Replicator is sweeping any given table.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -4062,7 +4062,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "cdc-sink",
+  "title": "Replicator",
   "uid": "uuu",
   "version": 2,
   "weekStart": ""
