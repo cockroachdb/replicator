@@ -244,7 +244,7 @@ func (c *conn) accumulateBatch(
 			return nil, errors.Errorf("Operation not supported %s", ev.Header.EventType)
 		}
 		mutationCount.With(prometheus.Labels{"type": operation.String()}).Inc()
-		if err := c.onDataTuple(ctx, batch, e, operation); err != nil {
+		if err := c.onDataTuple(batch, e, operation); err != nil {
 			return nil, err
 		}
 
@@ -333,10 +333,7 @@ func (c *conn) ZeroStamp() stamp.Stamp {
 }
 
 func (c *conn) onDataTuple(
-	ctx context.Context,
-	batch *types.MultiBatch,
-	tuple *replication.RowsEvent,
-	operation mutationType,
+	batch types.Accumulator, tuple *replication.RowsEvent, operation mutationType,
 ) error {
 	tbl, ok := c.relations[tuple.TableID]
 	if !ok {
@@ -352,15 +349,18 @@ func (c *conn) onDataTuple(
 	}
 	log.Tracef("%s on table %s (#rows: %d)", operation, tbl, len(tuple.Rows))
 	for rowNum, row := range tuple.Rows {
-		var err error
-		var key []any
-		var mut types.Mutation
-		enc := make(map[string]any)
 		// on update we only care about the new value.
 		// even rows are skipped since they contain the value before the update
 		if operation == updateMutation && (rowNum%2 == 0) {
 			continue
 		}
+		if len(targetCols) != len(row) {
+			return errors.Errorf("unexpected number of columns in the logical stream for %s", tbl)
+		}
+		var err error
+		var key []any
+		var mut types.Mutation
+		enc := make(map[string]any)
 		for idx, sourceCol := range row {
 			targetCol := targetCols[idx]
 			switch s := sourceCol.(type) {
@@ -383,7 +383,7 @@ func (c *conn) onDataTuple(
 			}
 		}
 		if len(key) == 0 && operation != insertMutation {
-			return errors.Errorf("only inserts supported with no key")
+			return errors.Errorf("only inserts supported with no key for %s", tbl)
 		}
 		mut.Key, err = json.Marshal(key)
 		if err != nil {
