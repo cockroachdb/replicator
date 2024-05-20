@@ -53,6 +53,14 @@ var (
 				if !ok {
 					return nil, errors.Errorf("expecting string, got %T", a)
 				}
+				// If the source UUID is stored as bytes and not as a
+				// UUID type, it will appear in the changefeed as a
+				// hex-escaped string. We can strip the escape sequence
+				// since the UUID parser will accept a 32-character hex
+				// sequence.
+				if len(s) == 34 && s[:2] == `\x` {
+					s = s[2:]
+				}
 				u, err := uuid.Parse(s)
 				return u[:], err
 			},
