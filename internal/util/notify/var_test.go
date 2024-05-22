@@ -115,6 +115,18 @@ func TestVar(t *testing.T) {
 	case <-time.After(time.Second):
 		r.Fail("channel should be closed")
 	}
+
+	// Check swap behavior.
+	current, ch4a := v.Swap(3)
+	r.Equal(2, current)
+	select {
+	case <-ch4a:
+		r.Fail("channel should not be closed")
+	default:
+	}
+	current, ch4b := v.Get()
+	r.Equal(3, current)
+	r.Equal(ch4a, ch4b)
 }
 
 func TestVarOf(t *testing.T) {
