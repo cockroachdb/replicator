@@ -24,6 +24,11 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 )
 
+const (
+	// NoLimit used to walk an unlimited number of entries.
+	NoLimit = 0
+)
+
 // WalkOptions are the configuration options used by the iterators.
 // While buckets are generally not hierarchial, they support the concept
 // of folders, grouping objects identified by a common prefix.

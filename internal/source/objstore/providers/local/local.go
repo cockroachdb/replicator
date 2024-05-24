@@ -21,7 +21,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -31,13 +30,13 @@ import (
 
 // Config specifies the parameters required to create a bucket reader.
 type Config struct {
-	Directory string // Root directory
+	Filesystem fs.FS // Underlying filesystem.
 }
 
 // New creates a bucket reader for a local filesystem.
 func New(config *Config) (bucket.Reader, error) {
 	return &localBucket{
-		filesystem: os.DirFS(config.Directory),
+		filesystem: config.Filesystem,
 	}, nil
 }
 
