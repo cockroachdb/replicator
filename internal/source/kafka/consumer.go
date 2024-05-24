@@ -19,7 +19,7 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -30,7 +30,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var _ sarama.ConsumerGroupHandler = &Handler{}
+var _ sarama.ConsumerGroupHandler = &Consumer{}
 
 type partitionState struct {
 	topic     string
@@ -38,43 +38,54 @@ type partitionState struct {
 	offset    int64
 }
 
-// Handler represents a Sarama consumer group consumer
-type Handler struct {
-	// The destination for writes.
-	acceptor  types.MultiAcceptor
-	batchSize int
-	target    ident.Schema
-	watchers  types.Watchers
-	timeRange hlc.Range
-	fromState []*partitionState
+// Consumer represents a Kafka consumer
+type Consumer struct {
+	batchSize int               // Batch size for writes.
+	conveyor  Conveyor          // The destination for writes.
+	fromState []*partitionState // The initial offsets for each partitions.
+	schema    ident.Schema      // The target schema.
+	timeRange hlc.Range         // The time range for incoming mutations.
+	mu        struct {
+		sync.Mutex
+		done map[string]bool
+	}
 }
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
-func (c *Handler) Setup(session sarama.ConsumerGroupSession) error {
-
-	// If the startup option provide a minTimestamp we mark the offset to the provided
-	// timestamp or the latest read message, whichever is later, for each topic and partition.
-	// In case we restart the process, we are able to resume from the latest committed message
+func (c *Consumer) Setup(session sarama.ConsumerGroupSession) error {
+	// If the startup option provide a minTimestamp we mark the offset
+	// to the provided timestamp or the latest read message, whichever
+	// is later, for each topic and partition. In case we restart the
+	// process, we are able to resume from the latest committed message
 	// without changing the start up command.
-	// TODO (silvano): Should we have a --force option to restart from the provided minTimestamp?
-	//                 Using a different group id would have the same effect.
+	//
+	// TODO (silvano): Should we have a --force option to restart from
+	// the provided minTimestamp? Using a different group id would have
+	// the same effect.
 	for _, marker := range c.fromState {
 		log.Debugf("setup: marking offset %s@%d to %d", marker.topic, marker.partition, marker.offset)
 		session.MarkOffset(marker.topic, marker.partition, marker.offset, "start")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mu.done = make(map[string]bool)
 	return nil
 }
 
-// Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
-func (c *Handler) Cleanup(session sarama.ConsumerGroupSession) error {
+// Cleanup is run at the end of a session, once all ConsumeClaim
+// goroutines have exited
+func (c *Consumer) Cleanup(session sarama.ConsumerGroupSession) error {
 	if session.Context().Err() != nil {
 		log.WithError(session.Context().Err()).Error("Session terminated with an error")
+	}
+	if c.allDone() {
+		return nil
 	}
 	return session.Context().Err()
 }
 
 // ConsumeClaim processes new messages for the topic/partition specified in the claim.
-func (c *Handler) ConsumeClaim(
+func (c *Consumer) ConsumeClaim(
 	session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim,
 ) (err error) {
 	log.Debugf("ConsumeClaim topic=%s partition=%d offset=%d", claim.Topic(), claim.Partition(), claim.InitialOffset())
@@ -83,6 +94,9 @@ func (c *Handler) ConsumeClaim(
 	// Track last message received for each topic/partition.
 	consumed := make(map[string]*sarama.ConsumerMessage)
 	ctx := session.Context()
+	partition := fmt.Sprintf("%s@%d", claim.Topic(), claim.Partition())
+	c.conveyor.Ensure(ctx, []ident.Ident{ident.New(partition)})
+	c.done(partition, false)
 	// Do not move the code below to a goroutine.
 	// The `ConsumeClaim` itself is called within a goroutine, see:
 	// https://github.com/IBM/sarama/blob/main/consumer_group.go#L27-L29
@@ -93,13 +107,33 @@ func (c *Handler) ConsumeClaim(
 				log.Debugf("message channel for topic=%s partition=%d was closed", claim.Topic(), claim.Partition())
 				return nil
 			}
-			partition := strconv.Itoa(int(claim.Partition()))
-			mutationsReceivedCount.WithLabelValues(claim.Topic(), partition).Inc()
-			if err = c.accumulate(toProcess, message); err != nil {
-				mutationsErrorCount.WithLabelValues(claim.Topic(), partition).Inc()
+			payload, err := c.accumulate(toProcess, message)
+			if err != nil {
+				log.WithError(err).Error("failed to add messages to a batch")
 				return err
 			}
-			mutationsSuccessCount.WithLabelValues(claim.Topic(), partition).Inc()
+			if payload.Resolved != "" {
+				partition := fmt.Sprintf("%s@%d", message.Topic, int(message.Partition))
+				timestamp, err := hlc.Parse(payload.Resolved)
+				if err != nil {
+					return err
+				}
+				if hlc.Compare(timestamp, c.timeRange.Max()) > 0 {
+					log.Infof("Done with topic=%s partition=%d  %+v", claim.Topic(), claim.Partition(), ctx)
+					c.done(partition, true)
+					return nil
+				}
+
+				c.conveyor.Advance(ctx, ident.New(partition), timestamp)
+				if err = c.accept(ctx, toProcess); err != nil {
+					return err
+				}
+				toProcess = toProcess.Empty()
+				consumed[fmt.Sprintf("%s@%d", message.Topic, message.Partition)] = message
+				c.mark(session, consumed)
+				continue
+
+			}
 			consumed[fmt.Sprintf("%s@%d", message.Topic, message.Partition)] = message
 			// Flush a batch, and mark the latest message for each topic/partition as read.
 			if toProcess.Count() > c.batchSize {
@@ -117,6 +151,7 @@ func (c *Handler) ConsumeClaim(
 		case <-time.After(time.Second):
 			// Periodically flush a batch, and mark the latest message for each topic/partition as consumed.
 			if err = c.accept(ctx, toProcess); err != nil {
+				log.Error(err)
 				return err
 			}
 			toProcess = toProcess.Empty()
@@ -125,9 +160,29 @@ func (c *Handler) ConsumeClaim(
 	}
 }
 
+// allDone returns true if we processed all the messages before the
+// maxTimestamp on all the partitions.
+func (c *Consumer) allDone() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, v := range c.mu.done {
+		if !v {
+			return false
+		}
+	}
+	return true
+}
+
+// done set the state of a partition.
+func (c *Consumer) done(partition string, done bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mu.done[partition] = done
+}
+
 // mark advances the offset on each topic/partition and removes it from the map that
 // track the latest message received on the topic/partition.
-func (c *Handler) mark(
+func (c *Consumer) mark(
 	session sarama.ConsumerGroupSession, consumed map[string]*sarama.ConsumerMessage,
 ) {
 	for key, message := range consumed {
@@ -137,45 +192,46 @@ func (c *Handler) mark(
 }
 
 // accept process a batch.
-func (c *Handler) accept(ctx context.Context, toProcess *types.MultiBatch) error {
+func (c *Consumer) accept(ctx context.Context, toProcess *types.MultiBatch) error {
 	if toProcess.Count() == 0 {
 		// Nothing to do.
 		return nil
 	}
 	log.Tracef("flushing %d", toProcess.Count())
-	if err := c.acceptor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{}); err != nil {
+	if err := c.conveyor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{}); err != nil {
 		return err
 	}
 	return nil
 }
 
-// accumulate adds the message to the batch, after converting it to a types.Mutation.
-// Resolved messages are skipped.
-func (c *Handler) accumulate(toProcess *types.MultiBatch, msg *sarama.ConsumerMessage) error {
+// accumulate adds the message to the batch and returns the decoded payload.
+func (c *Consumer) accumulate(
+	toProcess *types.MultiBatch, msg *sarama.ConsumerMessage,
+) (*payload, error) {
 	payload, err := asPayload(msg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if payload.Resolved != "" {
 		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
-		return nil
+		return payload, nil
 	}
 	log.Tracef("Mutation %s %d [%s@%d]", string(msg.Key), msg.Timestamp.Unix(), msg.Topic, msg.Partition)
 	timestamp, err := hlc.Parse(payload.Updated)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	table, qual, err := ident.ParseTableRelative(msg.Topic, c.target.Schema())
+	table, qual, err := ident.ParseTableRelative(msg.Topic, c.schema.Schema())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Ensure the destination table is in the target schema.
 	if qual != ident.TableOnly {
-		table = ident.NewTable(c.target.Schema(), table.Table())
+		table = ident.NewTable(c.schema.Schema(), table.Table())
 	}
 	if !c.timeRange.Contains(timestamp) {
-		log.Debugf("skipping mutation %s@%d %s %s", string(msg.Key), msg.Offset, timestamp, c.timeRange)
-		return nil
+		log.Debugf("skipping mutation %s %s %s", string(msg.Key), timestamp, c.timeRange)
+		return nil, nil
 	}
 	mut := types.Mutation{
 		Before: payload.Before,
@@ -185,5 +241,5 @@ func (c *Handler) accumulate(toProcess *types.MultiBatch, msg *sarama.ConsumerMe
 	}
 	script.AddMeta("kafka", table, &mut)
 	log.Debugf("adding mutation %s", string(msg.Key))
-	return toProcess.Accumulate(table, mut)
+	return payload, toProcess.Accumulate(table, mut)
 }

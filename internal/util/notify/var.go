@@ -114,6 +114,18 @@ func (v *Var[T]) Set(next T) <-chan struct{} {
 	return v.mu.updated
 }
 
+// Swap returns the current value and a channel that will be closed
+// when the next value has been replaced.
+func (v *Var[T]) Swap(next T) (T, <-chan struct{}) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	ret := v.mu.data
+	v.mu.data = next
+	v.notifyLocked()
+	return ret, v.mu.updated
+}
+
 // Update atomically updates the stored value using the current value as
 // an input. The callback may return [ErrNoUpdate] to take no action;
 // this error will not be returned to the caller. If the callback

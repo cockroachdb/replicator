@@ -562,16 +562,13 @@ func setupMYPool(config *Config) (*client.Pool, func(), error) {
 		return nil, func() {}, err
 	}
 
-	pool := client.NewPool(
-		log.WithField("mysql", true).Infof, // logger
-		1,                                  // minSize
-		1024,                               // maxSize
-		10,                                 // maxIdle
-		addr,                               // address
-		config.user,                        // user
-		config.password,                    // password
-		database.Raw(),                     // default db
+	pool, err := client.NewPoolWithOptions(addr, config.user, config.password, database.Raw(),
+		client.WithLogFunc(log.WithField("mysql", true).Infof),
+		client.WithPoolLimits(1, 1024, 10), // minAlive, maxAlive, maxIdle
 	)
+	if err != nil {
+		return nil, func() {}, err
+	}
 	return pool, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

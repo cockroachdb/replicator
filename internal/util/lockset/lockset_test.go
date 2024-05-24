@@ -70,7 +70,7 @@ func TestSmoke(t *testing.T) {
 	const numResources = 128
 	const numWaiters = 10 * numResources
 	r := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Verify that each resource and waiter are run in the expected
@@ -160,11 +160,11 @@ func TestSmoke(t *testing.T) {
 	r.NoError(eg.Wait())
 
 	// Wait for each task to arrive at a successful state.
-	r.NoError(Wait(ctx, outcomes))
-
+	waitErr := Wait(ctx, outcomes)
 	for i := 0; i < numResources; i++ {
 		r.Equalf(expectedOrder[i], executionOrder[i], "key %d", i)
 	}
+	r.NoError(waitErr)
 }
 
 func TestCancel(t *testing.T) {
@@ -365,9 +365,8 @@ func TestRetryAfterPromotion(t *testing.T) {
 		return nil
 	})
 
-	s.mu.Lock()
-	promoterWaiter := s.mu.head
-	s.mu.Unlock()
+	promoterWaiter, ok := s.queue.PeekHead()
+	r.True(ok)
 	r.NotNil(promoterWaiter)
 
 	blockRetry := make(chan struct{})
@@ -380,17 +379,15 @@ func TestRetryAfterPromotion(t *testing.T) {
 		}
 		return RetryAtHead(nil).Or(func() {
 			// Ensure the tail was promoted.
-			s.mu.Lock()
-			r.Same(retryWaiter, s.mu.head)
-			s.mu.Unlock()
+			h, ok := s.queue.PeekHead()
+			r.True(ok)
+			r.Same(retryWaiter, h)
 			retryRan.Store(true)
 		})
 	})
 
-	s.mu.Lock()
-	retryWaiter = s.mu.tail
-	s.mu.Unlock()
-
+	retryWaiter, ok = s.queue.PeekTail()
+	r.True(ok)
 	r.NotNil(retryWaiter)
 	r.NotSame(promoterWaiter, retryWaiter)
 

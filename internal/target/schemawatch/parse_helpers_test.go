@@ -17,6 +17,7 @@
 package schemawatch
 
 import (
+	"encoding/hex"
 	"fmt"
 	"testing"
 	"time"
@@ -28,7 +29,8 @@ import (
 
 func TestOraParseHelpers(t *testing.T) {
 	now := time.Now().UTC()
-
+	exampleUUIDString := "C847E52A-2612-4B98-9835-B0F0A9FCCD2F"
+	exampleUUID := uuid.MustParse(exampleUUIDString)
 	tcs := []struct {
 		typ      string
 		input    any
@@ -36,11 +38,16 @@ func TestOraParseHelpers(t *testing.T) {
 	}{
 		{
 			typ:   "RAW(16)",
-			input: "C847E52A-2612-4B98-9835-B0F0A9FCCD2F",
+			input: exampleUUIDString,
 			expected: func() []byte {
-				u := uuid.MustParse("C847E52A-2612-4B98-9835-B0F0A9FCCD2F")
-				// Can't slice without assignment to storage location.
-				return u[:]
+				return exampleUUID[:]
+			}(),
+		},
+		{
+			typ:   "RAW(16)",
+			input: `\x` + hex.EncodeToString(exampleUUID[:]),
+			expected: func() []byte {
+				return exampleUUID[:]
 			}(),
 		},
 		{
