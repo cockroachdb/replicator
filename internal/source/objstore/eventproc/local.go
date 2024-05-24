@@ -74,5 +74,5 @@ func (c *localProcessor) Process(ctx *stopper.Context, path string) error {
 		return errors.Wrapf(err, "failed to parse %s", path)
 	}
 	// Send the batch downstream to the target.
-	return c.acceptor.AcceptMultiBatch(ctx, batch, nil)
+	return c.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{})
 }
