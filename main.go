@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/cmd/licenses"
 	"github.com/cockroachdb/replicator/internal/cmd/mkjwt"
 	"github.com/cockroachdb/replicator/internal/cmd/mylogical"
+	"github.com/cockroachdb/replicator/internal/cmd/objstore"
 	"github.com/cockroachdb/replicator/internal/cmd/pglogical"
 	"github.com/cockroachdb/replicator/internal/cmd/preflight"
 	"github.com/cockroachdb/replicator/internal/cmd/start"
@@ -112,6 +113,7 @@ func main() {
 		licenses.Command(),
 		mkjwt.Command(),
 		mylogical.Command(),
+		objstore.Command(),
 		pglogical.Command(),
 		preflight.Command(),
 		script.HelpCommand(),
