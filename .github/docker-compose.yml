@@ -81,6 +81,12 @@ services:
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G
 
+  cockroachdb-unstable:
+    image: cockroachdb/cockroach-unstable:latest
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G
+
   # This target exists to verify split-mode operation, where staging is separate from the target.
   target-cockroachdb-v23.2:
     image: cockroachdb/cockroach:latest-v23.2

@@ -73,6 +73,7 @@ jobs:
   tests:
     name: Integration Tests
     runs-on: ${{ matrix.runs-on || 'ubuntu-latest-8-core' }}
+    continue-on-error: ${{ matrix.experimental || false }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -92,6 +93,10 @@ jobs:
           # These are our primary supported versions.
           - cockroachdb: v23.2
           - cockroachdb: v23.1
+
+          # Builds that are allowed to fail.
+          - cockroachdb: unstable
+            experimental: true
 
           # Run a test with a separate CockroachDB source and target
           # instance to ensure there are no accidental dependencies
