@@ -8,7 +8,7 @@ require (
 	github.com/cockroachdb/crlfmt v0.1.0
 	github.com/cockroachdb/field-eng-powertools v0.1.1
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
-	github.com/evanw/esbuild v0.21.3
+	github.com/evanw/esbuild v0.21.4
 	github.com/go-mysql-org/go-mysql v1.8.0
 	github.com/godror/godror v0.44.0
 	github.com/gofrs/uuid v4.4.0+incompatible
