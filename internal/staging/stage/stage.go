@@ -86,17 +86,18 @@ var _ types.Stager = (*stage)(nil)
 
 const tableSchema = `
 CREATE TABLE IF NOT EXISTS %[1]s (
-    nanos INT NOT NULL,
-  logical INT NOT NULL,
-      key STRING NOT NULL,
-      mut BYTES NOT NULL,
-   before BYTES NULL,
-  applied BOOL NOT NULL DEFAULT false,
+       nanos INT NOT NULL,
+     logical INT NOT NULL,
+         key STRING NOT NULL,
+         mut BYTES NOT NULL,
+      before BYTES NULL,
+     applied BOOL NOT NULL DEFAULT false,
+  applied_at TIMESTAMPTZ NULL,
   %[2]s
   PRIMARY KEY (nanos, logical, key),
     INDEX %[3]s (key) STORING (applied), -- Improve performance of StageIfExists
    FAMILY cold (mut, before),
-   FAMILY hot (applied)
+   FAMILY hot (applied, applied_at)
 )`
 
 // newStage constructs a new mutation stage that will track pending
@@ -133,6 +134,13 @@ ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
 	if err := retry.Execute(ctx, db, fmt.Sprintf(`
 CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 `, keyIdx, table)); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	// We're not going to worry about trying to backfill this, since
+	// old, applied mutations are retired on a regular basis.
+	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
+`, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
 	log.Tracef("completed schema upgrades for %s", table)
@@ -421,7 +429,7 @@ func (s *stage) stageOneBatch(
 
 const markAppliedTemplate = `
 WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
-UPDATE %s x SET applied=true
+UPDATE %s x SET applied=true, applied_at=now()
 FROM t
 WHERE (x.key, x.nanos, x.logical) = (t.key, t.nanos, t.logical) 
 `
