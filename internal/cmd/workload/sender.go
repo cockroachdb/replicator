@@ -25,10 +25,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/workgroup"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/workgroup"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

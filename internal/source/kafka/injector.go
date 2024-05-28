@@ -22,6 +22,7 @@ package kafka
 import (
 	"context"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	scriptRuntime "github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
@@ -30,7 +31,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging"
 	tgt "github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

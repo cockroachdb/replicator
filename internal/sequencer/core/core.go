@@ -22,6 +22,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	"github.com/cockroachdb/replicator/internal/sequencer/sequtil"
@@ -30,8 +32,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -85,7 +85,7 @@ func (s *Core) Start(
 		// associated apply task has finished successfully. It ensures
 		// that timestamp updates are received in an ordered fashion.
 		progressReports := make(chan (<-chan hlc.Range), s.cfg.Parallelism+1)
-		ctx.Go(func() error {
+		ctx.Go(func(ctx *stopper.Context) error {
 			for {
 				select {
 				case <-ctx.Stopping():
@@ -266,7 +266,7 @@ func (s *Core) Start(
 
 		// Adapt copier.Run() as if it were another lockset task.
 		copyOutcome := lockset.NewOutcome()
-		ctx.Go(func() error {
+		ctx.Go(func(ctx *stopper.Context) error {
 			err := copier.Run(ctx)
 			copyOutcome.Set(lockset.StatusFor(err))
 			return nil

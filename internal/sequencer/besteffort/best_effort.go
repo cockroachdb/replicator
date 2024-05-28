@@ -21,15 +21,15 @@ import (
 	"context"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	"github.com/cockroachdb/replicator/internal/sequencer/sequtil"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -103,7 +103,7 @@ func (s *bestEffort) Start(
 			}
 
 			// Start a helper to aggregate the progress values together.
-			ctx.Go(func() error {
+			ctx.Go(func(ctx *stopper.Context) error {
 				// Ignoring error since innermost callback returns nil.
 				_, _ = stopvar.DoWhenChanged(ctx, nil, subStats, func(ctx *stopper.Context, _, subStat sequencer.Stat) error {
 					_, _, err := stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
@@ -125,7 +125,7 @@ func (s *bestEffort) Start(
 		// of any existing checkpoints. This allows partial progress to
 		// be made in advance of receiving any checkpoints from the
 		// source.
-		ctx.Go(func() error {
+		ctx.Go(func(ctx *stopper.Context) error {
 			for {
 				if _, _, err := opts.Bounds.Update(func(old hlc.Range) (hlc.Range, error) {
 					// Cancel this task once there are checkpoints.

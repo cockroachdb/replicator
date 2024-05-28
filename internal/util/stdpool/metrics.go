@@ -22,8 +22,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -151,7 +151,7 @@ func (o *withMetrics) poolMetrics(ctx context.Context, pool any) {
 
 	// Update pool stats gauges at 1 QPS.
 	stop := stopper.From(ctx)
-	stop.Go(func() error {
+	stop.Go(func(stop *stopper.Context) error {
 		// These metrics are reported to us as counters, so we need to
 		// compute the deltas to pass them into the API.
 		var prevAcquireCount int64

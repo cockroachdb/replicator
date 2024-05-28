@@ -19,9 +19,9 @@
 package mylogical
 
 import (
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/source/mylogical"
 	"github.com/cockroachdb/replicator/internal/util/stdlogical"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/spf13/cobra"
 )
 

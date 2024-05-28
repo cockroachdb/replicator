@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/cmd/dumphelp"
 	"github.com/cockroachdb/replicator/internal/cmd/dumptemplates"
 	"github.com/cockroachdb/replicator/internal/cmd/kafka"
@@ -41,7 +42,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/cmd/workload"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/util/logfmt"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	joonix "github.com/joonix/log"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -122,7 +122,7 @@ func main() {
 
 	stop := stopper.WithContext(context.Background())
 	// Stop cleanly on interrupt.
-	stop.Go(func() error {
+	stop.Go(func(stop *stopper.Context) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer cancel()
 		select {

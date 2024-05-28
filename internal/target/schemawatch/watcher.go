@@ -26,10 +26,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -75,7 +75,7 @@ func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema)
 	w.mu.data = data
 
 	if w.delay > 0 {
-		ctx.Go(func() error {
+		ctx.Go(func(ctx *stopper.Context) error {
 			for {
 				select {
 				case <-ctx.Stopping():
@@ -170,7 +170,7 @@ func (w *watcher) Watch(table ident.Table) (<-chan []types.ColData, func(), erro
 	ctx := stopper.WithContext(w.background)
 	ch := make(chan []types.ColData, 1)
 
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		defer close(ch)
 
 		var last []types.ColData

@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -35,7 +36,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/cockroachdb/replicator/internal/util/stmtcache"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -147,7 +147,7 @@ func ProvideContext(t testing.TB) *stopper.Context {
 		ctx.Stop(10 * time.Millisecond)
 		_ = ctx.Wait()
 	})
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		select {
 		case <-ctx.Stopping():
 		// Clean shutdown, do nothing.

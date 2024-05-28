@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -38,7 +38,7 @@ func LeaseGroup(
 	fn func(*stopper.Context, *types.TableGroup),
 ) {
 	// Start a goroutine in the outer context.
-	outer.Go(func() error {
+	outer.Go(func(outer *stopper.Context) error {
 		// Run this in a loop in case of non-renewal. This is likely
 		// caused by database overload or any other case where we can't
 		// run SQL in a timely fashion.
@@ -55,7 +55,7 @@ func LeaseGroup(
 
 					// Execute the callback from a goroutine. Tear down
 					// the stopper once the main callback has exited.
-					sub.Go(func() error {
+					sub.Go(func(sub *stopper.Context) error {
 						defer sub.Stop(time.Second)
 						fn(sub, group)
 						return nil

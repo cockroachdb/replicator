@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
@@ -31,7 +32,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/secure"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

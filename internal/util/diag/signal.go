@@ -23,7 +23,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cockroachdb/replicator/internal/util/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -32,7 +32,7 @@ import (
 func logOnSignal(ctx *stopper.Context, d *Diagnostics) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGUSR1)
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		defer signal.Stop(ch)
 		for {
 			select {

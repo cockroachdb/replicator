@@ -20,12 +20,12 @@ package retire
 import (
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -46,7 +46,7 @@ func (r *Retire) Start(
 	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range],
 ) *notify.Var[hlc.Time] {
 	ret := &notify.Var[hlc.Time]{}
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		for {
 			_, err := stopvar.DoWhenChangedOrInterval(ctx, hlc.RangeEmpty(), bounds, time.Minute,
 				func(ctx *stopper.Context, _, bounds hlc.Range) error {

@@ -20,14 +20,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/source/cdc/server"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
@@ -86,7 +86,7 @@ func TestWorkload(t *testing.T) {
 	// Create a nested stopper, so we can run the workload generator
 	// for a period of time.
 	runnerCtx := stopper.WithContext(ctx)
-	runnerCtx.Go(func() error {
+	runnerCtx.Go(func(runnerCtx *stopper.Context) error {
 		return runner.Run(runnerCtx)
 	})
 

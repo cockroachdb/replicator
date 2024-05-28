@@ -26,11 +26,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/auth/broken"
 	"github.com/cockroachdb/replicator/internal/util/auth/reject"
 	"github.com/cockroachdb/replicator/internal/util/auth/trust"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/stretchr/testify/require"
 )
 

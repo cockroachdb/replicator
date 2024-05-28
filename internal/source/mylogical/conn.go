@@ -31,15 +31,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	"github.com/cockroachdb/replicator/internal/util/stamp"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
@@ -116,7 +116,7 @@ func (c *conn) Start(ctx *stopper.Context) error {
 	}
 
 	// Start a process to copy data to the target.
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		for !ctx.IsStopping() {
 			if err := c.copyMessages(ctx); err != nil {
 				log.WithError(err).Warn("error while copying messages; will retry")
@@ -587,7 +587,7 @@ func (c *conn) persistWALOffset(ctx *stopper.Context) error {
 	}
 	c.walOffset.Set(cp)
 
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, cp, &c.walOffset,
 			func(ctx *stopper.Context, _, cp *consistentPoint) error {
 				if err := c.memo.Put(ctx, c.stagingDB, key, []byte(cp.String())); err == nil {

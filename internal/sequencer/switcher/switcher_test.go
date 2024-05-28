@@ -22,12 +22,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/seqtest"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 )
 
 func TestSwitcher(t *testing.T) {
@@ -43,7 +44,7 @@ func TestSwitcher(t *testing.T) {
 			}
 			mode := notify.VarOf(initial)
 			seqFixture.BestEffort.SetTimeSource(hlc.Zero) // The test rig uses fake timestamps.
-			fixture.Context.Go(func() error {
+			ctx.Go(func(ctx *stopper.Context) error {
 				for {
 					select {
 					case <-time.After(time.Second):

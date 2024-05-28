@@ -22,6 +22,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
@@ -30,9 +33,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -234,7 +234,7 @@ func (c *Conveyor) metrics(ctx *stopper.Context) {
 	// Export the min and max resolved timestamps that we see and
 	// include lag computations. This happens on each node, regardless
 	// of whether it holds a lease.
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		labels := []string{c.factory.kind, c.target.Raw()}
 		min := resolvedMinTimestamp.WithLabelValues(labels...)
 		max := resolvedMaxTimestamp.WithLabelValues(labels...)
@@ -263,7 +263,7 @@ func (c *Conveyor) modeSelector(ctx *stopper.Context) {
 	}
 	// The initial update will be async, so wait for it.
 	_, initialSet := c.mode.Get()
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChangedOrInterval(ctx,
 			hlc.RangeEmptyAt(hlc.New(-1, -1)), // Pick a non-zero time so the callback fires.
 			&c.resolvingRange,
@@ -310,7 +310,7 @@ func (c *Conveyor) modeSelector(ctx *stopper.Context) {
 // updateResolved will monitor the timestamp to which tables in the
 // group have advanced and update the resolved timestamp table.
 func (c *Conveyor) updateResolved(ctx *stopper.Context) {
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx,
 			nil,
 			c.stat,
