@@ -19,11 +19,11 @@ package sinkprod
 import (
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/cockroachdb/replicator/internal/util/stmtcache"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/spf13/pflag"
 )
 

@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	stagingProd "github.com/cockroachdb/replicator/internal/sinkprod"
@@ -38,7 +39,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/stdlogical"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	joonix "github.com/joonix/log"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"

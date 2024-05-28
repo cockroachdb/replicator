@@ -23,10 +23,10 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/stdlogical"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
@@ -85,7 +85,7 @@ func New(
 		TLSConfig: tlsConfig,
 	}
 
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		var err error
 		if srv.TLSConfig != nil {
 			err = srv.ServeTLS(listener, "", "")
@@ -97,7 +97,7 @@ func New(
 		}
 		return errors.Wrap(err, "unable to serve requests")
 	})
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		<-ctx.Stopping()
 		if err := srv.Shutdown(ctx); err != nil {
 			log.WithError(err).Error("did not shut down cleanly")

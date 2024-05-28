@@ -21,10 +21,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

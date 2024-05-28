@@ -19,13 +19,13 @@
 package immediate
 
 import (
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 )
 
 // Immediate is a trivial implementation of [sequencer.Sequencer] that
@@ -45,7 +45,7 @@ func (i *Immediate) Start(
 
 	// Set each table's progress to the end of the bounds. This
 	// will allow the checkpointer to clean up resolved timestamps.
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, hlc.RangeEmpty(), opts.Bounds,
 			func(ctx *stopper.Context, old, new hlc.Range) error {
 				// Do nothing if the new end point didn't advance.

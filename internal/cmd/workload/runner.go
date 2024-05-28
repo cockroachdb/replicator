@@ -21,12 +21,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/cockroachdb/replicator/internal/util/workload"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -68,7 +68,7 @@ func (r *runner) Run(ctx *stopper.Context) error {
 	// This channel limits the total number outstanding HTTP requests.
 	pending := make(chan lockset.Outcome, r.cfg.concurrentRequests)
 	defer close(pending)
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		for outcome := range pending {
 			if err := lockset.Wait(ctx, []lockset.Outcome{outcome}); err != nil {
 				log.WithError(err).Error("fatal error")

@@ -21,12 +21,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -84,7 +84,7 @@ func (g *groupSequencer) Start(
 		return nil, nil, err
 	}
 
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, initialMode, g.mode,
 			func(ctx *stopper.Context, old, new Mode) error {
 				g.mu.Lock()
@@ -145,8 +145,8 @@ func (g *groupSequencer) switchModeLocked(
 	g.mu.acceptor = nextAcc
 
 	// Copy the status out to the persistent notification variable.
-	g.mu.stopper.Go(func() error {
-		_, err := stopvar.DoWhenChanged(g.mu.stopper, nil, nextStatus,
+	g.mu.stopper.Go(func(ctx *stopper.Context) error {
+		_, err := stopvar.DoWhenChanged(ctx, nil, nextStatus,
 			func(ctx *stopper.Context, _, new sequencer.Stat) error {
 				g.status.Set(new)
 				return nil

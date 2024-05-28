@@ -21,9 +21,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 
@@ -100,7 +100,7 @@ func (f *factory) Read(
 		tableChans[idx] = ch
 		tableReader := newTableReader(
 			q.Bounds, f.db, q.FragmentSize, ch, f.stagingDB, target)
-		ctx.Go(func() error {
+		ctx.Go(func(ctx *stopper.Context) error {
 			tableReader.run(ctx)
 			return nil
 		})
@@ -108,7 +108,7 @@ func (f *factory) Read(
 
 	mergeChan := make(chan *types.StagingCursor, 2)
 	merger := newTableMerger(q.Group, tableChans, mergeChan)
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		defer ctx.Stop(time.Second)
 		merger.run(ctx)
 		return nil

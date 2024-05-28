@@ -1,11 +1,12 @@
 module github.com/cockroachdb/replicator
 
-go 1.22
+go 1.22.1
 
 require (
 	github.com/IBM/sarama v1.43.2
 	github.com/cockroachdb/apd v1.1.0
 	github.com/cockroachdb/crlfmt v0.1.0
+	github.com/cockroachdb/field-eng-powertools v0.1.1
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
 	github.com/evanw/esbuild v0.21.3
 	github.com/go-mysql-org/go-mysql v1.8.0

@@ -17,8 +17,8 @@
 package workload
 
 import (
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/source/cdc/server"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/cockroachdb/replicator/internal/util/workload"
 	"github.com/spf13/cobra"
 )

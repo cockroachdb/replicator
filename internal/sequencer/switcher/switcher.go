@@ -21,6 +21,8 @@ package switcher
 import (
 	"fmt"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
@@ -28,8 +30,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 )
 

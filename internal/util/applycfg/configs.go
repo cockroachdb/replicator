@@ -23,8 +23,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 )
 
 // Configs provides a lookup service for per-destination-table

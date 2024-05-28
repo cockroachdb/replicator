@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/workgroup"
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/workgroup"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )

@@ -24,11 +24,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/sinktest/mutations"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
@@ -90,7 +91,7 @@ func TestTableReader(t *testing.T) {
 		out,
 		fixture.StagingDB.Schema(),
 		info.Name())
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		reader.run(ctx)
 		return nil
 	})

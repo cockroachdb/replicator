@@ -17,12 +17,12 @@
 package conveyor
 
 import (
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

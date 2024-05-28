@@ -24,3 +24,5 @@ heap_profiler/
 # Package working directory
 upload/
 
+# Make it easy to edit modules concurrently
+go.work*

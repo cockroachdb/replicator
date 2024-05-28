@@ -22,7 +22,7 @@ import (
 	"database/sql"
 	"sync"
 
-	"github.com/cockroachdb/replicator/internal/util/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/golang/groupcache/lru"
 	"github.com/pkg/errors"
 )
@@ -65,7 +65,7 @@ func New[T comparable](ctx *stopper.Context, db *sql.DB, size int) *Cache[T] {
 			stmtCacheDrops.Inc()
 		}
 	}
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		for {
 			select {
 			case stmt := <-ret.toClose:

@@ -27,15 +27,15 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/batches"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
 	"github.com/cockroachdb/replicator/internal/util/msort"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	"github.com/cockroachdb/replicator/internal/util/retry"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -174,7 +174,7 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
 		"AS OF SYSTEM TIME follower_read_timestamp()")
 
 	// Report unapplied mutations on a periodic basis.
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 

@@ -25,6 +25,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/seqtest"
@@ -34,7 +35,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )

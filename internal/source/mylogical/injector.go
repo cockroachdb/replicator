@@ -22,6 +22,7 @@ package mylogical
 import (
 	"context"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	scriptRuntime "github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
@@ -30,7 +31,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging"
 	"github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

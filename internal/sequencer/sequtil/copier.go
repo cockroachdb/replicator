@@ -19,10 +19,10 @@ package sequtil
 import (
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	log "github.com/sirupsen/logrus"
 )
 

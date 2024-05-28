@@ -21,13 +21,13 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	"github.com/cockroachdb/replicator/internal/util/retry"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -346,7 +346,7 @@ func (r *Group) refreshQuery(ctx context.Context, knownCommitted hlc.Time) (hlc.
 // refreshJob starts a goroutine to periodically synchronize the
 // in-memory bounds with the database.
 func (r *Group) refreshJob(ctx *stopper.Context) {
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		for {
 			_, fastWakeup := r.fastWakeup.Get()
 
@@ -371,7 +371,7 @@ func (r *Group) refreshJob(ctx *stopper.Context) {
 // metrics as the group's bounds change. The refresh is also periodic to
 // allow age metrics to tick.
 func (r *Group) reportMetrics(ctx *stopper.Context) {
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChangedOrInterval(ctx,
 			hlc.RangeEmpty(), r.bounds, 5*time.Second,
 			func(ctx *stopper.Context, _, bounds hlc.Range) error {

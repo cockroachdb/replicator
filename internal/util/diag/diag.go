@@ -27,10 +27,10 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/httpauth"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

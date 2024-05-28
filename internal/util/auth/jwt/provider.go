@@ -23,9 +23,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -66,7 +66,7 @@ func ProvideAuth(
 	if *RefreshDelay > 0 {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, syscall.SIGHUP)
-		ctx.Go(func() error {
+		ctx.Go(func(ctx *stopper.Context) error {
 			defer close(ch)
 			defer signal.Stop(ch)
 

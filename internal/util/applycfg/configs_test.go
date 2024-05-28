@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/stretchr/testify/require"
 )
 

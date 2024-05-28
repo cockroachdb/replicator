@@ -21,13 +21,13 @@ package seqtest
 import (
 	"context"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	userScript "github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/google/wire"
 )
 

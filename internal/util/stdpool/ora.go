@@ -23,8 +23,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/godror/godror"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"

@@ -27,10 +27,10 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/auth/trust"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"

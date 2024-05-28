@@ -22,9 +22,9 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/cockroachdb/field-eng-powertools/workgroup"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"github.com/cockroachdb/replicator/internal/util/workgroup"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 	"github.com/google/wire"

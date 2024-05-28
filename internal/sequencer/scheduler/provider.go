@@ -19,9 +19,9 @@ package scheduler
 import (
 	"context"
 
+	"github.com/cockroachdb/field-eng-powertools/workgroup"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
-	"github.com/cockroachdb/replicator/internal/util/workgroup"
 	"github.com/google/wire"
 	"github.com/pkg/errors"
 )

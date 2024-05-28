@@ -20,10 +20,10 @@ import (
 	"math"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

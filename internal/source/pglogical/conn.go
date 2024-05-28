@@ -25,13 +25,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/notify"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
-	"github.com/cockroachdb/replicator/internal/util/stopvar"
 	"github.com/google/uuid"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -83,7 +83,7 @@ func (c *Conn) Start(ctx *stopper.Context) error {
 	}
 
 	// Start a process to copy data to the target.
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		for !ctx.IsStopping() {
 			if err := c.copyMessages(ctx); err != nil {
 				log.WithError(err).Warn("error while copying messages; will retry")
@@ -440,7 +440,7 @@ func (c *Conn) persistWALOffset(ctx *stopper.Context) error {
 		}
 		c.walOffset.Set(lsn)
 	}
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, lsn, &c.walOffset,
 			func(ctx *stopper.Context, _, lsn pglogrepl.LSN) error {
 				if err := c.memo.Put(ctx, c.stagingDB, key, []byte(lsn.String())); err == nil {

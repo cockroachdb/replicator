@@ -28,15 +28,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/merge"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
 	"github.com/cockroachdb/replicator/internal/util/msort"
-	"github.com/cockroachdb/replicator/internal/util/notify"
 	"github.com/cockroachdb/replicator/internal/util/pjson"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -113,7 +113,7 @@ func (f *factory) newApply(
 
 	var initialErr notify.Var[error]
 	_, ready := initialErr.Get()
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		schemaCh, cancelSchema, err := w.Watch(target)
 		if err != nil {
 			return err

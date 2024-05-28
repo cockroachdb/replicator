@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/stopper"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -73,7 +73,7 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 	}
 
 	// Start a process to copy data to the target.
-	ctx.Go(func() error {
+	ctx.Go(func(ctx *stopper.Context) error {
 		defer c.group.Close()
 		for !ctx.IsStopping() {
 			if err := c.copyMessages(ctx); err != nil {
