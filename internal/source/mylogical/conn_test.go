@@ -236,6 +236,129 @@ func TestOnDataTuple(t *testing.T) {
 	}
 }
 
+func TestOnRelation(t *testing.T) {
+	mySchema := ident.MustSchema(ident.New("my"), ident.Public)
+	tests := []struct {
+		name         string
+		tableEvent   *replication.TableMapEvent
+		targetSchema ident.Schema
+		wantColumns  []types.ColData
+		wantTable    ident.Table
+	}{
+		{
+			name: "same db one pk",
+			tableEvent: &replication.TableMapEvent{
+				ColumnCount: 2,
+				ColumnName:  [][]byte{[]byte("pk1"), []byte("col1")},
+				ColumnType:  []byte{mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_VARCHAR},
+				PrimaryKey:  []uint64{0},
+				Schema:      []byte("my"),
+				Table:       []byte("table1"),
+				TableID:     1,
+			},
+			targetSchema: mySchema,
+			wantColumns: []types.ColData{
+				{
+					Name:    ident.New("pk1"),
+					Primary: true,
+					Type:    fmt.Sprintf("%d", mysql.MYSQL_TYPE_STRING),
+				},
+				{
+					Name:    ident.New("col1"),
+					Primary: false,
+					Type:    fmt.Sprintf("%d", mysql.MYSQL_TYPE_VARCHAR),
+				},
+			},
+			wantTable: ident.NewTable(mySchema, ident.New("table1")),
+		},
+		{
+			name: "same db two pk",
+			tableEvent: &replication.TableMapEvent{
+				ColumnCount: 3,
+				ColumnName:  [][]byte{[]byte("pk1"), []byte("pk2"), []byte("col1")},
+				ColumnType: []byte{
+					mysql.MYSQL_TYPE_STRING,
+					mysql.MYSQL_TYPE_LONG,
+					mysql.MYSQL_TYPE_VARCHAR,
+				},
+				PrimaryKey: []uint64{0, 1},
+				Schema:     []byte("my"),
+				Table:      []byte("table2"),
+				TableID:    2,
+			},
+			targetSchema: mySchema,
+			wantColumns: []types.ColData{
+				{
+					Name:    ident.New("pk1"),
+					Primary: true,
+					Type:    fmt.Sprintf("%d", mysql.MYSQL_TYPE_STRING),
+				},
+				{
+					Name:    ident.New("pk2"),
+					Primary: true,
+					Type:    fmt.Sprintf("%d", mysql.MYSQL_TYPE_LONG),
+				},
+				{
+					Name:    ident.New("col1"),
+					Primary: false,
+					Type:    fmt.Sprintf("%d", mysql.MYSQL_TYPE_VARCHAR),
+				},
+			},
+			wantTable: ident.NewTable(mySchema, ident.New("table2")),
+		},
+		{
+			name: "different db",
+			tableEvent: &replication.TableMapEvent{
+				ColumnCount: 2,
+				ColumnName:  [][]byte{[]byte("pk1"), []byte("col1")},
+				ColumnType:  []byte{mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_VARCHAR},
+				PrimaryKey:  []uint64{0},
+				Schema:      []byte("different"),
+				Table:       []byte("table1"),
+				TableID:     1,
+			},
+			targetSchema: mySchema,
+			wantColumns: []types.ColData{
+				{
+					Name:    ident.New("pk1"),
+					Primary: true,
+					Type:    fmt.Sprintf("%d", mysql.MYSQL_TYPE_STRING),
+				},
+				{
+					Name:    ident.New("col1"),
+					Primary: false,
+					Type:    fmt.Sprintf("%d", mysql.MYSQL_TYPE_VARCHAR),
+				},
+			},
+			wantTable: ident.NewTable(mySchema, ident.New("table1")),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
+			r := require.New(t)
+			c := &conn{
+				columns:   &ident.TableMap[[]types.ColData]{},
+				config:    &Config{},
+				relations: make(map[uint64]ident.Table),
+				target:    tt.targetSchema,
+			}
+			err := c.onRelation(tt.tableEvent)
+			a.NoError(err)
+			a.Equal(tt.wantTable.Raw(), c.relations[tt.tableEvent.TableID].Raw())
+			cols, ok := c.columns.Get(tt.wantTable)
+			a.True(ok)
+			r.Equal(len(tt.wantColumns), len(cols))
+			for idx, want := range tt.wantColumns {
+				r.Equal(want.Ignored, cols[idx].Ignored)
+				r.Equal(want.Name, cols[idx].Name)
+				r.Equal(want.Primary, cols[idx].Primary)
+				r.Equal(want.Type, cols[idx].Type)
+			}
+		})
+	}
+}
+
 type mockMemo struct {
 	kv sync.Map
 }
