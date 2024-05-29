@@ -78,16 +78,14 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	fixture, err := all.NewFixture(t)
 	r.NoError(err)
 	ctx := fixture.Context
-	dbName := fixture.TargetSchema.Schema()
 	crdbPool := fixture.TargetPool
 
 	// Create the schema in both locations.
-	tgt := ident.NewTable(dbName, ident.New("t"))
+	tgt := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("t"))
 
 	config, err := getConfig(fixture, fc, tgt)
 	r.NoError(err)
-
-	myPool, cancel, err := setupMYPool(config)
+	myPool, cancel, err := setupMYPool(config, fixture.SourceSchema.Idents(nil)[0])
 	r.NoError(err)
 	defer cancel()
 
@@ -225,11 +223,11 @@ func TestColumNames(t *testing.T) {
 	// Create a basic test fixture.
 	fixture, err := all.NewFixture(t)
 	r.NoError(err)
-	dbName := fixture.TargetSchema.Schema()
+	dbName := fixture.SourceSchema.Schema()
 	ctx := fixture.Context
 	config, err := getConfig(fixture, &fixtureConfig{}, ident.Table{})
 	r.NoError(err)
-	myPool, cancel, err := setupMYPool(config)
+	myPool, cancel, err := setupMYPool(config, fixture.SourceSchema.Idents(nil)[0])
 	r.NoError(err)
 	defer cancel()
 	flavor, _, err := getFlavor(config)
@@ -279,6 +277,7 @@ func TestColumNames(t *testing.T) {
 		})
 	}
 }
+
 func TestDataTypes(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
@@ -303,7 +302,7 @@ func TestDataTypes(t *testing.T) {
 	config, err := getConfig(fixture, &fixtureConfig{}, ident.Table{})
 	r.NoError(err)
 
-	myPool, cancel, err := setupMYPool(config)
+	myPool, cancel, err := setupMYPool(config, fixture.SourceSchema.Idents(nil)[0])
 	r.NoError(err)
 	defer cancel()
 
@@ -531,8 +530,7 @@ func myExec(
 		return conn.Execute(stmt, args...)
 	})
 }
-func setupMYPool(config *Config) (*client.Pool, func(), error) {
-	database := config.TargetSchema.Idents(nil)[0] // Extract database name.
+func setupMYPool(config *Config, database ident.Ident) (*client.Pool, func(), error) {
 	addr := fmt.Sprintf("%s:%d", config.host, config.port)
 	var baseConn *client.Conn
 	var err error

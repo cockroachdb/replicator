@@ -439,10 +439,8 @@ func (c *conn) getColNames(table ident.Table) ([][]byte, []uint64, error) {
 // Columns names are only available if
 // set global binlog_row_metadata = full;
 func (c *conn) onRelation(msg *replication.TableMapEvent) error {
-	tbl := ident.NewTable(
-		ident.MustSchema(ident.New(string(msg.Schema)), ident.Public),
-		ident.New(string(msg.Table)))
-	log.Tracef("Learned %+v", tbl)
+	targetTbl := ident.NewTable(c.target, ident.New(string(msg.Table)))
+	log.Tracef("Learned %+v", targetTbl)
 	columnNames, primaryKeys := msg.ColumnName, msg.PrimaryKey
 	// In case we need to fetch the metadata directly from the
 	// source, we will do it the first time we see the table,
@@ -451,13 +449,16 @@ func (c *conn) onRelation(msg *replication.TableMapEvent) error {
 		if _, ok := c.relations[msg.TableID]; ok {
 			return nil
 		}
+		sourceTbl := ident.NewTable(
+			ident.MustSchema(ident.New(string(msg.Schema)), ident.Public),
+			ident.New(string(msg.Table)))
 		var err error
-		columnNames, primaryKeys, err = c.getColNames(tbl)
+		columnNames, primaryKeys, err = c.getColNames(sourceTbl)
 		if err != nil {
 			return err
 		}
 	}
-	c.relations[msg.TableID] = tbl
+	c.relations[msg.TableID] = targetTbl
 	colData := make([]types.ColData, msg.ColumnCount)
 	primary := make(map[uint64]bool)
 	for _, p := range primaryKeys {
@@ -476,7 +477,7 @@ func (c *conn) onRelation(msg *replication.TableMapEvent) error {
 			Type:    fmt.Sprintf("%d", ctype),
 		}
 	}
-	c.columns.Put(tbl, colData)
+	c.columns.Put(targetTbl, colData)
 	return nil
 }
 
