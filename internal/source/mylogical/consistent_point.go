@@ -105,6 +105,19 @@ func (c *consistentPoint) String() string {
 	return c.AsGTIDSet().String()
 }
 
+func (c *consistentPoint) clone() *consistentPoint {
+	switch {
+	case c.ma != nil:
+		cloned := c.ma.Clone().(*mysql.MariadbGTIDSet)
+		return &consistentPoint{ma: cloned, ts: c.ts}
+	case c.my != nil:
+		cloned := c.my.Clone().(*mysql.MysqlGTIDSet)
+		return &consistentPoint{my: cloned, ts: c.ts}
+	default:
+		return &consistentPoint{ts: c.ts}
+	}
+}
+
 // parseFrom decodes GTID Sets expressed as strings. This method returns
 // the receiver.
 //
