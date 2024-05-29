@@ -47,23 +47,24 @@ type detailer struct {
 // sqlDetail represents a pgconn.PgError in a way that plays nicely
 // with the various formatters.
 type sqlDetail struct {
-	Severity         string `json:"severity,omitempty"`
-	Code             string `json:"code,omitempty"`
-	Message          string `json:"message,omitempty"`
-	Detail           string `json:"detail,omitempty"`
-	Hint             string `json:"hint,omitempty"`
-	Position         int32  `json:"position,omitempty"`
-	InternalPosition int32  `json:"internalPosition,omitempty"`
-	InternalQuery    string `json:"internalQuery,omitempty"`
-	Where            string `json:"where,omitempty"`
-	SchemaName       string `json:"schemaName,omitempty"`
-	TableName        string `json:"tableName,omitempty"`
-	ColumnName       string `json:"columnName,omitempty"`
-	DataTypeName     string `json:"dataTypeName,omitempty"`
-	ConstraintName   string `json:"constraintName,omitempty"`
-	File             string `json:"file,omitempty"`
-	Line             int32  `json:"line,omitempty"`
-	Routine          string `json:"routine,omitempty"`
+	Severity            string `json:"severity,omitempty"`
+	SeverityUnlocalized string `json:"-"`
+	Code                string `json:"code,omitempty"`
+	Message             string `json:"message,omitempty"`
+	Detail              string `json:"detail,omitempty"`
+	Hint                string `json:"hint,omitempty"`
+	Position            int32  `json:"position,omitempty"`
+	InternalPosition    int32  `json:"internalPosition,omitempty"`
+	InternalQuery       string `json:"internalQuery,omitempty"`
+	Where               string `json:"where,omitempty"`
+	SchemaName          string `json:"schemaName,omitempty"`
+	TableName           string `json:"tableName,omitempty"`
+	ColumnName          string `json:"columnName,omitempty"`
+	DataTypeName        string `json:"dataTypeName,omitempty"`
+	ConstraintName      string `json:"constraintName,omitempty"`
+	File                string `json:"file,omitempty"`
+	Line                int32  `json:"line,omitempty"`
+	Routine             string `json:"routine,omitempty"`
 }
 
 func (s *sqlDetail) String() string {
