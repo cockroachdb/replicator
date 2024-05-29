@@ -202,7 +202,7 @@ jobs:
         run: |
           set -e
           sudo apt-get install -yqq --no-install-recommends libaio1
-          curl -o /tmp/ora-libs.zip https://storage.googleapis.com/cdc-sink-binaries/third_party/instantclient-basiclite-linux-amd64.zip
+          curl -o /tmp/ora-libs.zip https://replicator.cockroachdb.com/third_party/instantclient-basiclite-linux-amd64.zip
           unzip -d /tmp /tmp/ora-libs.zip
           sudo mv /tmp/instantclient_21_13/* /usr/lib
 
