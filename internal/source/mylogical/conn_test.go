@@ -17,9 +17,14 @@
 package mylogical
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -227,6 +232,114 @@ func TestOnDataTuple(t *testing.T) {
 			}
 			a.NoError(err)
 			batch.compare(a, tables[tt.tuple.TableID], tt.wantMuts)
+		})
+	}
+}
+
+type mockMemo struct {
+	kv sync.Map
+}
+
+var _ types.Memo = &mockMemo{}
+
+// Get implements types.Memo.
+func (m *mockMemo) Get(ctx context.Context, tx types.StagingQuerier, key string) ([]byte, error) {
+	res, ok := m.kv.Load(key)
+	if !ok {
+		return nil, nil
+	}
+	return res.([]byte), nil
+}
+
+// Put implements types.Memo.
+func (m *mockMemo) Put(
+	ctx context.Context, tx types.StagingQuerier, key string, value []byte,
+) error {
+	m.kv.Store(key, value)
+	return nil
+}
+
+// TestInitialConsistentPoint verifies that we are persisting the correct initial value
+func TestInitialConsistentPoint(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stop := stopper.WithContext(ctx)
+	defer cancel()
+
+	tests := []struct {
+		config string
+		flavor string
+		name   string
+		stored string
+		want   string
+	}{
+		{
+			flavor: mysql.MySQLFlavor,
+			name:   "empty",
+			want:   "",
+		},
+		{
+			flavor: mysql.MySQLFlavor,
+			name:   "stored",
+			stored: "6fa7e6ef-c49a-11ec-950a-0242ac120002:1-5374",
+			want:   "6fa7e6ef-c49a-11ec-950a-0242ac120002:1-5374",
+		},
+		{
+			config: "6fa7e6ef-c49a-11ec-950a-0242ac120002:1-10",
+			flavor: mysql.MySQLFlavor,
+			name:   "config",
+			want:   "6fa7e6ef-c49a-11ec-950a-0242ac120002:1-10",
+		},
+		{
+			config: "6fa7e6ef-c49a-11ec-950a-0242ac120002:1-10",
+			flavor: mysql.MySQLFlavor,
+			name:   "stored_config",
+			stored: "6fa7e6ef-c49a-11ec-950a-0242ac120002:1-5374",
+			want:   "6fa7e6ef-c49a-11ec-950a-0242ac120002:1-5374",
+		},
+		{
+			flavor: mysql.MariaDBFlavor,
+			name:   "empty",
+			want:   "",
+		},
+		{
+			flavor: mysql.MariaDBFlavor,
+			name:   "stored",
+			stored: "1-1-100",
+			want:   "1-1-100",
+		},
+		{
+			config: "1-1-2",
+			flavor: mysql.MariaDBFlavor,
+			name:   "config",
+			want:   "1-1-2",
+		},
+		{
+			config: "1-1-2",
+			flavor: mysql.MariaDBFlavor,
+			name:   "stored_config",
+			stored: "1-1-100",
+			want:   "1-1-100",
+		},
+	}
+	for _, tt := range tests {
+		name := fmt.Sprintf("%s_%s", tt.name, tt.flavor)
+		t.Run(name, func(t *testing.T) {
+			a := assert.New(t)
+			m := &mockMemo{}
+			c := &conn{
+				config: &Config{
+					InitialGTID: tt.config,
+				},
+				flavor: tt.flavor,
+				memo:   m,
+				target: ident.MustSchema(ident.Public),
+			}
+			key := fmt.Sprintf("mysql-wal-offset-%s", c.target.Raw())
+			if tt.stored != "" {
+				m.Put(stop, nil, key, []byte(tt.stored))
+			}
+			c.persistWALOffset(stop)
+			a.Equal(c.nextConsistentPoint.String(), tt.want)
 		})
 	}
 }
