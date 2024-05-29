@@ -21,13 +21,17 @@
 package mylogical
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func Test_mySqlStamp_Less(t *testing.T) {
+func TestMySqlStampLess(t *testing.T) {
 	tests := []struct {
 		name string
 		this string
@@ -71,7 +75,7 @@ func Test_mySqlStamp_Less(t *testing.T) {
 	}
 }
 
-func Test_mariadbStamp_Less(t *testing.T) {
+func TestMariadbStampLess(t *testing.T) {
 	tests := []struct {
 		name string
 		this string
@@ -106,6 +110,48 @@ func Test_mariadbStamp_Less(t *testing.T) {
 	}
 }
 
+type interval struct {
+	from int
+	to   int
+}
+
+func TestWithMysqlGTIDSet(t *testing.T) {
+
+	gtid := func(intervals []interval) string {
+		buff := strings.Builder{}
+
+		buff.WriteString("6fa7e6ef-c49a-11ec-950a-0242ac120002")
+		for _, interval := range intervals {
+			buff.WriteString(fmt.Sprintf(":%d-%d", interval.from, interval.to))
+		}
+		return buff.String()
+	}
+	tests := []struct {
+		name    string
+		initial string
+		add     string
+		want    string
+	}{
+		{"from empty", "", gtid([]interval{{1, 10}}), gtid([]interval{{1, 10}})},
+		{"noop", gtid([]interval{{1, 10}}), gtid([]interval{{1, 10}}), gtid([]interval{{1, 10}})},
+		{"contiguous", gtid([]interval{{1, 10}}), gtid([]interval{{11, 20}}), gtid([]interval{{1, 20}})},
+		{"disjoint", gtid([]interval{{1, 10}}), gtid([]interval{{12, 20}}), gtid([]interval{{1, 10}, {12, 20}})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			a := assert.New(t)
+			this, err := newConsistentPoint(mysql.MySQLFlavor).parseFrom(tt.initial)
+			r.NoError(err)
+			toAdd, err := mysql.ParseUUIDSet(tt.add)
+			r.NoError(err)
+			res := this.withMysqlGTIDSet(time.Now(), toAdd)
+
+			a.Equal(tt.want, res.my.Sets["6fa7e6ef-c49a-11ec-950a-0242ac120002"].String())
+		})
+	}
+
+}
 func checkMarshal(a *assert.Assertions, flavor string, cp *consistentPoint) {
 	data, err := cp.MarshalJSON()
 	if !a.NoError(err) {

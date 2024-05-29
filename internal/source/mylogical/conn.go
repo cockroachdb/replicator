@@ -577,23 +577,24 @@ func (c *conn) persistWALOffset(ctx *stopper.Context) error {
 		if _, err := cp.parseFrom(string(found)); err != nil {
 			return err
 		}
-		c.walOffset.Set(cp)
+		log.Infof("Using GTID Set stored in the memo table: %s", cp)
 	} else if c.config.InitialGTID != "" {
 		// Set to a user-configured, default value.
 		cp, err = cp.parseFrom(c.config.InitialGTID)
 		if err != nil {
 			return err
 		}
+		log.Infof("Using GTID from the command line: %s", cp)
 	}
+	c.nextConsistentPoint = cp
 	c.walOffset.Set(cp)
-
 	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, cp, &c.walOffset,
 			func(ctx *stopper.Context, _, cp *consistentPoint) error {
 				if err := c.memo.Put(ctx, c.stagingDB, key, []byte(cp.String())); err == nil {
 					log.Tracef("stored WAL offset %s: %s", key, cp)
 				} else {
-					log.WithError(err).Warn("could not persist WAL offset")
+					log.WithError(err).Error("could not persist WAL offset")
 				}
 				return nil
 			})
