@@ -18,7 +18,7 @@
 # optionally push the results to a GCP bucket.
 name: Golang Binaries
 permissions:
-  contents: read
+  contents: write # Needed to modify release.
   id-token: write
   statuses: write
 on:
@@ -72,6 +72,11 @@ jobs:
           PACKAGE_GOARCH: ${{ matrix.arch }}
           UPLOAD_DIR: upload
         run: ./.github/workflows/package.sh
+
+      - id: release-artifacts
+        name: Attach binaries to GitHub Release
+        if: ${{ github.event.release.tag_name }}
+        run: gh release upload ${{ github.event.release.tag_name }} upload/*
 
       - id: auth
         name: Authenticate to GCP
