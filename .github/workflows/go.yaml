@@ -32,7 +32,10 @@ on:
       - '.github/workflows/go*.yaml'
   push:
     branches: [ master ]
-    tags: [ 'v*.*.*' ]
+  release:
+    types:
+      - published
+
 jobs:
   # Most jobs should depend on this one.
   go-build-cache:
@@ -43,7 +46,7 @@ jobs:
     needs:
       - go-build-cache
     permissions:
-      contents: read
+      contents: write
       id-token: write
       statuses: write
     secrets: inherit
