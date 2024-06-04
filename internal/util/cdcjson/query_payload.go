@@ -1,4 +1,4 @@
-// Copyright 2023 The Cockroach Authors
+// Copyright 2024 The Cockroach Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package cdc
+package cdcjson
 
 import (
 	"encoding/json"
@@ -33,7 +33,10 @@ var (
 	updated     = ident.New("updated")
 )
 
-const bareEnvelopeErrorMsg = `bare envelope is not supported. Use envelope="wrapped",format="json",diff in CREATE CHANGEFEED ... AS SELECT`
+// Errors
+var (
+	ErrBareEnvelope = errors.New(`bare envelope is not supported. Use envelope="wrapped",format="json",diff in CREATE CHANGEFEED ... AS SELECT`)
+)
 
 // queryPayload stores the payload sent by the client for
 // a change feed that uses a query
@@ -89,7 +92,7 @@ func (q *queryPayload) UnmarshalJSON(data []byte) error {
 	}
 	// Check if it is a bare message. Bare messages have a `__crdb__` property.
 	if _, hasCrdb := msg.Get(crdbLabel); hasCrdb {
-		return errors.New(bareEnvelopeErrorMsg)
+		return ErrBareEnvelope
 	}
 	ts, ok := msg.Get(updated)
 	if !ok {

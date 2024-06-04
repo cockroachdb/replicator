@@ -1,4 +1,4 @@
-// Copyright 2023 The Cockroach Authors
+// Copyright 2024 The Cockroach Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package cdc
+package cdcjson
 
 import (
 	"encoding/json"
@@ -50,7 +50,7 @@ func TestQueryPayload(t *testing.T) {
 			`{"__event__": "insert", "pk" : 42, "v" : 9, "__crdb__": {"updated": "1.0"}}`,
 			ident.MapOf[int](ident.New("pk"), 0),
 			types.Mutation{},
-			bareEnvelopeErrorMsg,
+			ErrBareEnvelope.Error(),
 		},
 		{"update with diff",
 			`{"after":{"pk":42,"v":9},"before":{"pk":42,"v":10},"updated":"1.0"}`,

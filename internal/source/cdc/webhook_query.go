@@ -17,11 +17,13 @@
 package cdc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/cdcjson"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
@@ -61,7 +63,7 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	}
 	// Bare messages are not longer supported.
 	if message.Bare != nil {
-		return errors.New(bareEnvelopeErrorMsg)
+		return cdcjson.ErrBareEnvelope
 	}
 	// Check if it is a resolved message.
 	if message.Resolved != "" {
@@ -76,13 +78,8 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 	// batch size for webhooks is reasonable.
 	toProcess := &types.MultiBatch{}
 	for _, payload := range message.Payload {
-		qp := queryPayload{
-			keys: keys,
-		}
-		if err := qp.UnmarshalJSON(payload); err != nil {
-			return err
-		}
-		mut, err := qp.AsMutation()
+		reader := bytes.NewReader(payload)
+		mut, err := cdcjson.QueryMutationReader(keys)(reader)
 		if err != nil {
 			return err
 		}

@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/cdcjson"
 	"github.com/google/wire"
 )
 
@@ -63,10 +64,15 @@ func ProvideHandler(
 	if err := conveyors.Bootstrap(); err != nil {
 		return nil, err
 	}
+	parser, err := cdcjson.New(cfg.NDJsonBuffer)
+	if err != nil {
+		return nil, err
+	}
 	return &Handler{
 		Authenticator: auth,
 		Conveyors:     conveyors,
 		Config:        cfg,
+		NDJsonParser:  parser,
 		TargetPool:    pool,
 	}, nil
 }
