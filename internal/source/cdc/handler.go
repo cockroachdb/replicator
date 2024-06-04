@@ -31,6 +31,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/httpauth"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/ndjson"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -46,6 +47,7 @@ type Handler struct {
 	Authenticator types.Authenticator // Access checks.
 	Config        *Config             // Runtime options.
 	Conveyors     *conveyor.Conveyors // Mutation delivery to the target.
+	NDJsonParser  *ndjson.Parser      // Parser for ndjson payloads.
 	TargetPool    *types.TargetPool   // Access to the target cluster.
 }
 

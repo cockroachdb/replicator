@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/ndjson"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func TestParseChangefeedURL(t *testing.T) {
 	tableName := nameParts[2].Raw()
 	ndjsonDate := `2020-04-02`
 	ndjsonTimestampWithExtras := `202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-REAL-42-1.ndjson`
-	ndjson := strings.Join([]string{ndjsonDate, ndjsonTimestampWithExtras}, "/")
+	ndjsonWithDate := strings.Join([]string{ndjsonDate, ndjsonTimestampWithExtras}, "/")
 	ndjsonFull := `2020-04-02/202004022058072107140000000000000-56087568dba1e6b8-1-72-00000000-ignored_db.ignored_schema.REAL-42-1.ndjson`
 	resolvedDate := `2020-04-04`
 	resolvedTimestamp := `202004042351304139680000000000000.RESOLVED`
@@ -139,7 +140,7 @@ func TestParseChangefeedURL(t *testing.T) {
 			name:     "ndjson to schema",
 			decision: "ndjson schema",
 			target:   ident.NewTable(schemaIdent, ident.New("REAL-42")), // Use topic name from query.
-			url:      strings.Join([]string{"", dbName, schemaName, ndjson}, "/"),
+			url:      strings.Join([]string{"", dbName, schemaName, ndjsonWithDate}, "/"),
 		},
 		{
 			name:     "ndjson full to schema",
@@ -151,24 +152,24 @@ func TestParseChangefeedURL(t *testing.T) {
 			name:     "table that looks like a malformed ndjson",
 			decision: "webhook table",
 			target:   ident.NewTable(ident.MustSchema(ident.New(dbName), ident.New(ndjsonDate)), ident.New(ndjsonTimestampWithExtras)),
-			url:      strings.Join([]string{"", dbName, ndjson}, "/"),
+			url:      strings.Join([]string{"", dbName, ndjsonWithDate}, "/"),
 		},
 		{
 			name:    "ndjson too long",
-			url:     strings.Join([]string{"", dbName, schemaName, "too", "much", ndjson}, "/"),
+			url:     strings.Join([]string{"", dbName, schemaName, "too", "much", ndjsonWithDate}, "/"),
 			wantErr: "path did not match any expected patterns",
 		},
 		{
 			name:     "ndjson to table",
 			decision: "ndjson table",
 			target:   tableIdent,
-			url:      strings.Join([]string{"", dbName, schemaName, tableName, ndjson}, "/"),
+			url:      strings.Join([]string{"", dbName, schemaName, tableName, ndjsonWithDate}, "/"),
 		},
 		{
 			name:     "ndjson to table extra slashes",
 			decision: "ndjson table",
 			target:   tableIdent,
-			url:      strings.Join([]string{"", dbName, schemaName, "", "", tableName, "", ndjson, ""}, "/"),
+			url:      strings.Join([]string{"", dbName, schemaName, "", "", tableName, "", ndjsonWithDate, ""}, "/"),
 		},
 		{
 			name:     "ndjson full to table",
@@ -179,6 +180,7 @@ func TestParseChangefeedURL(t *testing.T) {
 	}
 
 	h := &Handler{
+		NDJsonParser: &ndjson.Parser{BufferSize: 1000},
 		TargetPool: &types.TargetPool{
 			PoolInfo: types.PoolInfo{Product: types.ProductCockroachDB},
 		},

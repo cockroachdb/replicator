@@ -41,6 +41,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/merge"
+	"github.com/cockroachdb/replicator/internal/util/ndjson"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -158,13 +159,15 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		// Stage two lines of data. When this test is run with scripting
 		// enabled, we also want to see the bigint value successfully
 		// transit the JS runtime without being mangled.
-		a.NoError(h.ndjson(ctx, &request{
+		upsertRequest := &request{
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
 {"after" : {"pk" : 42, "v" : 9007199254740995}, "updated": "1.0"}
 {"after":  {"pk" : 99, "v" : 42}, "updated": "1.0", "before": {"pk" : 99, "v" : 33 }}
 `),
-		}, h.parseNdjsonQueryMutation))
+		}
+		a.NoError(h.ndjson(ctx, upsertRequest,
+			h.parseNdjsonQueryMutation(upsertRequest)))
 
 		// Verify staged data, if applicable.
 		if !htc.immediate {
@@ -200,16 +203,15 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 		ct, err := tableInfo.RowCount(ctx)
 		a.NoError(err)
 		a.Equal(2, ct)
-
 		// Now, delete the data.
-		a.NoError(h.ndjson(ctx, &request{
+		deleteReq := &request{
 			target: tableInfo.Name(),
 			body: strings.NewReader(`
 {"before":{"pk" : 42, "v" : null},"updated": "3.0"}
 {"before":{"pk" : 99, "v" : null},"updated": "3.0"}
-`),
-		}, h.parseNdjsonQueryMutation))
-
+`)}
+		a.NoError(h.ndjson(ctx, deleteReq,
+			h.parseNdjsonQueryMutation(deleteReq)))
 		a.NoError(h.resolved(ctx, &request{
 			target:    tableInfo.Name(),
 			timestamp: hlc.New(5, 0),
@@ -295,10 +297,12 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 	// Verify that an empty post doesn't crash.
 	t.Run("empty-ndjson", func(t *testing.T) {
 		a := assert.New(t)
-		a.NoError(h.ndjson(ctx, &request{
+		emptyRequest := &request{
 			target: tableInfo.Name(),
 			body:   strings.NewReader(""),
-		}, h.parseNdjsonQueryMutation))
+		}
+		a.NoError(h.ndjson(ctx, emptyRequest,
+			h.parseNdjsonQueryMutation(emptyRequest)))
 	})
 
 	// Verify that an empty webhook post doesn't crash.
@@ -362,7 +366,7 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 { "after" : { "pk" : 42, "v" : 99 }, "key" : [ 42 ], "updated" : "1.0" }
 { "after" : { "pk" : 99, "v" : 42 }, "before": { "pk" : 99, "v" : 33 }, "key" : [ 99 ], "updated" : "1.0" }
 `),
-		}, parseNdjsonMutation))
+		}, ndjson.ParseMutation))
 
 		// Verify staged data, if applicable.
 		if !cfg.immediate {
@@ -406,7 +410,7 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 { "after" : null, "key" : [ 42 ], "updated" : "3.0" }
 { "key" : [ 99 ], "updated" : "3.0" }
 `),
-		}, parseNdjsonMutation))
+		}, ndjson.ParseMutation))
 
 		a.NoError(h.resolved(ctx, &request{
 			target:    jumbleName(),
@@ -496,7 +500,7 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 		a.NoError(h.ndjson(ctx, &request{
 			target: jumbleName(),
 			body:   strings.NewReader(""),
-		}, parseNdjsonMutation))
+		}, ndjson.ParseMutation))
 	})
 
 	// Verify that an empty webhook post doesn't crash.
@@ -558,7 +562,7 @@ v INT8 NOT NULL)`)
 				version,
 				v,
 			)),
-		}, parseNdjsonMutation)
+		}, ndjson.ParseMutation)
 	}
 
 	// Send an update at V9. We're starting with 9 to ensure that when
@@ -624,7 +628,7 @@ v INT8 NOT NULL)`)
 				ts.Format(time.RFC3339Nano),
 				v,
 			)),
-		}, parseNdjsonMutation)
+		}, ndjson.ParseMutation)
 	}
 
 	// Round time to reflect actual storage.

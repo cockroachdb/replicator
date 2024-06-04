@@ -19,28 +19,31 @@ package cdc
 // This file contains code repackaged from url.go.
 
 import (
-	"encoding/json"
+	"io"
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/ndjson"
 	"github.com/pkg/errors"
 )
 
-// parseNdjsonQueryMutation is a parseMutation function.
+// parseNdjsonQueryMutation returns a MutationParser
 // We expect the CREATE CHANGE FEED INTO ... AS ... to use the following options:
 // envelope="wrapped",format="json",diff
-func (h *Handler) parseNdjsonQueryMutation(req *request, rawBytes []byte) (types.Mutation, error) {
-	keys, err := h.getPrimaryKey(req)
-	if err != nil {
-		return types.Mutation{}, err
+func (h *Handler) parseNdjsonQueryMutation(req *request) ndjson.MutationParser {
+	return func(reader io.Reader) (types.Mutation, error) {
+		keys, err := h.getPrimaryKey(req)
+		if err != nil {
+			return types.Mutation{}, err
+		}
+		payload := queryPayload{
+			keys: keys,
+		}
+		if err := ndjson.Decode(reader, &payload); err != nil {
+			return types.Mutation{}, err
+		}
+		return payload.AsMutation()
 	}
-	qp := queryPayload{
-		keys: keys,
-	}
-	if err := json.Unmarshal(rawBytes, &qp); err != nil {
-		return types.Mutation{}, err
-	}
-	return qp.AsMutation()
 }
 
 // getPrimaryKey returns a map that contains all the columns that make up the primary key

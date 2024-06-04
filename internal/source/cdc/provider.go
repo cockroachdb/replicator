@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/ndjson"
 	"github.com/google/wire"
 )
 
@@ -67,6 +68,9 @@ func ProvideHandler(
 		Authenticator: auth,
 		Conveyors:     conveyors,
 		Config:        cfg,
-		TargetPool:    pool,
+		NDJsonParser: &ndjson.Parser{
+			BufferSize: cfg.NDJsonBuffer,
+		},
+		TargetPool: pool,
 	}, nil
 }
