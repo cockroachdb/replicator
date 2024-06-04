@@ -1,4 +1,4 @@
-// Copyright 2023 The Cockroach Authors
+// Copyright 2024 The Cockroach Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,32 +16,10 @@
 
 package cdc
 
-// This file contains code repackaged from url.go.
-
 import (
-	"encoding/json"
-
-	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 )
-
-// parseNdjsonQueryMutation is a parseMutation function.
-// We expect the CREATE CHANGE FEED INTO ... AS ... to use the following options:
-// envelope="wrapped",format="json",diff
-func (h *Handler) parseNdjsonQueryMutation(req *request, rawBytes []byte) (types.Mutation, error) {
-	keys, err := h.getPrimaryKey(req)
-	if err != nil {
-		return types.Mutation{}, err
-	}
-	qp := queryPayload{
-		keys: keys,
-	}
-	if err := json.Unmarshal(rawBytes, &qp); err != nil {
-		return types.Mutation{}, err
-	}
-	return qp.AsMutation()
-}
 
 // getPrimaryKey returns a map that contains all the columns that make up the primary key
 // for the target table and their ordinal position within the key.

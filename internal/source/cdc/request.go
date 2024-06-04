@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/cdcjson"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
@@ -106,14 +107,18 @@ var requestPatterns = []*requestPattern{
 
 				req.target = ident.NewTable(t, tbl.Table())
 				req.leaf = func(ctx context.Context, req *request) error {
-					return h.ndjson(ctx, req, parseNdjsonMutation)
+					return h.ndjson(ctx, req, cdcjson.BulkMutationReader())
 				}
 			case ident.Table:
 				if requestParsingTestCallback != nil {
 					requestParsingTestCallback("ndjson table")
 				}
 				req.leaf = func(ctx context.Context, req *request) error {
-					return h.ndjson(ctx, req, h.parseNdjsonQueryMutation)
+					keys, err := h.getPrimaryKey(req)
+					if err != nil {
+						return err
+					}
+					return h.ndjson(ctx, req, cdcjson.QueryMutationReader(keys))
 				}
 			default:
 				return errors.Errorf("unimplemented %T", t)
