@@ -29,6 +29,7 @@ import (
 
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/cdcjson"
 	"github.com/cockroachdb/replicator/internal/util/httpauth"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
@@ -43,10 +44,11 @@ var sanitizer = strings.NewReplacer("\n", " ", "\r", " ")
 // Handler is an http.Handler for processing webhook requests
 // from a CockroachDB changefeed.
 type Handler struct {
-	Authenticator types.Authenticator // Access checks.
-	Config        *Config             // Runtime options.
-	Conveyors     *conveyor.Conveyors // Mutation delivery to the target.
-	TargetPool    *types.TargetPool   // Access to the target cluster.
+	Authenticator types.Authenticator   // Access checks.
+	Config        *Config               // Runtime options.
+	Conveyors     *conveyor.Conveyors   // Mutation delivery to the target.
+	NDJsonParser  *cdcjson.NDJsonParser // Parser for ndjson payloads.
+	TargetPool    *types.TargetPool     // Access to the target cluster.
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
