@@ -34,7 +34,7 @@ import (
 )
 
 // This can be seen as a skeleton for more interesting sequencers.
-func TestImmediate(t *testing.T) {
+func TestStepByStep(t *testing.T) {
 	r := require.New(t)
 	fixture, err := all.NewFixture(t)
 	r.NoError(err)
@@ -94,4 +94,16 @@ func TestImmediate(t *testing.T) {
 			r.Fail("timed out")
 		}
 	}
+}
+
+func TestImmediate(t *testing.T) {
+	seqtest.CheckSequencer(t,
+		&all.WorkloadConfig{
+			DisableFK:         true,
+			DisablePreStaging: true,
+		},
+		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
+			return seqFixture.Immediate
+		},
+		func(t *testing.T, check *seqtest.Check) {})
 }
