@@ -704,7 +704,7 @@ func TestSyntheticWebhooks(t *testing.T) {
 	fixture, _ := createFixture(t, &fixtureConfig{})
 	ctx := fixture.Context
 
-	gen, _, err := fixture.NewWorkload(ctx)
+	gen, _, err := fixture.NewWorkload(ctx, &all.WorkloadConfig{})
 	r.NoError(err)
 
 	batch := &types.MultiBatch{}
