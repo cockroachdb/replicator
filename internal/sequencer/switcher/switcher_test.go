@@ -32,7 +32,7 @@ import (
 )
 
 func TestSwitcher(t *testing.T) {
-	seqtest.CheckSequencer(t,
+	seqtest.CheckSequencer(t, &all.WorkloadConfig{},
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
 			ctx := fixture.Context
 			// Ensure we cove both startup cases in CI.

@@ -74,11 +74,16 @@ func (f CheckFlag) String() string {
 // support foreign-key relationships. The post-hook may be nil.
 func CheckSequencer(
 	t *testing.T,
+	workloadCfg *all.WorkloadConfig,
 	pre func(t *testing.T, fixture *all.Fixture, seqFixture *Fixture) sequencer.Sequencer,
 	post func(t *testing.T, check *Check),
 ) {
 	const batches = 1_000
 	check := func(t *testing.T, flags CheckFlag) {
+		if workloadCfg.DisablePreStaging && flags&checkStage == checkStage {
+			t.Log("staging disabled by WorkloadConfig")
+			return
+		}
 		r := require.New(t)
 
 		fixture, err := all.NewFixture(t)
@@ -110,7 +115,7 @@ func CheckSequencer(
 			Sequencer: seq,
 			Stage:     flags&checkStage == checkStage,
 		}
-		basic.Check(ctx, t)
+		basic.Check(ctx, t, workloadCfg)
 		if post != nil {
 			post(t, basic)
 		}
@@ -145,10 +150,10 @@ type Check struct {
 }
 
 // Check generates data and verifies that it reaches the target tables.
-func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
+func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfig) {
 	r := require.New(t)
 
-	generator, group, err := c.Fixture.NewWorkload(ctx)
+	generator, group, err := c.Fixture.NewWorkload(ctx, cfg)
 	r.NoError(err)
 	c.Group = group
 
@@ -179,9 +184,11 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
 			}))
 		}
 	} else {
-		// We're going to fragment the batch to simulate data being received
-		// piecemeal by multiple instances of Replicator. We ensure that the child
-		// fragments must be processed before the parent fragments.
+		// We're going to fragment the batch to simulate data being
+		// received piecemeal by multiple instances of Replicator. We
+		// ensure that the child fragments must be processed before the
+		// parent fragments to ensure FK relationships are correctly
+		// implemented.
 		fragments, err := Fragment(testData)
 		r.NoError(err)
 		r.Len(fragments, 2)
@@ -189,11 +196,27 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
 			fragments[0], fragments[1] = fragments[1], fragments[0]
 		}
 
-	retry:
 		for _, fragment := range fragments {
+		retryMulti:
 			if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
 				if errors.Is(err, chaos.ErrChaos) {
-					goto retry
+					goto retryMulti
+				}
+				r.NoError(err)
+			}
+		}
+
+		// We're also going to send a subset of stale data to simulate
+		// unrepeatable replay from a changefeed.
+		for idx, temporal := range testData.Data {
+			continue // XXX
+			if idx%10 != 1 {
+				continue
+			}
+		retryTemporal:
+			if err := seqAcc.AcceptTemporalBatch(ctx, temporal, &types.AcceptOptions{}); err != nil {
+				if errors.Is(err, chaos.ErrChaos) {
+					goto retryTemporal
 				}
 				r.NoError(err)
 			}

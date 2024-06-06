@@ -62,7 +62,7 @@ func TestWorkload(t *testing.T) {
 		},
 	}
 
-	workload, group, err := fixture.NewWorkload(ctx)
+	workload, group, err := fixture.NewWorkload(ctx, &all.WorkloadConfig{})
 	r.NoError(err)
 
 	cfg := &clientConfig{

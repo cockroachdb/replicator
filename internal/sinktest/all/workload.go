@@ -40,9 +40,16 @@ type Workload struct {
 	fixture *Fixture
 }
 
+// WorkloadConfig provides additional parameters to
+// [Fixture.NewWorkload].
+type WorkloadConfig struct {
+	DisableFK         bool // Don't create FK references from child to parent.
+	DisablePreStaging bool // Don't test resuming by pre-populating staging tables.
+}
+
 // NewWorkload constructs a parent/child workload test rig attached to
 // the test fixture.
-func (f *Fixture) NewWorkload(ctx context.Context) (*Workload, *types.TableGroup, error) {
+func (f *Fixture) NewWorkload(ctx context.Context, cfg *WorkloadConfig) (*Workload, *types.TableGroup, error) {
 	// We want at least a 64-bit value.
 	bigType := "BIGINT"
 	if f.TargetPool.Product == types.ProductOracle {
@@ -56,13 +63,24 @@ func (f *Fixture) NewWorkload(ctx context.Context) (*Workload, *types.TableGroup
 		return nil, nil, err
 	}
 
-	childInfo, err := f.CreateTargetTable(ctx, fmt.Sprintf(
+	// The child table may be generated with or without an FK reference.
+	childSchema := fmt.Sprintf(
 		`CREATE TABLE %%s (
 child %[2]s PRIMARY KEY,
 parent %[2]s NOT NULL,
 val %[2]s DEFAULT 0 NOT NULL,
 CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %[1]s(parent)
-)`, parentInfo.Name(), bigType))
+)`, parentInfo.Name(), bigType)
+	if cfg.DisableFK {
+		childSchema = fmt.Sprintf(
+			`CREATE TABLE %%s (
+child %[1]s PRIMARY KEY,
+parent %[1]s NOT NULL,
+val %[1]s DEFAULT 0 NOT NULL
+)`, bigType)
+	}
+
+	childInfo, err := f.CreateTargetTable(ctx, childSchema)
 	if err != nil {
 		return nil, nil, err
 	}

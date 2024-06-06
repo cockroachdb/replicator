@@ -136,7 +136,7 @@ val INT DEFAULT 0 NOT NULL
 }
 
 func TestSerial(t *testing.T) {
-	seqtest.CheckSequencer(t,
+	seqtest.CheckSequencer(t, &all.WorkloadConfig{},
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
 			return seqFixture.Core
 		},

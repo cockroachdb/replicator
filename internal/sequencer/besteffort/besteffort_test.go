@@ -250,7 +250,7 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 }
 
 func TestBestEffort(t *testing.T) {
-	seqtest.CheckSequencer(t,
+	seqtest.CheckSequencer(t, &all.WorkloadConfig{},
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
 			// We only want BestEffort to do work when told; the test
 			// rig uses a counter to generate timestamps.
