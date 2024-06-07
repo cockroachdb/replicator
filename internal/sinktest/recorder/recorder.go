@@ -115,7 +115,7 @@ func (r *Recorder) AcceptMultiBatch(
 	if err == nil {
 		r.mu.calls = append(r.mu.calls, &Call{Multi: batch})
 	}
-	return nil
+	return err
 }
 
 // Calls returns a copy of the recording.
