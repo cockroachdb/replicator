@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
@@ -35,6 +36,8 @@ var Set = wire.NewSet(
 func ProvideBestEffort(
 	cfg *sequencer.Config,
 	leases types.Leases,
+	marker *decorators.Marker,
+	once *decorators.Once,
 	scheduler *scheduler.Scheduler,
 	stagingPool *types.StagingPool,
 	stagers types.Stagers,
@@ -44,6 +47,8 @@ func ProvideBestEffort(
 	return &BestEffort{
 		cfg:         cfg,
 		leases:      leases,
+		marker:      marker,
+		once:        once,
 		scheduler:   scheduler,
 		stagingPool: stagingPool,
 		stagers:     stagers,

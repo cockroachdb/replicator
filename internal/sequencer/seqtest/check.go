@@ -196,11 +196,26 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 			fragments[0], fragments[1] = fragments[1], fragments[0]
 		}
 
-	retry:
 		for _, fragment := range fragments {
+		retry:
 			if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
 				if errors.Is(err, chaos.ErrChaos) {
 					goto retry
+				}
+				r.NoError(err)
+			}
+		}
+
+		// We're also going to send a subset of stale data to simulate
+		// non-idempotent replay from a changefeed.
+		for idx, temporal := range testData.Data {
+			if idx%10 != 1 {
+				continue
+			}
+		retryRedeliver:
+			if err := seqAcc.AcceptTemporalBatch(ctx, temporal, &types.AcceptOptions{}); err != nil {
+				if errors.Is(err, chaos.ErrChaos) {
+					goto retryRedeliver
 				}
 				r.NoError(err)
 			}

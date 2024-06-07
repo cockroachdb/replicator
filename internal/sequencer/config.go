@@ -22,6 +22,9 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// AssumeIdempotent is a flag name.
+const AssumeIdempotent = "assumeIdempotent"
+
 // Defaults for flag bindings.
 const (
 	DefaultFlushPeriod     = 1 * time.Second
@@ -36,14 +39,15 @@ const (
 // Config is an injection point common to sequencer implementations. Not
 // all sequencers necessarily respond to all configuration options.
 type Config struct {
-	Chaos           float32       // Set by tests to inject errors.
-	FlushPeriod     time.Duration // Don't queue mutations for longer than this.
-	FlushSize       int           // Ideal target database transaction size
-	Parallelism     int           // The number of concurrent connections to use.
-	QuiescentPeriod time.Duration // How often to sweep for queued mutations.
-	RetireOffset    time.Duration // Delay removal of applied mutations.
-	ScanSize        int           // Limit on staging-table read queries.
-	TimestampLimit  int           // The maximum number of timestamps to operate on.
+	Chaos            float32       // Set by tests to inject errors.
+	FlushPeriod      time.Duration // Don't queue mutations for longer than this.
+	FlushSize        int           // Ideal target database transaction size
+	IdempotentSource bool          // The upstream source is idempotent, disable extra marking.
+	Parallelism      int           // The number of concurrent connections to use.
+	QuiescentPeriod  time.Duration // How often to sweep for queued mutations.
+	RetireOffset     time.Duration // Delay removal of applied mutations.
+	ScanSize         int           // Limit on staging-table read queries.
+	TimestampLimit   int           // The maximum number of timestamps to operate on.
 }
 
 // Bind adds configuration flags to the set.
@@ -52,6 +56,8 @@ func (c *Config) Bind(flags *pflag.FlagSet) {
 		"flush queued mutations after this duration")
 	flags.IntVar(&c.FlushSize, "flushSize", DefaultFlushSize,
 		"ideal batch size to determine when to flush mutations")
+	flags.BoolVar(&c.IdempotentSource, AssumeIdempotent, false,
+		"disable the extra staging table queries that debounce non-idempotent redelivery in changefeeds")
 	flags.IntVar(&c.Parallelism, "parallelism", DefaultParallelism,
 		"the number of concurrent database transactions to use")
 	flags.DurationVar(&c.QuiescentPeriod, "quiescentPeriod", DefaultQuiescentPeriod,

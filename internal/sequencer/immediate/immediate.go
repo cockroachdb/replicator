@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -31,7 +32,12 @@ import (
 // Immediate is a trivial implementation of [sequencer.Sequencer] that
 // writes through to the underlying acceptor.
 type Immediate struct {
-	targetPool *types.TargetPool
+	cfg         *sequencer.Config
+	marker      *decorators.Marker
+	once        *decorators.Once
+	retryTarget *decorators.RetryTarget
+	stagers     types.Stagers
+	targetPool  *types.TargetPool
 }
 
 var _ sequencer.Sequencer = (*Immediate)(nil)
@@ -65,5 +71,11 @@ func (i *Immediate) Start(
 		return err
 	})
 
-	return &acceptor{i, opts.Delegate}, ret, nil
+	acc := opts.Delegate
+	acc = i.retryTarget.MultiAcceptor(acc)
+	if !i.cfg.IdempotentSource {
+		acc = i.marker.MultiAcceptor(acc)
+		acc = i.once.MultiAcceptor(acc)
+	}
+	return acc, ret, nil
 }

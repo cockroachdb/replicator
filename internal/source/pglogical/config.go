@@ -72,7 +72,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 
 	f.StringVar(&c.Publication, "publicationName", "",
 		"the publication within the source database to replicate")
-	f.StringVar(&c.Slot, "slotName", "cdc_sink", "the replication slot in the source database")
+	f.StringVar(&c.Slot, "slotName", "replicator", "the replication slot in the source database")
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
 		"how often to report WAL progress to the source server")
@@ -80,6 +80,11 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"the SQL database schema in the target cluster to update")
 	f.BoolVar(&c.ToastedColumns, "enableToastedColumns", false,
 		"Enable support for toasted columns")
+
+	// Set to true below.
+	if err := f.MarkHidden(sequencer.AssumeIdempotent); err != nil {
+		panic(err)
+	}
 }
 
 // Preflight updates the configuration with sane defaults or returns an
@@ -101,6 +106,11 @@ func (c *Config) Preflight() error {
 	if err := c.Target.Preflight(); err != nil {
 		return err
 	}
+
+	// We can disable idempotent tracking in the sequencer stack
+	// since the logical stream is idempotent.
+	c.Sequencer.IdempotentSource = true
+
 	if c.Publication == "" {
 		return errors.New("no publication name was configured")
 	}

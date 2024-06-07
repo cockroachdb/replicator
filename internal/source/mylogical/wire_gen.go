@@ -10,10 +10,12 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
@@ -63,7 +65,6 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
-	immediateImmediate := immediate.ProvideImmediate(targetPool)
 	stagingConfig := &eagerConfig.Staging
 	stagingPool, err := sinkprod.ProvideStagingPool(ctx, stagingConfig, diagnostics, targetConfig)
 	if err != nil {
@@ -73,6 +74,11 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 	if err != nil {
 		return nil, err
 	}
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
+	marker := decorators.ProvideMarker(stagingPool, stagers)
+	once := decorators.ProvideOnce(stagingPool, stagers)
+	retryTarget := decorators.ProvideRetryTarget(targetPool)
+	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
 	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
