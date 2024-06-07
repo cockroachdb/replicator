@@ -77,6 +77,17 @@ func Flatten[B any](batch Batch[B]) []Mutation {
 	return ret
 }
 
+// FlattenByTable copies the mutations into an [ident.TableMap].
+func FlattenByTable[B any](batch Batch[B]) *ident.TableMap[[]Mutation] {
+	ret := &ident.TableMap[[]Mutation]{}
+	// Ignoring error since callback returns nil.
+	_ = batch.CopyInto(AccumulatorFunc(func(table ident.Table, mut Mutation) error {
+		ret.Put(table, append(ret.GetZero(table), mut))
+		return nil
+	}))
+	return ret
+}
+
 // A MultiBatch is a time-ordered collection of per-table data to apply.
 // This represents the broadest scope of applying data, as it covers
 // both time- and table-space and likely represents any number of

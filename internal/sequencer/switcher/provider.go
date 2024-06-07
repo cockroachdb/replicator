@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	"github.com/cockroachdb/replicator/internal/sequencer/script"
@@ -34,6 +35,7 @@ var Set = wire.NewSet(
 	chaos.Set,
 	core.Set,
 	immediate.Set,
+	decorators.Set,
 	script.Set,
 	scheduler.Set,
 

@@ -39,6 +39,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestFilterStubs ensures that MarkApplied will insert stub entries and
+// that FilterApplied performs the required anti-join against the
+// staging table.
+func TestFilterStubs(t *testing.T) {
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+	pool := fixture.StagingPool
+	targetDB := fixture.StagingDB.Schema()
+	dummyTarget := ident.NewTable(targetDB, ident.New("target"))
+
+	s, err := fixture.Stagers.Get(ctx, dummyTarget)
+	r.NoError(err)
+	r.NotNil(s)
+
+	muts := []types.Mutation{
+		{Key: json.RawMessage(`[ 1 ]`), Time: hlc.New(1, 1)},
+		{Key: json.RawMessage(`[ 1 ]`), Time: hlc.New(1, 2)},
+		{Key: json.RawMessage(`[ 2 ]`), Time: hlc.New(2, 2)},
+	}
+
+	// Test empty case.
+	filtered, err := s.FilterApplied(ctx, pool, muts)
+	r.NoError(err)
+	r.Equal(muts, filtered)
+
+	// Check partial filtering.
+	r.NoError(s.MarkApplied(ctx, pool, muts[1:2]))
+	filtered, err = s.FilterApplied(ctx, pool, muts)
+	r.NoError(err)
+	r.Equal([]types.Mutation{muts[0], muts[2]}, filtered)
+
+	// Check total filtering.
+	r.NoError(s.MarkApplied(ctx, pool, muts))
+	filtered, err = s.FilterApplied(ctx, pool, muts)
+	r.NoError(err)
+	r.Empty(filtered)
+}
+
 // TestPutAndDrain will insert and mark a batch of Mutations.
 func TestPutAndDrain(t *testing.T) {
 	a := assert.New(t)

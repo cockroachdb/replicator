@@ -23,6 +23,15 @@ import (
 )
 
 var (
+	stageFilterAppliedDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "stage_filter_applied_duration_seconds",
+		Help:    "the SQL statement execution time to detect already-applied mutations",
+		Buckets: metrics.LatencyBuckets,
+	}, metrics.TableLabels)
+	stageFilterCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stage_filter_mutation_count",
+		Help: "the number of incoming mutations that were filtered because they already existed",
+	}, metrics.TableLabels)
 	stageMarkDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stage_mark_duration_seconds",
 		Help:    "the SQL statement execution time to mark a mutation as applied",

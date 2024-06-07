@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
@@ -109,13 +110,16 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	marker := decorators.ProvideMarker(stagingPool, stagers)
+	once := decorators.ProvideOnce(stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(ctx, sequencerConfig)
 	if err != nil {
 		return nil, err
 	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
-	immediateImmediate := immediate.ProvideImmediate(targetPool)
+	retryTarget := decorators.ProvideRetryTarget(targetPool)
+	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
 	conveyors, err := conveyor.ProvideConveyors(ctx, acceptor, conveyorConfig, checkpoints, retireRetire, switcherSwitcher, watchers)
@@ -206,13 +210,16 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
+	marker := decorators.ProvideMarker(stagingPool, stagers)
+	once := decorators.ProvideOnce(stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(context, sequencerConfig)
 	if err != nil {
 		return nil, nil, err
 	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
-	immediateImmediate := immediate.ProvideImmediate(targetPool)
+	retryTarget := decorators.ProvideRetryTarget(targetPool)
+	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
 	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
 	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {

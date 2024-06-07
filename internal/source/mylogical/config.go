@@ -82,6 +82,11 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"fetch column metadata explicitly, for older version of MySQL that don't support binlog_row_metadata")
 	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
 		"the SQL database schema in the target cluster to update")
+
+	// Set to true below.
+	if err := f.MarkHidden(sequencer.AssumeIdempotent); err != nil {
+		panic(err)
+	}
 }
 
 func newClientTLSConfig(
@@ -145,6 +150,11 @@ func (c *Config) Preflight() error {
 	if err := c.Target.Preflight(); err != nil {
 		return err
 	}
+
+	// We can disable idempotent tracking in the sequencer stack
+	// since the logical stream is idempotent.
+	c.Sequencer.IdempotentSource = true
+
 	if c.TargetSchema.Empty() {
 		return errors.New("no target schema specified")
 	}

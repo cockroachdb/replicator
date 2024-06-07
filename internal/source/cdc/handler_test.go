@@ -558,13 +558,14 @@ v INT8 NOT NULL)`)
 	})
 	r.NoError(fixture.Configs.Set(table.Name(), cfg))
 
-	sendUpdate := func(version int, v int64) error {
+	sendUpdate := func(version int, v int64, ts hlc.Time) error {
 		return h.ndjson(ctx, &request{
 			target: table.Name(),
 			body: strings.NewReader(fmt.Sprintf(`
-{ "after" : { "pk" : 42, "version": %d, "v" : %d }, "key" : [ 42 ], "updated" : "1.0" }`,
+{ "after" : { "pk" : 42, "version": %d, "v" : %d }, "key" : [ 42 ], "updated" : %q }`,
 				version,
 				v,
+				ts,
 			)),
 		}, cdcjson.BulkMutationReader())
 	}
@@ -572,23 +573,24 @@ v INT8 NOT NULL)`)
 	// Send an update at V9. We're starting with 9 to ensure that when
 	// we increase to 10 we're getting a numeric, not a lexicographical
 	// comparison.
-	r.NoError(sendUpdate(9, 1<<55))
+	r.NoError(sendUpdate(9, 1<<55, hlc.New(9, 0)))
 
 	var v int64
 	r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
 		"SELECT v FROM %s", table.Name())).Scan(&v))
 	r.Equal(int64(1<<55), v)
 
-	// Send an update at V8 that would normally go to the DLQ, had we
-	// created one. This is a sanity-check for the idempotent check
-	// below.
-	r.ErrorContains(sendUpdate(8, 1), "must be created")
+	// Send an update at an alternate V8 that would normally go to the
+	// DLQ, had we created one. This is a sanity-check for the
+	// idempotent check below.
+	r.ErrorContains(sendUpdate(8, 1, hlc.New(8, 0)), "must be created")
 
-	// Repeat the T0 update to ensure that idempotent updates are OK.
-	r.NoError(sendUpdate(9, 1<<55))
+	// Repeat the T9 update to ensure that idempotent updates are OK.
+	r.NoError(sendUpdate(9, 1<<55, hlc.New(9, 0)))
+	r.NoError(sendUpdate(9, 1<<55, hlc.New(9, 1)))
 
 	// Send a T+1 update. This is expected to succeed.
-	r.NoError(sendUpdate(10, 1<<56))
+	r.NoError(sendUpdate(10, 1<<56, hlc.New(10, 0)))
 
 	r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
 		"SELECT v FROM %s", table.Name())).Scan(&v))
@@ -628,9 +630,10 @@ v INT8 NOT NULL)`)
 		return h.ndjson(ctx, &request{
 			target: table.Name(),
 			body: strings.NewReader(fmt.Sprintf(`
-{ "after" : { "pk" : 42, "updated_at": %q, "v" : %d }, "key" : [ 42 ], "updated" : "1.0" }`,
+{ "after" : { "pk" : 42, "updated_at": %q, "v" : %d }, "key" : [ 42 ], "updated" : %q }`,
 				ts.Format(time.RFC3339Nano),
 				v,
+				hlc.New(ts.UnixNano(), 0),
 			)),
 		}, cdcjson.BulkMutationReader())
 	}
@@ -646,10 +649,10 @@ v INT8 NOT NULL)`)
 		"SELECT v FROM %s", table.Name())).Scan(&v))
 	r.Equal(int64(1<<55), v)
 
-	// Send an update at T-1 that would normally go to the DLQ, had we
-	// created one. This is a sanity-check for the idempotent check
-	// below.
-	r.ErrorContains(sendUpdate(now.Add(-time.Minute), 1), "must be created")
+	// Send an update at an alternate T-1 that would normally go to the
+	// DLQ, had we created one. This is a sanity-check for the
+	// idempotent check below.
+	r.ErrorContains(sendUpdate(now.Add(-time.Minute), 2), "must be created")
 
 	// Repeat the T0 update to ensure that idempotent updates are OK.
 	r.NoError(sendUpdate(now, 1<<55))

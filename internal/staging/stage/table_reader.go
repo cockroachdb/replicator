@@ -17,6 +17,7 @@
 package stage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -202,6 +203,12 @@ func (r *tableReader) nextCursor(ctx *stopper.Context) *tableCursor {
 		mut.Data, err = maybeGunzip(mut.Data)
 		if err != nil {
 			return &tableCursor{Error: err}
+		}
+		// This is a purely defensive check. We don't expect this to
+		// ever happen, since a stub entry would already be marked as
+		// having been applied and should be filtered by the query.
+		if bytes.Equal(stubSentinel, mut.Data) {
+			continue
 		}
 		if err := ret.Batch.Accumulate(r.table, mut); err != nil {
 			return &tableCursor{Error: err}

@@ -41,6 +41,7 @@ type CheckFlag int
 
 const (
 	checkStage CheckFlag = 1 << iota
+	checkIdempotent
 	checkChaos
 
 	checkMax           // Sentinel
@@ -62,6 +63,11 @@ func (f CheckFlag) String() string {
 		sb.WriteString("stage")
 	} else {
 		sb.WriteString("direct")
+	}
+	if f&checkIdempotent == checkIdempotent {
+		sb.WriteString("-idempotent")
+	} else {
+		sb.WriteString("-non-idempotent")
 	}
 	if f&checkChaos == checkChaos {
 		sb.WriteString("-chaos")
@@ -92,11 +98,12 @@ func CheckSequencer(
 
 		// Create sequencer test fixture.
 		cfg := &sequencer.Config{
-			FlushSize:       batches/10 + 1,
-			Parallelism:     8,
-			QuiescentPeriod: 100 * time.Millisecond,
-			ScanSize:        batches/5 + 1,
-			TimestampLimit:  batches/10 + 1,
+			FlushSize:        batches/10 + 1,
+			IdempotentSource: flags&checkIdempotent == checkIdempotent,
+			Parallelism:      8,
+			QuiescentPeriod:  100 * time.Millisecond,
+			ScanSize:         batches/5 + 1,
+			TimestampLimit:   batches/10 + 1,
 		}
 		r.NoError(cfg.Preflight())
 
@@ -110,10 +117,11 @@ func CheckSequencer(
 			r.NoError(err)
 		}
 		basic := &Check{
-			Batches:   batches,
-			Fixture:   fixture,
-			Sequencer: seq,
-			Stage:     flags&checkStage == checkStage,
+			Batches:    batches,
+			Idempotent: flags&checkIdempotent == checkIdempotent,
+			Fixture:    fixture,
+			Sequencer:  seq,
+			Stage:      flags&checkStage == checkStage,
 		}
 		basic.Check(ctx, t, workloadCfg)
 		if post != nil {
@@ -142,6 +150,8 @@ type Check struct {
 	Generator *all.Workload
 	// Populated by Check.
 	Group *types.TableGroup
+	// Suppress non-idempotent replay of previous data.
+	Idempotent bool
 	// The Sequencer under test.
 	Sequencer sequencer.Sequencer
 	// If true, generated data will be loaded into staging first. This
@@ -196,13 +206,32 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 			fragments[0], fragments[1] = fragments[1], fragments[0]
 		}
 
-	retry:
 		for _, fragment := range fragments {
+		retry:
 			if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
 				if errors.Is(err, chaos.ErrChaos) {
 					goto retry
 				}
 				r.NoError(err)
+			}
+		}
+
+		// We're also going to send a subset of stale data to simulate
+		// non-idempotent replay from a changefeed.
+		if !c.Idempotent {
+			for idx, temporal := range testData.Data {
+				if idx%10 != 1 {
+					continue
+				}
+			retryRedeliver:
+				if err := seqAcc.AcceptTemporalBatch(
+					ctx, temporal, &types.AcceptOptions{},
+				); err != nil {
+					if errors.Is(err, chaos.ErrChaos) {
+						goto retryRedeliver
+					}
+					r.NoError(err)
+				}
 			}
 		}
 	}
