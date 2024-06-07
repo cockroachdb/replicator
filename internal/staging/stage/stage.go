@@ -43,6 +43,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// This mutation value will be stored when a mutation is marked as
+// having been applied without having been previously staged.
+var stubSentinel = json.RawMessage(`{"__stub__":true}`)
+
 // stagingTable returns the staging table name that will store mutations
 // for the given target table.
 func stagingTable(stagingDB ident.Schema, target ident.Table) ident.Table {
@@ -59,6 +63,8 @@ type stage struct {
 	stagingDB  *types.StagingPool
 	retireFrom notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
 
+	filterApplied  prometheus.Observer
+	filterCount    prometheus.Counter
 	markDuration   prometheus.Observer
 	retireDuration prometheus.Observer
 	retireError    prometheus.Counter
@@ -73,6 +79,7 @@ type stage struct {
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
+		filterApplied string // Select mutation keys that have been applied.
 		markApplied   string // Mark mutations as having been applied.
 		retire        string // Delete a batch of staged mutations.
 		stage         string // General-purpose upsert into staging table.
@@ -149,6 +156,8 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
 	s := &stage{
 		stage:          db.HintNoFTS(table),
 		stagingDB:      db,
+		filterApplied:  stageFilterAppliedDuration.WithLabelValues(labels...),
+		filterCount:    stageFilterCount.WithLabelValues(labels...),
 		markDuration:   stageMarkDuration.WithLabelValues(labels...),
 		retireDuration: stageRetireDurations.WithLabelValues(labels...),
 		retireError:    stageRetireErrors.WithLabelValues(labels...),
@@ -165,7 +174,8 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
 	// Prevent these hot-path queries from being planned with a full
 	// table scan if statistics are stale.
 	tableHinted := db.HintNoFTS(table)
-	s.sql.markApplied = fmt.Sprintf(markAppliedTemplate, tableHinted)
+	s.sql.filterApplied = fmt.Sprintf(filterAppliedTemplate, tableHinted)
+	s.sql.markApplied = fmt.Sprintf(markAppliedTemplate, tableHinted, stubSentinel)
 	s.sql.retire = fmt.Sprintf(retireTemplate, tableHinted)
 	s.sql.stage = fmt.Sprintf(stageTemplate, tableHinted)
 	s.sql.stageExists = fmt.Sprintf(stageIfExistsTemplate, tableHinted)
@@ -234,6 +244,70 @@ func (s *stage) CountUnapplied(
 		return db.QueryRow(ctx, q, before.Nanos(), before.Logical()).Scan(&ret)
 	})
 	return ret, errors.Wrap(err, q)
+}
+
+// This query returns the input indices of mutations that have already
+// been applied.
+//
+//	$1 - key array
+//	$2 - nanos array
+//	$3 - logical array
+const filterAppliedTemplate = `
+WITH ids (idx, key, nanos, logical) AS (
+  SELECT row_number() OVER (), unnest($1::STRING[]), unnest($2::INT[]), unnest($3::INT[]))
+SELECT idx FROM ids
+JOIN %s
+USING (key, nanos, logical)
+WHERE applied
+`
+
+// FilterApplied implements [types.Stager].
+func (s *stage) FilterApplied(
+	ctx context.Context, db types.StagingQuerier, muts []types.Mutation,
+) ([]types.Mutation, error) {
+	start := time.Now()
+
+	keys := make([]string, len(muts))
+	nanos := make([]int64, len(muts))
+	logical := make([]int, len(muts))
+	for idx, mut := range muts {
+		keys[idx] = string(mut.Key)
+		nanos[idx] = mut.Time.Nanos()
+		logical[idx] = mut.Time.Logical()
+	}
+
+	rows, err := db.Query(ctx, s.sql.filterApplied, keys, nanos, logical)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	applied := make(map[int]bool, len(muts))
+	for rows.Next() {
+		var idx int
+		if err := rows.Scan(&idx); err != nil {
+			return nil, errors.WithStack(err)
+		}
+		// Returned indices are 1-based.
+		applied[idx-1] = true
+	}
+
+	var ret []types.Mutation
+	if len(applied) == 0 {
+		// Typical case where none of the mutations have been applied.
+		// Just make a fast copy of the slice.
+		ret = make([]types.Mutation, len(muts))
+		copy(ret, muts)
+	} else {
+		ret = make([]types.Mutation, 0, len(muts))
+		for idx, mut := range muts {
+			if !applied[idx] {
+				ret = append(ret, mut)
+			}
+		}
+		s.filterCount.Add(float64(len(muts) - len(ret)))
+	}
+	s.filterApplied.Observe(time.Since(start).Seconds())
+	return ret, nil
 }
 
 // GetTable returns the table that the stage is storing into.
@@ -429,12 +503,14 @@ func (s *stage) stageOneBatch(
 
 const markAppliedTemplate = `
 WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
-UPDATE %s x SET applied=true, applied_at=now()
-FROM t
-WHERE (x.key, x.nanos, x.logical) = (t.key, t.nanos, t.logical) 
+INSERT INTO %s (key, nanos, logical, applied, applied_at, mut)
+SELECT t.key, t.nanos, t.logical, true, now(), '%s' FROM t
+ON CONFLICT (key, nanos, logical)
+DO UPDATE SET applied = true, applied_at = now()
 `
 
 // MarkApplied sets the applied column to true for the given mutations.
+// If the mutation does not already exist, a stub entry will be created.
 func (s *stage) MarkApplied(
 	ctx context.Context, db types.StagingQuerier, muts []types.Mutation,
 ) error {

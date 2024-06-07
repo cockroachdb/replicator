@@ -147,6 +147,11 @@ func (m Mutation) IsDelete() bool {
 // Stager describes a service which can durably persist some
 // number of Mutations.
 type Stager interface {
+	// FilterApplied performs an anti-join against the staging table to
+	// return only unapplied mutations. This method will return a new
+	// slice.
+	FilterApplied(ctx context.Context, db StagingQuerier, muts []Mutation) ([]Mutation, error)
+
 	// MarkApplied will mark the given mutations as having been applied.
 	// This is used with lease-based unstaging or when certain mutation
 	// should be skipped.

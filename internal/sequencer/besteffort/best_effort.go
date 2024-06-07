@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	"github.com/cockroachdb/replicator/internal/sequencer/sequtil"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -39,6 +40,8 @@ import (
 type BestEffort struct {
 	cfg         *sequencer.Config
 	leases      types.Leases
+	marker      *decorators.Marker
+	once        *decorators.Once
 	scheduler   *scheduler.Scheduler
 	stagingPool *types.StagingPool
 	stagers     types.Stagers
@@ -157,8 +160,16 @@ func (s *bestEffort) Start(
 		<-ctx.Stopping()
 	})
 
+	acc := opts.Delegate
+	// Write staging entries only for immediately-applied mutations.
+	if !s.cfg.IdempotentSource {
+		acc = s.marker.MultiAcceptor(acc)
+	}
 	// Respect table-dependency ordering.
-	acc := types.OrderedAcceptorFrom(&acceptor{s.BestEffort, opts.Delegate}, s.watchers)
-
+	acc = types.OrderedAcceptorFrom(&acceptor{s.BestEffort, acc}, s.watchers)
+	// Filter repeated messages.
+	if !s.cfg.IdempotentSource {
+		acc = s.once.MultiAcceptor(acc)
+	}
 	return acc, stats, nil
 }

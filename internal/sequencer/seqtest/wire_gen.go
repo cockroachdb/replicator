@@ -12,6 +12,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
@@ -31,19 +32,22 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	if err != nil {
 		return nil, err
 	}
+	stagers := fixture.Stagers
+	marker := decorators.ProvideMarker(stagingPool, stagers)
+	once := decorators.ProvideOnce(stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(context, config)
 	if err != nil {
 		return nil, err
 	}
-	stagers := fixture.Stagers
 	targetPool := baseFixture.TargetPool
 	watchers := fixture.Watchers
-	bestEffort := besteffort.ProvideBestEffort(config, leases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(config, leases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	chaosChaos := &chaos.Chaos{
 		Config: config,
 	}
 	coreCore := core.ProvideCore(config, leases, schedulerScheduler, stagers, stagingPool, targetPool)
-	immediateImmediate := immediate.ProvideImmediate(targetPool)
+	retryTarget := decorators.ProvideRetryTarget(targetPool)
+	immediateImmediate := immediate.ProvideImmediate(config, targetPool, marker, once, retryTarget, stagers)
 	retireRetire := retire.ProvideRetire(config, stagingPool, stagers)
 	configs := fixture.Configs
 	diagnostics := fixture.Diagnostics

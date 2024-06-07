@@ -14,35 +14,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package immediate
+package decorators
 
 import (
-	"github.com/cockroachdb/replicator/internal/sequencer"
-	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/google/wire"
 )
 
 // Set is used by Wire.
 var Set = wire.NewSet(
-	ProvideImmediate,
+	ProvideMarker,
+	ProvideOnce,
+	ProvideRetryTarget,
 )
 
-// ProvideImmediate is called by Wire.
-func ProvideImmediate(
-	cfg *sequencer.Config,
-	db *types.TargetPool,
-	marker *decorators.Marker,
-	once *decorators.Once,
-	retryTarget *decorators.RetryTarget,
-	stagers types.Stagers,
-) *Immediate {
-	return &Immediate{
-		cfg:         cfg,
-		marker:      marker,
-		once:        once,
-		retryTarget: retryTarget,
+// ProvideMarker is called by Wire.
+func ProvideMarker(pool *types.StagingPool, stagers types.Stagers) *Marker {
+	return &Marker{
 		stagers:     stagers,
-		targetPool:  db,
+		stagingPool: pool,
+	}
+}
+
+// ProvideOnce is called by Wire.
+func ProvideOnce(pool *types.StagingPool, stagers types.Stagers) *Once {
+	return &Once{
+		pool:    pool,
+		stagers: stagers,
+	}
+}
+
+// ProvideRetryTarget is called by Wire.
+func ProvideRetryTarget(target *types.TargetPool) *RetryTarget {
+	return &RetryTarget{
+		targetPool: target,
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
@@ -38,18 +39,20 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
+	stagers := fixture.Stagers
+	marker := decorators.ProvideMarker(stagingPool, stagers)
+	once := decorators.ProvideOnce(stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(context, sequencerConfig)
 	if err != nil {
 		return nil, err
 	}
-	stagers := fixture.Stagers
 	targetPool := baseFixture.TargetPool
 	diagnostics := diag.New(context)
 	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	targetStatements := baseFixture.TargetCache
 	configs := fixture.Configs
 	dlqConfig := ProvideDLQConfig(config)
@@ -65,7 +68,8 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	}
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
-	immediateImmediate := immediate.ProvideImmediate(targetPool)
+	retryTarget := decorators.ProvideRetryTarget(targetPool)
+	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
 	scriptConfig := ProvideScriptConfig(config)
 	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {
