@@ -21,7 +21,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,15 +28,10 @@ import (
 	"github.com/cockroachdb/replicator/internal/source/objstore/bucket"
 )
 
-// Config specifies the parameters required to create a bucket reader.
-type Config struct {
-	Directory string // Root directory
-}
-
 // New creates a bucket reader for a local filesystem.
-func New(config *Config) (bucket.Reader, error) {
+func New(fs fs.FS) (bucket.Bucket, error) {
 	return &localBucket{
-		filesystem: os.DirFS(config.Directory),
+		filesystem: fs,
 	}, nil
 }
 
@@ -46,9 +40,9 @@ type localBucket struct {
 	filesystem fs.FS
 }
 
-var _ bucket.Reader = &localBucket{}
+var _ bucket.Bucket = &localBucket{}
 
-// Iter implements bucket.Reader
+// Iter implements bucket.Bucket
 func (b *localBucket) Walk(
 	ctx *stopper.Context,
 	dir string,
@@ -80,7 +74,7 @@ func (b *localBucket) Walk(
 	return err
 }
 
-// Open implements bucket.Reader
+// Open implements bucket.Bucket
 func (b *localBucket) Open(ctx *stopper.Context, file string) (io.ReadCloser, error) {
 	r, err := b.fs().Open(filepath.Clean(file))
 	if errors.Is(err, fs.ErrNotExist) {

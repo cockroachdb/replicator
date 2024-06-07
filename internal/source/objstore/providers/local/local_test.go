@@ -20,15 +20,16 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/storetest"
-	"github.com/psanford/memfs"
 	"github.com/stretchr/testify/require"
 )
 
 // mockFS is in memory filesystem.
 type mockFS struct {
-	root      *memfs.FS
+	root      fstest.MapFS
 	directory string
 }
 
@@ -37,13 +38,12 @@ var _ storetest.Writer = &mockFS{}
 // Store implements validate.Writer.
 func (m *mockFS) Store(ctx context.Context, name string, buf []byte) error {
 	name = filepath.Clean(filepath.Join(m.directory, name))
-	dir := filepath.Dir(name)
-	// In case the directory doesn't exist, we will create it.
-	err := m.root.MkdirAll(dir, 0777)
-	if err != nil {
-		return err
+	m.root[name] = &fstest.MapFile{
+		Data:    []byte(buf),
+		Mode:    0777,
+		ModTime: time.Now(),
 	}
-	return m.root.WriteFile(name, buf, 0777)
+	return nil
 }
 
 // TestOpen verifies that we can get an object content from the store.
@@ -61,22 +61,20 @@ func TestWalk(t *testing.T) {
 	suite(t).Walk(t)
 }
 
-// WalkWithSkipAll validates bucket.Reader.Walk with ErrSkipAll
+// WalkWithSkipAll validates bucket.Bucket.Walk with ErrSkipAll
 func TestWalkWithSkipAll(t *testing.T) {
 	suite(t).WalkWithSkipAll(t)
 }
 
 // suite builds a validator for a in memory filesystem.
 func suite(t *testing.T) *storetest.Suite {
-	rootFS := memfs.New()
-	err := rootFS.MkdirAll("tmp", 0777)
-	require.NoError(t, err)
-	bucketFS, err := rootFS.Sub("tmp")
-	require.NoError(t, err)
+	rootFS := make(fstest.MapFS)
 	mockFS := &mockFS{
 		directory: "tmp",
 		root:      rootFS,
 	}
+	bucketFS, err := rootFS.Sub("tmp")
+	require.NoError(t, err)
 	return &storetest.Suite{
 		Reader: &localBucket{
 			filesystem: bucketFS,
