@@ -159,6 +159,75 @@ func (v *Suite) Walk(t *testing.T) {
 	}
 }
 
+// WalkWithSkipAll validates bucket.Reader.Walk with ErrSkipAll
+func (v *Suite) WalkWithSkipAll(t *testing.T) {
+	r := require.New(t)
+	tests := []struct {
+		name  string
+		until string
+		max   int
+		want  []string
+	}{
+		{"stop at 4", "000/003.txt", 0, []string{
+			"000/000.txt",
+			"000/001.txt",
+			"000/002.txt",
+			"000/003.txt",
+		}},
+		{"stop at 6", "001/001.txt", 0, []string{
+			"000/000.txt",
+			"000/001.txt",
+			"000/002.txt",
+			"000/003.txt",
+			"001/000.txt",
+			"001/001.txt",
+		}},
+		{"all", "001/003.txt", 0, []string{
+			"000/000.txt",
+			"000/001.txt",
+			"000/002.txt",
+			"000/003.txt",
+			"001/000.txt",
+			"001/001.txt",
+			"001/002.txt",
+		}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stop := stopper.WithContext(ctx)
+	r.NoError(v.createDummy(ctx, "000/000.txt"))
+	r.NoError(v.createDummy(ctx, "000/001.txt"))
+	r.NoError(v.createDummy(ctx, "000/002.txt"))
+	r.NoError(v.createDummy(ctx, "000/003.txt"))
+
+	r.NoError(v.createDummy(ctx, "001/000.txt"))
+	r.NoError(v.createDummy(ctx, "001/001.txt"))
+	r.NoError(v.createDummy(ctx, "001/002.txt"))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
+			r := require.New(t)
+			res := make([]string, 0)
+			options := &bucket.WalkOptions{
+				StartAfter: "",
+				Limit:      tt.max,
+				Recursive:  true,
+			}
+			err := v.Reader.Walk(stop, "", options, func(_ *stopper.Context, s string) error {
+				res = append(res, s)
+				if s == tt.until {
+					return bucket.ErrSkipAll
+				}
+				return nil
+			})
+			r.NoError(err)
+			a.Equal(tt.want, res)
+		})
+	}
+}
+
 // createDummy creates a new object at the named path. The content of the object
 // is the path itself.
 func (v *Suite) createDummy(ctx context.Context, path string) error {

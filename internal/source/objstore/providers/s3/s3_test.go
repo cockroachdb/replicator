@@ -108,6 +108,10 @@ func TestWalk(t *testing.T) {
 	suite().Walk(t)
 }
 
+func TestWalkWithSkipAll(t *testing.T) {
+	suite().WalkWithSkipAll(t)
+}
+
 func suite() *storetest.Suite {
 	mockS3 := &mockS3{
 		bucketName: "test",

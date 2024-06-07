@@ -24,4 +24,8 @@ var (
 	ErrNoSuchBucket = errors.New("bucket not found")
 	// ErrNoSuchKey must be returned if there is no object with the given key.
 	ErrNoSuchKey = errors.New("key not found")
+	// ErrTransient represent an error that can be retried.
+	ErrTransient = errors.New("the operation causing the error may be retried")
+	// ErrSkipAll signal that Walk can stop process the follow entries.
+	ErrSkipAll = errors.New("skip the rest of objects")
 )
