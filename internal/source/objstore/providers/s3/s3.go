@@ -74,7 +74,7 @@ type s3Access interface {
 }
 
 // New returns a bucket reader backed by a S3 provider.
-func New(config *Config) (bucket.Reader, error) {
+func New(config *Config) (bucket.Bucket, error) {
 	minioClient, err := minio.New(config.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""),
 		Secure: !config.Insecure,
@@ -93,7 +93,7 @@ type s3Bucket struct {
 	bucket string
 }
 
-// Iter implements bucket.Reader
+// Iter implements bucket.Bucket
 func (b *s3Bucket) Walk(
 	ctx *stopper.Context,
 	dir string,
@@ -130,7 +130,7 @@ func (b *s3Bucket) Walk(
 	return ctx.Err()
 }
 
-// Open implements bucket.Reader
+// Open implements bucket.Bucket
 func (b *s3Bucket) Open(ctx *stopper.Context, file string) (io.ReadCloser, error) {
 	file = strings.TrimPrefix(file, b.bucket+Delimiter)
 	r, err := b.client.GetObject(ctx, b.bucket, file, minio.GetObjectOptions{})
