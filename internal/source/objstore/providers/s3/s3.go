@@ -74,7 +74,7 @@ type s3Access interface {
 }
 
 // New returns a bucket reader backed by a S3 provider.
-func New(config *Config) (bucket.Reader, error) {
+func New(config *Config) (bucket.Bucket, error) {
 	minioClient, err := minio.New(config.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""),
 		Secure: !config.Insecure,

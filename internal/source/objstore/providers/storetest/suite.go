@@ -40,7 +40,7 @@ type Writer interface {
 // read and list objects from a bucket.
 // TODO (silvano): expand the test cases, add integration tests.
 type Suite struct {
-	Reader bucket.Reader // The interface we are testing.
+	Reader bucket.Bucket // The interface we are testing.
 	Writer Writer        // The interface used to load objects for testing.
 }
 

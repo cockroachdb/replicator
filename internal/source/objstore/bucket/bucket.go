@@ -41,8 +41,8 @@ type WalkOptions struct {
 	StartAfter string // Iterators will returns entries lexically after this.
 }
 
-// Reader provides read access to an object storage bucket.
-type Reader interface {
+// Bucket provides read access to an object storage bucket.
+type Bucket interface {
 	// Walk calls f for each entry in the given prefix. The argument
 	// to f is the full object name including the prefix of the
 	// inspected directory. Entries are passed to function in sorted
