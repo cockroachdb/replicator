@@ -24,6 +24,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
@@ -41,6 +42,17 @@ const (
 	// using "/" to define folder boundaries, mimicking the familiar
 	// organization within a Unix filesystem.
 	Delimiter = "/"
+)
+
+var (
+	// RetriableErrors identifies errors that are transient. The
+	// operation causing the error may be retried.
+	RetriableErrors = []int{
+		http.StatusBadGateway,
+		http.StatusGatewayTimeout,
+		http.StatusInternalServerError,
+		http.StatusTooManyRequests,
+	}
 )
 
 // Config has the parameters used to connect to S3.
@@ -109,10 +121,12 @@ func (b *s3Bucket) Walk(
 			continue
 		}
 		if err := f(ctx, object.Key); err != nil {
+			if errors.Is(err, bucket.ErrSkipAll) {
+				return nil
+			}
 			return err
 		}
 	}
-
 	return ctx.Err()
 }
 
@@ -124,6 +138,9 @@ func (b *s3Bucket) Open(ctx *stopper.Context, file string) (io.ReadCloser, error
 		resp := minio.ToErrorResponse(err)
 		if resp.StatusCode == http.StatusNotFound {
 			return nil, errors.Join(bucket.ErrNoSuchKey, err)
+		}
+		if slices.Contains(RetriableErrors, resp.StatusCode) {
+			return nil, errors.Join(bucket.ErrTransient, err)
 		}
 	}
 	return r, err

@@ -57,7 +57,7 @@ func (b *localBucket) Walk(
 ) error {
 	count := 0
 	dir = filepath.Clean(dir)
-	return fs.WalkDir(b.filesystem, dir,
+	err := fs.WalkDir(b.filesystem, dir,
 		func(path string, d fs.DirEntry, err error) error {
 			if options.StartAfter != "" && strings.Compare(path, options.StartAfter) <= 0 {
 				return nil
@@ -74,6 +74,10 @@ func (b *localBucket) Walk(
 			count++
 			return f(ctx, path)
 		})
+	if errors.Is(err, bucket.ErrSkipAll) {
+		return nil
+	}
+	return err
 }
 
 // Open implements bucket.Reader

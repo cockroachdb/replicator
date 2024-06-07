@@ -61,6 +61,11 @@ func TestWalk(t *testing.T) {
 	suite(t).Walk(t)
 }
 
+// WalkWithSkipAll validates bucket.Reader.Walk with ErrSkipAll
+func TestWalkWithSkipAll(t *testing.T) {
+	suite(t).WalkWithSkipAll(t)
+}
+
 // suite builds a validator for a in memory filesystem.
 func suite(t *testing.T) *storetest.Suite {
 	rootFS := memfs.New()
