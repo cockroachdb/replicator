@@ -38,6 +38,12 @@ const (
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
 	MySQLName = "mysql"
+
+	// ObjectStoreName must be kept in alignment with the
+	// .github/docker-compose.yml file and the integration matrix
+	// variable in workflows/tests.yaml.
+	ObjectStoreName = "objstore"
+
 	// PostgreSQLName must be kept in alignment with the
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
