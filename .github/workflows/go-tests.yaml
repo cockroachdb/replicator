@@ -143,6 +143,9 @@ jobs:
           # Test CRDB via a Kafka cluster
           - cockroachdb: v23.2
             integration: kafka-v7.6
+          # Test CRDB via an object store
+          - cockroachdb: v23.2
+            integration: objstore
           # Test CRDB -> PostgreSQL for migration backfill use cases.
           - cockroachdb: v23.2
             target: postgresql-v11
