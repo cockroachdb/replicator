@@ -29,6 +29,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 // A round contains the workflow necessary to commit a batch of
@@ -146,42 +147,41 @@ func (r *round) tryCommit(ctx context.Context) error {
 	}))
 
 	log.Tracef("round.tryCommit: beginning tx for %s to %s", r.group, r.advanceTo)
-	targetTx, err := r.targetPool.BeginTx(ctx, nil)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer func() { _ = targetTx.Rollback() }()
 
-	if err := r.delegate.AcceptMultiBatch(ctx, r.batch, &types.AcceptOptions{
-		TargetQuerier: targetTx,
-	}); err != nil {
-		return err
-	}
-
-	// Close out the transaction.
-	err = errors.WithStack(targetTx.Commit())
-	if err != nil {
-		return err
-	}
-
-	// Marking the mutations as having been applied needs to happen here
-	// and not, say, in a separate goroutine. If the marking were to
-	// fail, we need to poison the keys in this round to prevent
-	// leapfrogging and then rolling back a given key.
+	// We're going to manage the target and the staging transaction
+	// concurrently. The target transaction must commit before the
+	// staging transaction.
 	stagingTx, err := r.stagingPool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = stagingTx.Rollback(context.Background()) }()
 
-	// Mark all mutations as applied.
-	if err := toMark.Range(func(table ident.Table, muts []types.Mutation) error {
-		stager, err := r.stagers.Get(ctx, table)
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		targetTx, err := r.targetPool.BeginTx(ctx, nil)
 		if err != nil {
+			return errors.WithStack(err)
+		}
+		defer func() { _ = targetTx.Rollback() }()
+		if err := r.delegate.AcceptMultiBatch(egCtx, r.batch, &types.AcceptOptions{
+			TargetQuerier: targetTx,
+		}); err != nil {
 			return err
 		}
-		return stager.MarkApplied(ctx, stagingTx, muts)
-	}); err != nil {
+		return errors.WithStack(targetTx.Commit())
+	})
+	eg.Go(func() error {
+		return toMark.Range(func(table ident.Table, muts []types.Mutation) error {
+			stager, err := r.stagers.Get(ctx, table)
+			if err != nil {
+				return err
+			}
+			return stager.MarkApplied(ctx, stagingTx, muts)
+		})
+	})
+
+	if err := eg.Wait(); err != nil {
 		return err
 	}
 
