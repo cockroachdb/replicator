@@ -17,10 +17,12 @@
 package kafka
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -31,11 +33,16 @@ import (
 // TestAccumulate verifies that we correctly add incoming consumer messages
 // to a types.MultiBatch.
 func TestAccumulate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stop := stopper.WithContext(ctx)
+
 	a := assert.New(t)
 	r := require.New(t)
 	tests := []struct {
 		name    string
 		msg     *sarama.ConsumerMessage
+		want    hlc.Time
 		wantErr string
 	}{
 		{
@@ -47,6 +54,18 @@ func TestAccumulate(t *testing.T) {
 				Key:       []byte(`[0]`),
 				Value:     []byte(`{"after": {"k":0, "v": "a"}, "updated":"1.0"}`),
 			},
+			want: hlc.Zero(),
+		},
+		{
+			name: "insert",
+			msg: &sarama.ConsumerMessage{
+				Timestamp: time.Now(),
+				Topic:     "table",
+				Partition: 1,
+				Key:       []byte(`[0]`),
+				Value:     []byte(`{"after": {"k":0, "v": "a"}, "updated":"10.0"}`),
+			},
+			want: hlc.New(10, 0),
 		},
 		{
 			name: "insert",
@@ -57,6 +76,7 @@ func TestAccumulate(t *testing.T) {
 				Key:       []byte(`[1]`),
 				Value:     []byte(`{"after": {"k":1, "v": "a"}, "updated":"10.0"}`),
 			},
+			want: hlc.New(10, 0),
 		},
 		{
 			name: "update",
@@ -67,6 +87,40 @@ func TestAccumulate(t *testing.T) {
 				Key:       []byte(`[1]`),
 				Value:     []byte(`{"after": {"k":1, "v": "a"}, "before": {"k":1, "v": "b"},"updated":"11.0"}`),
 			},
+			want: hlc.New(11, 0),
+		},
+		{
+			name: "update2",
+			msg: &sarama.ConsumerMessage{
+				Timestamp: time.Now(),
+				Topic:     "table",
+				Partition: 1,
+				Key:       []byte(`[1]`),
+				Value:     []byte(`{"after": {"k":1, "v": "b"}, "before": {"k":1, "v": "c"},"updated":"12.0"}`),
+			},
+			want: hlc.New(12, 0),
+		},
+		{
+			name: "dup",
+			msg: &sarama.ConsumerMessage{
+				Timestamp: time.Now(),
+				Topic:     "table",
+				Partition: 1,
+				Key:       []byte(`[1]`),
+				Value:     []byte(`{"after": {"k":1, "v": "a"}, "before": {"k":1, "v": "b"},"updated":"11.0"}`),
+			},
+			want: hlc.Zero(),
+		},
+		{
+			name: "ahead",
+			msg: &sarama.ConsumerMessage{
+				Timestamp: time.Now(),
+				Topic:     "table",
+				Partition: 1,
+				Key:       []byte(`[1]`),
+				Value:     []byte(`{"after": {"k":1, "v": "a"}, "before": {"k":1, "v": "b"},"updated":"13.0"}`),
+			},
+			want: hlc.New(13, 0),
 		},
 		{
 			name: "resolved partition 0",
@@ -74,8 +128,9 @@ func TestAccumulate(t *testing.T) {
 				Timestamp: time.Now(),
 				Partition: 0,
 				Topic:     "table",
-				Value:     []byte(`{"resolved":"11.0"}`),
+				Value:     []byte(`{"resolved":"12.0"}`),
 			},
+			want: hlc.New(12, 0),
 		},
 		{
 			name: "resolved partition 1",
@@ -83,8 +138,9 @@ func TestAccumulate(t *testing.T) {
 				Timestamp: time.Now(),
 				Partition: 1,
 				Topic:     "table",
-				Value:     []byte(`{"resolved":"11.0"}`),
+				Value:     []byte(`{"resolved":"12.0"}`),
 			},
+			want: hlc.New(12, 0),
 		},
 		{
 			name: "resolved partition 2",
@@ -92,8 +148,9 @@ func TestAccumulate(t *testing.T) {
 				Timestamp: time.Now(),
 				Partition: 2,
 				Topic:     "table",
-				Value:     []byte(`{"resolved":"11.0"}`),
+				Value:     []byte(`{"resolved":"12.0"}`),
 			},
+			want: hlc.New(12, 0),
 		},
 		{
 			name: "delete",
@@ -102,8 +159,9 @@ func TestAccumulate(t *testing.T) {
 				Topic:     "table",
 				Partition: 1,
 				Key:       []byte(`[1]`),
-				Value:     []byte(`{"before": {"k":1, "v": "b"}, "updated":"13.0"}`),
+				Value:     []byte(`{"before": {"k":1, "v": "b"}, "updated":"14.0"}`),
 			},
+			want: hlc.New(14, 0),
 		},
 		{
 			name: "after",
@@ -114,6 +172,7 @@ func TestAccumulate(t *testing.T) {
 				Key:       []byte(`[2]`),
 				Value:     []byte(`{"after": {"k":2, "v": "b"}, "updated":"20.0"}`),
 			},
+			want: hlc.Zero(),
 		},
 		{
 			name: "skipping extra field",
@@ -124,6 +183,7 @@ func TestAccumulate(t *testing.T) {
 				Key:       []byte(`[2]`),
 				Value:     []byte(`{"after": {"k":2, "v": "b"}, "updated":"20.0", "extra":"test"}`),
 			},
+			want: hlc.Zero(),
 		},
 		{
 			name: "no topic",
@@ -148,28 +208,50 @@ func TestAccumulate(t *testing.T) {
 		},
 	}
 	toProcess := &types.MultiBatch{}
+	cache, err := newCache(stop, "global", 0, 100)
+	r.NoError(err)
 	consumer := &Consumer{
-		timeRange: hlc.RangeIncluding(hlc.New(10, 0), hlc.New(13, 0)),
+		timeRange: hlc.RangeIncluding(hlc.New(10, 0), hlc.New(14, 0)),
 		schema:    ident.MustSchema(ident.New("db"), ident.New("public")),
 	}
-	for _, test := range tests {
-		_, err := consumer.accumulate(toProcess, test.msg)
-		if test.wantErr != "" {
-			a.Error(err)
-			a.ErrorContains(err, test.wantErr)
-		} else {
-			r.NoError(err)
-		}
 
+	// Run these test sequentially.
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload, err := consumer.accumulate(cache, toProcess, test.msg)
+			if test.wantErr != "" {
+				a.Error(err)
+				a.ErrorContains(err, test.wantErr)
+				return
+			}
+			r.NoError(err)
+			if payload == nil {
+				a.Equal(test.want, hlc.Zero())
+				return
+			}
+			if payload.Resolved != "" {
+				timestamp, err := hlc.Parse(payload.Resolved)
+				a.NoError(err)
+				a.Equal(test.want, timestamp)
+			}
+			if payload.Updated != "" {
+				timestamp, err := hlc.Parse(payload.Updated)
+				a.NoError(err)
+				a.Equal(test.want, timestamp)
+			}
+		})
 	}
 	// Verify the we accumulated all the messages within the time range.
-	a.Equal(3, len(toProcess.Data))
+	a.Equal(5, len(toProcess.Data))
 	r.NotNil(toProcess.ByTime[hlc.New(10, 0)])
-	a.Equal(1, toProcess.ByTime[hlc.New(10, 0)].Count())
+	a.Equal(2, toProcess.ByTime[hlc.New(10, 0)].Count())
 	r.NotNil(toProcess.ByTime[hlc.New(11, 0)])
 	a.Equal(1, toProcess.ByTime[hlc.New(11, 0)].Count())
-	a.Nil(toProcess.ByTime[hlc.New(12, 0)])
+	a.Equal(1, toProcess.ByTime[hlc.New(12, 0)].Count())
 	r.NotNil(toProcess.ByTime[hlc.New(13, 0)])
 	a.Equal(1, toProcess.ByTime[hlc.New(13, 0)].Count())
+	r.NotNil(toProcess.ByTime[hlc.New(14, 0)])
+	a.Equal(1, toProcess.ByTime[hlc.New(14, 0)].Count())
 	a.Nil(toProcess.ByTime[hlc.New(20, 0)])
+	time.Sleep(5 * time.Second)
 }

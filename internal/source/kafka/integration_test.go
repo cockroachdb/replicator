@@ -189,7 +189,7 @@ func getConfig(fixture *base.Fixture, fc *fixtureConfig, tgt ident.Table) (*Conf
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 		},
 		TargetSchema: dbName,
-		ConveyorConfig: conveyor.Config{
+		Conveyor: conveyor.Config{
 			Immediate: fc.immediate,
 		},
 		BatchSize:        100,

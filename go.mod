@@ -18,6 +18,7 @@ require (
 	github.com/google/go-licenses v1.6.0
 	github.com/google/uuid v1.6.0
 	github.com/google/wire v0.6.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jackc/pglogrepl v0.0.0-20240307033717-828fbfe908e9
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
