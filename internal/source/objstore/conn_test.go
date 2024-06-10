@@ -382,6 +382,11 @@ func (m *timestampTracker) getCheckPoint() hlc.Time {
 	return m.mu.checkpoint
 }
 
+// Watcher implements Conveyor.
+func (m *timestampTracker) Watcher() types.Watcher {
+	panic("unimplemented")
+}
+
 // buildConn returns a connection for testing purposes.
 // The connection is backed by a in-memory bucket, and a processor
 // that collects the file names read from the bucket and processed.

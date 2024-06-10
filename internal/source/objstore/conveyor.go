@@ -39,6 +39,8 @@ type Conveyor interface {
 	// Ensure that a checkpoint exists for all the given partitions. It should be
 	// called every time a new partition or topic is discovered by the consumer group.
 	Ensure(context.Context, []ident.Ident) error
+	// Access to the underlying schema.
+	Watcher() types.Watcher
 }
 
 // We make sure that the concrete conveyor.Conveyor implements the Conveyor interface.
