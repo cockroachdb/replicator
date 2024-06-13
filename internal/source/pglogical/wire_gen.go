@@ -14,6 +14,7 @@ import (
 	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
+	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
@@ -41,7 +42,21 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	targetConfig := &eagerConfig.Target
-	targetPool, err := sinkprod.ProvideTargetPool(context, targetConfig, diagnostics)
+	stagingConfig := &eagerConfig.Staging
+	stagingPool, err := sinkprod.ProvideStagingPool(context, stagingConfig, diagnostics, targetConfig)
+	if err != nil {
+		return nil, err
+	}
+	stagingSchema, err := sinkprod.ProvideStagingDB(context, stagingConfig, stagingPool)
+	if err != nil {
+		return nil, err
+	}
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -64,19 +79,6 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		Config: sequencerConfig,
 	}
 	immediateImmediate := immediate.ProvideImmediate(targetPool)
-	stagingConfig := &eagerConfig.Staging
-	stagingPool, err := sinkprod.ProvideStagingPool(context, stagingConfig, diagnostics, targetConfig)
-	if err != nil {
-		return nil, err
-	}
-	stagingSchema, err := sinkprod.ProvideStagingDB(context, stagingConfig, stagingPool)
-	if err != nil {
-		return nil, err
-	}
-	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
-	if err != nil {
-		return nil, err
-	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	conn, err := ProvideConn(context, acceptor, chaosChaos, config, immediateImmediate, memoMemo, sequencer, stagingPool, targetPool, watchers)
 	if err != nil {

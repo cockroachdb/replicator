@@ -20,10 +20,13 @@ import (
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/cockroachdb/replicator/internal/util/stmtcache"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 )
 
@@ -67,9 +70,22 @@ func (c *TargetConfig) Preflight() error {
 // ProvideTargetPool is called by Wire to create a connection pool that
 // accesses the target cluster. The pool will be closed when the context
 // is stopped.
+//
+// Adding the Replicator version checker here is a bit of a hack. If
+// Wire supported eager dependencies, this would be an obvious use.
 func ProvideTargetPool(
-	ctx *stopper.Context, config *TargetConfig, diags *diag.Diagnostics,
+	ctx *stopper.Context, check *version.Checker, config *TargetConfig, diags *diag.Diagnostics,
 ) (*types.TargetPool, error) {
+	missing, err := check.Check(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(missing) > 0 {
+		for _, msg := range missing {
+			log.Warn(msg)
+		}
+		return nil, errors.New("schema upgrade required")
+	}
 	options := []stdpool.Option{
 		stdpool.WithConnectionLifetime(config.MaxLifetime, config.IdleTime, config.JitterTime),
 		stdpool.WithDiagnostics(diags, "target"),
