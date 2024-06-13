@@ -7,8 +7,6 @@
 package server
 
 import (
-	"net"
-
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/script"
@@ -24,7 +22,9 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/staging/leases"
+	"github.com/cockroachdb/replicator/internal/staging/memo"
 	"github.com/cockroachdb/replicator/internal/staging/stage"
+	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
 	"github.com/google/wire"
+	"net"
 )
 
 // Injectors from injector.go:
@@ -73,7 +74,12 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetPool, err := sinkprod.ProvideTargetPool(ctx, targetConfig, diagnostics)
+	memoMemo, err := memo.ProvideMemo(ctx, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	targetPool, err := sinkprod.ProvideTargetPool(ctx, checker, targetConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +167,12 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		return nil, nil, err
 	}
 	cdcConfig := &config.CDC
-	targetPool, err := sinkprod.ProvideTargetPool(context, targetConfig, diagnostics)
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, nil, err
+	}
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}
