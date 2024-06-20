@@ -45,15 +45,15 @@ type EagerConfig Config
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
-	ConveyorConfig conveyor.Config
-	DLQ            dlq.Config
-	Script         script.Config
-	Sequencer      sequencer.Config
-	Staging        sinkprod.StagingConfig
-	Target         sinkprod.TargetConfig
-	TargetSchema   ident.Schema
-	TLS            secure.Config
+	Conveyor  conveyor.Config
+	DLQ       dlq.Config
+	Script    script.Config
+	Sequencer sequencer.Config
+	Staging   sinkprod.StagingConfig
+	Target    sinkprod.TargetConfig
+	TLS       secure.Config
 
+	TargetSchema     ident.Schema
 	BatchSize        int           // How many messages to accumulate before committing to the target
 	Brokers          []string      // The address of the Kafka brokers
 	Group            string        // the Kafka consumer group id.
@@ -86,11 +86,13 @@ type SASLConfig struct {
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
 func (c *Config) Bind(f *pflag.FlagSet) {
+	c.Conveyor.Bind(f)
 	c.DLQ.Bind(f)
 	c.Script.Bind(f)
 	c.Sequencer.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
+	c.TLS.Bind(f)
 	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
 		"the SQL database schema in the target cluster to update")
 
@@ -131,6 +133,9 @@ Please see the CREATE CHANGEFEED documentation for details.
 // error if there are missing options for which a default cannot be
 // provided.
 func (c *Config) Preflight(ctx context.Context) error {
+	if err := c.Conveyor.Preflight(); err != nil {
+		return err
+	}
 	if err := c.DLQ.Preflight(); err != nil {
 		return err
 	}
@@ -144,6 +149,9 @@ func (c *Config) Preflight(ctx context.Context) error {
 		return err
 	}
 	if err := c.Target.Preflight(); err != nil {
+		return err
+	}
+	if err := c.TLS.Preflight(); err != nil {
 		return err
 	}
 	if c.TargetSchema.Empty() {
