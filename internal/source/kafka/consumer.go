@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -95,7 +96,10 @@ func (c *Consumer) ConsumeClaim(
 	consumed := make(map[string]*sarama.ConsumerMessage)
 	ctx := session.Context()
 	partition := fmt.Sprintf("%s@%d", claim.Topic(), claim.Partition())
-	c.conveyor.Ensure(ctx, []ident.Ident{ident.New(partition)})
+	if err := c.conveyor.Ensure(ctx, []ident.Ident{ident.New(partition)}); err != nil {
+		return errors.Wrap(err, "unable to persist default checkpoint")
+	}
+
 	c.done(partition, false)
 	// Do not move the code below to a goroutine.
 	// The `ConsumeClaim` itself is called within a goroutine, see:

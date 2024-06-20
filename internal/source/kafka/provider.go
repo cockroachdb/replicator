@@ -39,7 +39,7 @@ func ProvideEagerConfig(cfg *Config, _ *script.Loader) *EagerConfig {
 
 // ProvideConveyorConfig is called by Wire.
 func ProvideConveyorConfig(cfg *Config) *conveyor.Config {
-	return &cfg.ConveyorConfig
+	return &cfg.Conveyor
 }
 
 // ProvideConn is called by Wire to construct this package's
