@@ -113,7 +113,22 @@ func (b *s3Bucket) Walk(
 		StartAfter: after,
 		UseV1:      false,
 	}
-	for object := range b.client.ListObjects(ctx, b.bucket, opts) {
+	childCtx, cancel := context.WithCancel(ctx)
+	// From ListObjects docs: If caller cancels the context, then the last entry
+	// on the 'chan ObjectInfo' will be the context.Error() caller must
+	// drain the channel entirely and wait until channel is closed
+	// before proceeding, without waiting on the channel to be closed
+	// completely you might leak goroutines.
+	objects := b.client.ListObjects(childCtx, b.bucket, opts)
+	defer func() {
+		// cancel the child context to signal ListObjects that
+		// we are done.
+		cancel()
+		// drain the channel to avoid goroutine leaks.
+		for range objects {
+		}
+	}()
+	for object := range objects {
 		if object.Err != nil {
 			return object.Err
 		}
@@ -127,7 +142,7 @@ func (b *s3Bucket) Walk(
 			return err
 		}
 	}
-	return ctx.Err()
+	return nil
 }
 
 // Open implements bucket.Bucket
