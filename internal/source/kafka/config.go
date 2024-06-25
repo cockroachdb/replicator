@@ -119,14 +119,14 @@ Please see the CREATE CHANGEFEED documentation for details.
 	f.StringArrayVar(&c.Topics, "topic", nil, "the topic(s) that the consumer should use")
 
 	// SASL configuration
-	f.StringVar(&c.SASL.ClientID, "ClientId", "", "client ID for OAuth authentication from a third-party provider")
-	f.StringVar(&c.SASL.ClientSecret, "ClientSecret", "", "Client secret for OAuth authentication from a third-party provider")
-	f.StringVar(&c.SASL.GrantType, "GrantType", "", "Override the default OAuth client credentials grant type for other implementations")
-	f.StringVar(&c.SASL.Mechanism, "Mechanism", "", "Can be set to OAUTHBEARER, SCRAM-SHA-256, SCRAM-SHA-512, or PLAIN")
-	f.StringArrayVar(&c.SASL.Scopes, "Scope", nil, "Scopes that the OAuth token should have access for.")
-	f.StringVar(&c.SASL.TokenURL, "TokenURL", "", "Client token URL for OAuth authentication from a third-party provider")
-	f.StringVar(&c.SASL.User, "User", "", "SASL username")
-	f.StringVar(&c.SASL.Password, "Password", "", "SASL password")
+	f.StringVar(&c.SASL.ClientID, "saslClientID", "", "client ID for OAuth authentication from a third-party provider")
+	f.StringVar(&c.SASL.ClientSecret, "saslClientSecret", "", "Client secret for OAuth authentication from a third-party provider")
+	f.StringVar(&c.SASL.GrantType, "saslGrantType", "", "Override the default OAuth client credentials grant type for other implementations")
+	f.StringVar(&c.SASL.Mechanism, "saslMechanism", "", "Can be set to OAUTHBEARER, SCRAM-SHA-256, SCRAM-SHA-512, or PLAIN")
+	f.StringArrayVar(&c.SASL.Scopes, "saslScope", nil, "Scopes that the OAuth token should have access for.")
+	f.StringVar(&c.SASL.TokenURL, "saslTokenURL", "", "Client token URL for OAuth authentication from a third-party provider")
+	f.StringVar(&c.SASL.User, "saslUser", "", "SASL username")
+	f.StringVar(&c.SASL.Password, "saslPassword", "", "SASL password")
 }
 
 // Preflight updates the configuration with sane defaults or returns an

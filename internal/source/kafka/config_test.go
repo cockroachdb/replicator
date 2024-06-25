@@ -24,13 +24,170 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/secure"
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var maxRange = hlc.RangeExcluding(hlc.New(0, 0), hlc.New(math.MaxInt64, math.MaxInt))
+var (
+	maxRange              = hlc.RangeExcluding(hlc.New(0, 0), hlc.New(math.MaxInt64, math.MaxInt))
+	defaultConvoyerConfig = conveyor.Config{
+		BestEffortWindow: conveyor.DefaultBackfillWindow,
+		BestEffortOnly:   false,
+		Immediate:        false,
+	}
+)
+
+func TestBind(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want *Config
+	}{
+		{
+			name: "tls ca",
+			args: []string{
+				"--group", "test",
+				"--broker", "localhost:1000",
+				"--topic", "topic",
+				"--tlsCACertificate", "./testdata/ca.crt"},
+			want: &Config{
+				Conveyor: defaultConvoyerConfig,
+				TLS: secure.Config{
+					CaCert: "./testdata/ca.crt",
+				},
+			},
+		},
+		{
+			name: "tls ca + keypair",
+			args: []string{
+				"--group", "test",
+				"--broker", "localhost:1000",
+				"--topic", "topic",
+				"--tlsCACertificate", "./testdata/ca.crt",
+				"--tlsCertificate", "./testdata/test.crt",
+				"--tlsPrivateKey", "./testdata/test.key"},
+			want: &Config{
+				Conveyor: defaultConvoyerConfig,
+				TLS: secure.Config{
+					CaCert:     "./testdata/ca.crt",
+					ClientCert: "./testdata/test.crt",
+					ClientKey:  "./testdata/test.key",
+				},
+			},
+		},
+		{
+			name: "immediate",
+			args: []string{
+				"--group", "test",
+				"--broker", "localhost:1000",
+				"--topic", "topic",
+				"--immediate",
+			},
+			want: &Config{
+				Conveyor: conveyor.Config{
+					BestEffortWindow: conveyor.DefaultBackfillWindow,
+					BestEffortOnly:   false,
+					Immediate:        true},
+			},
+		},
+		{
+			name: "best effort",
+			args: []string{
+				"--group", "test",
+				"--broker", "localhost:1000",
+				"--topic", "topic",
+				"--bestEffortOnly",
+			},
+			want: &Config{
+				Conveyor: conveyor.Config{
+					BestEffortWindow: conveyor.DefaultBackfillWindow,
+					BestEffortOnly:   true,
+					Immediate:        false},
+			},
+		},
+		{
+			name: "scram256",
+			args: []string{
+				"--group", "test",
+				"--broker", "localhost:1000",
+				"--topic", "topic",
+				"--saslMechanism", "SCRAM-SHA-256",
+				"--saslUser", "test",
+				"--saslPassword", "test",
+			},
+			want: &Config{
+				Conveyor: defaultConvoyerConfig,
+				SASL: SASLConfig{
+					Mechanism: "SCRAM-SHA-256",
+					Password:  "test",
+					User:      "test",
+				},
+			},
+		},
+		{
+			name: "scram512",
+			args: []string{
+				"--group", "test",
+				"--broker", "localhost:1000",
+				"--topic", "topic",
+				"--saslMechanism", "SCRAM-SHA-512",
+				"--saslUser", "test",
+				"--saslPassword", "test",
+			},
+			want: &Config{
+				Conveyor: defaultConvoyerConfig,
+				SASL: SASLConfig{
+					Mechanism: "SCRAM-SHA-512",
+					Password:  "test",
+					User:      "test",
+				},
+			},
+		},
+		{
+			name: "oauth",
+			args: []string{
+				"--group", "test",
+				"--broker", "localhost:1000",
+				"--topic", "topic",
+				"--saslClientID", "myclient",
+				"--saslClientSecret", "mysecret",
+				"--saslMechanism", "OAUTHBEARER",
+				"--saslTokenURL", "http://example.com",
+			},
+			want: &Config{
+				Conveyor: defaultConvoyerConfig,
+				SASL: SASLConfig{
+					ClientID:     "myclient",
+					ClientSecret: "mysecret",
+					Mechanism:    "OAUTHBEARER",
+					TokenURL:     "http://example.com",
+				},
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := assert.New(t)
+			flags := &pflag.FlagSet{}
+			config := &Config{}
+			config.Bind(flags)
+			err := flags.Parse(tt.args)
+			a.NoError(err)
+
+			a.Equal(tt.want.TLS, config.TLS)
+			a.Equal(tt.want.SASL, config.SASL)
+			a.Equal(tt.want.Conveyor, config.Conveyor)
+			a.NoError(config.preflight(ctx))
+		})
+	}
+}
 
 // TestPreflight verifies that the kafka configuration can be validated
 // before we start the service.

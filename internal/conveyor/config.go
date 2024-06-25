@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	defaultBackfillWindow = time.Hour
+	DefaultBackfillWindow = time.Hour
 )
 
 // Config defines the behavior for a Conveyor.
@@ -43,7 +43,7 @@ type Config struct {
 
 // Bind adds configuration flags to the set.
 func (c *Config) Bind(f *pflag.FlagSet) {
-	f.DurationVar(&c.BestEffortWindow, "bestEffortWindow", defaultBackfillWindow,
+	f.DurationVar(&c.BestEffortWindow, "bestEffortWindow", DefaultBackfillWindow,
 		"use an eventually-consistent mode for initial backfill or when replication "+
 			"is behind; 0 to disable")
 	f.BoolVar(&c.BestEffortOnly, "bestEffortOnly", false,
