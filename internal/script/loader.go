@@ -49,6 +49,10 @@ type deleteKeyJS func(
 	meta map[string]any,
 ) ([]any, error)
 
+// A JS function that dispatches delete operations, analogous to
+// dispatchJS.
+type deletesToJS dispatchJS
+
 // A JS function to dispatch source documents onto target tables.
 //
 // Look on my Works, ye Mighty, and despair!
@@ -96,7 +100,7 @@ var (
 
 // sourceJS is used in the API binding.
 type sourceJS struct {
-	DeletesTo string     `goja:"deletesTo"`
+	DeletesTo goja.Value `goja:"deletesTo"` // A deletesToJS or a string.
 	Dispatch  dispatchJS `goja:"dispatch"`
 	Recurse   bool       `goja:"recurse"`
 	Target    string     `goja:"target"`

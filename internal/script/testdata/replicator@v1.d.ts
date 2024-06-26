@@ -102,13 +102,24 @@ declare module "replicator@v1" {
         dispatch: (doc: Document, meta: Document) => Record<Table, Document[]> | null
 
         /**
-         * The destination table to apply deletion operations to. In
-         * cases when a dispatch function fans out an incoming document
-         * across multiple tables, an <code>ON DELETE CASCADE</code>
-         * foreign-key relationship should be used to ensure correct
-         * propagation.
+         * The destination table(s) to apply deletion operations to.
+         *
+         * In cases when a dispatch function fans out an incoming
+         * document across multiple tables, an <code>ON DELETE
+         * CASCADE</code> foreign-key relationship can be used to
+         * ensure correct propagation. This is useful for document
+         * stores where a document is mapped onto a table hierarchy.
+         *
+         * This value may also be a function which dynamically
+         * dispatches deletes. It will receive a sparse mutation
+         * containing the PK columns of the row to delete. It should
+         * return a mapping of destination table(s) to (sparse) records
+         * to delete. This callback may also return null to elide
+         * deletes from the source. The <code>meta.table</code> value
+         * can be used to determine the table that the delete would
+         * normally be dispatched to.
          */
-        deletesTo: Table
+        deletesTo: Table | ((doc: Document, meta: Document) => Record<Table, Document[]> | null)
     } | {
         /**
          * The name of a destination table.
@@ -223,11 +234,11 @@ declare module "replicator@v1" {
          */
         merge: MergeFunction | StandardMerge;
         /**
-          * This is a tuning parameter which allows the maximum number
-          * of rows in a single UPSERT or DELETE statement to be
-          * limited. This is mainly needed for ultra-wide tables and
-          * databases with a relatively small number of available bind
-          * variables. If unset, a reasonable value will be chosen.
+         * This is a tuning parameter which allows the maximum number
+         * of rows in a single UPSERT or DELETE statement to be
+         * limited. This is mainly needed for ultra-wide tables and
+         * databases with a relatively small number of available bind
+         * variables. If unset, a reasonable value will be chosen.
          */
         rowLimit: number;
     };
