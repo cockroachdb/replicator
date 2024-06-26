@@ -114,12 +114,33 @@ CREATE TABLE %s.skewed_merge_times(
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
 	tbl2 := ident.NewTable(schema, ident.New("table2"))
-	tblS := ident.NewTable(schema, ident.New("some_table"))
 
 	if cfg := s.Sources.GetZero(ident.New("expander")); a.NotNil(cfg) {
-		a.Equal(tbl1, cfg.DeletesTo)
-		mut := types.Mutation{Before: []byte(`{"before":true}`), Data: []byte(`{"msg":true}`)}
-		mapped, err := cfg.Dispatch(context.Background(), mut)
+		mut := types.Mutation{
+			Before: []byte(`{"before":true}`),
+			Data:   []byte(`{"msg":true,"idx":0}`),
+			Key:    []byte(`["key"]`),
+		}
+		AddMeta("test", tbl1, &mut)
+		// Check that deletes can be sent to both tables.
+		if a.NotNil(cfg.DeletesTo) {
+			mutNoData := mut
+			mutNoData.Data = nil
+			a.True(mutNoData.IsDelete())
+			if mapped, err := cfg.DeletesTo(ctx, tbl1, mutNoData); a.NoError(err) {
+				a.Equal(2, mapped.Len())
+				// This should pass the original document through.
+				if found := mapped.GetZero(tbl1); a.Len(found, 1) {
+					a.Equal(mutNoData, found[0])
+				}
+				// We really just care about the key at this point.
+				if found := mapped.GetZero(tbl2); a.Len(found, 1) {
+					a.Zero(found[0].Data)
+					a.Equal(json.RawMessage(`[42]`), found[0].Key)
+				}
+			}
+		}
+		mapped, err := cfg.Dispatch(context.Background(), tbl1, mut)
 		if a.NoError(err) && a.NotNil(mapped) {
 			if docs := mapped.GetZero(tbl1); a.Len(docs, 1) {
 				a.Equal(`{"before":true}`, string(docs[0].Before))
@@ -140,12 +161,20 @@ CREATE TABLE %s.skewed_merge_times(
 	}
 
 	if cfg := s.Sources.GetZero(ident.New("passthrough")); a.NotNil(cfg) {
-		a.Equal(tblS, cfg.DeletesTo)
 		mut := types.Mutation{Data: []byte(`{"passthrough":true}`)}
-		mapped, err := cfg.Dispatch(context.Background(), mut)
+		someTable := ident.NewTable(schema, ident.New("some_table"))
+		if a.NotNil(cfg.DeletesTo) {
+			mutNoData := mut
+			mutNoData.Data = nil
+			if mapped, err := cfg.DeletesTo(ctx, someTable, mut); a.NoError(err) {
+				if found := mapped.GetZero(someTable); a.Len(found, 1) {
+					a.Equal(mutNoData, found[0])
+				}
+			}
+		}
+		mapped, err := cfg.Dispatch(context.Background(), someTable, mut)
 		if a.NoError(err) && a.NotNil(mapped) {
-			tbl := ident.NewTable(schema, ident.New("some_table"))
-			expanded := mapped.GetZero(tbl)
+			expanded := mapped.GetZero(someTable)
 			if a.Len(expanded, 1) {
 				a.Equal(mut, expanded[0])
 			}

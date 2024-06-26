@@ -102,11 +102,18 @@ func (a *acceptor) doDispatch(
 	for _, mutToDispatch := range batch.Data {
 		// Separate deletes from upserts for routing.
 		if mutToDispatch.IsDelete() {
-			deletesTo := source.DeletesTo
-			if deletesTo.Empty() {
-				deletesTo = batch.Table
+			deletesTo, err := source.DeletesTo(ctx, batch.Table, mutToDispatch)
+			if err != nil {
+				return err
 			}
-			if err := nextBatch.Accumulate(deletesTo, mutToDispatch); err != nil {
+			if err := deletesTo.Range(func(table ident.Table, muts []types.Mutation) error {
+				for _, mut := range muts {
+					if err := nextBatch.Accumulate(table, mut); err != nil {
+						return err
+					}
+				}
+				return err
+			}); err != nil {
 				return err
 			}
 			continue
@@ -114,7 +121,7 @@ func (a *acceptor) doDispatch(
 
 		script.AddMeta(a.group.Name.Raw(), batch.Table, &mutToDispatch)
 		// Call the user function to see what mutations(s) go into which table(s).
-		dispatched, err := source.Dispatch(ctx, mutToDispatch)
+		dispatched, err := source.Dispatch(ctx, batch.Table, mutToDispatch)
 		if err != nil {
 			return err
 		}
