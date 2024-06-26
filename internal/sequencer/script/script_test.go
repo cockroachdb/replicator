@@ -204,4 +204,44 @@ api.configureTable("t_2", {
 		r.NoError(pool.QueryRowContext(ctx, fmt.Sprintf(q, tgt), search).Scan(&count))
 		r.Equalf(numEmits, count, "in table %s", tgt)
 	}
+
+	// Verify that deletes are routed to the correct table.
+	endTime = hlc.New(1000*(numEmits+1), 0)
+	for i := 0; i < numEmits; i++ {
+		r.NoError(acc.AcceptTableBatch(ctx,
+			sinktest.TableBatchOf(
+				tgts[0],
+				hlc.New(1000*int64(i+1), 0), // +1 since zero time is rejected.
+				[]types.Mutation{
+					{
+						Key: json.RawMessage(fmt.Sprintf(`[ %d ]`, i)),
+					},
+				},
+			),
+			&types.AcceptOptions{}))
+	}
+	// Make next batch of mutations eligible for processing.
+	bounds.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
+
+	// Wait for (async) replication for the first table name.
+	progress, progressMade = stats.Get()
+	for {
+		targetProgress := progress.Progress().GetZero(tgts[0])
+		if hlc.Compare(targetProgress.MaxInclusive(), endTime) >= 0 {
+			break
+		}
+		log.Infof("waiting for %s, saw %s", endTime, targetProgress)
+		select {
+		case <-progressMade:
+			progress, progressMade = stats.Get()
+		case <-ctx.Done():
+			r.NoError(ctx.Err())
+		}
+	}
+
+	// Ensure that the values were deleted from the target table.
+	var count int
+	r.NoError(pool.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT count(*) FROM %s", tgts[0])).Scan(&count))
+	r.Zero(count)
 }

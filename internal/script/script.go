@@ -48,6 +48,9 @@ var identityDelete DeleteKey = func(_ context.Context, mut types.Mutation) (type
 	return mut, true, nil
 }
 
+// A DeletesTo describes how a delete operation should be routed.
+type DeletesTo func(ctx context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error)
+
 // A Dispatch function receives a source mutation and assigns mutations
 // to some number of downstream tables. Dispatch functions are
 // internally synchronized to ensure single-threaded access to the
@@ -77,9 +80,9 @@ var identity Map = func(_ context.Context, mut types.Mutation) (types.Mutation, 
 // A Source holds user-provided configuration options for a
 // generic data-source.
 type Source struct {
-	// The table to apply incoming deletes to; this assumes that the
-	// target schema is using FK's with ON DELETE CASCADE.
-	DeletesTo ident.Table
+	// A user-provided function that routes deletes to zero or more
+	// tables.
+	DeletesTo DeletesTo `json:"-"`
 	// A user-provided function that routes mutations to zero or more
 	// tables.
 	Dispatch Dispatch `json:"-"`
@@ -180,7 +183,6 @@ func (s *UserScript) Resumed(obj any) {
 // bind validates the user configuration against the target schema and
 // creates the public facade around JS callbacks.
 func (s *UserScript) bind(loader *Loader) error {
-	var err error
 	// Evaluate calls to api.configureSource(). We implement a
 	// last-one-wins approach if there are multiple calls for the same
 	// source name.
@@ -193,20 +195,42 @@ func (s *UserScript) bind(loader *Loader) error {
 		// or the name of a table.
 		switch {
 		case bag.Dispatch != nil:
-			if bag.DeletesTo != "" {
-				src.DeletesTo, _, err = ident.ParseTableRelative(bag.DeletesTo, s.target)
+			src.Dispatch = s.bindDispatch(sourceName, bag.Dispatch)
+
+			if bag.DeletesTo == nil {
+				return errors.Errorf("configureSource(%s) called with "+
+					"a dispatch function and no deletesTo", sourceName)
+			}
+
+			// Convenience mechanism just to provide a single name.
+			if justName, ok := bag.DeletesTo.Export().(string); ok {
+				deletesTo, _, err := ident.ParseTableRelative(justName, s.target)
 				if err != nil {
 					return errors.Wrapf(err, "configureSource(%q).deletesTo", sourceName)
 				}
+
+				// Sanity-check that the table exists.
+				if _, ok := s.watcher.Get().Columns.Get(deletesTo); !ok {
+					return errors.Errorf(
+						"configureSource(%q).deletesTo references a non-existent table %s",
+						sourceName, deletesTo)
+				}
+
+				src.DeletesTo = bindDeletesToTable(deletesTo)
+			} else {
+				var userFn deletesToJS
+				if err := s.rt.ExportTo(bag.DeletesTo, &userFn); err != nil {
+					return errors.Wrapf(err, "configureSource(%q).deletesTo was not a function", sourceName)
+				}
+				src.DeletesTo = s.bindDeletesTo(sourceName, userFn)
 			}
-			src.Dispatch = s.bindDispatch(sourceName, bag.Dispatch)
 
 		case bag.Target != "":
 			dest, _, err := ident.ParseTableRelative(bag.Target, s.target)
 			if err != nil {
 				return errors.Wrapf(err, "configureSource(%q).target", sourceName)
 			}
-			src.DeletesTo = dest
+			src.DeletesTo = bindDeletesToTable(dest)
 			src.Dispatch = dispatchTo(dest)
 
 		default:
@@ -340,6 +364,121 @@ func (s *UserScript) bindDeleteKey(table ident.Table, deleteKey deleteKeyJS) Del
 	}
 }
 
+// bindDeletesTo exports a user-provided function as a DeletesTo.
+func (s *UserScript) bindDeletesTo(fnName string, deletesTo deletesToJS) DeletesTo {
+	return func(ctx context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
+		// We expect the delete to contain the PKs to delete.
+		data, err := crep.Unmarshal(mut.Key)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		key, ok := data.([]crep.Value)
+		if !ok {
+			return nil, errors.New("mutation keys was not an array")
+		}
+
+		// If there's diff data, make that available.
+		var beforeMap map[string]crep.Value
+		if len(mut.Before) > 0 {
+			data, err := crep.Unmarshal(mut.Before)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			// The before value could be a json null token.
+			if data != nil {
+				beforeMap, ok = data.(map[string]crep.Value)
+				if !ok {
+					return nil, errors.Errorf("mutation before data was not an object: %T", data)
+				}
+			}
+		}
+
+		meta := mut.Meta
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		meta["before"] = beforeMap
+
+		var dispatches map[string][][]any
+		if err := s.execJS(func(*goja.Runtime) error {
+			var err error
+			dispatches, err = deletesTo(key, meta)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+
+		// JS returned null or an empty object.
+		ret := &ident.TableMap[[]types.Mutation]{}
+		if len(dispatches) == 0 {
+			return ret, nil
+		}
+
+		// Serialize keys back to JSON.
+		for tableName, jsKeyArrays := range dispatches {
+			table, _, err := ident.ParseTableRelative(tableName, s.target)
+			if err != nil {
+				return nil, errors.Wrapf(err,
+					"deletesTo function returned unparsable table name %q", tableName)
+			}
+
+			colData, ok := s.watcher.Get().Columns.Get(table)
+			if !ok {
+				return nil, errors.Errorf(
+					"deletesTo function %s returned an unknown table %s", fnName, tableName)
+			}
+
+			// Count the expected number of PK columns. They're always
+			// first in the slice.
+			pkCount := 0
+			for _, col := range colData {
+				if col.Primary {
+					pkCount++
+				} else {
+					break
+				}
+			}
+
+			muts := make([]types.Mutation, len(jsKeyArrays))
+			ret.Put(table, muts)
+			for idx, jsKeyArray := range jsKeyArrays {
+				// Ensure we have the expected number of columns.
+				if len(jsKeyArray) != pkCount {
+					return nil, errors.Errorf(
+						"deletesToFunction %s returned %d PK column values, "+
+							"but table %s has %d PK columns",
+						fnName, len(jsKeyArray), table, pkCount)
+				}
+
+				// No data bytes in a delete payload.
+
+				keyBytes, err := json.Marshal(jsKeyArray)
+				if err != nil {
+					return nil, err
+				}
+
+				muts[idx] = types.Mutation{
+					Before: mut.Before,
+					Key:    keyBytes,
+					Time:   mut.Time,
+				}
+			}
+		}
+
+		return ret, nil
+	}
+}
+
+// bindDeletesToTable returns a DeletesTo that applies all deletes to
+// the given table.
+func bindDeletesToTable(table ident.Table) DeletesTo {
+	return func(ctx context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
+		ret := &ident.TableMap[[]types.Mutation]{}
+		ret.Put(table, []types.Mutation{mut})
+		return ret, nil
+	}
+}
+
 // bindDispatch exports a user-provided function as a Dispatch.
 func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 	return func(ctx context.Context, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
@@ -353,13 +492,31 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 			return nil, errors.New("mutation data was not an object")
 		}
 
+		// If there's diff data, make that available.
+		var beforeMap map[string]crep.Value
+		if len(mut.Before) > 0 {
+			data, err := crep.Unmarshal(mut.Before)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			// The before value could be a json null token.
+			if data != nil {
+				beforeMap, ok = data.(map[string]crep.Value)
+				if !ok {
+					return nil, errors.Errorf("mutation before data was not an object: %T", data)
+				}
+			}
+		}
+
+		meta := mut.Meta
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		meta["before"] = beforeMap
+
 		// Execute the user function to route the mutation.
 		var dispatches map[string][]map[string]any
 		if err := s.execJS(func(*goja.Runtime) (err error) {
-			meta := mut.Meta
-			if meta == nil {
-				meta = make(map[string]any)
-			}
 			dispatches, err = dispatch(dataMap, meta)
 			return err
 		}); err != nil {

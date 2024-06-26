@@ -49,6 +49,11 @@ type deleteKeyJS func(
 	meta map[string]any,
 ) ([]any, error)
 
+// A JS function that dispatches delete operations, analogous to
+// dispatchJS. The returned value is a mapping of table names to
+// (multiple) primary keys to delete from that table.
+type deletesToJS func(key []crep.Value, meta map[string]any) (map[string][][]any, error)
+
 // A JS function to dispatch source documents onto target tables.
 //
 // Look on my Works, ye Mighty, and despair!
@@ -96,7 +101,7 @@ var (
 
 // sourceJS is used in the API binding.
 type sourceJS struct {
-	DeletesTo string     `goja:"deletesTo"`
+	DeletesTo goja.Value `goja:"deletesTo"` // A deletesToJS or a string.
 	Dispatch  dispatchJS `goja:"dispatch"`
 	Recurse   bool       `goja:"recurse"`
 	Target    string     `goja:"target"`

@@ -114,11 +114,28 @@ CREATE TABLE %s.skewed_merge_times(
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
 	tbl2 := ident.NewTable(schema, ident.New("table2"))
-	tblS := ident.NewTable(schema, ident.New("some_table"))
 
 	if cfg := s.Sources.GetZero(ident.New("expander")); a.NotNil(cfg) {
-		a.Equal(tbl1, cfg.DeletesTo)
-		mut := types.Mutation{Before: []byte(`{"before":true}`), Data: []byte(`{"msg":true}`)}
+		mut := types.Mutation{
+			Before: []byte(`{"before":true}`),
+			Data:   []byte(`{"msg":true}`),
+			Key:    []byte(`["key"]`),
+		}
+		// Check that deletes can be sent to both tables.
+		if a.NotNil(cfg.DeletesTo) {
+			mutNoData := mut
+			mutNoData.Data = nil
+			a.True(mutNoData.IsDelete())
+			if mapped, err := cfg.DeletesTo(ctx, mutNoData); a.NoError(err) {
+				a.Equal(2, mapped.Len())
+				if found := mapped.GetZero(tbl1); a.Len(found, 1) {
+					a.Equal(mutNoData, found[0])
+				}
+				if found := mapped.GetZero(tbl2); a.Len(found, 1) {
+					a.Equal(mutNoData, found[0])
+				}
+			}
+		}
 		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
 			if docs := mapped.GetZero(tbl1); a.Len(docs, 1) {
@@ -140,12 +157,18 @@ CREATE TABLE %s.skewed_merge_times(
 	}
 
 	if cfg := s.Sources.GetZero(ident.New("passthrough")); a.NotNil(cfg) {
-		a.Equal(tblS, cfg.DeletesTo)
 		mut := types.Mutation{Data: []byte(`{"passthrough":true}`)}
+		someTable := ident.NewTable(schema, ident.New("some_table"))
+		if a.NotNil(cfg.DeletesTo) {
+			if mapped, err := cfg.DeletesTo(ctx, mut); a.NoError(err) {
+				if found := mapped.GetZero(someTable); a.Len(found, 1) {
+					a.Equal(mut, found[0])
+				}
+			}
+		}
 		mapped, err := cfg.Dispatch(context.Background(), mut)
 		if a.NoError(err) && a.NotNil(mapped) {
-			tbl := ident.NewTable(schema, ident.New("some_table"))
-			expanded := mapped.GetZero(tbl)
+			expanded := mapped.GetZero(someTable)
 			if a.Len(expanded, 1) {
 				a.Equal(mut, expanded[0])
 			}

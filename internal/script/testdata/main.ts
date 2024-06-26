@@ -24,7 +24,7 @@ import * as lib from "./lib";
 
 api.configureSource("expander", {
     dispatch: (doc, meta) => {
-        console.log(JSON.stringify(doc), JSON.stringify(meta));
+        console.log("dispatch:", JSON.stringify(doc), JSON.stringify(meta));
         console.log(api.randomUUID());
 
         return {
@@ -35,7 +35,15 @@ api.configureSource("expander", {
             ],
         };
     },
-    deletesTo: "table1"
+    // This returns a map of arrays of PKs to allow multiple rows to be
+    // deleted within a table.
+    deletesTo: (keys: api.DocumentValue[], meta: api.Document): Record<api.Table, api.DocumentValue[][]> => {
+        console.log("deletesTo:", JSON.stringify(keys), JSON.stringify(meta));
+        return {
+            "table1": [keys],
+            "table2": [keys],
+        }
+    },
 });
 
 api.configureSource("passthrough", {

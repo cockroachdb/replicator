@@ -17,7 +17,7 @@
  */
 
 import * as api from "cdc-sink@v1";
-import {Document, Table} from "cdc-sink@v1";
+import {Document, DocumentValue, Table} from "cdc-sink@v1";
 
 // The sentinel name will be replaced by the test rig. It would normally be
 // "my_db.public" or "my_db" depending on the target product.
@@ -33,7 +33,10 @@ api.configureSource("{{ SCHEMA }}", {
             }
         ];
         return ret
-    }
+    },
+    deletesTo: (key: DocumentValue[]): Record<Table, DocumentValue[][]> => ({
+        "{{ TABLE }}": [key],
+    }),
 })
 
 // We introduce an unknown column in the dispatch function above.
