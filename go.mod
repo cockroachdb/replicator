@@ -6,7 +6,7 @@ require (
 	github.com/IBM/sarama v1.43.2
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cockroachdb/apd v1.1.0
-	github.com/cockroachdb/crlfmt v0.1.0
+	github.com/cockroachdb/crlfmt v0.2.1
 	github.com/cockroachdb/field-eng-powertools v0.1.1
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
 	github.com/evanw/esbuild v0.21.5
@@ -83,7 +83,6 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cockroachdb/gostdlib v1.19.0 // indirect
-	github.com/cockroachdb/ttycolor v0.0.0-20210902133924-c7d7dcdde4e8 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/emirpasic/gods v1.12.0 // indirect
