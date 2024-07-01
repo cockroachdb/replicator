@@ -80,11 +80,21 @@ func testUserScriptSequencer(t *testing.T, baseMode switcher.Mode) {
 			"main.ts": &fstest.MapFile{Data: []byte(`
 import * as api from "replicator@v1";
 api.configureSource("src1", {
-  dispatch: (doc) => ({
-    "T_1": [ doc ], // Note upper-case table name.
-    "t_2": [ doc ]
-  }),
-  deletesTo: "t_1"
+  dispatch: (doc, meta) => {
+    if (meta.table === undefined) {
+      throw "verify meta wiring";
+    }
+    return {
+      "T_1": [ doc ], // Note upper-case table name.
+      "t_2": [ doc ]
+    };
+  },
+  deletesTo: (doc, meta) => {
+    if (meta.table === undefined) {
+      throw "verify meta wiring";
+    }
+    return { "t_1" : [doc] };
+  },
 });
 api.configureTable("T_1", { // Upper-case table name.
   map: (doc) => {
