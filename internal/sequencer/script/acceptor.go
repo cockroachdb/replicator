@@ -100,6 +100,8 @@ func (a *acceptor) doDispatch(
 	nextBatch := &types.MultiBatch{}
 
 	for _, mutToDispatch := range batch.Data {
+		script.AddMeta(a.group.Name.Raw(), batch.Table, &mutToDispatch)
+
 		// Separate deletes from upserts for routing.
 		if mutToDispatch.IsDelete() {
 			deletesTo, err := source.DeletesTo(ctx, batch.Table, mutToDispatch)
@@ -119,7 +121,6 @@ func (a *acceptor) doDispatch(
 			continue
 		}
 
-		script.AddMeta(a.group.Name.Raw(), batch.Table, &mutToDispatch)
 		// Call the user function to see what mutations(s) go into which table(s).
 		dispatched, err := source.Dispatch(ctx, batch.Table, mutToDispatch)
 		if err != nil {
