@@ -175,8 +175,8 @@ github.com/go-sql-driver/mysql v1.8.1 h1:LedoTUt/eveggdHS9qUFC1EFSa8bU2+1pZjSRpv
 github.com/go-sql-driver/mysql v1.8.1/go.mod h1:wEBSXgmK//2ZFJyE+qWnIsVGmvmEKlqwuVSjsCm7DZg=
 github.com/goccy/go-json v0.10.2 h1:CrxCmQqYDkv1z7lO7Wbh2HN93uovUHgrECaO5ZrCXAU=
 github.com/goccy/go-json v0.10.2/go.mod h1:6MelG93GURQebXPDq3khkgXZkazVtN9CRI+MGFi0w8I=
-github.com/godror/godror v0.44.0 h1:tW0oDotJDoC5GTl5saOAwxmlozDy15ImjsbC7UVKEVA=
-github.com/godror/godror v0.44.0/go.mod h1:oRlxogABC1Tr5u/zYF3EjHE1fYvAeNBS9MJ8bq1hVkU=
+github.com/godror/godror v0.44.1 h1:jeit85/5RGu9qaMh3Oj6EqvIr6Ppl08fbUROjxf+YYs=
+github.com/godror/godror v0.44.1/go.mod h1:oRlxogABC1Tr5u/zYF3EjHE1fYvAeNBS9MJ8bq1hVkU=
 github.com/godror/knownpb v0.1.1 h1:A4J7jdx7jWBhJm18NntafzSC//iZDHkDi1+juwQ5pTI=
 github.com/godror/knownpb v0.1.1/go.mod h1:4nRFbQo1dDuwKnblRXDxrfCFYeT4hjg3GjMqef58eRE=
 github.com/gofrs/uuid v4.4.0+incompatible h1:3qXRTX8/NbyulANqlc0lchS1gqAVxRgsuW1YrTJupqA=
