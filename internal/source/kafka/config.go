@@ -45,17 +45,18 @@ type EagerConfig Config
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
-	ConveyorConfig conveyor.Config
-	DLQ            dlq.Config
-	Script         script.Config
-	Sequencer      sequencer.Config
-	Staging        sinkprod.StagingConfig
-	Target         sinkprod.TargetConfig
-	TargetSchema   ident.Schema
-	TLS            secure.Config
+	Conveyor     conveyor.Config
+	DLQ          dlq.Config
+	Script       script.Config
+	Sequencer    sequencer.Config
+	Staging      sinkprod.StagingConfig
+	Target       sinkprod.TargetConfig
+	TargetSchema ident.Schema
+	TLS          secure.Config
 
 	BatchSize        int           // How many messages to accumulate before committing to the target
 	Brokers          []string      // The address of the Kafka brokers
+	CacheSize        int           // Size of the cache to track duplicate messages.
 	Group            string        // the Kafka consumer group id.
 	MaxTimestamp     string        // Only accept messages at or older than this timestamp
 	MinTimestamp     string        // Only accept messages at or newer than this timestamp
@@ -86,6 +87,7 @@ type SASLConfig struct {
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
 func (c *Config) Bind(f *pflag.FlagSet) {
+	c.Conveyor.Bind(f)
 	c.DLQ.Bind(f)
 	c.Script.Bind(f)
 	c.Sequencer.Bind(f)
@@ -96,6 +98,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 
 	f.IntVar(&c.BatchSize, "batchSize", 100, "messages to accumulate before committing to the target")
 	f.StringArrayVar(&c.Brokers, "broker", nil, "address of Kafka broker(s)")
+	f.IntVar(&c.CacheSize, "cacheSize", 1e4, "size of the cache for de-duping, per partition")
 	f.StringVar(&c.Group, "group", "", "the Kafka consumer group id")
 	f.StringVar(&c.MaxTimestamp, "maxTimestamp", "",
 		"only accept messages older than this timestamp; this is an exclusive upper limit")

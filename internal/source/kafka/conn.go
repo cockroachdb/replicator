@@ -67,6 +67,7 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 	c.consumer = &Consumer{
 		conveyor:  c.conveyor,
 		batchSize: c.config.BatchSize,
+		cacheSize: c.config.CacheSize,
 		schema:    c.config.TargetSchema,
 		timeRange: c.config.timeRange,
 		fromState: start,

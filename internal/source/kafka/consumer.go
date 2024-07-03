@@ -19,10 +19,12 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
@@ -41,6 +43,7 @@ type partitionState struct {
 // Consumer represents a Kafka consumer
 type Consumer struct {
 	batchSize int               // Batch size for writes.
+	cacheSize int               // Dedup cache size, per partition.
 	conveyor  Conveyor          // The destination for writes.
 	fromState []*partitionState // The initial offsets for each partitions.
 	schema    ident.Schema      // The target schema.
@@ -95,8 +98,16 @@ func (c *Consumer) ConsumeClaim(
 	consumed := make(map[string]*sarama.ConsumerMessage)
 	ctx := session.Context()
 	partition := fmt.Sprintf("%s@%d", claim.Topic(), claim.Partition())
-	c.conveyor.Ensure(ctx, []ident.Ident{ident.New(partition)})
+	if err := c.conveyor.Ensure(ctx, []ident.Ident{ident.New(partition)}); err != nil {
+		return err
+	}
 	c.done(partition, false)
+	stop := stopper.WithContext(ctx)
+	cache, err := newCache(stop, claim.Topic(), int(claim.Partition()), c.cacheSize)
+	if err != nil {
+		return err
+	}
+	defer stop.Stop(time.Second)
 	// Do not move the code below to a goroutine.
 	// The `ConsumeClaim` itself is called within a goroutine, see:
 	// https://github.com/IBM/sarama/blob/main/consumer_group.go#L27-L29
@@ -107,7 +118,7 @@ func (c *Consumer) ConsumeClaim(
 				log.Debugf("message channel for topic=%s partition=%d was closed", claim.Topic(), claim.Partition())
 				return nil
 			}
-			payload, err := c.accumulate(toProcess, message)
+			payload, err := c.accumulate(cache, toProcess, message)
 			if err != nil {
 				log.WithError(err).Error("failed to add messages to a batch")
 				return err
@@ -123,7 +134,7 @@ func (c *Consumer) ConsumeClaim(
 					c.done(partition, true)
 					return nil
 				}
-
+				log.Debugf("Advance %s %s", partition, timestamp)
 				c.conveyor.Advance(ctx, ident.New(partition), timestamp)
 				if err = c.accept(ctx, toProcess); err != nil {
 					return err
@@ -160,6 +171,69 @@ func (c *Consumer) ConsumeClaim(
 	}
 }
 
+// accept process a batch.
+func (c *Consumer) accept(ctx context.Context, toProcess *types.MultiBatch) error {
+	if toProcess.Count() == 0 {
+		// Nothing to do.
+		return nil
+	}
+	log.Tracef("flushing %d", toProcess.Count())
+	if err := c.conveyor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// accumulate adds the message to the batch and returns the decoded payload.
+func (c *Consumer) accumulate(
+	cache *cache, toProcess *types.MultiBatch, msg *sarama.ConsumerMessage,
+) (*payload, error) {
+	payload, err := asPayload(msg)
+	if err != nil {
+		return nil, err
+	}
+	if payload.Resolved != "" {
+		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
+		timestamp, err := hlc.Parse(payload.Resolved)
+		if err != nil {
+			return nil, err
+		}
+		delayDuration.WithLabelValues(msg.Topic, strconv.Itoa(int(msg.Partition))).
+			Set(float64(time.Now().UnixNano()-timestamp.Nanos()) / 1e9)
+		cache.markResolved(timestamp)
+		return payload, nil
+	}
+	log.Tracef("Mutation %s %d [%s@%d]", string(msg.Key), msg.Timestamp.Unix(), msg.Topic, msg.Partition)
+	timestamp, err := hlc.Parse(payload.Updated)
+	if err != nil {
+		return nil, err
+	}
+	table, qual, err := ident.ParseTableRelative(msg.Topic, c.schema.Schema())
+	if err != nil {
+		return nil, err
+	}
+	// Ensure the destination table is in the target schema.
+	if qual != ident.TableOnly {
+		table = ident.NewTable(c.schema.Schema(), table.Table())
+	}
+	if !c.timeRange.Contains(timestamp) {
+		log.Debugf("skipping mutation %s %s %s", string(msg.Key), timestamp, c.timeRange)
+		return nil, nil
+	}
+	if !cache.inNewer(msg, timestamp) {
+		return nil, nil
+	}
+	mut := types.Mutation{
+		Before: payload.Before,
+		Data:   payload.After,
+		Key:    msg.Key,
+		Time:   timestamp,
+	}
+	script.AddMeta("kafka", table, &mut)
+	log.Tracef("adding mutation %s", string(msg.Key))
+	return payload, toProcess.Accumulate(table, mut)
+}
+
 // allDone returns true if we processed all the messages before the
 // maxTimestamp on all the partitions.
 func (c *Consumer) allDone() bool {
@@ -189,57 +263,4 @@ func (c *Consumer) mark(
 		session.MarkMessage(message, "")
 		delete(consumed, key)
 	}
-}
-
-// accept process a batch.
-func (c *Consumer) accept(ctx context.Context, toProcess *types.MultiBatch) error {
-	if toProcess.Count() == 0 {
-		// Nothing to do.
-		return nil
-	}
-	log.Tracef("flushing %d", toProcess.Count())
-	if err := c.conveyor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{}); err != nil {
-		return err
-	}
-	return nil
-}
-
-// accumulate adds the message to the batch and returns the decoded payload.
-func (c *Consumer) accumulate(
-	toProcess *types.MultiBatch, msg *sarama.ConsumerMessage,
-) (*payload, error) {
-	payload, err := asPayload(msg)
-	if err != nil {
-		return nil, err
-	}
-	if payload.Resolved != "" {
-		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
-		return payload, nil
-	}
-	log.Tracef("Mutation %s %d [%s@%d]", string(msg.Key), msg.Timestamp.Unix(), msg.Topic, msg.Partition)
-	timestamp, err := hlc.Parse(payload.Updated)
-	if err != nil {
-		return nil, err
-	}
-	table, qual, err := ident.ParseTableRelative(msg.Topic, c.schema.Schema())
-	if err != nil {
-		return nil, err
-	}
-	// Ensure the destination table is in the target schema.
-	if qual != ident.TableOnly {
-		table = ident.NewTable(c.schema.Schema(), table.Table())
-	}
-	if !c.timeRange.Contains(timestamp) {
-		log.Debugf("skipping mutation %s %s %s", string(msg.Key), timestamp, c.timeRange)
-		return nil, nil
-	}
-	mut := types.Mutation{
-		Before: payload.Before,
-		Data:   payload.After,
-		Key:    msg.Key,
-		Time:   timestamp,
-	}
-	script.AddMeta("kafka", table, &mut)
-	log.Debugf("adding mutation %s", string(msg.Key))
-	return payload, toProcess.Accumulate(table, mut)
 }

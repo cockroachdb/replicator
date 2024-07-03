@@ -24,6 +24,32 @@ import (
 // TODO (silvano) Provide a grafana dashboard for kafka connector.
 // https://github.com/cockroachdb/replicator/issues/829
 var (
+	cacheSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafka_cache_size",
+		Help: "the number of entries in the cache",
+	}, []string{"topic", "partition"})
+	delayDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafka_delay_seconds",
+		Help: "the delta between now and the latest resolved timestamp",
+	}, []string{"topic", "partition"})
+	duplicateMessagesCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kafka_duplicate_count",
+		Help: "the total of duplicate messages",
+	}, []string{"topic", "partition"})
+	evictDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kafka_cache_evictions_duration",
+		Help:    "the length of time it took to evict expired entries from the cache",
+		Buckets: prometheus.ExponentialBucketsRange(1, 1e6, 20),
+	}, []string{"topic", "partition"})
+	oldMessagesCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kafka_old_messages_count",
+		Help: "the total of messages older than the last resolved timestamp",
+	}, []string{"topic", "partition"})
+	purgeDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kafka_cache_purges_duration",
+		Help:    "the length of time it took to purge the cache",
+		Buckets: prometheus.ExponentialBucketsRange(1, 1e6, 20),
+	}, []string{"topic", "partition"})
 	seekMessagesCount = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kafka_seeks_count",
 		Help: "the total of messages read seeking a minimum resolved timestamp",
