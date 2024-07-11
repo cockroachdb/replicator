@@ -35,7 +35,7 @@ import (
 var (
 	maxRange              = hlc.RangeExcluding(hlc.New(0, 0), hlc.New(math.MaxInt64, math.MaxInt))
 	defaultConvoyerConfig = conveyor.Config{
-		BestEffortWindow: conveyor.DefaultBackfillWindow,
+		BestEffortWindow: conveyor.DefaultBestEffortWindow,
 		BestEffortOnly:   false,
 		Immediate:        false,
 	}
@@ -89,7 +89,7 @@ func TestBind(t *testing.T) {
 			},
 			want: &Config{
 				Conveyor: conveyor.Config{
-					BestEffortWindow: conveyor.DefaultBackfillWindow,
+					BestEffortWindow: conveyor.DefaultBestEffortWindow,
 					BestEffortOnly:   false,
 					Immediate:        true},
 			},
@@ -104,7 +104,7 @@ func TestBind(t *testing.T) {
 			},
 			want: &Config{
 				Conveyor: conveyor.Config{
-					BestEffortWindow: conveyor.DefaultBackfillWindow,
+					BestEffortWindow: conveyor.DefaultBestEffortWindow,
 					BestEffortOnly:   true,
 					Immediate:        false},
 			},
