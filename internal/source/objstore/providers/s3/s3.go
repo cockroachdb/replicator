@@ -57,11 +57,12 @@ var (
 
 // Config has the parameters used to connect to S3.
 type Config struct {
-	AccessKey string // AWS Access Key
-	Bucket    string // The name of the bucket.
-	Endpoint  string // Alternative server to use, for other S3 providers.
-	Insecure  bool   // For testing against self hosted S3 providers.
-	SecretKey string // Secret associated to the Access Key
+	AccessKey    string // AWS Access Key.
+	Bucket       string // The name of the bucket.
+	Endpoint     string // Alternative server to use, for other S3 providers.
+	Insecure     bool   // For testing against self hosted S3 providers.
+	SecretKey    string // Secret associated to the Access Key.
+	SessionToken string // Session token.
 }
 
 // s3Access defines the functions we are using to interact with the minio SDK.
@@ -75,8 +76,30 @@ type s3Access interface {
 
 // New returns a bucket reader backed by a S3 provider.
 func New(config *Config) (bucket.Bucket, error) {
+	// Set up different authentication methods.
+	creds := credentials.NewChainCredentials([]credentials.Provider{
+		// Authentication based on the configuration.
+		&credentials.Static{
+			Value: credentials.Value{
+				AccessKeyID:     config.AccessKey,
+				SecretAccessKey: config.SecretKey,
+				SessionToken:    config.SessionToken,
+			},
+		},
+		// Authentication using a credentials file.
+		// Linux/OSX: "$HOME/.aws/credentials"
+		&credentials.FileAWSCredentials{},
+		// Implicit base on IAM metadata service.
+		// http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html
+		&credentials.IAM{
+			Client: &http.Client{
+				Transport: http.DefaultTransport,
+			},
+		},
+	})
+
 	minioClient, err := minio.New(config.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""),
+		Creds:  creds,
 		Secure: !config.Insecure,
 	})
 	if err != nil {

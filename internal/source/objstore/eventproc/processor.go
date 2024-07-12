@@ -18,7 +18,10 @@
 // within an object store.
 package eventproc
 
-import "github.com/cockroachdb/field-eng-powertools/stopper"
+import (
+	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/types"
+)
 
 // A Processor downloads a file from an object store
 // at the named path and operates on the mutations stored in the file.
@@ -30,5 +33,5 @@ type Processor interface {
 	// implementation. A Process returns a bucket.ErrTransient if the
 	// operation may be retried on a different processor instance or at
 	// a later time.
-	Process(ctx *stopper.Context, path string) error
+	Process(ctx *stopper.Context, path string, filters ...types.MutationFilter) error
 }
