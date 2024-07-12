@@ -126,6 +126,7 @@ func TestLocalProcess(t *testing.T) {
 	tests := []struct {
 		name           string
 		acceptor       *recorder.Recorder
+		filters        []types.MutationFilter
 		path           string
 		wantTimestamps []hlc.Time
 		wantErr        error
@@ -143,6 +144,18 @@ func TestLocalProcess(t *testing.T) {
 			acceptor:       newAcceptor(nil),
 			path:           `202405031553360274750000000000000-08779498965a12e2-1-2-00000000-mytable-2.ndjson`,
 			wantTimestamps: []hlc.Time{hlc.New(1, 0), hlc.New(2, 0), hlc.New(3, 0)},
+			wantTable:      ident.NewTable(ident.MustSchema(ident.Public), ident.New("mytable")),
+		},
+		{
+			name:     "filter",
+			acceptor: newAcceptor(nil),
+			filters: []types.MutationFilter{
+				func(mut types.Mutation) bool {
+					return hlc.Compare(mut.Time, hlc.New(2, 0)) >= 0
+				},
+			},
+			path:           `202405031553360274750000000000000-08779498965a12e2-1-2-00000000-mytable-2.ndjson`,
+			wantTimestamps: []hlc.Time{hlc.New(2, 0), hlc.New(3, 0)},
 			wantTable:      ident.NewTable(ident.MustSchema(ident.Public), ident.New("mytable")),
 		},
 		{
@@ -176,7 +189,7 @@ func TestLocalProcess(t *testing.T) {
 			parser, _ := cdcjson.New(bufio.MaxScanTokenSize)
 			schema := ident.MustSchema(ident.Public)
 			processor := NewLocal(tt.acceptor, bucket, parser, schema)
-			err := processor.Process(stop, filepath.Join(bucketName, tt.path))
+			err := processor.Process(stop, filepath.Join(bucketName, tt.path), tt.filters...)
 			if tt.wantErr != nil {
 				a.ErrorContains(err, tt.wantErr.Error())
 				return

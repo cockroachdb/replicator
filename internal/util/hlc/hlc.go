@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/spf13/pflag"
 )
 
 // Time is a representation of the hybrid logical clock timestamp used
@@ -44,6 +45,7 @@ type Time struct {
 var (
 	_ driver.Valuer = Time{}
 	_ sql.Scanner   = (*Time)(nil)
+	_ pflag.Value   = (*Time)(nil)
 )
 
 // Compare two timestamps.
@@ -108,6 +110,21 @@ func (t Time) Nanos() int64 { return t.nanos }
 // Next returns the time plus one logical tick.
 func (t Time) Next() Time {
 	return Time{t.nanos, t.logical + 1}
+}
+
+// Set implements pflag.Value
+func (t *Time) Set(timestamp string) error {
+	nt, err := Parse(timestamp)
+	if err != nil {
+		return err
+	}
+	*t = nt
+	return nil
+}
+
+// Type implements pflag.Value
+func (t Time) Type() string {
+	return fmt.Sprintf("%T", t)
 }
 
 // Value implements [driver.Valuer], which allows the time to be
