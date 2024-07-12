@@ -144,6 +144,9 @@ func (m Mutation) IsDelete() bool {
 	return len(m.Data) == 0 || bytes.Equal(m.Data, nullBytes)
 }
 
+// MutationFilter check if a mutation satisfies a condition.
+type MutationFilter func(Mutation) bool
+
 // Stager describes a service which can durably persist some
 // number of Mutations.
 type Stager interface {

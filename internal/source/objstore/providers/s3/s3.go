@@ -57,11 +57,12 @@ var (
 
 // Config has the parameters used to connect to S3.
 type Config struct {
-	AccessKey string // AWS Access Key
-	Bucket    string // The name of the bucket.
-	Endpoint  string // Alternative server to use, for other S3 providers.
-	Insecure  bool   // For testing against self hosted S3 providers.
-	SecretKey string // Secret associated to the Access Key
+	AccessKey    string // AWS Access Key
+	Bucket       string // The name of the bucket.
+	Endpoint     string // Alternative server to use, for other S3 providers.
+	Insecure     bool   // For testing against self hosted S3 providers.
+	SecretKey    string // Secret associated to the Access Key
+	SessionToken string // Session token
 }
 
 // s3Access defines the functions we are using to interact with the minio SDK.
@@ -76,7 +77,7 @@ type s3Access interface {
 // New returns a bucket reader backed by a S3 provider.
 func New(config *Config) (bucket.Bucket, error) {
 	minioClient, err := minio.New(config.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""),
+		Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, config.SessionToken),
 		Secure: !config.Insecure,
 	})
 	if err != nil {

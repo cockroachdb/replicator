@@ -21,10 +21,11 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/url"
 	"os"
-	"path"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/s3"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/secure"
 	"github.com/pkg/errors"
@@ -87,6 +89,10 @@ type Config struct {
 	// Object store specific configuration
 	BufferSize           int
 	FetchDelay           time.Duration
+	MaxTimestamp         string
+	MinTimestamp         string
+	PartitionFormat      string
+	ResolvedInterval     time.Duration // Minimal duration between resolved timestamps.
 	RetryInitialInterval time.Duration
 	RetryMaxTime         time.Duration
 	StorageURL           string
@@ -99,6 +105,7 @@ type Config struct {
 	local      fs.FS
 	prefix     string
 	s3         *s3.Config
+	timeRange  hlc.Range // Timestamp range, computed based on minTimestamp and maxTimestamp.
 }
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
@@ -115,6 +122,24 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"buffer size for the ndjson parser")
 	f.DurationVar(&c.FetchDelay, "fetchDelay", defaultFetchDelay,
 		"time to wait between fetching the list of entries in a bucket")
+	f.StringVar(&c.MaxTimestamp, "maxTimestamp", "",
+		"only accept messages older than this timestamp; this is an exclusive upper limit")
+	f.StringVar(&c.MinTimestamp, "minTimestamp", "",
+		"only accept unprocessed messages at or newer than this timestamp; this is an inclusive lower limit")
+	f.StringVar(&c.PartitionFormat, "partitionFormat", "daily",
+		"how changefeed file paths are partitioned: daily, hourly, flat")
+	f.DurationVar(&c.ResolvedInterval, "resolvedInterval", 5*time.Second, `interval between two resolved timestamps.
+Only used when minTimestamp is specified.
+It serves as a hint to seek the offset of a resolved timestamp message
+that is strictly less than the minTimestamp.
+Note:
+The optimal value for resolvedInterval is the same as the resolved
+interval specified in the CREATE CHANGEFEED command.
+The resolved messages will not be emitted more frequently than
+the configured min_checkpoint_frequency specified in CREATE CHANGEFEED
+command (but may be emitted less frequently).
+Please see the CREATE CHANGEFEED documentation for details.
+`)
 	f.DurationVar(&c.RetryInitialInterval, "retryInitial", defaultRetryInitialInterval,
 		"initial time to wait before retrying an operation that failed because of a transient error")
 	f.DurationVar(&c.RetryMaxTime, "retryMax", defaultRetryMaxTime,
@@ -165,32 +190,72 @@ func (c *Config) preflight() error {
 	if err != nil {
 		return err
 	}
-	// Extract provider configuration from the storage URL
-	c.bucketName = strings.TrimPrefix(u.Path, "/")
-	elements := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-	c.bucketName = elements[0]
-	if len(elements) > 1 {
-		c.prefix = path.Join(elements[1:]...)
+	c.PartitionFormat = strings.ToLower(c.PartitionFormat)
+	if !slices.Contains([]string{"daily", "flat", "hourly"}, c.PartitionFormat) {
+		return errors.Errorf("invalid partitionFormat %s. Must be one of daily, flat, hourly",
+			c.PartitionFormat)
 	}
-	c.identifier = fmt.Sprintf("objstore:%s//%s/%s", u.Scheme, c.bucketName, c.prefix)
+	minTimestamp := hlc.New(0, 0)
+	if len(c.MinTimestamp) != 0 {
+		if minTimestamp, err = hlc.Parse(c.MinTimestamp); err != nil {
+			return err
+		}
+	}
+	maxTimestamp := hlc.New(math.MaxInt64, math.MaxInt)
+	if len(c.MaxTimestamp) != 0 {
+		if maxTimestamp, err = hlc.Parse(c.MaxTimestamp); err != nil {
+			return err
+		}
+	}
+
+	if hlc.Compare(minTimestamp, maxTimestamp) > 0 {
+		return errors.New("minTimestamp must be before maxTimestamp")
+	}
+	c.timeRange = hlc.RangeExcluding(minTimestamp, maxTimestamp)
 	switch Providers[u.Scheme] {
 	case LocalStorage:
 		c.local = os.DirFS(u.Path)
+		c.identifier = fmt.Sprintf("objstore:file///%s", u.Path)
 	case S3Storage:
+		if u.Host != "" {
+			c.bucketName = u.Host
+			// Extract provider configuration from the storage URL
+			c.prefix = strings.TrimPrefix(u.Path, "/")
+		} else {
+			return errors.New("missing bucket name in URL. Must be s3://bucket/folder")
+		}
+		c.identifier = fmt.Sprintf("objstore:%s//%s/%s", u.Scheme, u.Host, u.Path)
 		params := u.Query()
-		ep, err := url.Parse(params.Get("AWS_ENDPOINT"))
+		endpointURL := paramValue(params, "AWS_ENDPOINT")
+		// The minio API require a endpoint to be set.
+		// We will be using AWS S3 as the default.
+		if endpointURL == "" {
+			endpointURL = "https://s3.amazonaws.com"
+		}
+		endpointParsed, err := url.Parse(endpointURL)
 		if err != nil {
 			return err
 		}
 		c.s3 = &s3.Config{
-			AccessKey: params.Get("AWS_ACCESS_KEY_ID"),
-			Bucket:    c.bucketName,
-			Endpoint:  ep.Host,
-			Insecure:  ep.Scheme == "http",
-			SecretKey: params.Get("AWS_SECRET_ACCESS_KEY"),
+			AccessKey:    paramValue(params, "AWS_ACCESS_KEY_ID"),
+			Bucket:       c.bucketName,
+			Endpoint:     endpointParsed.Host,
+			Insecure:     endpointParsed.Scheme == "http",
+			SecretKey:    paramValue(params, "AWS_SECRET_ACCESS_KEY"),
+			SessionToken: paramValue(params, "AWS_SESSION_TOKEN"),
 		}
 	default:
 		return errors.Errorf("unknown scheme %s", u.Scheme)
 	}
 	return nil
+}
+
+// paramValue gets the value for the specified parameter from the URL.
+// If not present in the URL, it retrieves a value from the environment.
+func paramValue(params url.Values, key string) string {
+	value := params.Get(key)
+	if value != "" {
+		return value
+	}
+	return os.Getenv(key)
 }
