@@ -22,6 +22,7 @@ import (
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/source/objstore/eventproc"
+	"github.com/cockroachdb/replicator/internal/types"
 )
 
 // Collector implements eventproc.Processor. It tracks the files that
@@ -55,7 +56,9 @@ func (c *Collector) GetSorted() []string {
 
 // Process implements eventproc.Processor.
 // It may return an ErrTransient to verify retry.
-func (c *Collector) Process(ctx *stopper.Context, path string) error {
+func (c *Collector) Process(
+	ctx *stopper.Context, path string, filters ...types.MutationFilter,
+) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.mu.batch = append(c.mu.batch, path)

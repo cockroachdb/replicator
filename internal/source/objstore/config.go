@@ -21,9 +21,9 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/url"
 	"os"
-	"path"
 	"runtime"
 	"strings"
 	"time"
@@ -34,11 +34,15 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/s3"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/secure"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 )
+
+const defaultEndpoint = "https://s3.amazonaws.com"
 
 var (
 	defaultBufferSize           = bufio.MaxScanTokenSize // 64K
@@ -46,12 +50,67 @@ var (
 	defaultNumberOfWorkers      = runtime.GOMAXPROCS(0)
 	defaultRetryInitialInterval = 10 * time.Millisecond
 	defaultRetryMaxTime         = 10 * time.Second
+	defaultResolvedInterval     = 5 * time.Second
+	minResolvedInterval         = 100 * time.Millisecond
 )
 
 // EagerConfig is a hack to get Wire to move userscript evaluation to
 // the beginning of the injector. This allows CLI flags to be set by the
 // script.
 type EagerConfig Config
+
+// PartitionFormat identifies how files are organized within
+// a bucket: daily, hourly or flat formats.
+type PartitionFormat int
+
+//go:generate go run golang.org/x/tools/cmd/stringer -type=PartitionFormat
+
+const (
+	// Daily is the default option:
+	// /[date]/[timestamp]-[uniquer]-[topic]-[schema-id]
+	Daily PartitionFormat = iota
+	// Flat result in no file partitioning:
+	// /[timestamp]-[uniquer]-[topic]-[schema-id]
+	Flat
+	// Hourly will partition into an hourly directory:
+	// /[date]/[hour]/[timestamp]-[uniquer]-[topic]-[schema-id]
+	Hourly
+)
+
+// PartitionFormats returns the available partition formats.
+func PartitionFormats() []string {
+	res := make([]string, 0)
+	for i := Daily; i <= Hourly; i++ {
+		res = append(res, i.String())
+	}
+	return res
+}
+
+var _ pflag.Value = new(PartitionFormat)
+
+// Set implements pflag.Value
+func (p *PartitionFormat) Set(value string) error {
+	log.Warnf("PartitionFormat %s", value)
+	switch strings.ToLower(value) {
+	case "":
+		// default partition format, when nothing is specified.
+		*p = PartitionFormat(Daily)
+	case "daily":
+		*p = PartitionFormat(Daily)
+	case "flat":
+		*p = PartitionFormat(Flat)
+	case "hourly":
+		*p = PartitionFormat(Hourly)
+	default:
+		return errors.Errorf("invalid partition format %q", value)
+	}
+	return nil
+}
+
+// Type implements pflag.Value
+func (p PartitionFormat) Type() string {
+	return fmt.Sprintf("%T", p)
+}
 
 // Provider identifies the type of providers.
 //
@@ -87,6 +146,10 @@ type Config struct {
 	// Object store specific configuration
 	BufferSize           int
 	FetchDelay           time.Duration
+	MaxTimestamp         hlc.Time
+	MinTimestamp         hlc.Time
+	PartitionFormat      PartitionFormat
+	ResolvedInterval     time.Duration // Minimal duration between resolved timestamps.
 	RetryInitialInterval time.Duration
 	RetryMaxTime         time.Duration
 	StorageURL           string
@@ -99,6 +162,7 @@ type Config struct {
 	local      fs.FS
 	prefix     string
 	s3         *s3.Config
+	timeRange  hlc.Range // Timestamp range, computed based on minTimestamp and maxTimestamp.
 }
 
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
@@ -115,6 +179,25 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"buffer size for the ndjson parser")
 	f.DurationVar(&c.FetchDelay, "fetchDelay", defaultFetchDelay,
 		"time to wait between fetching the list of entries in a bucket")
+	f.Var(&c.MaxTimestamp, "maxTimestamp",
+		"only accept messages older than this timestamp; this is an exclusive upper limit")
+	f.Var(&c.MinTimestamp, "minTimestamp",
+		"only accept unprocessed messages at or newer than this timestamp; this is an inclusive lower limit")
+	f.Var(&c.PartitionFormat, "partitionFormat",
+		fmt.Sprintf("how changefeed file paths are partitioned: %s",
+			strings.Join(PartitionFormats(), ", ")))
+	f.DurationVar(&c.ResolvedInterval, "resolvedInterval", defaultResolvedInterval, `interval between two resolved timestamps.
+Only used when minTimestamp is specified.
+It serves as a hint to seek the offset of a resolved timestamp message
+that is strictly less than the minTimestamp.
+Note:
+The optimal value for resolvedInterval is the same as the resolved
+interval specified in the CREATE CHANGEFEED command.
+The resolved messages will not be emitted more frequently than
+the configured min_checkpoint_frequency specified in CREATE CHANGEFEED
+command (but may be emitted less frequently).
+Please see the CREATE CHANGEFEED documentation for details.
+`)
 	f.DurationVar(&c.RetryInitialInterval, "retryInitial", defaultRetryInitialInterval,
 		"initial time to wait before retrying an operation that failed because of a transient error")
 	f.DurationVar(&c.RetryMaxTime, "retryMax", defaultRetryMaxTime,
@@ -165,32 +248,61 @@ func (c *Config) preflight() error {
 	if err != nil {
 		return err
 	}
-	// Extract provider configuration from the storage URL
-	c.bucketName = strings.TrimPrefix(u.Path, "/")
-	elements := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-	c.bucketName = elements[0]
-	if len(elements) > 1 {
-		c.prefix = path.Join(elements[1:]...)
+	maxTimestamp := hlc.New(math.MaxInt64, math.MaxInt)
+	if hlc.Compare(c.MaxTimestamp, hlc.Zero()) > 0 {
+		maxTimestamp = c.MaxTimestamp
 	}
-	c.identifier = fmt.Sprintf("objstore:%s//%s/%s", u.Scheme, c.bucketName, c.prefix)
+	if hlc.Compare(c.MinTimestamp, maxTimestamp) > 0 {
+		return errors.New("minTimestamp must be before maxTimestamp")
+	}
+	c.timeRange = hlc.RangeExcluding(c.MinTimestamp, maxTimestamp)
+	if c.ResolvedInterval < minResolvedInterval {
+		return errors.Errorf("resolvedInterval must be at least %s", minResolvedInterval)
+	}
 	switch Providers[u.Scheme] {
 	case LocalStorage:
 		c.local = os.DirFS(u.Path)
+		c.identifier = fmt.Sprintf("objstore:file///%s", u.Path)
 	case S3Storage:
+		if u.Host != "" {
+			c.bucketName = u.Host
+			// Extract provider configuration from the storage URL
+			c.prefix = strings.TrimPrefix(u.Path, "/")
+		} else {
+			return errors.New("missing bucket name in URL. Must be s3://bucket/folder")
+		}
+		c.identifier = fmt.Sprintf("objstore:%s//%s/%s", u.Scheme, u.Host, u.Path)
 		params := u.Query()
-		ep, err := url.Parse(params.Get("AWS_ENDPOINT"))
+		endpointURL := paramValue(params, "AWS_ENDPOINT")
+		// The minio API require a endpoint to be set.
+		// We will be using AWS S3 as the default.
+		if endpointURL == "" {
+			endpointURL = defaultEndpoint
+		}
+		endpointParsed, err := url.Parse(endpointURL)
 		if err != nil {
 			return err
 		}
 		c.s3 = &s3.Config{
-			AccessKey: params.Get("AWS_ACCESS_KEY_ID"),
-			Bucket:    c.bucketName,
-			Endpoint:  ep.Host,
-			Insecure:  ep.Scheme == "http",
-			SecretKey: params.Get("AWS_SECRET_ACCESS_KEY"),
+			AccessKey:    paramValue(params, "AWS_ACCESS_KEY_ID"),
+			Bucket:       c.bucketName,
+			Endpoint:     endpointParsed.Host,
+			Insecure:     endpointParsed.Scheme == "http",
+			SecretKey:    paramValue(params, "AWS_SECRET_ACCESS_KEY"),
+			SessionToken: paramValue(params, "AWS_SESSION_TOKEN"),
 		}
 	default:
 		return errors.Errorf("unknown scheme %s", u.Scheme)
 	}
 	return nil
+}
+
+// paramValue gets the value for the specified parameter from the URL.
+// If not present in the URL, it retrieves a value from the environment.
+func paramValue(params url.Values, key string) string {
+	value := params.Get(key)
+	if value != "" {
+		return value
+	}
+	return os.Getenv(key)
 }

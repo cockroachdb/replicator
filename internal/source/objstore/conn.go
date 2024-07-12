@@ -108,13 +108,20 @@ func (c *Conn) apply(ctx *stopper.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	log.WithField("bucket", c.config.bucketName).Infof("apply starting from %s", last)
+	minResolved, ok, err := c.findStartingResolved(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if ok && last < minResolved {
+		last = minResolved
+	}
 	resolvedRanges := make(chan (*resolvedRange))
+
 	// Start a go routine to find resolved timestamps
 	ctx.Go(func(ctx *stopper.Context) error {
 		defer close(resolvedRanges)
 		for {
-			r, err := c.findResolved(ctx, dir, last)
+			r, err := c.findResolved(ctx, dir, last, false)
 			if err != nil {
 				return err
 			}
@@ -156,6 +163,17 @@ func (c *Conn) applyRange(ctx *stopper.Context, dir string, res *resolvedRange) 
 		Limit:      bucket.NoLimit,
 		Recursive:  true,
 	}
+	// Check if the resolved timestamps are within the min/max timestamp.
+	validRange, err := c.checkValidRange(ctx, res)
+	if err != nil {
+		return err
+	}
+	// if not, we just update the state
+	if !validRange {
+		log.WithField("bucket", c.config.bucketName).
+			Debugf("skipping %s %s", res.from, res.to)
+		return c.state.setLast(ctx, c.stagingPool, res.to)
+	}
 	log.WithField("bucket", c.config.bucketName).
 		Debugf("applyRange %q %q", res.from, res.to)
 	operation := func() error {
@@ -169,18 +187,7 @@ func (c *Conn) applyRange(ctx *stopper.Context, dir string, res *resolvedRange) 
 				case compare == 0:
 					// We found the upper bound resolved timestamp.
 					// We can process all the files we collected.
-					var buff io.ReadCloser
-					open := func() error {
-						var err error
-						buff, err = c.bucket.Open(ctx, file)
-						return err
-					}
-					err := c.retry(open, "open file")
-					if err != nil {
-						return errors.Wrapf(err, "failed to retrieve %q", file)
-					}
-					defer buff.Close()
-					time, err := c.parser.Resolved(buff)
+					time, err := c.getResolvedTimestamp(ctx, file)
 					if err != nil {
 						return err
 					}
@@ -213,11 +220,126 @@ func (c *Conn) applyRange(ctx *stopper.Context, dir string, res *resolvedRange) 
 	return c.retry(operation, "apply range")
 }
 
-// findResolved finds the next range of entries to processes.
-// Currently, it's between two consecutive resolved timestamps.
+// checkValidRange verifies that the resolved timestamps in the
+// given range overlaps with the time range specified in the
+// configuration as [MinTimestamp - MaxTimestamp).
+func (c *Conn) checkValidRange(ctx *stopper.Context, res *resolvedRange) (bool, error) {
+	var lowerBound hlc.Time
+	if res.from != "" {
+		var err error
+		lowerBound, err = c.getResolvedTimestamp(ctx, res.from)
+		if err != nil {
+			return false, err
+		}
+	}
+	upperBound, err := c.getResolvedTimestamp(ctx, res.to)
+	if err != nil {
+		return false, err
+	}
+	return c.config.timeRange.Contains(lowerBound) ||
+		c.config.timeRange.Contains(upperBound), nil
+}
+
+// getResolvedTimestamp retrieves a resolved timestamp message located at the given path.
+func (c *Conn) getResolvedTimestamp(ctx *stopper.Context, file string) (hlc.Time, error) {
+	var buff io.ReadCloser
+	open := func() error {
+		var err error
+		buff, err = c.bucket.Open(ctx, file)
+		return err
+	}
+	err := c.retry(open, "open file")
+	if err != nil {
+		return hlc.Zero(), errors.Wrapf(err, "failed to retrieve %q", file)
+	}
+	defer buff.Close()
+	res, err := c.parser.Resolved(buff)
+	if err != nil {
+		return hlc.Zero(), errors.Wrapf(err, "failed to parse timestamp in file %q", file)
+	}
+	return res, nil
+}
+
+// filePrefix returns a path within the connection's bucket based on the configured
+// partition file format.
+func (c *Conn) filePrefix(dir string, timestamp time.Time) (string, error) {
+	switch c.config.PartitionFormat {
+	case Daily:
+		return path.Join(c.config.bucketName, dir,
+			timestamp.Format("2006-01-02"),
+			timestamp.Format("20060102150405")), nil
+	case Hourly:
+		return path.Join(c.config.bucketName, dir,
+			timestamp.Format("2006-01-02"),
+			timestamp.Format("15"),
+			timestamp.Format("20060102150405")), nil
+	case Flat:
+		return path.Join(c.config.bucketName, dir,
+			timestamp.Format("20060102150405")), nil
+	default:
+		return "",
+			errors.Errorf("invalid partition format %s", c.config.PartitionFormat)
+	}
+}
+
+// findStartingResolved discovers a file that has a resolved timestamp
+// before the user supplied minimum timestamp.
+// It returns a comma-ok if the file was found.
+func (c *Conn) findStartingResolved(ctx *stopper.Context, dir string) (string, bool, error) {
+	if hlc.Compare(c.config.MinTimestamp, hlc.Zero()) == 0 {
+		return "", false, nil
+	}
+	earliestResolved, err := c.findResolved(ctx, dir, "", true)
+	if err != nil {
+		return "", false, err
+	}
+	// nothing found in the bucket.
+	if earliestResolved.to == "" {
+		return "", false, nil
+	}
+	min := time.Unix(0, c.config.timeRange.Min().Nanos()).UTC()
+	for {
+		// we'll build the filename
+		from, err := c.filePrefix(dir, min)
+		if err != nil {
+			log.WithError(err).
+				WithField("bucket", c.config.bucketName).
+				Errorf("cannot determine prefix from %q", min)
+			return "", false, err
+		}
+		rng, err := c.findResolved(ctx, dir, from, true)
+		if err != nil {
+			log.WithError(err).
+				WithField("bucket", c.config.bucketName).
+				Errorf("cannot find resolved timestamp file starting at %q", from)
+			return "", false, err
+		}
+		// found the earliest, there is nothing before it.
+		if earliestResolved.to == rng.to {
+			return rng.to, true, nil
+		}
+		resolved, err := c.getResolvedTimestamp(ctx, rng.to)
+		if err != nil {
+			log.WithField("bucket", c.config.bucketName).
+				Errorf("cannot get resolved timestamp %q", err)
+			return "", false, err
+		}
+		// we have to start to scan just before the given min timestamp
+		if hlc.Compare(resolved, c.config.timeRange.Min()) <= 0 {
+			return rng.to, true, nil
+		}
+		// go back and try again.
+		min = min.Add(-c.config.ResolvedInterval)
+	}
+}
+
+// findResolved discovers ranges of files between two consecutive resolved timestamps.
+// It returns also ranges with no transactions if returnEmpty is true.
 func (c *Conn) findResolved(
-	ctx *stopper.Context, dir string, lowerBound string,
+	ctx *stopper.Context, dir string, lowerBound string, returnEmpty bool,
 ) (*resolvedRange, error) {
+	log.WithField("bucket", c.config.bucketName).
+		Tracef("findResolved %s", lowerBound)
 	ticker := time.NewTicker(c.config.FetchDelay)
 	var upperBound string
 	// Number of entries between two resolved timestamps.
@@ -238,7 +360,7 @@ func (c *Conn) findResolved(
 
 					if strings.HasSuffix(file, resolvedSuffix) {
 						batchSize.WithLabelValues(c.config.bucketName).Observe(float64(count))
-						if count > 0 {
+						if count > 0 || returnEmpty {
 							// We found a range with mutations, we will stop
 							// the walk
 							upperBound = file
@@ -299,7 +421,9 @@ func (c *Conn) processBatch(ctx *stopper.Context, resolved hlc.Time, files []str
 	for _, file := range files {
 		file := file
 		operation := func() error {
-			return c.processor.Process(ctx, file)
+			return c.processor.Process(ctx, file, func(mut types.Mutation) bool {
+				return c.config.timeRange.Contains(mut.Time)
+			})
 		}
 		g.Go(func() error {
 			start := time.Now()
