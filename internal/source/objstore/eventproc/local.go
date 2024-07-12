@@ -18,6 +18,7 @@ package eventproc
 
 import (
 	"context"
+	"io"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/source/objstore/bucket"
@@ -55,7 +56,9 @@ func NewLocal(
 }
 
 // Process implements Processor
-func (c *localProcessor) Process(ctx *stopper.Context, path string) error {
+func (c *localProcessor) Process(
+	ctx *stopper.Context, path string, filters ...types.MutationFilter,
+) error {
 	// Extract the table name from the path.
 	tableName, err := getTableName(path)
 	if err != nil {
@@ -68,11 +71,37 @@ func (c *localProcessor) Process(ctx *stopper.Context, path string) error {
 		return errors.Wrapf(err, "failed to retrieve %s", path)
 	}
 	defer buff.Close()
+
 	// Parse the mutations inside the file into a Batch.
-	batch, err := c.parser.Parse(table, cdcjson.BulkMutationReader(), buff)
+	batch, err := c.parser.Parse(table, filteredReader(filters...), buff)
 	if err != nil {
 		return errors.Wrapf(err, "failed to parse %s", path)
 	}
+
 	// Send the batch downstream to the target.
 	return c.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{})
+}
+
+// filteredReader returns a function reads mutations from
+// from a regular changefeed, removing mutations that
+// don't match all the given filters.
+func filteredReader(
+	filters ...types.MutationFilter,
+) func(reader io.Reader) (types.Mutation, error) {
+	return func(reader io.Reader) (types.Mutation, error) {
+		// read a mutation
+		mut, err := cdcjson.BulkMutationReader()(reader)
+		if err != nil {
+			return types.Mutation{}, err
+		}
+		// check that it satisfies all the filters, if any.
+		for _, filter := range filters {
+			if !filter(mut) {
+				// returning an empty mutation,
+				// which will be discarded by the parser.
+				return types.Mutation{}, nil
+			}
+		}
+		return mut, nil
+	}
 }

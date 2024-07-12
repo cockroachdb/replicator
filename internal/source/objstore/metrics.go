@@ -36,6 +36,10 @@ var (
 		Help:    "the size of a batch of files between two consecutive resolved timestamps",
 		Buckets: metrics.Buckets(1, 1e6),
 	}, bucketLabels)
+	bucketScanCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "objstore_scan_read",
+		Help: "the total number of times we are reading from the bucket",
+	}, bucketLabels)
 	fetchResolvedDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "objstore_fetch_resolved_duration_seconds",
 		Help:    "the time spent in fetching resolved timestamps",

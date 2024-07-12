@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/source/objstore/bucket"
 	"github.com/cockroachdb/replicator/internal/source/objstore/eventproc"
+	"github.com/cockroachdb/replicator/internal/types"
 )
 
 // chaosProcessor wraps a eventproc.Processor and injects transient errors.
@@ -43,9 +44,11 @@ func NewChaosProcessor(delegate eventproc.Processor, prob float32) eventproc.Pro
 
 // Process implements eventproc.Processor.
 // It may return an ErrTransient to verify retry.
-func (c *chaosProcessor) Process(ctx *stopper.Context, path string) error {
+func (c *chaosProcessor) Process(
+	ctx *stopper.Context, path string, filters ...types.MutationFilter,
+) error {
 	if rand.Float32() <= c.probTransientError {
 		return bucket.ErrTransient
 	}
-	return c.delegate.Process(ctx, path)
+	return c.delegate.Process(ctx, path, filters...)
 }
