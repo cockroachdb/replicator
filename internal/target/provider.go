@@ -21,6 +21,7 @@ package target
 import (
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/google/wire"
 )
@@ -30,5 +31,6 @@ import (
 var Set = wire.NewSet(
 	apply.Set,
 	dlq.Set,
+	load.Set,
 	schemawatch.Set,
 )

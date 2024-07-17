@@ -1,0 +1,40 @@
+{{- /*gotype: github.com/cockroachdb/replicator/internal/target/load.demand*/ -}}
+{{- /*
+This uses a CTE that sends the PKs that we wish to select and
+returns the index of extant rows, along with the requested values..
+
+WITH
+k ( __idx__, pk0, pk1 ) AS (VALUES ROW(?,?), ROW(?,?), ROW(?,?))
+SELECT k.__idx__, t.data0, t.data1, t.data2
+FROM my_table t
+JOIN k USING (pk0, pk1)
+*/ -}}
+
+WITH k (
+  __idx__
+  {{- range $colIdx, $col := $.PKs -}}
+    , {{ $col.Name }}
+  {{- end -}}
+) AS (VALUES {{- nl -}}
+{{- range $rowIdx, $rowData := $.PKData -}}
+{{- if $rowIdx -}} , {{- nl -}} {{- end -}}
+{{- /* Syntax differs between MySQL and MariaDB. */ -}}
+ROW(
+  {{ $rowIdx }}
+  {{- range $colIdx, $colValue := $rowData -}}
+    , ?
+  {{- end -}}
+)
+{{- end -}}
+)
+SELECT k.__idx__ {{- sp -}}
+{{- range $colIdx, $col := $.SelectCols -}}
+  , {{- sp -}} t.{{- $col.Name -}}
+{{- end -}} {{- nl -}}
+FROM k
+JOIN {{ $.Table }} t ON (
+{{- range $colIdx, $col := $.PKs -}}
+  {{- if $colIdx }} AND {{ end -}}
+  t.{{ $col.Name }} = k.{{ $col.Name }}
+{{- end -}}
+)

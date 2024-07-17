@@ -14,6 +14,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -83,6 +84,10 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	loader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, err
+	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
@@ -101,6 +106,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		Diagnostics:    diagnostics,
 		DLQConfig:      config,
 		DLQs:           dlQs,
+		Loader:         loader,
 		Memo:           memoMemo,
 		Stagers:        stagers,
 		VersionChecker: checker,
