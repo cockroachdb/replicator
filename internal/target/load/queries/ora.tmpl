@@ -1,0 +1,42 @@
+{{- /*gotype: github.com/cockroachdb/replicator/internal/target/load.demand*/ -}}
+{{- /*
+This uses a CTE that sends the PKs that we wish to select and
+returns the index of extant rows, along with the requested values..
+
+WITH
+k ( __idx__, pk0, pk1 ) AS (
+  SELECT 0, :1, :2, :3 FROM DUAL UNION ALL
+  SELECT 1, :4, :5, :6 FROM DUAL)
+SELECT k.__idx__, t.data0, t.data1, t.data2
+FROM my_table t
+JOIN idx_k ON (k.pk0 = t.pk0 AND k.pk1 = t.pk1)
+*/ -}}
+
+WITH k (
+"__idx__"
+{{- range $colIdx, $col := $.PKs -}}
+  , {{ $col.Name }}
+{{- end -}}
+) AS ({{- nl -}}
+{{- $p := 1 -}}
+{{- range $rowIdx, $rowData := $.PKData -}}
+  {{- if $rowIdx -}} {{- sp -}} UNION ALL {{- nl -}} {{- end -}}
+  SELECT {{ $rowIdx }} {{- sp -}}
+  {{- range $colIdx, $colValue := $rowData -}}
+    , CAST(:{{- $p }} AS {{ (index $.PKs $colIdx).Type }})
+    {{- $p = inc $p -}}
+  {{- end -}}
+  {{- sp -}} FROM DUAL
+{{- end -}}
+)
+SELECT k."__idx__"
+{{- range $colIdx, $col := $.SelectCols -}}
+  , {{- sp -}} t.{{- $col.Name -}}
+{{- end -}} {{- nl -}}
+FROM {{ $.Table }} t
+JOIN k ON (
+{{- range $colIdx, $col := $.PKs -}}
+  {{- if $colIdx }} AND {{ end -}}
+  k.{{ $col.Name }}=t.{{ $col.Name }}
+{{- end -}}
+)

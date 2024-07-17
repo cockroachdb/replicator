@@ -33,6 +33,19 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// A ChildRow contains an expected snapshot of some child table row.
+type ChildRow struct {
+	ID     int
+	Parent int
+	Val    int64
+}
+
+// A ParentRow contains an expected snapshot of some parent table row.
+type ParentRow struct {
+	ID  int
+	Val int64
+}
+
 // GeneratorBase creates batches of test data. It assumes that there is
 // a parent table and a child table.
 type GeneratorBase struct {
@@ -68,6 +81,19 @@ func NewGeneratorBase(parent, child ident.Table) *GeneratorBase {
 		Parents:       make(map[int]struct{}),
 		ParentVals:    make(map[int]int64),
 	}
+}
+
+// ChildRows returns a summary of all expected child table rows.
+func (g *GeneratorBase) ChildRows() []*ChildRow {
+	ret := make([]*ChildRow, 0, len(g.Parents))
+	for child := range g.Children {
+		ret = append(ret, &ChildRow{
+			ID:     child,
+			Parent: g.ChildToParent[child],
+			Val:    g.ChildVals[child],
+		})
+	}
+	return ret
 }
 
 // GenerateInto will add mutations to the batch at the requested time.
@@ -133,6 +159,18 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 	if hlc.Compare(time, g.MaxTime) > 0 {
 		g.MaxTime = time
 	}
+}
+
+// ParentRows returns a summary of all expected parent table rows.
+func (g *GeneratorBase) ParentRows() []*ParentRow {
+	ret := make([]*ParentRow, 0, len(g.Parents))
+	for parent := range g.Parents {
+		ret = append(ret, &ParentRow{
+			ID:  parent,
+			Val: g.ParentVals[parent],
+		})
+	}
+	return ret
 }
 
 // Range returns a range that includes all times at which the Generator

@@ -105,8 +105,18 @@ func OpenMySQLAsTarget(
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		driver := mysql.MySQLDriver{}
-		connector, err := driver.OpenConnector(mySQLString)
+		cfg, err := mysql.ParseDSN(mySQLString)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		// This impacts the use of db.Query() and friends, but not
+		// prepared statements. We set this as a workaround for MariaDB
+		// queries where the parameter types in prepared statements
+		// don't line up with MySQL. What this option does is to replace
+		// the ? markers with the literal values, rather than doing a
+		// prepare, bind, exec.
+		cfg.InterpolateParams = true
+		connector, err := mysql.NewConnector(cfg)
 		if err != nil {
 			log.WithError(err).Trace("failed to connect to database server")
 			transportError = err
