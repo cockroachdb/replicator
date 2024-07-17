@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -49,6 +50,7 @@ type Fixture struct {
 	Diagnostics    *diag.Diagnostics
 	DLQConfig      *dlq.Config
 	DLQs           types.DLQs
+	Loader         *load.Loader
 	Memo           types.Memo
 	Stagers        types.Stagers
 	VersionChecker *version.Checker

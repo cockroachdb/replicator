@@ -141,10 +141,11 @@ val %[1]s DEFAULT 0 NOT NULL
 
 // CheckConsistent verifies that the staging tables are empty and that
 // the requisite number of rows exist in the target tables.
-func (g *Workload) CheckConsistent(_ context.Context, t testing.TB) {
+func (g *Workload) CheckConsistent(_ context.Context, t testing.TB) (ok bool) {
 	a := assert.New(t)
 	failures, err := g.Checker.CheckConsistent()
 	if a.NoError(err) {
-		a.Empty(failures)
+		return a.Empty(failures)
 	}
+	return false
 }
