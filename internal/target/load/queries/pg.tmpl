@@ -1,0 +1,41 @@
+{{- /*gotype: github.com/cockroachdb/replicator/internal/target/load.demand*/ -}}
+{{- /*
+This uses a CTE that sends the PKs that we wish to select and
+returns the index of extant rows, along with the requested values..
+
+WITH
+k ( __idx__, pk0, pk1 ) AS (VALUES (0, $1::TYPE,$2::TYPE), (1, $3::TYPE,$4::TYPE), ...),
+SELECT k.__idx__, t.data0, t.data1, t.data2
+FROM my_table t
+JOIN k USING (pk0, pk1)
+*/ -}}
+
+WITH k (
+  __idx__
+  {{- range $colIdx, $col := $.PKs -}}
+  , {{ $col.Name }}
+  {{- end -}}
+) AS (VALUES {{- nl -}}
+{{- $p := 1 -}}
+{{- range $rowIdx, $rowData := $.PKData -}}
+{{- if $rowIdx -}} , {{- nl -}} {{- end -}}
+(
+  {{ $rowIdx }}
+  {{- range $colIdx, $colValue := $rowData -}}
+    , ${{ $p }}::{{ (index $.PKs $colIdx).Type }}
+    {{- $p = inc $p -}}
+  {{- end -}}
+)
+{{- end -}}
+)
+SELECT k.__idx__ {{- sp -}}
+{{- range $colIdx, $col := $.SelectCols -}}
+, {{- sp -}} t.{{- $col.Name -}}
+{{- end -}} {{- nl -}}
+FROM {{ $.Table }} t
+JOIN k USING (
+{{- range $colIdx, $col := $.PKs -}}
+  {{- if $colIdx}}, {{- sp -}} {{- end -}}
+  {{ $col.Name }}
+{{- end -}}
+)

@@ -142,6 +142,11 @@ func (b *Bag) Entries() []cmap.Entry[ident.Ident, any] {
 	return ret
 }
 
+// Entry returns the mapped Entry, or returns false.
+func (b *Bag) Entry(key ident.Ident) (_ *Entry, ok bool) {
+	return b.Mapped.Get(b.renamed(key))
+}
+
 // Get implements cmap.Map.
 func (b *Bag) Get(key ident.Ident) (_ any, ok bool) {
 	key = b.renamed(key)
