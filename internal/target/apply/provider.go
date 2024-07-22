@@ -18,6 +18,7 @@ package apply
 
 import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -37,6 +38,7 @@ func ProvideAcceptor(
 	configs *applycfg.Configs,
 	diags *diag.Diagnostics,
 	dlqs types.DLQs,
+	loader *load.Loader,
 	target *types.TargetPool,
 	watchers types.Watchers,
 ) (*Acceptor, error) {
@@ -44,6 +46,7 @@ func ProvideAcceptor(
 		cache:    cache,
 		configs:  configs,
 		dlqs:     dlqs,
+		loader:   loader,
 		poolInfo: target.Info(),
 		stop:     ctx,
 		watchers: watchers,

@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging/leases"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/auth/trust"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -57,7 +58,11 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	configs := fixture.Configs
 	dlqConfig := ProvideDLQConfig(config)
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	loader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, err
+	}
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, loader, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +76,11 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
 	scriptConfig := ProvideScriptConfig(config)
-	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
+	scriptLoader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, err
 	}
-	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
+	sequencer := script2.ProvideSequencer(scriptLoader, targetPool, watchers)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
 	conveyors, err := conveyor.ProvideConveyors(context, acceptor, conveyorConfig, checkpoints, retireRetire, switcherSwitcher, watchers)
 	if err != nil {

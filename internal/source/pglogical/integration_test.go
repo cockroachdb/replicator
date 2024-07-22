@@ -39,8 +39,10 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest/scripttest"
 	"github.com/cockroachdb/replicator/internal/util/batches"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/logfmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	log "github.com/sirupsen/logrus"
@@ -57,6 +59,11 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	log.SetFormatter(logfmt.Wrap(&log.TextFormatter{
+		FullTimestamp:   true,
+		PadLevelText:    true,
+		TimestampFormat: time.Stamp,
+	}))
 	all.IntegrationMain(m, all.PostgreSQLName)
 }
 
@@ -691,7 +698,6 @@ func TestToast(t *testing.T) {
 		SourceConn:     *pgConnString + dbName.Raw(),
 		StandbyTimeout: 100 * time.Millisecond,
 		TargetSchema:   dbSchema,
-		ToastedColumns: true,
 	}
 	r.NoError(cfg.Preflight())
 	repl, err := Start(fixture.Context, cfg)
@@ -706,7 +712,7 @@ func TestToast(t *testing.T) {
 		for count < updates {
 			row := crdbPool.QueryRowContext(ctx, fmt.Sprintf("SELECT i from %s limit 1", name))
 			err = row.Scan(&count)
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -725,8 +731,8 @@ func TestToast(t *testing.T) {
 		a.Equal(longObj, json)
 		a.Equal(longString, st.String)
 		a.Equal(longString, text.String)
-		// Verify that we actually seen empty toasted column markers
-		a.Equal(updates*3, getCounterValue(t, unchangedToastedColumns))
+		// Verify that we actually see empty toasted column markers
+		a.NotZero(getCounterValue(t, unchangedToastedColumns))
 
 	})
 

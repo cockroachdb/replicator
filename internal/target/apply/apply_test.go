@@ -1894,6 +1894,102 @@ func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	}
 }
 
+// Verify that sparse payloads will load pre-existing values from the
+// target table.
+func TestSparsePayload(t *testing.T) {
+	const numRows = 128
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+	ctx := fixture.Context
+
+	// KV payload, but with different column names.
+	type Payload struct {
+		PK   int    `json:"pk"`
+		Val0 string `json:"val0,omitempty"`
+		Val1 string `json:"val1,omitempty"`
+		Val2 string `json:"val2,omitempty"`
+		Val3 string `json:"val3,omitempty"`
+	}
+	newPayload := func(pk int) *Payload {
+		return &Payload{
+			PK:   pk,
+			Val0: "val0_initial",
+			Val1: "val1_initial",
+			Val2: "val2_initial",
+			Val3: "val3_initial",
+		}
+	}
+
+	tbl, err := fixture.CreateTargetTable(ctx, `
+CREATE TABLE %s (
+  pk INT PRIMARY KEY,
+  val0 VARCHAR(32),
+  val1 VARCHAR(32) DEFAULT 'should_not_see_this',
+  val2 VARCHAR(32) NOT NULL,
+  val3 VARCHAR(32) DEFAULT 'should_not_see_this' NOT NULL
+)`)
+	r.NoError(err)
+	app := fixture.Applier(ctx, tbl.Name())
+
+	// Insert initial values.
+	muts := make([]types.Mutation, numRows)
+	for i := range muts {
+		p := newPayload(i)
+		data, err := json.Marshal(p)
+		r.NoError(err)
+		muts[i] = types.Mutation{
+			Data: data,
+			Key:  []byte(fmt.Sprintf(`[%d]`, i)),
+		}
+	}
+	r.NoError(app(muts))
+
+	// Generate sparse values and the expected final states.
+	expected := make([]*Payload, numRows)
+	patches := make([]types.Mutation, numRows)
+	for i := range patches {
+		next := newPayload(i)
+		patchP := &Payload{PK: i}
+		if i&(1<<0) != 0 {
+			next.Val0 = "val0_updated"
+			patchP.Val0 = next.Val0
+		}
+		if i&(1<<1) != 0 {
+			next.Val1 = "val1_updated"
+			patchP.Val1 = next.Val1
+		}
+		if i&(1<<2) != 0 {
+			next.Val2 = "val2_updated"
+			patchP.Val2 = next.Val2
+		}
+		if i&(1<<3) != 0 {
+			next.Val3 = "val3_updated"
+			patchP.Val3 = next.Val3
+		}
+		expected[i] = next
+		patchData, err := json.Marshal(patchP)
+		r.NoError(err)
+		patches[i] = types.Mutation{
+			Data: patchData,
+			Key:  []byte(fmt.Sprintf(`[%d]`, i)),
+		}
+	}
+	r.NoError(app(patches))
+
+	found := make([]*Payload, numRows)
+	for i := range found {
+		next := &Payload{PK: i}
+		r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
+			"SELECT val0, val1, val2, val3 FROM %s WHERE pk=%d", tbl.Name(), i,
+		)).Scan(&next.Val0, &next.Val1, &next.Val2, &next.Val3))
+		found[i] = next
+	}
+
+	r.Equal(expected, found)
+}
+
 // Verify that user-defined enums with mixed-case identifiers work.
 func TestUDTEnum(t *testing.T) {
 

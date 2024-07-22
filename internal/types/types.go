@@ -257,11 +257,6 @@ type Stagers interface {
 	Read(ctx *stopper.Context, q *StagingQuery) (<-chan *StagingCursor, error)
 }
 
-// ToastedColumnPlaceholder is a placeholder to identify a unchanged
-// Postgres toasted column. Must be quoted, so it can be used
-// in JSON columns.
-const ToastedColumnPlaceholder = `"__cdc__sink__toasted__"`
-
 // ColData hold SQL column metadata.
 type ColData struct {
 	// A SQL expression to use with sparse payloads.

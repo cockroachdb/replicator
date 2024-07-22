@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -76,7 +77,11 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	loadLoader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, err
+	}
+	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, loadLoader, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}

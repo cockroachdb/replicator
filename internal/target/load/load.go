@@ -21,6 +21,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -209,6 +210,9 @@ func (l *Loader) load(ctx context.Context, work *demand) (map[*merge.Bag]struct{
 				if err != nil {
 					return nil, err
 				}
+			}
+			if num, ok := pkColValue.(json.Number); ok {
+				pkColValue = num.String()
 			}
 			args[argIdx] = pkColValue
 			argIdx++
