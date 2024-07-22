@@ -58,8 +58,6 @@ type Config struct {
 	// The SQL schema in the target cluster to write into. This value is
 	// optional if a userscript dispatch function is present.
 	TargetSchema ident.Schema
-	// Enable support for toasted columns
-	ToastedColumns bool
 }
 
 // Bind adds flags to the set.
@@ -78,8 +76,14 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"how often to report WAL progress to the source server")
 	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
 		"the SQL database schema in the target cluster to update")
-	f.BoolVar(&c.ToastedColumns, "enableToastedColumns", false,
-		"Enable support for toasted columns")
+
+	// The apply package supports sparse mutations now.
+	var deprecated bool
+	f.BoolVar(&deprecated, "enableToastedColumns", false,
+		"(deprecated) Enable support for toasted columns")
+	if err := f.MarkHidden("enableToastedColumns"); err != nil {
+		panic(err)
+	}
 
 	// Set to true below.
 	if err := f.MarkHidden(sequencer.AssumeIdempotent); err != nil {

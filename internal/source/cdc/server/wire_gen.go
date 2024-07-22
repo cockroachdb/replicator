@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
@@ -94,7 +95,11 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	loadLoader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, err
+	}
+	acceptor, err := apply.ProvideAcceptor(ctx, targetStatements, configs, diagnostics, dlQs, loadLoader, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +199,11 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		return nil, nil, err
 	}
 	dlQs := dlq.ProvideDLQs(dlqConfig, targetPool, watchers)
-	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	loader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, nil, err
+	}
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, loader, targetPool, watchers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -221,11 +230,11 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
 	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
-	loader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
+	scriptLoader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
 	if err != nil {
 		return nil, nil, err
 	}
-	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
+	sequencer := script2.ProvideSequencer(scriptLoader, targetPool, watchers)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
 	conveyors, err := conveyor.ProvideConveyors(context, acceptor, conveyorConfig, checkpoints, retireRetire, switcherSwitcher, watchers)
 	if err != nil {

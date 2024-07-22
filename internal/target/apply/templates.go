@@ -92,7 +92,6 @@ var (
 			}
 			return ret, nil
 		},
-		"toasted": func() string { return types.ToastedColumnPlaceholder },
 	}
 
 	tmplCRDB *template.Template

@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -32,6 +33,7 @@ type factory struct {
 	cache    *types.TargetStatements
 	configs  *applycfg.Configs
 	dlqs     types.DLQs
+	loader   *load.Loader
 	poolInfo *types.PoolInfo
 	stop     *stopper.Context
 	watchers types.Watchers
