@@ -68,8 +68,6 @@ type Conn struct {
 	target ident.Schema
 	// Access to the target database.
 	targetDB *types.TargetPool
-	// Support for toasted columns
-	toastedColumns bool
 	// Managed by persistWALOffset.
 	walOffset notify.Var[pglogrepl.LSN]
 }
@@ -327,21 +325,11 @@ func (c *Conn) decodeMutation(
 				key = append(key, string(sourceCol.Data))
 			}
 		case pglogrepl.TupleDataTypeToast:
-			if c.toastedColumns {
-				// TupleDataTypeToast is just a marker that tells us
-				// that a TOASTed column has not changed.
-				// Putting a placeholders for downstream apply handlers,
-				// and a custom template that will be able to handle it.
-				unchangedToastedColumns.Inc()
-				if mut.Meta == nil {
-					mut.Meta = make(map[string]any)
-				}
-				mut.Meta[types.CustomUpsert] = "toasted"
-				enc[targetCol.Name.Raw()] = types.ToastedColumnPlaceholder
-				continue
-			}
-			return mut, errors.Errorf(
-				"TOASTed columns are not supported in %s.%s", tbl, targetCol.Name)
+			// TupleDataTypeToast is just a marker that tells us that a
+			// TOASTed column has not changed. The apply package
+			// supports sparse mutations, so any existing value in the
+			// target table will remain in place.
+			unchangedToastedColumns.Inc()
 		default:
 			return mut, errors.Errorf(
 				"unimplemented tuple data type %q", string(sourceCol.DataType))

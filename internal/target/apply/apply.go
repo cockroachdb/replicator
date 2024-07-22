@@ -30,6 +30,7 @@ import (
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -46,6 +47,7 @@ import (
 type apply struct {
 	cache   *types.TargetStatements
 	dlqs    types.DLQs
+	loader  *load.Loader
 	product types.Product
 	target  *ident.Hinted[ident.Table]
 
@@ -92,6 +94,7 @@ func (f *factory) newApply(
 	a := &apply{
 		cache:   f.cache,
 		dlqs:    f.dlqs,
+		loader:  f.loader,
 		product: poolInfo.Product,
 		target:  poolInfo.HintNoFTS(target),
 
@@ -342,6 +345,14 @@ func (a *apply) upsertLocked(
 	); err != nil {
 		return err
 	}
+
+	// Load data from sparse payloads. In the ideal case, this call to
+	// Load is a no-op, since all known properties will have valid
+	// values.
+	if _, err := a.loader.Load(ctx, db, a.target.Base, allPayloadData); err != nil {
+		return err
+	}
+
 	return a.upsertBagsLocked(ctx, db, applyConditional, muts, allPayloadData, template)
 }
 
@@ -508,7 +519,7 @@ func (a *apply) upsertBagsLocked(
 		// There's no merge behavior, so we don't need to read anything back.
 		tag, err := stmt.ExecContext(ctx, allArgs...)
 		if err != nil {
-			return errors.WithStack(err)
+			return errors.Wrap(err, stmtCacheKey)
 		}
 		upserted, err := tag.RowsAffected()
 		if err != nil {

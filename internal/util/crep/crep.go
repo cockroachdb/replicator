@@ -91,7 +91,7 @@ func Canonical(value any) (Value, error) {
 
 	case []byte:
 		// Parse raw message as-is.
-		buf = t
+		return string(t), nil
 
 	default:
 		// Marshal other random types.

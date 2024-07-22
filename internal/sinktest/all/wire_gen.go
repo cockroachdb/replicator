@@ -76,15 +76,15 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		return nil, err
 	}
 	dlQs := dlq.ProvideDLQs(config, targetPool, watchers)
-	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, targetPool, watchers)
+	loader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, err
+	}
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, loader, targetPool, watchers)
 	if err != nil {
 		return nil, err
 	}
 	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
-	if err != nil {
-		return nil, err
-	}
-	loader, err := load.ProvideLoader(targetStatements, targetPool)
 	if err != nil {
 		return nil, err
 	}

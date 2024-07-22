@@ -135,7 +135,6 @@ func ProvideConn(
 		stagingDB:       stagingPool,
 		target:          config.TargetSchema,
 		targetDB:        targetPool,
-		toastedColumns:  config.ToastedColumns,
 	}
 	return conn, conn.Start(ctx)
 }
