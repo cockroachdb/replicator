@@ -267,6 +267,10 @@ func (c *Config) preflight() error {
 		if err != nil {
 			return err
 		}
+		// if the mode is immediate, we need to process files sequentially.
+		if c.Conveyor.Immediate {
+			c.Workers = 1
+		}
 		c.s3 = &s3.Config{
 			AccessKey:    paramValue(params, "AWS_ACCESS_KEY_ID"),
 			Bucket:       c.bucketName,
