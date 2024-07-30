@@ -18,12 +18,17 @@ package objstore
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math/rand/v2"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
@@ -31,6 +36,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest/scripttest"
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/s3"
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -47,9 +53,12 @@ type fixtureConfig struct {
 }
 
 const (
-	endpoint = "localhost:9100"
-	user     = "root"
-	password = "SoupOrSecret"
+	endpoint      = "localhost:9100"
+	maxBatchSize  = 50
+	maxIterations = 100
+	password      = "SoupOrSecret"
+	uniquer       = "8446dc14536f66f2-1-2-00000000"
+	user          = "root"
 )
 
 // TestMain verifies that we can run the integration test for objstore.
@@ -57,19 +66,20 @@ func TestMain(m *testing.M) {
 	all.IntegrationMain(m, all.ObjectStoreName)
 }
 
-// TestIntegrationSmoke verifies that we can process change events stored in an object store.
-func TestIntegrationSmoke(t *testing.T) {
+// TestSmoke verifies that we can process change events send by a CockroachDB node
+// via a bucket.
+func TestSmoke(t *testing.T) {
 
-	t.Run("consistent", func(t *testing.T) { testIntegration(t, &fixtureConfig{}) })
-	t.Run("consistent chaos", func(t *testing.T) { testIntegration(t, &fixtureConfig{chaos: true}) })
-	t.Run("consistent script", func(t *testing.T) { testIntegration(t, &fixtureConfig{script: true}) })
+	t.Run("consistent", func(t *testing.T) { testSmoke(t, &fixtureConfig{}) })
+	t.Run("consistent chaos", func(t *testing.T) { testSmoke(t, &fixtureConfig{chaos: true}) })
+	t.Run("consistent script", func(t *testing.T) { testSmoke(t, &fixtureConfig{script: true}) })
 
-	t.Run("immediate", func(t *testing.T) { testIntegration(t, &fixtureConfig{immediate: true}) })
-	t.Run("immediate chaos", func(t *testing.T) { testIntegration(t, &fixtureConfig{chaos: true, immediate: true}) })
-	t.Run("immediate script", func(t *testing.T) { testIntegration(t, &fixtureConfig{script: true, immediate: true}) })
+	t.Run("immediate", func(t *testing.T) { testSmoke(t, &fixtureConfig{immediate: true}) })
+	t.Run("immediate chaos", func(t *testing.T) { testSmoke(t, &fixtureConfig{chaos: true, immediate: true}) })
+	t.Run("immediate script", func(t *testing.T) { testSmoke(t, &fixtureConfig{script: true, immediate: true}) })
 }
 
-func testIntegration(t *testing.T, fc *fixtureConfig) {
+func testSmoke(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
 	r := require.New(t)
 
@@ -103,11 +113,13 @@ func testIntegration(t *testing.T, fc *fixtureConfig) {
 
 	serverCfg, err := getConfig(destFixture, fc, target, bucketName)
 	r.NoError(err)
-
-	cleanup, err := createBucket(ctx, serverCfg.s3, bucketName)
+	if fc.immediate {
+		r.Equal(1, serverCfg.Workers)
+	}
+	sourceBucket, err := newSourceBucket(ctx, serverCfg.s3)
 	r.NoError(err)
 	defer func() {
-		if err := cleanup(); err != nil {
+		if err := sourceBucket.cleanup(ctx); err != nil {
 			log.Errorf("error removing bucket %v", err)
 		}
 	}()
@@ -180,25 +192,210 @@ func testIntegration(t *testing.T, fc *fixtureConfig) {
 	sinktest.CheckDiagnostics(ctx, t, conn.Diagnostics)
 }
 
-func createBucket(ctx context.Context, config *s3.Config, bucketName string) (func() error, error) {
-	minioClient, err := minio.New(config.Endpoint, &minio.Options{
+func TestWorkload(t *testing.T) {
+	t.Run("consistent", func(t *testing.T) { testWorkload(t, &fixtureConfig{}) })
+	t.Run("consistent chaos", func(t *testing.T) { testWorkload(t, &fixtureConfig{chaos: true}) })
+
+	t.Run("immediate", func(t *testing.T) { testWorkload(t, &fixtureConfig{immediate: true}) })
+	t.Run("immediate chaos", func(t *testing.T) { testWorkload(t, &fixtureConfig{chaos: true, immediate: true}) })
+}
+
+func testWorkload(t *testing.T, fc *fixtureConfig) {
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+	ctx := fixture.Context
+	workload, _, err := fixture.NewWorkload(ctx,
+		&all.WorkloadConfig{
+			// Don't create foreign keys references in immediate mode
+			DisableFK:         fc.immediate,
+			DisablePreStaging: true,
+		})
+	r.NoError(err)
+	bucketName := fixture.TargetSchema.Schema().Raw()
+	serverCfg, err := getConfig(fixture.Fixture, fc,
+		workload.Parent.Name(), bucketName)
+	r.NoError(err)
+	// With immediate mode, we need to process files sequentially.
+	if fc.immediate {
+		r.Equal(1, serverCfg.Workers)
+	}
+	// Using a flat partition format in this test.
+	serverCfg.PartitionFormat = Flat
+
+	sourceBucket, err := newSourceBucket(ctx, serverCfg.s3)
+	r.NoError(err)
+	defer func() {
+		if err := sourceBucket.cleanup(ctx); err != nil {
+			log.Errorf("error removing bucket %v", err)
+		}
+	}()
+
+	conn, err := Start(ctx, serverCfg)
+	r.NoError(err)
+	stats := conn.Conn.conveyor.(interface {
+		Stat() *notify.Var[sequencer.Stat]
+	}).Stat()
+
+	lastTime := hlc.New(time.Now().UnixNano(), 0)
+	r.NoError(sourceBucket.writeResolved(ctx, lastTime))
+	for iter := 1; iter <= maxIterations; iter++ {
+		batch := &types.MultiBatch{}
+		r.NoError(err)
+		size := rand.IntN(maxBatchSize) + 1
+		for i := 0; i < size; i++ {
+			lastTime = hlcNow(lastTime)
+			workload.GenerateInto(batch, lastTime)
+		}
+		r.NoError(sourceBucket.writeBatch(ctx, batch))
+		// Write a resolved timestamp file once in a while.
+		// Ensure that we have resolved file at the end.
+		if isPrime(iter) || iter == maxIterations {
+			lastTime = hlcNow(lastTime)
+			r.NoError(sourceBucket.writeResolved(ctx, lastTime))
+		}
+	}
+	// Waiting for the rows to show in the target database.
+	r.NoError(workload.WaitForCatchUp(ctx, stats))
+
+	parent, err := workload.Checker.StageCounter(workload.Parent.Name(),
+		hlc.RangeIncluding(hlc.Zero(), lastTime))
+	r.NoError(err)
+	child, err := workload.Checker.StageCounter(workload.Child.Name(),
+		hlc.RangeIncluding(hlc.Zero(), lastTime))
+	r.NoError(err)
+	log.Infof("staging database content parent rows: %d, child rows: %d", parent, child)
+
+	// Verify that the target database has all the data.
+	workload.CheckConsistent(ctx, t)
+}
+
+type sourceBucket struct {
+	client     *minio.Client
+	bucketName string
+}
+
+func newSourceBucket(ctx context.Context, config *s3.Config) (*sourceBucket, error) {
+	client, err := minio.New(config.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(config.AccessKey, config.SecretKey, ""),
 		Secure: !config.Insecure,
 	})
 	if err != nil {
 		return nil, err
 	}
-	cleanup := func() error {
-		for item := range minioClient.ListObjects(ctx, bucketName,
-			minio.ListObjectsOptions{Recursive: true}) {
-			err = minioClient.RemoveObject(ctx, bucketName, item.Key, minio.RemoveObjectOptions{})
-			if err != nil {
-				return err
+	if err := client.MakeBucket(ctx, config.Bucket, minio.MakeBucketOptions{}); err != nil {
+		return nil, err
+	}
+	return &sourceBucket{
+		client:     client,
+		bucketName: config.Bucket,
+	}, nil
+}
+
+func (b *sourceBucket) cleanup(ctx context.Context) error {
+	for item := range b.client.ListObjects(ctx, b.bucketName,
+		minio.ListObjectsOptions{Recursive: true}) {
+		if err := b.client.RemoveObject(ctx, b.bucketName,
+			item.Key, minio.RemoveObjectOptions{}); err != nil {
+			return err
+		}
+	}
+	return b.client.RemoveBucket(ctx, b.bucketName)
+}
+
+func (b *sourceBucket) writeBatch(ctx context.Context, batch *types.MultiBatch) error {
+	type payload struct {
+		After   json.RawMessage `json:"after"`
+		Before  json.RawMessage `json:"before"`
+		Key     json.RawMessage `json:"key"`
+		Updated string          `json:"updated"`
+	}
+	var buffers ident.TableMap[*strings.Builder]
+	var timestamps ident.TableMap[hlc.Time]
+	for _, b := range batch.Data {
+		for _, t := range b.Data.Entries() {
+			for _, v := range t.Value.Data {
+				p := &payload{
+					After:   v.Data,
+					Before:  v.Before,
+					Key:     v.Key,
+					Updated: v.Time.String(),
+				}
+				out, err := json.Marshal(p)
+				if err != nil {
+					return err
+				}
+				buff, ok := buffers.Get(t.Value.Table)
+				if !ok {
+					buff = &strings.Builder{}
+					buffers.Put(t.Value.Table, buff)
+					timestamps.Put(t.Value.Table, t.Value.Time)
+				}
+				if _, err = buff.Write(out); err != nil {
+					return err
+				}
+				if _, err = buff.WriteString("\n"); err != nil {
+					return err
+				}
 			}
 		}
-		return minioClient.RemoveBucket(ctx, bucketName)
 	}
-	return cleanup, minioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+	return buffers.Range(func(k ident.Table, v *strings.Builder) error {
+		timestamp, _ := timestamps.Get(k)
+		tm := time.Unix(0, timestamp.Nanos())
+		date := tm.Format("20060102150405")
+		objectName := fmt.Sprintf(`%s%09d%010d-%s-%s-%d.ndjson`,
+			date,
+			tm.Nanosecond(), timestamp.Logical(),
+			uniquer,
+			k.Table().Raw(), 1,
+		)
+		_, err := b.client.PutObject(ctx, b.bucketName, objectName,
+			strings.NewReader(v.String()), int64(v.Len()),
+			minio.PutObjectOptions{},
+		)
+		return err
+	})
+}
+
+func (b *sourceBucket) writeResolved(ctx context.Context, resolved hlc.Time) error {
+	type resolvedPayload struct {
+		Resolved string `json:"resolved"`
+	}
+	var buff strings.Builder
+	r := resolvedPayload{
+		Resolved: resolved.String(),
+	}
+	out, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	buff.Write(out)
+	buff.WriteString("\n")
+	tm := time.Unix(0, resolved.Nanos())
+	date := tm.Format("20060102150405")
+	objectName := fmt.Sprintf(`%s%09d%010d.RESOLVED`,
+		date,
+		tm.Nanosecond(), resolved.Logical())
+	_, err = b.client.PutObject(ctx, b.bucketName, objectName,
+		strings.NewReader(buff.String()), int64(buff.Len()),
+		minio.PutObjectOptions{},
+	)
+	return err
+
+}
+
+// hlcNow returns an hlc timestamp that is after
+// the given timestamp.
+func hlcNow(lastTime hlc.Time) hlc.Time {
+	nextNanos := time.Now().UnixNano()
+	if nextNanos > lastTime.Nanos() {
+		lastTime = hlc.New(nextNanos, 0)
+		return lastTime
+	}
+	lastTime = lastTime.Next()
+	return lastTime
 }
 
 // getConfig is a helper function to create a configuration for the connector
@@ -228,7 +425,7 @@ func getConfig(
 		Workers:      defaultNumberOfWorkers,
 	}
 	if fc.chaos {
-		config.Sequencer.Chaos = 0.0005
+		config.Sequencer.Chaos = 0.005
 	}
 	if fc.script {
 		config.Script = script.Config{

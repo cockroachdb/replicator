@@ -48,12 +48,11 @@ type WalkOptions struct {
 
 // Bucket provides read access to an object storage bucket.
 type Bucket interface {
+	// Open returns a reader for the object at the named path.
+	Open(ctx *stopper.Context, path string) (io.ReadCloser, error)
 	// Walk calls f for each entry in the given prefix. The argument
 	// to f is the full object name including the prefix of the
 	// inspected directory. Entries are passed to function in sorted
 	// order.
 	Walk(ctx *stopper.Context, prefix string, options *WalkOptions, f func(*stopper.Context, string) error) error
-
-	// Open returns a reader for the object at the named path.
-	Open(ctx *stopper.Context, path string) (io.ReadCloser, error)
 }
