@@ -39,7 +39,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest/scripttest"
 	"github.com/cockroachdb/replicator/internal/util/batches"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/logfmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
@@ -59,11 +58,6 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	log.SetFormatter(logfmt.Wrap(&log.TextFormatter{
-		FullTimestamp:   true,
-		PadLevelText:    true,
-		TimestampFormat: time.Stamp,
-	}))
 	all.IntegrationMain(m, all.PostgreSQLName)
 }
 
