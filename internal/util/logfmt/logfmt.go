@@ -18,6 +18,7 @@
 package logfmt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,11 +85,27 @@ func (d *detailer) Format(e *log.Entry) ([]byte, error) {
 				e.Data[detailKey] = fmt.Sprintf("%+v", err)
 			}
 
-			if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) {
+			var pgErr *pgconn.PgError
+			switch {
+			case errors.As(err, &pgErr):
+				// Improve formatting of SQL errors.
 				s := sqlDetail(*pgErr)
 				e.Data["sql"] = &s
+
+			case errors.Is(err, context.Canceled),
+				errors.Is(err, context.DeadlineExceeded):
+				// These errors are often a side effect of some other
+				// malfunction and can be somewhat noisy in the logs.
+				// Adding this field allows them to be readily ignored.
+				e.Data["noisy"] = true
 			}
 		}
 	}
+
+	// Make it easier for operators to know that the logs are worth
+	// looking at. Note that the formatter is only invoked for messages
+	// at an enabled level.
+	messageCount.WithLabelValues(e.Level.String()).Inc()
+
 	return d.Formatter.Format(e)
 }

@@ -71,6 +71,7 @@ func main() {
 				log.SetLevel(log.DebugLevel)
 			default:
 				log.SetLevel(log.TraceLevel)
+				log.SetReportCaller(true)
 			}
 
 			switch logFormat {
