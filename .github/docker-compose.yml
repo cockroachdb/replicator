@@ -69,6 +69,11 @@ services:
     network_mode: host
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v24.1:
+    image: cockroachdb/cockroach:latest-v24.1
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
 
   # These versions of CRDB are supported for staging and target operations.
   cockroachdb-v23.1:
@@ -83,6 +88,12 @@ services:
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G
 
+  cockroachdb-v24.1:
+    image: cockroachdb/cockroach:latest-v24.1
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G
+
   cockroachdb-unstable:
     image: cockroachdb/cockroach-unstable:latest
     network_mode: host
@@ -90,8 +101,8 @@ services:
     command: start-single-node --insecure --store type=mem,size=2G
 
   # This target exists to verify split-mode operation, where staging is separate from the target.
-  target-cockroachdb-v23.2:
-    image: cockroachdb/cockroach:latest-v23.2
+  target-cockroachdb-v24.1:
+    image: cockroachdb/cockroach:latest-v24.1
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5401 --http-addr :8082
     ports:
