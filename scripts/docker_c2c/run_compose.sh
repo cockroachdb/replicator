@@ -28,7 +28,7 @@ fi
 echo "export COCKROACH_DEV_LICENSE='"$COCKROACH_DEV_LICENSE"'" > scripts/crdb_env
 echo "export COCKROACH_DEV_ORGANIZATION='"$COCKROACH_DEV_ORGANIZATION"'" >> scripts/crdb_env
 
-docker-compose up --detach
+docker compose up --detach
 
 echo "Resetting Grafana Admin Password...."
 echo ""
