@@ -11,7 +11,7 @@ import the dashboard template.
 
 ## Quickstart
 
-* Execute `docker-compose --profile monitor up` to launch the containers.
+* Execute `docker compose --profile monitor up` to launch the containers.
 * Connect to `http://127.0.0.1:3000` and log in with "admin" as the
   username and password.
 * Add Prometheus as a data source:

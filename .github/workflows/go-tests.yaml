@@ -212,7 +212,7 @@ jobs:
       - name: Start Containers
         working-directory: .github
         run: >
-          docker-compose up -d
+          docker compose up -d
           cockroachdb-${{ matrix.cockroachdb }}
           ${{ matrix.integration }}
           ${{ matrix.source }}
@@ -261,7 +261,7 @@ jobs:
       - name: Docker container logs
         if: always()
         working-directory: .github
-        run: docker-compose logs --no-color > ${{ env.DOCKER_LOGS_OUT }}
+        run: docker compose logs --no-color > ${{ env.DOCKER_LOGS_OUT }}
 
       # Upload all test reports to a common artifact name, to make them
       # available to the summarization step. The go test json is
