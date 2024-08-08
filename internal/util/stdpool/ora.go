@@ -14,19 +14,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build cgo && linux && (target_oracle || target_all)
+//go:build cgo && (target_oracle || target_all)
 
 package stdpool
 
 import (
 	"database/sql"
+	"os"
 	"strconv"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/godror/godror"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -85,6 +86,10 @@ func OpenOracleAsTarget(
 		return nil, err
 	}
 
+	if os.Getenv("LD_LIBRARY_PATH") == "" && os.Getenv("LD_LIBRARY_PATH") == "" {
+		return nil, errors.AssertionFailedf("LD_LIBRARY_PATH or DYLD_LIBRARY_PATH must be set to the location of Oracle Instant Client libraries")
+	}
+
 	params, err := godror.ParseDSN(connectString)
 	if err != nil {
 		return nil, err
@@ -99,6 +104,12 @@ func OpenOracleAsTarget(
 	if params.Timezone == nil {
 		params.Timezone = time.UTC
 	}
+
+	params.LibDir = os.Getenv("LD_LIBRARY_PATH")
+	if params.LibDir == "" {
+		params.LibDir = os.Getenv("DYLD_LIBRARY_PATH")
+	}
+
 	connector := godror.NewConnector(params)
 
 	ret := &types.TargetPool{

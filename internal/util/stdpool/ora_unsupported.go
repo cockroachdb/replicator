@@ -14,14 +14,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !(cgo && linux && (target_oracle || target_all))
+//go:build !(cgo && (target_oracle || target_all))
 
 package stdpool
 
 import (
+	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/pkg/errors"
 )
 
 // OpenOracleAsTarget returns an unsupported error.
