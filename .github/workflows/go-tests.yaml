@@ -208,7 +208,9 @@ jobs:
           sudo apt-get install -yqq --no-install-recommends libaio1
           curl -o /tmp/ora-libs.zip https://replicator.cockroachdb.com/third_party/instantclient-basiclite-linux-amd64.zip
           unzip -d /tmp /tmp/ora-libs.zip
-          sudo mv /tmp/instantclient_21_13/* /usr/lib
+          sudo mv -f /tmp/instantclient_21_13 /usr/lib
+          sudo rm /tmp/ora-libs.zip
+          sudo readlink -f /usr/lib/* | grep instantclient_21_13
 
       - name: Start Containers
         working-directory: .github
@@ -232,6 +234,7 @@ jobs:
           CDC_INTEGRATION: ${{ matrix.integration }}
           TEST_SOURCE_CONNECT: ${{ matrix.sourceConn }}
           TEST_TARGET_CONNECT: ${{ matrix.targetConn }}
+          LD_LIBRARY_PATH: /usr/lib/instantclient_21_13
         run: >
           set -e -o pipefail;
           go test
