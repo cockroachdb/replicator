@@ -25,7 +25,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +41,6 @@ func TestWatch(t *testing.T) {
 	r.NoError(err)
 
 	ctx := fixture.Context
-	dbName := fixture.TargetSchema.Schema()
 	w := fixture.Watcher
 
 	w2, err := fixture.Watchers.Get(sinktest.JumbleSchema(fixture.TargetSchema.Schema()))
@@ -53,20 +51,15 @@ func TestWatch(t *testing.T) {
 	tblInfo, err := fixture.CreateTargetTable(ctx, "CREATE TABLE %s (pk INT PRIMARY KEY)")
 	r.NoError(err)
 
-	ch, cancel, err := w.Watch(tblInfo.Name())
+	colDataVar, err := w.Watch(ctx, tblInfo.Name())
 	r.NoError(err)
-	defer cancel()
+	colData, colDataChanged := colDataVar.Get()
 
 	t.Run("smoke", func(t *testing.T) {
 		r := require.New(t)
 
-		select {
-		case <-ctx.Done():
-			r.FailNow("timed out waiting for channel data")
-		case data := <-ch:
-			r.Len(data, 1)
-			r.Equal("pk", data[0].Name.Canonical().Raw())
-		}
+		r.Len(colData, 1)
+		r.Equal("pk", colData[0].Name.Canonical().Raw())
 	})
 
 	// Check that we can retrieve a jumbled table name.
@@ -74,17 +67,12 @@ func TestWatch(t *testing.T) {
 		r := require.New(t)
 		jumbled := sinktest.JumbleTable(tblInfo.Name())
 
-		ch, cancel, err := w.Watch(jumbled)
+		jumbledData, err := w.Watch(ctx, jumbled)
 		r.NoError(err)
-		defer cancel()
 
-		select {
-		case <-ctx.Done():
-			r.FailNow("timed out waiting for channel data")
-		case data := <-ch:
-			r.Len(data, 1)
-			r.Equal("pk", data[0].Name.Canonical().Raw())
-		}
+		data, _ := jumbledData.Get()
+		r.Len(data, 1)
+		r.Equal("pk", data[0].Name.Canonical().Raw())
 	})
 
 	// Add a column and expect to see it.
@@ -108,28 +96,25 @@ func TestWatch(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			r.FailNow("timed out waiting for channel data")
-		case data := <-ch:
-			r.Len(data, 2)
-			r.Equal("pk", data[0].Name.Canonical().Raw())
-			r.Equal("v", data[1].Name.Canonical().Raw())
+		case <-colDataChanged:
+			colData, colDataChanged = colDataVar.Get()
+			r.Len(colData, 2)
+			r.Equal("pk", colData[0].Name.Canonical().Raw())
+			r.Equal("v", colData[1].Name.Canonical().Raw())
 		}
 	})
 
-	// Expect the channel to close if the table is dropped.
+	// Expect the slice to be zero-length if the table is dropped.
 	t.Run("drop", func(t *testing.T) {
 		r := require.New(t)
 		r.NoError(tblInfo.DropTable(ctx))
 		select {
 		case <-ctx.Done():
 			r.FailNow("timed out waiting for channel close")
-		case _, open := <-ch:
-			r.False(open)
+		case <-colDataChanged:
+			colData, colDataChanged = colDataVar.Get()
 		}
 
-		// Check that we error out quickly on unknown tables.
-		ch, cancel, err = w.Watch(ident.NewTable(dbName, ident.New("blah")))
-		r.Nil(ch)
-		r.Nil(cancel)
-		r.Error(err)
+		r.Empty(colData)
 	})
 }

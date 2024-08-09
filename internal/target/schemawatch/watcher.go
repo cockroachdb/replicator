@@ -23,10 +23,11 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"sync"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
@@ -42,16 +43,9 @@ var RefreshDelay = flag.Duration("schemaRefresh", time.Minute,
 // A watcher maintains an internal cache of a database's schema,
 // allowing callers to receive notifications of schema changes.
 type watcher struct {
-	// All goroutines used by Watch use this as a parent context.
-	background *stopper.Context
-	delay      time.Duration
-	schema     ident.Schema
-
-	mu struct {
-		sync.RWMutex
-		data    *types.SchemaData
-		updated chan struct{} // Closed and replaced when data is updated.
-	}
+	data   *notify.Var[*types.SchemaData]
+	delay  time.Duration
+	schema ident.Schema
 }
 
 var _ types.Watcher = (*watcher)(nil)
@@ -61,18 +55,16 @@ var _ types.Watcher = (*watcher)(nil)
 // until the cancel callback is executed.
 func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema) (*watcher, error) {
 	w := &watcher{
-		background: ctx,
-		delay:      *RefreshDelay,
-		schema:     schema,
+		delay:  *RefreshDelay,
+		schema: schema,
 	}
-	w.mu.updated = make(chan struct{})
 
 	// Initial data load to sanity-check and make ready.
 	data, err := w.getTables(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	w.mu.data = data
+	w.data = notify.VarOf(data)
 
 	if w.delay > 0 {
 		ctx.Go(func(ctx *stopper.Context) error {
@@ -94,42 +86,32 @@ func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema)
 
 // Get implements types.Watcher.
 func (w *watcher) Get() *types.SchemaData {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.mu.data
+	ret, _ := w.data.Get()
+	return ret
 }
 
 // Refresh immediately refreshes the watcher's internal cache. This
 // is intended for use by tests.
 func (w *watcher) Refresh(ctx context.Context, tx *types.TargetPool) error {
-	data, err := w.getTables(ctx, tx)
+	next, err := w.getTables(ctx, tx)
 	if err != nil {
 		return err
 	}
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	w.mu.data = data
-
-	// Close and replace the channel to create a broadcast effect.
-	close(w.mu.updated)
-	w.mu.updated = make(chan struct{})
-
+	w.data.Set(next)
 	return nil
 }
 
 // Snapshot returns the known tables in the given user-defined schema.
 func (w *watcher) Snapshot(in ident.Schema) *types.SchemaData {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
+	data, _ := w.data.Get()
 
 	ret := &types.SchemaData{
 		Columns: &ident.TableMap[[]types.ColData]{},
-		Order:   make([][]ident.Table, 0, len(w.mu.data.Order)),
+		Order:   make([][]ident.Table, 0, len(data.Order)),
 	}
 
-	_ = w.mu.data.Columns.Range(func(table ident.Table, cols []types.ColData) error {
+	_ = data.Columns.Range(func(table ident.Table, cols []types.ColData) error {
 		if in.Contains(table) {
 			// https://github.com/golang/go/wiki/SliceTricks#copy
 			out := make([]types.ColData, len(cols))
@@ -138,7 +120,7 @@ func (w *watcher) Snapshot(in ident.Schema) *types.SchemaData {
 		}
 		return nil
 	})
-	for _, tables := range w.mu.data.Order {
+	for _, tables := range data.Order {
 		filtered := make([]ident.Table, 0, len(tables))
 		for _, tbl := range tables {
 			if in.Contains(tbl) {
@@ -160,52 +142,45 @@ func (w *watcher) String() string {
 // Watch will send updated column data for the given table until the
 // watch is canceled. The requested table must already be known to the
 // watcher.
-func (w *watcher) Watch(table ident.Table) (<-chan []types.ColData, func(), error) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	if _, ok := w.mu.data.Columns.Get(table); !ok {
-		return nil, nil, errors.Errorf("unknown table %s", table)
+func (w *watcher) Watch(
+	ctx *stopper.Context, table ident.Table,
+) (*notify.Var[[]types.ColData], error) {
+	snapshot := w.Get()
+	lastCols, ok := snapshot.Columns.Get(table)
+	if !ok {
+		return nil, errors.Errorf("unknown table %s", table)
 	}
-
-	ctx := stopper.WithContext(w.background)
-	ch := make(chan []types.ColData, 1)
+	into := notify.VarOf(lastCols)
 
 	ctx.Go(func(ctx *stopper.Context) error {
-		defer close(ch)
+		_, _ = stopvar.DoWhenChanged(ctx, snapshot, w.data, func(ctx *stopper.Context, _, next *types.SchemaData) error {
+			nextCols, ok := next.Columns.Get(table)
 
-		var last []types.ColData
-		for {
-			w.mu.RLock()
-			next, ok := w.mu.data.Columns.Get(table)
-			updated := w.mu.updated
-			w.mu.RUnlock()
+			// Respond to dropping the table.
+			if !ok {
+				log.Tracef("canceling schema watch for %s because it was dropped", table)
+				into.Set(nil)
+				// Returning any error to break out.
+				return context.Canceled
+			}
 
-			// Respond to context cancellation or dropping the table.
-			if !ok || ctx.Err() != nil {
+			// Suppress no-op updates.
+			if colSliceEqual(lastCols, nextCols) {
 				return nil
 			}
+			lastCols = nextCols
 
-			// We're read-locked, so this isn't hugely critical.
-			if !colSliceEqual(last, next) {
-				select {
-				case <-ctx.Stopping():
-					return nil
-				case ch <- next:
-					last = next
-				default:
-					log.WithField("target", table).Warn("ColData watcher excessively behind")
-				}
-			}
-
-			select {
-			case <-ctx.Stopping():
-				return nil
-			case <-updated:
-				continue
-			}
-		}
+			// Emit a copy of the slice, to ensure the above
+			// comparison can't be affected by any pruning.
+			cpy := make([]types.ColData, len(nextCols))
+			copy(cpy, nextCols)
+			into.Set(cpy)
+			return nil
+		})
+		return nil
 	})
-	return ch, func() { ctx.Stop(100 * time.Millisecond) }, nil
+
+	return into, nil
 }
 
 const (

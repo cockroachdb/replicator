@@ -476,9 +476,11 @@ type Watcher interface {
 	// for updated schema information. This is intended for testing and
 	// does not need to be called in the general case.
 	Refresh(context.Context, *TargetPool) error
-	// Watch returns a channel that emits updated column data for the
-	// given table.  The channel will be closed if there
-	Watch(table ident.Table) (_ <-chan []ColData, cancel func(), _ error)
+	// Watch returns an initialized variable that will be kept up to
+	// date until the context is stopped or the table is dropped. If the
+	// table is dropped, a zero-length slice will be emitted as a final
+	// update. An error will be returned if the table is unknown.
+	Watch(ctx *stopper.Context, table ident.Table) (*notify.Var[[]ColData], error)
 }
 
 // Watchers is a factory for Watcher instances.
