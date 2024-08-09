@@ -28,7 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/target/load"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -114,46 +113,37 @@ func (f *factory) newApply(
 		return nil, errors.Errorf("merge operation not implemented for %s", a.product)
 	}
 
-	var initialErr notify.Var[error]
-	_, ready := initialErr.Get()
+	schemaVar, err := w.Watch(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+
+	// Watch will return an already-initialized variable.
+	schemaData, schemaChanged := schemaVar.Get()
+	if err := a.refreshUnlocked(configData, schemaData); err != nil {
+		return nil, errors.Wrap(err, "could not read table metadata")
+	}
+
+	// Start a process that will refresh when either the schema or the
+	// configuration have changed.
 	ctx.Go(func(ctx *stopper.Context) error {
-		schemaCh, cancelSchema, err := w.Watch(target)
-		if err != nil {
-			return err
-		}
-		defer cancelSchema()
-		initial := true
-		var schemaData []types.ColData
 		for {
 			select {
 			case <-ctx.Stopping():
 				return nil
 			case <-configChanged:
 				configData, configChanged = configHandle.Get()
-			case schemaData = <-schemaCh:
+			case <-schemaChanged:
+				schemaData, schemaChanged = schemaVar.Get()
 			}
-
-			if len(schemaData) > 0 {
-				err := a.refreshUnlocked(configData, schemaData)
-				if initial {
-					// If we're just starting up, return errors.
-					initialErr.Set(errors.Wrap(err, "could not read table metadata"))
-					initial = false
-				} else if err != nil {
-					// In the steady state, just log refresh errors.
-					log.WithError(err).WithField("table", target).Warn("could not refresh table metadata")
-				}
+			if err := a.refreshUnlocked(configData, schemaData); err != nil {
+				// In the steady state, just log refresh errors.
+				log.WithError(err).WithField("table", target).Warn(
+					"could not refresh table metadata")
 			}
 		}
 	})
 
-	select {
-	case <-ready:
-		// Wait for the first loop of the refresh goroutine above.
-		err, _ = initialErr.Get()
-	case <-ctx.Stopping():
-		err = errors.New("stopping before initial schema read")
-	}
 	return a, err
 }
 
@@ -692,6 +682,9 @@ func (a *apply) refreshUnlocked(configData *applycfg.Config, schemaData []types.
 }
 
 func (a *apply) validate(configData *applycfg.Config, schemaData []types.ColData) error {
+	if len(schemaData) == 0 {
+		return errors.Errorf("table %s has no columns, was it dropped?", a.target)
+	}
 	// We want to verify that the cas and deadline columns actually
 	// exist in the incoming column data.
 	var allColNames ident.Map[struct{}]
