@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinktest/recorder"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
@@ -110,9 +112,11 @@ type fakeWatcher struct {
 }
 
 func (w *fakeWatcher) Get() *types.SchemaData { return w.data }
-func (w *fakeWatcher) Refresh(ctx context.Context, pool *types.TargetPool) error {
+func (w *fakeWatcher) Refresh(_ context.Context, _ *types.TargetPool) error {
 	return errors.New("unimplemented")
 }
-func (w *fakeWatcher) Watch(table ident.Table) (_ <-chan []types.ColData, cancel func(), _ error) {
-	return nil, nil, errors.New("unimplemented")
+func (w *fakeWatcher) Watch(
+	_ *stopper.Context, _ ident.Table,
+) (*notify.Var[[]types.ColData], error) {
+	return nil, errors.New("unimplemented")
 }
