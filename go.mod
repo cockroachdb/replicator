@@ -6,7 +6,7 @@ require (
 	github.com/IBM/sarama v1.43.2
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cockroachdb/apd v1.1.0
-	github.com/cockroachdb/crlfmt v0.2.1
+	github.com/cockroachdb/crlfmt v0.3.0
 	github.com/cockroachdb/field-eng-powertools v0.1.1
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
 	github.com/evanw/esbuild v0.23.0
