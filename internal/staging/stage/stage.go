@@ -63,19 +63,20 @@ type stage struct {
 	stagingDB  *types.StagingPool
 	retireFrom notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
 
-	filterApplied  prometheus.Observer
-	filterCount    prometheus.Counter
-	markDuration   prometheus.Observer
-	retireDuration prometheus.Observer
-	retireError    prometheus.Counter
-	selectCount    prometheus.Counter
-	selectDuration prometheus.Observer
-	selectError    prometheus.Counter
-	staleCount     prometheus.Gauge
-	stageCount     prometheus.Counter
-	stageDupes     prometheus.Counter
-	stageDuration  prometheus.Observer
-	stageError     prometheus.Counter
+	consistencyError prometheus.Gauge
+	filterApplied    prometheus.Observer
+	filterCount      prometheus.Counter
+	markDuration     prometheus.Observer
+	retireDuration   prometheus.Observer
+	retireError      prometheus.Counter
+	selectCount      prometheus.Counter
+	selectDuration   prometheus.Observer
+	selectError      prometheus.Counter
+	staleCount       prometheus.Gauge
+	stageCount       prometheus.Counter
+	stageDupes       prometheus.Counter
+	stageDuration    prometheus.Observer
+	stageError       prometheus.Counter
 
 	// Compute SQL fragments exactly once on startup.
 	sql struct {
@@ -154,21 +155,22 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
 
 	labels := metrics.TableValues(target)
 	s := &stage{
-		stage:          db.HintNoFTS(table),
-		stagingDB:      db,
-		filterApplied:  stageFilterAppliedDuration.WithLabelValues(labels...),
-		filterCount:    stageFilterCount.WithLabelValues(labels...),
-		markDuration:   stageMarkDuration.WithLabelValues(labels...),
-		retireDuration: stageRetireDurations.WithLabelValues(labels...),
-		retireError:    stageRetireErrors.WithLabelValues(labels...),
-		selectCount:    stageSelectCount.WithLabelValues(labels...),
-		selectDuration: stageSelectDurations.WithLabelValues(labels...),
-		selectError:    stageSelectErrors.WithLabelValues(labels...),
-		staleCount:     stageStaleMutations.WithLabelValues(labels...),
-		stageCount:     stageCount.WithLabelValues(labels...),
-		stageDupes:     stageDuplicateCount.WithLabelValues(labels...),
-		stageDuration:  stageDuration.WithLabelValues(labels...),
-		stageError:     stageErrors.WithLabelValues(labels...),
+		stage:            db.HintNoFTS(table),
+		stagingDB:        db,
+		consistencyError: stageConsistencyErrors.WithLabelValues(labels...),
+		filterApplied:    stageFilterAppliedDuration.WithLabelValues(labels...),
+		filterCount:      stageFilterCount.WithLabelValues(labels...),
+		markDuration:     stageMarkDuration.WithLabelValues(labels...),
+		retireDuration:   stageRetireDurations.WithLabelValues(labels...),
+		retireError:      stageRetireErrors.WithLabelValues(labels...),
+		selectCount:      stageSelectCount.WithLabelValues(labels...),
+		selectDuration:   stageSelectDurations.WithLabelValues(labels...),
+		selectError:      stageSelectErrors.WithLabelValues(labels...),
+		staleCount:       stageStaleMutations.WithLabelValues(labels...),
+		stageCount:       stageCount.WithLabelValues(labels...),
+		stageDupes:       stageDuplicateCount.WithLabelValues(labels...),
+		stageDuration:    stageDuration.WithLabelValues(labels...),
+		stageError:       stageErrors.WithLabelValues(labels...),
 	}
 
 	// Prevent these hot-path queries from being planned with a full
@@ -215,6 +217,33 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
 				// Ensure that values get reset if this instance of
 				// Replicator isn't the one that's actively resolving or
 				// retiring mutations.
+			}
+		}
+	})
+
+	// Validate table consistency on a periodic basis.
+	ctx.Go(func(ctx *stopper.Context) error {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			ct, err := s.CheckConsistency(ctx, s.stagingDB, nil /* all keys */, true /* follower read */)
+			if code, ok := s.stagingDB.ErrCode(err); ok &&
+				(code == "3D000" /* invalid_catalog_name */ ||
+					code == "42P01" /* undefined_table */) {
+				// This prevents log spam during testing or initial
+				// startup, since the AOST query may push the read
+				// behind the database time at which the table or
+				// database was created.
+			} else if err != nil {
+				log.WithError(err).Warn("could not check consistency")
+			} else {
+				s.consistencyError.Set(float64(ct))
+			}
+
+			select {
+			case <-ctx.Stopping():
+				return nil
+			case <-ticker.C:
 			}
 		}
 	})
@@ -524,10 +553,39 @@ func (s *stage) MarkApplied(
 	}
 	return retry.Retry(ctx, s.stagingDB, func(ctx context.Context) error {
 		start := time.Now()
+
+		var tx pgx.Tx
+		if extraSanityChecks {
+			if _, isTx := db.(pgx.Tx); !isTx {
+				var err error
+				tx, err = s.stagingDB.Begin(ctx)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				defer func() { _ = tx.Rollback(context.Background()) }()
+				db = tx
+			}
+		}
+
 		tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
+		if err != nil {
+			return errors.Wrap(err, s.sql.markApplied)
+		}
+		if extraSanityChecks {
+			count, err := s.CheckConsistency(ctx, db, muts, false /* current-time read */)
+			if err != nil {
+				return err
+			}
+			if count != 0 {
+				return errors.Errorf("consistency check failed with %d mutations", count)
+			}
+		}
 		s.markDuration.Observe(time.Since(start).Seconds())
 		log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
-		return errors.WithMessage(err, s.sql.markApplied)
+		if tx != nil {
+			return errors.WithStack(tx.Commit(ctx))
+		}
+		return nil
 	})
 }
 
