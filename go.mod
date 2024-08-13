@@ -6,7 +6,9 @@ require (
 	github.com/IBM/sarama v1.43.2
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cockroachdb/apd v1.1.0
+	github.com/cockroachdb/cockroachdb-parser v0.23.2
 	github.com/cockroachdb/crlfmt v0.2.1
+	github.com/cockroachdb/datadriven v1.0.2
 	github.com/cockroachdb/errors v1.9.1
 	github.com/cockroachdb/field-eng-powertools v0.1.1
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
@@ -45,8 +47,13 @@ require filippo.io/edwards25519 v1.1.0 // indirect
 
 require (
 	github.com/Masterminds/semver v1.5.0 // indirect
+	github.com/bazelbuild/rules_go v0.46.0 // indirect
+	github.com/biogo/store v0.0.0-20201120204734-aad293a2328f // indirect
+	github.com/blevesearch/snowballstem v0.9.0 // indirect
+	github.com/cockroachdb/apd/v3 v3.1.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect
 	github.com/cockroachdb/redact v1.1.3 // indirect
+	github.com/dave/dst v0.27.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eapache/go-resiliency v1.6.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
@@ -57,7 +64,10 @@ require (
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/godror/knownpb v0.1.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang/geo v0.0.0-20210211234256-740aa86cb551 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
@@ -71,17 +81,25 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
+	github.com/pierrre/geohash v1.0.0 // indirect
 	github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 // indirect
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20231103042308-035ad5ccbe67 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/rs/xid v1.5.0 // indirect
+	github.com/sasha-s/go-deadlock v0.3.1 // indirect
+	github.com/twpayne/go-geom v1.4.1 // indirect
+	github.com/twpayne/go-kml v1.5.2 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20231212172506-995d672761c0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20231212172506-995d672761c0 // indirect
+	google.golang.org/grpc v1.60.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
 
@@ -128,7 +146,7 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20230522175609-2e198f4a06a1 // indirect
 	golang.org/x/mod v0.20.0
 	golang.org/x/sys v0.22.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/text v0.16.0
 	google.golang.org/genproto v0.0.0-20240102182953-50ed04b92917 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
 	gopkg.in/src-d/go-billy.v4 v4.3.2 // indirect
