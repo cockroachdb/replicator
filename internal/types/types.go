@@ -150,6 +150,11 @@ type MutationFilter func(Mutation) bool
 // Stager describes a service which can durably persist some
 // number of Mutations.
 type Stager interface {
+	// CheckConsistency scans the staging table to ensure that it
+	// internally consistent. The number of inconsistent staging table
+	// entries will be returned.
+	CheckConsistency(ctx context.Context, db StagingQuerier, muts []Mutation, followerRead bool) (int, error)
+
 	// FilterApplied performs an anti-join against the staging table to
 	// return only unapplied mutations. This method will return a new
 	// slice.

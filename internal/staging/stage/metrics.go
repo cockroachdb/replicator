@@ -23,6 +23,10 @@ import (
 )
 
 var (
+	stageConsistencyErrors = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "stage_consistency_error_count",
+		Help: "the number of staging table rows with inconsistent source and apply times",
+	}, metrics.TableLabels)
 	stageFilterAppliedDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stage_filter_applied_duration_seconds",
 		Help:    "the SQL statement execution time to detect already-applied mutations",

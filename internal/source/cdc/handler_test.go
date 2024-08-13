@@ -23,6 +23,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/sinktest/scripttest"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
@@ -50,6 +52,11 @@ type fixtureConfig struct {
 	discard   bool
 	immediate bool
 	script    bool
+}
+
+func TestMain(m *testing.M) {
+	stage.EnableSanityChecks()
+	os.Exit(m.Run())
 }
 
 func TestHandler(t *testing.T) {
