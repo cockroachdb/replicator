@@ -147,6 +147,11 @@ func (m Mutation) IsDelete() bool {
 // Stager describes a service which can durably persist some
 // number of Mutations.
 type Stager interface {
+	// CheckConsistency scans the staging table to ensure that it
+	// internally consistent. The number of inconsistent staging table
+	// entries will be returned.
+	CheckConsistency(ctx context.Context, db StagingQuerier, muts []Mutation, followerRead bool) (int, error)
+
 	// MarkApplied will mark the given mutations as having been applied.
 	// This is used with lease-based unstaging or when certain mutation
 	// should be skipped.
