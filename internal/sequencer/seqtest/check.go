@@ -145,6 +145,7 @@ type Check struct {
 }
 
 // Check generates data and verifies that it reaches the target tables.
+// It will also ensure that the staging tables are in a correct state.
 func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
 	r := require.New(t)
 
@@ -211,4 +212,12 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB) {
 	log.Infof("caught up in an additional %s", time.Since(now))
 	generator.CheckConsistent(ctx, t)
 
+	for _, table := range []ident.Table{generator.Parent.Name(), generator.Child.Name()} {
+		stager, err := c.Fixture.Stagers.Get(ctx, table)
+		r.NoError(err)
+		ct, err := stager.CheckConsistency(ctx,
+			c.Fixture.StagingPool, nil /* all records */, false /* current-time read */)
+		r.NoError(err, table)
+		r.Zero(ct, table)
+	}
 }
