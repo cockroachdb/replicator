@@ -45,7 +45,6 @@ type tableCursor struct {
 
 // tableReader returns batches of rows from an individual table.
 type tableReader struct {
-	accumulator  []types.Mutation       // Accumulates rows as we go.
 	bounds       *notify.Var[hlc.Range] // Timestamps to read within.
 	db           *types.StagingPool     // Access to the staging database.
 	fragmentSize int                    // Upper bound on the size of data we'll send.
@@ -161,9 +160,13 @@ func (r *tableReader) run(ctx *stopper.Context) {
 
 // nextCursor produces a value to send to the consumer.
 func (r *tableReader) nextCursor(ctx *stopper.Context) *tableCursor {
+	var muts []types.Mutation
+
 	// Deal with database flakes.
 	if err := retry.Retry(ctx, r.db, func(ctx context.Context) error {
-		return r.queryOnce(ctx)
+		var err error
+		muts, err = r.queryOnce(ctx)
+		return err
 	}); err != nil {
 		return &tableCursor{Error: err}
 	}
@@ -171,12 +174,12 @@ func (r *tableReader) nextCursor(ctx *stopper.Context) *tableCursor {
 		Batch: &types.MultiBatch{},
 	}
 
-	ret.Fragment = len(r.accumulator) >= r.fragmentSize
+	ret.Fragment = len(muts) >= r.fragmentSize
 	if ret.Fragment {
 		// Indicate partial progress within a larger batch, so we
 		// can only advance the progress to before the timestamp
 		// we're currently reading.
-		lastMut := r.accumulator[len(r.accumulator)-1]
+		lastMut := muts[len(muts)-1]
 		r.scanBounds = hlc.RangeExcluding(lastMut.Time, r.scanBounds.Max())
 		r.scanKey = lastMut.Key
 		ret.Progress = hlc.RangeExcluding(hlc.Zero(), r.scanBounds.Min())
@@ -191,7 +194,7 @@ func (r *tableReader) nextCursor(ctx *stopper.Context) *tableCursor {
 	}
 
 	// Assemble the mutations into a complete batch.
-	for idx, mut := range r.accumulator {
+	for _, mut := range muts {
 		var err error
 		// The data retrieved from the database may have been
 		// compressed. We want to decompress it outside the database
@@ -213,21 +216,15 @@ func (r *tableReader) nextCursor(ctx *stopper.Context) *tableCursor {
 		if err := ret.Batch.Accumulate(r.table, mut); err != nil {
 			return &tableCursor{Error: err}
 		}
-
-		// Clear data from backing array.
-		r.accumulator[idx] = types.Mutation{}
 	}
-
-	// Reset accumulator.
-	r.accumulator = r.accumulator[:0]
 
 	return ret
 }
 
-// queryOnce retrieves a limited number of rows to populate the reader's
-// accumulator.
-func (r *tableReader) queryOnce(ctx context.Context) error {
+// queryOnce retrieves a limited number of rows.
+func (r *tableReader) queryOnce(ctx context.Context) ([]types.Mutation, error) {
 	start := time.Now()
+	ret := make([]types.Mutation, 0, r.fragmentSize)
 
 	rows, err := r.db.Query(ctx,
 		r.sqlQ,
@@ -238,7 +235,7 @@ func (r *tableReader) queryOnce(ctx context.Context) error {
 		r.scanBounds.Max().Logical(),
 		r.fragmentSize)
 	if err != nil {
-		return errors.Wrap(err, r.sqlQ)
+		return nil, errors.Wrap(err, r.sqlQ)
 	}
 	defer rows.Close()
 
@@ -247,18 +244,18 @@ func (r *tableReader) queryOnce(ctx context.Context) error {
 		var nanos int64
 		var logical int
 		if err := rows.Scan(&nanos, &logical, &mut.Key, &mut.Data, &mut.Before); err != nil {
-			return errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
 		mut.Time = hlc.New(nanos, logical)
 
-		r.accumulator = append(r.accumulator, mut)
+		ret = append(ret, mut)
 	}
 	if err := rows.Err(); err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
-	r.readCount.Add(float64(len(r.accumulator)))
+	r.readCount.Add(float64(len(ret)))
 	r.readDurations.Observe(time.Since(start).Seconds())
-	return nil
+	return ret, nil
 }
 
 // updateBounds ensures that the state of the reader can satisfy all
