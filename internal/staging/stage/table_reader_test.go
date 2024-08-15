@@ -108,6 +108,7 @@ func TestTableReader(t *testing.T) {
 			case cursor := <-out:
 				r.NoError(cursor.Error)
 				r.NotNil(cursor.Batch)
+				r.False(cursor.Jump)
 
 				// We expect the fragment bit to be set for all cursors but
 				// the last. Each transaction is exactly one mutation long,
@@ -142,64 +143,23 @@ func TestTableReader(t *testing.T) {
 		}
 	})
 
-	t.Run("advance-empty", func(t *testing.T) {
-		r := require.New(t)
-
-		// Slide the time window forward.
-		jumpStart := hlc.New(int64(19*mutCount), 0)
-		jumpEnd := hlc.New(int64(20*mutCount), 0)
-		bounds.Set(hlc.RangeIncluding(jumpStart, jumpEnd))
-
-		// We expect to see an empty scan that advances to the end.
-		select {
-		case cursor := <-out:
-			r.NoError(cursor.Error)
-			r.NotNil(cursor.Batch)
-			r.Empty(cursor.Batch.Data)
-			r.False(cursor.Fragment)
-			r.Equal(jumpEnd, cursor.Progress.MaxInclusive())
-			r.True(cursor.Jump)
-		case <-ctx.Done():
-			r.NoError(ctx.Err())
-		}
-	})
-
-	// Move the window backwards. We should see the jump flag set on
-	// the cursor. This isn't an expected case in production, but it's
-	// good to know that there's a defined behavior if we add support
-	// for targeted replay.
+	// Move the window backwards should have no effect.
 	t.Run("rewind", func(t *testing.T) {
 		r := require.New(t)
 
-		smallBatchEnd = hlc.New(int64(mutCount/2), mutCount/2)
-		bounds.Set(hlc.RangeIncluding(hlc.Zero(), smallBatchEnd))
+		bounds.Set(hlc.RangeIncluding(hlc.Zero(), hlc.New(int64(mutCount/2), mutCount/2)))
 		select {
 		case cursor := <-out:
 			r.NoError(cursor.Error)
 			r.NotNil(cursor.Batch)
-			r.True(cursor.Fragment)
-			r.True(cursor.Jump)
-			rewound := types.Flatten[*types.MultiBatch](cursor.Batch)
-			r.Equal(singleMuts[:len(cursor.Batch.Data)], rewound)
-			// We're in the middle of reading a batch, so the batch's
-			// timestamp should not be included in the progress range.
-			r.Equal(rewound[len(rewound)-1].Time, cursor.Progress.Max())
+			r.Zero(cursor.Batch.Count())
+			r.False(cursor.Fragment)
+			r.False(cursor.Jump)
+
+			// This should be unchanged from the preceding test.
+			r.Equal(hlc.RangeIncluding(hlc.Zero(), smallBatchEnd), cursor.Progress)
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
-		}
-
-		// Drain channel
-	drain:
-		for {
-			select {
-			case cursor := <-out:
-				r.NoError(cursor.Error)
-				if !cursor.Fragment {
-					break drain
-				}
-			case <-ctx.Done():
-				r.NoError(ctx.Err())
-			}
 		}
 	})
 
@@ -242,5 +202,27 @@ func TestTableReader(t *testing.T) {
 		r.Equal(len(bigMuts), len(seen))
 		r.Equal(bigMuts, seen)
 		r.Len(times, 1)
+	})
+
+	t.Run("advance-empty", func(t *testing.T) {
+		r := require.New(t)
+
+		// Slide the time window forward.
+		jumpStart := hlc.New(int64(19*mutCount), 0)
+		jumpEnd := hlc.New(int64(20*mutCount), 0)
+		bounds.Set(hlc.RangeIncluding(jumpStart, jumpEnd))
+
+		// We expect to see an empty scan that advances to the end.
+		select {
+		case cursor := <-out:
+			r.NoError(cursor.Error)
+			r.NotNil(cursor.Batch)
+			r.Empty(cursor.Batch.Data)
+			r.False(cursor.Fragment)
+			r.Equal(jumpEnd, cursor.Progress.MaxInclusive())
+			r.True(cursor.Jump)
+		case <-ctx.Done():
+			r.NoError(ctx.Err())
+		}
 	})
 }

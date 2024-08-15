@@ -260,18 +260,33 @@ func (r *tableReader) queryOnce(ctx context.Context) ([]types.Mutation, error) {
 
 // updateBounds ensures that the state of the reader can satisfy all
 // reads within the requested bounds.
-func (r *tableReader) updateBounds(proposed hlc.Range) (rewound bool) {
-	// If the reader is new or idle, accept any value.
-	if r.scanBounds.Empty() {
-		r.scanBounds = proposed
-		return true
+func (r *tableReader) updateBounds(proposed hlc.Range) (jump bool) {
+	next := r.scanBounds
+
+	// If the reader is new, accept any value.
+	if next == hlc.RangeEmpty() {
+		next = proposed
+	} else {
+		// We only allow fast-forwarding (to optimize database scans) or
+		// extending the bounds. Rewinding isn't allowed, since this could
+		// re-emit rows.
+		if hlc.Compare(proposed.Min(), next.Min()) > 0 {
+			jump = true
+			next = hlc.RangeExcluding(proposed.Min(), next.Max())
+		}
+		if hlc.Compare(proposed.Max(), next.Max()) > 0 {
+			next = hlc.RangeExcluding(next.Min(), proposed.Max())
+		}
 	}
-	// We only allow extensions of existing scans while running.
-	if hlc.Compare(proposed.Max(), r.scanBounds.Max()) > 0 {
-		next := hlc.RangeExcluding(r.scanBounds.Min(), proposed.Max())
-		log.Tracef("read bounds %s: scan: %s proposed: %s next: %s",
-			r.table, r.scanBounds, proposed, next)
-		r.scanBounds = next
+	if log.IsLevelEnabled(log.TraceLevel) {
+		log.WithFields(log.Fields{
+			"jump":     jump,
+			"next":     next,
+			"previous": r.scanBounds,
+			"proposed": proposed,
+			"table":    r.table,
+		}).Trace("reader bounds updated")
 	}
-	return false
+	r.scanBounds = next
+	return jump
 }

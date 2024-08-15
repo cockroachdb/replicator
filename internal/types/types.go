@@ -232,8 +232,9 @@ func (c *StagingCursor) String() string {
 type StagingQuery struct {
 	// The bounds variable governs the reader to ensure that it does not
 	// read beyond the data known to be consistent, by pausing reads
-	// when the maximum time has been reached. The minimum value of the
-	// bounds may be updated to optimize database scans.
+	// when the maximum time has been reached. Updates to the minimum
+	// bound allows records to be skipped, but a query cannot be rewound
+	// such that it will re-emit records.
 	Bounds *notify.Var[hlc.Range]
 
 	// FragmentSize places an upper bound on the size of any individual
