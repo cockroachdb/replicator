@@ -1,0 +1,217 @@
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = 'Pink White', "SALARY" = 75000 WHERE "NAME_TARGET" = 'John Doe';
+----
+{
+  "NAME_TARGET": "Pink White",
+  "SALARY": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE RECORDS" SET "NAME_TARGET" = 'Pink White', "SALARY" = 75000 WHERE "NAME_TARGET" = 'John Doe';
+----
+{
+  "NAME_TARGET": "Pink White",
+  "SALARY": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "FULL NAME" = 'Pink White', "SALARY AMOUNT" = 75000 WHERE "FULL NAME" = 'John Doe';
+----
+{
+  "FULL NAME": "Pink White",
+  "SALARY AMOUNT": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME$TARGET" = 'Pink White', "SALARY#AMOUNT" = 75000 WHERE "NAME$TARGET" = 'John Doe';
+----
+{
+  "NAME$TARGET": "Pink White",
+  "SALARY#AMOUNT": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = 'Pink White', "NewCol" = 'NewVal' WHERE "NAME_TARGET" = 'John Doe';
+----
+{
+  "NAME_TARGET": "Pink White",
+  "NewCol": "NewVal"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EmployeeDetails" SET "FullName" = 'Pink White', "SalaryAmount" = 75000 WHERE "FullName" = 'John Doe';
+----
+{
+  "FullName": "Pink White",
+  "SalaryAmount": "75000"
+}
+
+# This is a bug with Antlr that spaces of subqueries are removed for the GetText() function.
+# But we actually won't see this in the logminer as it will always be evaluated to the actual
+# value already.
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "SALARY" = (SELECT MAX("SALARY") FROM "EMPLOYEE_SALARIES") WHERE "NAME_TARGET" = 'John Doe';
+----
+{
+  "SALARY": "(SELECTMAX(\"SALARY\")FROM\"EMPLOYEE_SALARIES\")"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = 'Pink White', "SALARY" = 75000 WHERE "NAME_TARGET" = 'John Doe' AND "DEPARTMENT" = 'HR';
+----
+{
+  "NAME_TARGET": "Pink White",
+  "SALARY": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = NULL, "SALARY" = 75000 WHERE "NAME_TARGET" = 'John Doe';
+----
+{
+  "NAME_TARGET": null,
+  "SALARY": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "DETAILS" = '{"age": 30, "position": "Manager"}' WHERE "ID" = 1001;
+----
+{
+  "DETAILS": "{\"age\": 30, \"position\": \"Manager\"}"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."Emp (Details)" SET "Emp Name" = 'John Doe', "Salary Amount" = 75000 WHERE "Emp Name" = 'Jane Doe';
+----
+{
+  "Emp Name": "John Doe",
+  "Salary Amount": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."Emp (Details)" SET "Emp Name" = NULL, "Salary Amount" = 75000 WHERE "Emp Name" = "HELLO";
+----
+{
+  "Emp Name": null,
+  "Salary Amount": "75000"
+}
+
+
+parse
+UPDATE "C##MYADMIN"."EMPLOYEE_DETAILS_WITH_VERY_LONG_NAME" SET "EMPLOYEE_NAME_WITH_VERY_LONG_COLUMN_NAME" = 'Pink White' WHERE "EMPLOYEE_ID" = 1001;
+----
+{
+  "EMPLOYEE_NAME_WITH_VERY_LONG_COLUMN_NAME": "Pink White"
+}
+
+parse
+update "C##MYADMIN"."E2" set "NAME_TARGET" = 'O''Reilly', "COMMENT" = 'He said, "Hello!"' where "NAME_TARGET" = 'John Doe' and "COMMENT" = 'Initial Comment' and ROWID = 'AAASLfAAHAAAAJ+AAA';
+----
+{
+  "COMMENT": "He said, \"Hello!\"",
+  "NAME_TARGET": "O''Reilly"
+}
+
+parse
+update "C##MYADMIN"."E2" set "NAME_TARGET" = 'PINK WHITE', "SALARY" = '75000' where "NAME_TARGET" = 'John Doe' and "SALARY" = '75000' and ROWID = 'AAASLfAAHAAAAJ+AAA';
+----
+{
+  "NAME_TARGET": "PINK WHITE",
+  "SALARY": "75000"
+}
+
+
+parse
+update "C##MYADMIN"."E2" set "SALARY" = '75000', "DATE_JOINED" = TO_DATE('23-01-01', 'RR-MM-DD') where "SALARY" IS NULL and "DATE_JOINED" IS NULL and ROWID = 'AAASLfAAHAAAAJ+AAA';
+----
+{
+  "DATE_JOINED": "TO_DATE('23-01-01','RR-MM-DD')",
+  "SALARY": "75000"
+}
+
+
+parse
+update "C##MYADMIN"."E2" set "SALARY" = NULL, "DATE_JOINED" = TO_DATE('23-01-01', 'RR-MM-DD') where "SALARY" IS NULL and "DATE_JOINED" IS NULL and ROWID = 'AAASLfAAHAAAAJ+AAA';
+----
+{
+  "DATE_JOINED": "TO_DATE('23-01-01','RR-MM-DD')",
+  "SALARY": null
+}
+
+parse
+update "C##MYADMIN"."E3" set "DETAILS" = '{"age": 30, "position": "Manager"}' where "ID" = '1014' and "NAME_TARGET" = 'JSON Example' and ROWID = 'AAASLsAAHAAAAUeAAA';
+----
+{
+  "DETAILS": "{\"age\": 30, \"position\": \"Manager\"}"
+}
+
+parse
+update "C##MYADMIN"."E2" set "SALARY" = '75000', "DATE_JOINED" = EMPTY_CLOB();
+----
+{
+  "DATE_JOINED": "ORACLE_EMPTY_CLOB()",
+  "SALARY": "75000"
+}
+
+
+parse
+UPDATE students
+  SET math_majors =
+        people_typ (person_typ(12, 'Bob Jones', '650-555-0130'),
+                    person_typ(31, 'Sarah Chen', '415-555-0120'),
+                    person_typ(45, 'Chris Woods', '415-555-0124')),
+      chem_majors =
+        people_typ (person_typ(51, 'Joe Lane', '650-555-0140'),
+                    person_typ(31, 'Sarah Chen', '415-555-0120'),
+                    person_typ(52, 'Kim Patel', '650-555-0135')),
+   physics_majors =
+        people_typ (person_typ(12, 'Bob Jones', '650-555-0130'),
+                    person_typ(45, 'Chris Woods', '415-555-0124'))
+WHERE graduation = '01-JUN-03';
+----
+{
+  "chem_majors": "people_typ(person_typ(51,'Joe Lane','650-555-0140'),person_typ(31,'Sarah Chen','415-555-0120'),person_typ(52,'Kim Patel','650-555-0135'))",
+  "math_majors": "people_typ(person_typ(12,'Bob Jones','650-555-0130'),person_typ(31,'Sarah Chen','415-555-0120'),person_typ(45,'Chris Woods','415-555-0124'))",
+  "physics_majors": "people_typ(person_typ(12,'Bob Jones','650-555-0130'),person_typ(45,'Chris Woods','415-555-0124'))"
+}
+
+parse
+UPDATE employees
+SET phone_numbers = phone_varray('345-678-9012', '456-789-0123', '567-890-1234')
+WHERE emp_id = 1;
+----
+{
+  "phone_numbers": "phone_varray('345-678-9012','456-789-0123','567-890-1234')"
+}
+
+
+parse
+UPDATE financials
+SET account_balance = 87654321098765432109.99,
+    credit_limit = 21098765432109876543.21
+WHERE record_id = 1;
+----
+{
+  "account_balance": "87654321098765432109.99",
+  "credit_limit": "21098765432109876543.21"
+}
+
+parse
+UPDATE financials
+SET account_balance = 87654321098765432109.9214141239,
+    credit_limit = 21098765432109876543.2241243123131
+WHERE record_id = 1;
+----
+{
+  "account_balance": "87654321098765432109.9214141239",
+  "credit_limit": "21098765432109876543.2241243123131"
+}

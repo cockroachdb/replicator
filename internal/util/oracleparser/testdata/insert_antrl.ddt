@@ -1,0 +1,270 @@
+parse
+insert into "C##MYADMIN"."EMPLOYEE"("ID","NAME_TARGET","SALARY") values ('900000','Alice Johnson','70000');
+----
+{
+  "ID": "900000",
+  "NAME_TARGET": "Alice Johnson",
+  "SALARY": "70000"
+}
+
+# Basic Insert Statement
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY") 
+VALUES (1001, 'John Doe', 75000);
+----
+{
+  "ID": "1001",
+  "NAME_TARGET": "John Doe",
+  "SALARY": "75000"
+}
+
+# Insert with Column Names Containing Spaces
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("Employee ID", "Full Name", "Salary Amount") 
+VALUES (1002, 'Jane Doe', 80000);
+----
+{
+  "Employee ID": "1002",
+  "Full Name": "Jane Doe",
+  "Salary Amount": "80000"
+}
+
+# Insert with Column Names Containing Special Characters
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID#", "NAME_TARGET$", "SALARY@") 
+VALUES (1003, 'Mark Twain', 85000);
+----
+{
+  "ID#": "1003",
+  "NAME_TARGET$": "Mark Twain",
+  "SALARY@": "85000"
+}
+
+# Insert with Mixed Data Types
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "DATE_JOINED", "IS_ACTIVE", "SALARY") 
+VALUES (1004, 'Lucy Liu', TO_DATE('2023-01-01', 'YYYY-MM-DD'), 1, 92000);
+----
+{
+  "DATE_JOINED": "TO_DATE('2023-01-01','YYYY-MM-DD')",
+  "ID": "1004",
+  "IS_ACTIVE": "1",
+  "NAME_TARGET": "Lucy Liu",
+  "SALARY": "92000"
+}
+
+# Insert with Nested Functions
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY") 
+VALUES (1005, UPPER('nancy drew'), NVL(NULL, 60000));
+----
+{
+  "ID": "1005",
+  "NAME_TARGET": "UPPER('nancy drew')",
+  "SALARY": "NVL(NULL,60000)"
+}
+
+# Insert with NULL Values
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY") 
+VALUES (1006, NULL, NULL);
+----
+{
+  "ID": "1006",
+  "NAME_TARGET": null,
+  "SALARY": null
+}
+
+# Insert with Default Values
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY") 
+VALUES (1007, DEFAULT, DEFAULT);
+----
+{
+  "ID": "1007",
+  "NAME_TARGET": "DEFAULT",
+  "SALARY": "DEFAULT"
+}
+
+# Insert with Explicit NULL Values in Columns
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY", "DATE_JOINED") 
+VALUES (1008, 'Sam Smith', 75000, NULL);
+----
+{
+  "DATE_JOINED": null,
+  "ID": "1008",
+  "NAME_TARGET": "Sam Smith",
+  "SALARY": "75000"
+}
+
+# Insert with Overlong Identifier Names
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "VERY_LONG_COLUMN_NAME_THAT_EXCEEDS_NORMAL_LIMITS", "SALARY") 
+VALUES (1009, 'Long Name', 70000);
+----
+{
+  "ID": "1009",
+  "SALARY": "70000",
+  "VERY_LONG_COLUMN_NAME_THAT_EXCEEDS_NORMAL_LIMITS": "Long Name"
+}
+
+# Insert with Special Characters in Values
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "COMMENT") 
+VALUES (1011, 'O''Reilly', 'He said, "Hello!"');
+----
+{
+  "COMMENT": "He said, \"Hello!\"",
+  "ID": "1011",
+  "NAME_TARGET": "O''Reilly"
+}
+
+# Insert with Missing Columns
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET") 
+VALUES (1012, 'Eve Adams');
+----
+{
+  "ID": "1012",
+  "NAME_TARGET": "Eve Adams"
+}
+
+# Insert with Subquery in VALUES
+# This is a bug with Antlr that spaces of subqueries are removed for the GetText() function.
+# But we actually won't see this in the logminer as it will always be evaluated to the actual
+# value already.
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY")
+VALUES (1999998, 'Alice Wonderland', (SELECT AVG("SALARY") FROM "C##MYADMIN"."EMPLOYEE"));
+----
+{
+  "ID": "1999998",
+  "NAME_TARGET": "Alice Wonderland",
+  "SALARY": "(SELECTAVG(\"SALARY\")FROM\"C##MYADMIN\".\"EMPLOYEE\")"
+}
+
+# Insert with Sequence Value
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY") 
+VALUES (employee_seq.NEXTVAL, 'Frank Ocean', 95000);
+----
+{
+  "ID": "employee_seq.NEXTVAL",
+  "NAME_TARGET": "Frank Ocean",
+  "SALARY": "95000"
+}
+
+# Insert with JSON Data Type
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "DETAILS") 
+VALUES (1014, 'JSON Example', '{"age": 30, "position": "Manager"}');
+----
+{
+  "DETAILS": "{\"age\": 30, \"position\": \"Manager\"}",
+  "ID": "1014",
+  "NAME_TARGET": "JSON Example"
+}
+
+# Insert with Empty String
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY", "COMMENT") 
+VALUES (1015, '', 50000, '');
+----
+{
+  "COMMENT": "",
+  "ID": "1015",
+  "NAME_TARGET": "",
+  "SALARY": "50000"
+}
+
+# Insert with Expressions as Values
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY") 
+VALUES (1019, 'Expression Example', 50000 + 25000);
+----
+{
+  "ID": "1019",
+  "NAME_TARGET": "Expression Example",
+  "SALARY": "50000+25000"
+}
+
+# Insert with Function Result
+parse
+INSERT INTO "C##MYADMIN"."EMPLOYEE" ("ID", "NAME_TARGET", "SALARY", "DATE_JOINED") 
+VALUES (1020, 'Function Example', DBMS_RANDOM.VALUE(50000, 100000), SYSDATE);
+----
+{
+  "DATE_JOINED": "SYSDATE",
+  "ID": "1020",
+  "NAME_TARGET": "Function Example",
+  "SALARY": "DBMS_RANDOM.VALUE(50000,100000)"
+}
+
+# Insert with EMPTY_CLOB()
+parse
+insert into "C##MYADMIN"."E3"("ID","NAME_TARGET","DETAILS") values ('1014','JSON Example',EMPTY_CLOB());
+----
+{
+  "DETAILS": "ORACLE_EMPTY_CLOB()",
+  "ID": "1014",
+  "NAME_TARGET": "JSON Example"
+}
+
+
+parse
+insert into dept_phone_list values (
+   100,
+   phone_varray_typ( phone_typ ('01', '650', '5550123'),
+                      phone_typ ('01', '650', '5550148'),
+                      phone_typ ('01', '650', '5550192')));
+----
+ERROR: column list is not specified
+
+parse
+insert into dept_phone_list (x, y) values (
+   100,
+   phone_varray_typ( phone_typ ('01', '650', '5550123'),
+                      phone_typ ('01', '650', '5550148'),
+                      phone_typ ('01', '650', '5550192')));
+----
+{
+  "x": "100",
+  "y": "phone_varray_typ(phone_typ('01','650','5550123'),phone_typ('01','650','5550148'),phone_typ('01','650','5550192'))"
+}
+
+
+parse
+INSERT INTO employees (emp_id, name, phone_numbers)
+VALUES (
+    1,
+    'John Doe',
+    phone_varray('123-456-7890', '234-567-8901')
+);
+----
+{
+  "emp_id": "1",
+  "name": "John Doe",
+  "phone_numbers": "phone_varray('123-456-7890','234-567-8901')"
+}
+
+
+parse
+INSERT INTO financials (record_id, account_balance, credit_limit)
+VALUES (1, 12345678901234567890.12, 98765432109876543210.99);
+----
+{
+  "account_balance": "12345678901234567890.12",
+  "credit_limit": "98765432109876543210.99",
+  "record_id": "1"
+}
+
+parse
+INSERT INTO financials (record_id, account_balance, credit_limit)
+VALUES (2, 98765432101234567890.5042341341, 12345678901234567890.753124234);
+----
+{
+  "account_balance": "98765432101234567890.5042341341",
+  "credit_limit": "12345678901234567890.753124234",
+  "record_id": "2"
+}
