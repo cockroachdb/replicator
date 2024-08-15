@@ -37,25 +37,25 @@ jobs:
       - name: crlfmt returns no deltas
         if: ${{ !cancelled() }}
         run: |
-          DELTA=$(go run github.com/cockroachdb/crlfmt -ignore _gen.go .)
+          DELTA=$(go run github.com/cockroachdb/crlfmt -ignore '_gen\.go|\.gen\.go' -ignore '.*thirdparty/.*' -ignore '.*\.ddt' -ignore '.*\.md' .)
           echo $DELTA
           test -z "$DELTA"
 
       - name: Copyright headers
         if: ${{ !cancelled() }}
-        run: go run github.com/google/addlicense -c "The Cockroach Authors" -l apache -s -v  -check  -ignore '**/testdata/**/*.sql' .
+        run: go run github.com/google/addlicense -c "The Cockroach Authors" -l apache -s -v -check -ignore '**/testdata/**/*.sql'  -ignore '**/thirdparty/**' -ignore '*.ddt' -ignore '*.md' -ignore '.idea/*' .
 
       - name: Lint
         if: ${{ !cancelled() }}
-        run: go run golang.org/x/lint/golint -set_exit_status ./...
+        run: go run golang.org/x/lint/golint -set_exit_status $(go list ./... | grep -v "/thirdparty" | grep -v "/oracleparser")
 
       - name: Static checks
         if: ${{ !cancelled() }}
-        run: go run honnef.co/go/tools/cmd/staticcheck -checks all ./...
+        run: go run honnef.co/go/tools/cmd/staticcheck -checks all $(go list ./... | grep -v "/thirdparty" | grep -v "/oracleparser")
 
       - name: Go Vet
         if: ${{ !cancelled() }}
-        run: go vet ./...
+        run: go vet $(go list ./... | grep -v "/thirdparty")
 
       # Check that all dependencies have licenses and that those
       # licenses are reasonably permissive. License files for modules
