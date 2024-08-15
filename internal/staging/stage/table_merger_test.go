@@ -206,6 +206,9 @@ func TestTableMerger(t *testing.T) {
 		r.Equal(bigMuts, seen)
 	})
 
+	// Moving the lower or upper bounds backwards will have no effect.
+	// We'll expect to see a progress-only update that reflects the
+	// current state of the merge.
 	t.Run("jump-backwards", func(t *testing.T) {
 		r := require.New(t)
 		jumpEnd := hlc.New(int64(2*mutCount), 0)
@@ -213,7 +216,9 @@ func TestTableMerger(t *testing.T) {
 		select {
 		case cursor := <-out:
 			r.NoError(cursor.Error)
-			r.True(cursor.Jump)
+			r.False(cursor.Jump)
+			r.Equal(hlc.RangeIncluding(hlc.Zero(), bigTime), cursor.Progress)
+			r.Nil(cursor.Batch)
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
 		}
