@@ -1,6 +1,6 @@
 module github.com/cockroachdb/replicator
 
-go 1.22.1
+go 1.22.6
 
 require (
 	github.com/IBM/sarama v1.43.2
