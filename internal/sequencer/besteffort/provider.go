@@ -35,6 +35,7 @@ var Set = wire.NewSet(
 // ProvideBestEffort is called by Wire.
 func ProvideBestEffort(
 	cfg *sequencer.Config,
+	fold *decorators.Fold,
 	leases types.Leases,
 	marker *decorators.Marker,
 	once *decorators.Once,
@@ -46,6 +47,7 @@ func ProvideBestEffort(
 ) *BestEffort {
 	return &BestEffort{
 		cfg:         cfg,
+		fold:        fold,
 		leases:      leases,
 		marker:      marker,
 		once:        once,

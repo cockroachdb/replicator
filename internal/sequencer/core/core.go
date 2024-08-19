@@ -129,7 +129,7 @@ func (s *Core) Start(
 		// event notifications that are interpreted by a Copier below.
 		stagingReader, err := s.stagers.Read(ctx, &types.StagingQuery{
 			Bounds:       opts.Bounds,
-			FragmentSize: s.cfg.ScanSize,
+			FragmentSize: 1_000_000, // XXX s.cfg.ScanSize,
 			Group:        group,
 		})
 		if err != nil {

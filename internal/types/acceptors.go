@@ -105,36 +105,90 @@ func (t *orderedAdapter) AcceptMultiBatch(
 	if batch.Count() == 0 {
 		return nil
 	}
-	// Coalesce all data by destination table.
-	var commonSchema ident.Schema
-	var mutsByTable ident.TableMap[[]Mutation]
-	for _, temporal := range batch.Data {
-		if err := temporal.Data.Range(func(tbl ident.Table, tblBatch *TableBatch) error {
-			if commonSchema.Empty() {
-				commonSchema = tbl.Schema()
-			} else if !ident.Equal(commonSchema, tbl.Schema()) {
-				return errors.Errorf("mixed-schema batches not currently supported: %s vs %s", commonSchema, tbl.Schema())
-			}
 
-			mutsByTable.Put(tbl, append(mutsByTable.GetZero(tbl), tblBatch.Data...))
-			return nil
-		}); err != nil {
-			return errors.Wrap(err, temporal.Time.String())
+	// Determine the final disposition of any given row. A row will be
+	// present in exactly one of these maps.
+	var commonSchema ident.Schema
+	var deletes, updates ident.TableMap[map[string]Mutation]
+	if err := batch.CopyInto(AccumulatorFunc(func(table ident.Table, mut Mutation) error {
+		if commonSchema.Empty() {
+			commonSchema = table.Schema()
+		} else if !ident.Equal(commonSchema, table.Schema()) {
+			return errors.Errorf("mixed-schema batches not currently supported: %s vs %s",
+				commonSchema, table.Schema())
 		}
+
+		key := string(mut.Key)
+
+		var setInTable, clearFromTable *ident.TableMap[map[string]Mutation]
+		if mut.IsDelete() {
+			setInTable = &deletes
+			clearFromTable = &updates
+		} else {
+			setInTable = &updates
+			clearFromTable = &deletes
+		}
+
+		setInMap, ok := setInTable.Get(table)
+		if !ok {
+			setInMap = make(map[string]Mutation)
+			setInTable.Put(table, setInMap)
+		}
+		setInMap[key] = mut
+
+		if clearFromMap, ok := clearFromTable.Get(table); ok {
+			delete(clearFromMap, key)
+			if len(clearFromMap) == 0 {
+				clearFromTable.Delete(table)
+			}
+		}
+		return nil
+	})); err != nil {
+		return err
 	}
 
 	w, err := t.watchers.Get(commonSchema)
 	if err != nil {
 		return err
 	}
+	order := w.Get().Order
 
-	// Iterate over data in dependency order.
-	for _, level := range w.Get().Order {
-		for _, table := range level {
-			if muts, ok := mutsByTable.Get(table); ok {
-				nextBatch := &TableBatch{Table: table, Data: muts}
-				if err := t.AcceptTableBatch(ctx, nextBatch, options); err != nil {
-					return errors.Wrap(err, table.String())
+	// Apply deletes in reverse table order.
+	if deletes.Len() > 0 {
+		for i := len(order) - 1; i >= 0; i-- {
+			tablesInLevel := order[i]
+			for _, table := range tablesInLevel {
+				if mutsByKey, ok := deletes.Get(table); ok {
+					nextBatch := &TableBatch{
+						Table: table,
+						Data:  make([]Mutation, 0, len(mutsByKey)),
+					}
+					for _, mut := range mutsByKey {
+						nextBatch.Data = append(nextBatch.Data, mut)
+					}
+					if err := t.AcceptTableBatch(ctx, nextBatch, options); err != nil {
+						return errors.Wrap(err, table.String())
+					}
+				}
+			}
+		}
+	}
+
+	// Apply updates in table order.
+	if updates.Len() > 0 {
+		for _, tablesInLevel := range order {
+			for _, table := range tablesInLevel {
+				if mutsByKey, ok := updates.Get(table); ok {
+					nextBatch := &TableBatch{
+						Table: table,
+						Data:  make([]Mutation, 0, len(mutsByKey)),
+					}
+					for _, mut := range mutsByKey {
+						nextBatch.Data = append(nextBatch.Data, mut)
+					}
+					if err := t.AcceptTableBatch(ctx, nextBatch, options); err != nil {
+						return errors.Wrap(err, table.String())
+					}
 				}
 			}
 		}

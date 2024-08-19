@@ -96,7 +96,7 @@ func (c *Checker) CheckConsistent() (failures []string, _ error) {
 				continue
 			}
 			if foundVal != expectedVal {
-				failf("parent %d: expected %d, got %d", child, expectedVal, foundVal)
+				failf("child %d: expected %d, got %d", child, expectedVal, foundVal)
 			}
 			expectedParent := c.ChildToParent[child]
 			if foundParent != expectedParent {

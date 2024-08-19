@@ -39,6 +39,7 @@ import (
 // sequencer for each table that is provided.
 type BestEffort struct {
 	cfg         *sequencer.Config
+	fold        *decorators.Fold
 	leases      types.Leases
 	marker      *decorators.Marker
 	once        *decorators.Once
@@ -97,6 +98,7 @@ func (s *bestEffort) Start(
 			subOpts.MaxDeferred = s.cfg.TimestampLimit
 			subOpts.Group.Name = ident.New(subOpts.Group.Name.Raw() + ":" + table.Raw())
 			subOpts.Group.Tables = []ident.Table{table}
+			subOpts.Delegate = s.fold.MultiAcceptor(subOpts.Delegate)
 
 			_, subStats, err := s.delegate.Start(ctx, subOpts)
 			if err != nil {
@@ -161,6 +163,7 @@ func (s *bestEffort) Start(
 	})
 
 	acc := opts.Delegate
+	acc = s.fold.MultiAcceptor(acc)
 	// Write staging entries only for immediately-applied mutations.
 	if !s.cfg.IdempotentSource {
 		acc = s.marker.MultiAcceptor(acc)

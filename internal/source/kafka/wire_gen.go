@@ -93,6 +93,7 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	sequencerConfig := &eagerConfig.Sequencer
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
+	fold := decorators.ProvideFold()
 	typesLeases, err := leases.ProvideLeases(ctx, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
@@ -103,7 +104,7 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	if err != nil {
 		return nil, err
 	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, fold, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)

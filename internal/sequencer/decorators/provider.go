@@ -23,10 +23,16 @@ import (
 
 // Set is used by Wire.
 var Set = wire.NewSet(
+	ProvideFold,
 	ProvideMarker,
 	ProvideOnce,
 	ProvideRetryTarget,
 )
+
+// ProvideFold is called by Wire.
+func ProvideFold() *Fold {
+	return &Fold{}
+}
 
 // ProvideMarker is called by Wire.
 func ProvideMarker(pool *types.StagingPool, stagers types.Stagers) *Marker {

@@ -32,6 +32,7 @@ import (
 
 func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) {
 	sequencerConfig := ProvideSequencerConfig(config)
+	fold := decorators.ProvideFold()
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
 	stagingPool := baseFixture.StagingPool
@@ -53,7 +54,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, fold, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	targetStatements := baseFixture.TargetCache
 	configs := fixture.Configs
 	dlqConfig := ProvideDLQConfig(config)

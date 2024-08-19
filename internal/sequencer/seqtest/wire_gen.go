@@ -24,6 +24,7 @@ import (
 // Injectors from injector.go:
 
 func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptConfig *script.Config) (*Fixture, error) {
+	fold := decorators.ProvideFold()
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
 	stagingPool := baseFixture.StagingPool
@@ -41,7 +42,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	}
 	targetPool := baseFixture.TargetPool
 	watchers := fixture.Watchers
-	bestEffort := besteffort.ProvideBestEffort(config, leases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(config, fold, leases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
 	chaosChaos := &chaos.Chaos{
 		Config: config,
 	}
