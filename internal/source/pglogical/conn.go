@@ -289,6 +289,19 @@ func (c *Conn) copyMessages(ctx *stopper.Context) error {
 					return err
 				}
 			}
+
+		case *pgproto3.ErrorResponse:
+			// General error message from upstream. Log it and bail
+			// since we don't know what the status of the connection is.
+			log.WithField("logicalMsg", msg).Error("error received from source database")
+			return errors.New("error received from source database")
+
+		case *pgproto3.ReadyForQuery:
+			// This would suggest that the connection isn't actually in
+			// logical-replication mode.
+			return errors.New("source database connection appears to be in SQL mode; " +
+				"verify that source is configured for logical replication")
+
 		case *pgproto3.NotificationResponse:
 			log.Debugf("notification from server: %s", msg.Payload)
 		default:
