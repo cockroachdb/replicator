@@ -3,7 +3,7 @@ module github.com/cockroachdb/replicator
 go 1.22.6
 
 require (
-	github.com/IBM/sarama v1.43.2
+	github.com/IBM/sarama v1.43.3
 	github.com/antlr4-go/antlr/v4 v4.13.1
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cockroachdb/apd v1.1.0
@@ -47,7 +47,7 @@ require filippo.io/edwards25519 v1.1.0 // indirect
 require (
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/eapache/go-resiliency v1.6.0 // indirect
+	github.com/eapache/go-resiliency v1.7.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
