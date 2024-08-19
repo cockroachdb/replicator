@@ -37,7 +37,7 @@ require (
 	golang.org/x/sync v0.8.0
 	golang.org/x/time v0.5.0
 	golang.org/x/tools v0.24.0
-	honnef.co/go/tools v0.4.7
+	honnef.co/go/tools v0.5.1
 )
 
 require filippo.io/edwards25519 v1.1.0 // indirect
@@ -78,7 +78,7 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.3.2 // indirect
+	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -117,7 +117,7 @@ require (
 	go.opencensus.io v0.24.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
-	golang.org/x/exp/typeparams v0.0.0-20230522175609-2e198f4a06a1 // indirect
+	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
 	golang.org/x/mod v0.20.0
 	golang.org/x/sys v0.23.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
