@@ -39,7 +39,22 @@ type acceptor struct {
 	watchers   types.Watchers
 }
 
-var _ types.TableAcceptor = (*acceptor)(nil)
+var _ types.MultiAcceptor = (*acceptor)(nil)
+
+func (a *acceptor) AcceptTemporalBatch(ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions) error {
+	return batch.Data.Range(func(table ident.Table, batch *types.TableBatch) error {
+		return a.AcceptTableBatch(ctx, batch, opts)
+	})
+}
+
+func (a *acceptor) AcceptMultiBatch(ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions) error {
+	for _, temp := range batch.Data {
+		if err := a.AcceptTemporalBatch(ctx, temp, opts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // AcceptTableBatch implements [types.TableAcceptor]. It will invoke
 // user-defined dispatch and/or map functions.

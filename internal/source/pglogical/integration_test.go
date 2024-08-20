@@ -210,6 +210,11 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 			FS:       scripttest.ScriptFSFor(tgts[0]),
 			MainPath: "/testdata/logical_test.ts",
 		}
+	} else {
+		// No-op just to verify wiring.
+		cfg.Renames = map[*regexp.Regexp]ident.Ident{
+			regexp.MustCompile("t1"): ident.New("t1"),
+		}
 	}
 	r.NoError(cfg.Preflight())
 	repl, err := Start(ctx, cfg)

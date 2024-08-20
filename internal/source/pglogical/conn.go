@@ -23,6 +23,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
@@ -56,6 +57,8 @@ type Conn struct {
 	publicationName string
 	// Map source ids to target tables.
 	relations map[uint32]ident.Table
+	// Rename incoming tables on the fly.
+	renames map[*regexp.Regexp]ident.Ident
 	// The name of the slot within the publication.
 	slotName string
 	// The configuration for opening replication connections.
@@ -392,6 +395,14 @@ func (c *Conn) onDataTuple(
 	}
 	// Set an approximate timestamp.
 	mut.Time = hlc.New(c.nextCommitTime.UnixNano(), 0)
+	// Allow user to rename incoming table names.
+	for pattern, rename := range c.renames {
+		if pattern.MatchString(tbl.Raw()) {
+			next := ident.NewTable(tbl.Schema(), rename)
+			log.Tracef("renaming incoming table %s to %s", tbl, next)
+			tbl = next
+		}
+	}
 	// Set script metadata, which will be acted on by the acceptor.
 	script.AddMeta("pglogical", tbl, &mut)
 

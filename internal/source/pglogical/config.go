@@ -17,6 +17,8 @@
 package pglogical
 
 import (
+	"encoding/json"
+	"regexp"
 	"time"
 
 	"github.com/cockroachdb/replicator/internal/script"
@@ -42,6 +44,7 @@ type EagerConfig Config
 // mandatory unless explicitly indicated.
 type Config struct {
 	DLQ       dlq.Config
+	Renames   map[*regexp.Regexp]ident.Ident
 	Script    script.Config
 	Sequencer sequencer.Config
 	Staging   sinkprod.StagingConfig
@@ -58,6 +61,8 @@ type Config struct {
 	// The SQL schema in the target cluster to write into. This value is
 	// optional if a userscript dispatch function is present.
 	TargetSchema ident.Schema
+
+	renamePatterns string
 }
 
 // Bind adds flags to the set.
@@ -70,6 +75,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 
 	f.StringVar(&c.Publication, "publicationName", "",
 		"the publication within the source database to replicate")
+	f.StringVar(&c.renamePatterns, "renamePatterns", "",
+		`a JSON literal to rename incoming table names: { "regular_expression" : "table_name" }`)
 	f.StringVar(&c.Slot, "slotName", "replicator", "the replication slot in the source database")
 	f.StringVar(&c.SourceConn, "sourceConn", "", "the source database's connection string")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
@@ -129,6 +136,20 @@ func (c *Config) Preflight() error {
 	}
 	if c.TargetSchema.Empty() {
 		return errors.New("no target schema specified")
+	}
+	if c.renamePatterns != "" {
+		obj := make(map[string]string)
+		if err := json.Unmarshal([]byte(c.renamePatterns), &obj); err != nil {
+			return errors.New("could not parse renamePatterns as a JSON object")
+		}
+		c.Renames = make(map[*regexp.Regexp]ident.Ident, len(obj))
+		for k, v := range obj {
+			pattern, err := regexp.Compile(k)
+			if err != nil {
+				return errors.Errorf("could not compile regular expression: %q", k)
+			}
+			c.Renames[pattern] = ident.New(v)
+		}
 	}
 	return nil
 }

@@ -129,6 +129,7 @@ func ProvideConn(
 		memo:            memo,
 		publicationName: config.Publication,
 		relations:       make(map[uint32]ident.Table),
+		renames:         config.Renames,
 		slotName:        config.Slot,
 		sourceConfig:    sourceConfig,
 		standbyTimeout:  config.StandbyTimeout,
