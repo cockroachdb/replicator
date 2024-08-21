@@ -17,18 +17,29 @@
 package kafka
 
 import (
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"math/big"
+	"math/rand/v2"
 	"testing"
 	"time"
 
+	"github.com/IBM/sarama"
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/sinktest/scripttest"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -42,7 +53,10 @@ type fixtureConfig struct {
 }
 
 const (
-	broker = "localhost:29092"
+	broker        = "localhost:29092"
+	maxBatchSize  = 10
+	maxIterations = 100
+	numPartitions = 5
 )
 
 // TestMain verifies that we can run the integration test for Kafka.
@@ -103,7 +117,7 @@ func testIntegration(t *testing.T, fc *fixtureConfig) {
 	_, err = targetPool.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (pk INT PRIMARY KEY, %s VARCHAR(2048))", target, targetCol))
 	r.NoError(err)
 
-	serverCfg, err := getConfig(destFixture, fc, target)
+	serverCfg, err := getConfig(destFixture, fc, []string{target.Raw()}, target)
 	r.NoError(err)
 
 	kafka, err := Start(ctx, serverCfg)
@@ -171,11 +185,233 @@ func testIntegration(t *testing.T, fc *fixtureConfig) {
 	a.NoError(err)
 	log.WithField("metrics", metrics).Trace()
 	sinktest.CheckDiagnostics(ctx, t, kafka.Diagnostics)
+}
 
+// changefeedPartitioner forces a message without a key (e.g. the resolved timestamp)
+// on a given partition.
+type changefeedPartitioner struct {
+	hash sarama.Partitioner
+}
+
+var _ sarama.Partitioner = &changefeedPartitioner{}
+var _ sarama.PartitionerConstructor = newChangefeedPartitioner
+
+func newChangefeedPartitioner(topic string) sarama.Partitioner {
+	return &changefeedPartitioner{
+		hash: sarama.NewCustomHashPartitioner(fnv.New32a)(topic),
+	}
+}
+
+func (p *changefeedPartitioner) RequiresConsistency() bool { return true }
+func (p *changefeedPartitioner) Partition(
+	message *sarama.ProducerMessage, numPartitions int32,
+) (int32, error) {
+	if message.Key == nil {
+		return message.Partition, nil
+	}
+	return p.hash.Partition(message, numPartitions)
+}
+
+func TestWorkload(t *testing.T) {
+	t.Run("consistent", func(t *testing.T) { testWorkload(t, &fixtureConfig{}) })
+	t.Run("consistent chaos", func(t *testing.T) { testWorkload(t, &fixtureConfig{chaos: true}) })
+
+	t.Run("immediate", func(t *testing.T) { testWorkload(t, &fixtureConfig{immediate: true}) })
+	t.Run("immediate chaos", func(t *testing.T) { testWorkload(t, &fixtureConfig{chaos: true, immediate: true}) })
+}
+
+func testWorkload(t *testing.T, fc *fixtureConfig) {
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+	ctx := fixture.Context
+	workload, _, err := fixture.NewWorkload(ctx,
+		&all.WorkloadConfig{
+			// Don't create foreign keys references in immediate mode
+			DisableFK:         fc.immediate,
+			DisablePreStaging: true,
+		})
+	r.NoError(err)
+	topics := []string{
+		workload.Parent.Name().Raw(),
+		workload.Child.Name().Raw(),
+	}
+	serverCfg, err := getConfig(fixture.Fixture, fc, topics,
+		workload.Parent.Name())
+	r.NoError(err)
+
+	producer, err := newProducer(serverCfg.Brokers, topics)
+	r.NoError(err)
+	defer func() {
+		if err := producer.cleanup(); err != nil {
+			log.Errorf("error closing producer %v", err)
+		}
+	}()
+	connCtx := stopper.WithContext(ctx)
+	conn, err := Start(connCtx, serverCfg)
+	r.NoError(err)
+	stats := conn.Conn.conveyor.(interface {
+		Stat() *notify.Var[sequencer.Stat]
+	}).Stat()
+
+	lastTime := hlc.New(time.Now().UnixNano(), 0)
+	r.NoError(producer.writeResolved(lastTime))
+	for iter := 1; iter <= maxIterations; iter++ {
+		batch := &types.MultiBatch{}
+		size := rand.IntN(maxBatchSize) + 1
+		for i := 0; i < size; i++ {
+			lastTime = hlcNow(lastTime)
+			workload.GenerateInto(batch, lastTime)
+		}
+		r.NoError(producer.writeBatch(batch))
+		// Write a resolved timestamp file once in a while.
+		// Ensure that we have resolved file at the end.
+		if isPrime(iter) || iter == maxIterations {
+			lastTime = hlcNow(lastTime)
+			r.NoError(producer.writeResolved(lastTime))
+		}
+	}
+	log.Info("waiting for rows")
+	// Waiting for the rows to show in the target database.
+	r.NoError(workload.WaitForCatchUp(connCtx, stats))
+
+	parent, err := workload.Checker.StageCounter(workload.Parent.Name(),
+		hlc.RangeIncluding(hlc.Zero(), lastTime))
+	r.NoError(err)
+	child, err := workload.Checker.StageCounter(workload.Child.Name(),
+		hlc.RangeIncluding(hlc.Zero(), lastTime))
+	r.NoError(err)
+	log.Infof("staging database content parent rows: %d, child rows: %d", parent, child)
+
+	// Verify that the target database has all the data.
+	workload.CheckConsistent(connCtx, t)
+}
+
+type kafkaProducer struct {
+	producer sarama.SyncProducer
+	topics   []string
+}
+
+func newProducer(brokers []string, topics []string) (*kafkaProducer, error) {
+	config := sarama.NewConfig()
+	config.Producer.Partitioner = newChangefeedPartitioner
+	config.Producer.Return.Successes = true
+	producer, err := sarama.NewSyncProducer(brokers, config)
+	if err != nil {
+		return nil, err
+	}
+	admin, err := sarama.NewClusterAdmin(brokers, config)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = admin.Close() }()
+	for _, topic := range topics {
+		err = admin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     numPartitions,
+			ReplicationFactor: 1,
+		}, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &kafkaProducer{
+		producer: producer,
+		topics:   topics,
+	}, err
+}
+
+func (p *kafkaProducer) cleanup() error {
+	return p.producer.Close()
+}
+
+func (p *kafkaProducer) sendMessage(
+	topic string, partition int32, key json.RawMessage, message any,
+) error {
+	out, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+
+	msg := &sarama.ProducerMessage{
+		Topic:     topic,
+		Partition: partition,
+		Value:     sarama.ByteEncoder(out),
+	}
+	if key != nil {
+		msg.Key = sarama.ByteEncoder(key)
+	}
+	sent, _, err := p.producer.SendMessage(msg)
+	if key == nil && sent != partition {
+		return errors.Errorf("invalid partition %d (%d)", sent, partition)
+	}
+	return err
+}
+func (p *kafkaProducer) writeBatch(batch *types.MultiBatch) error {
+	type payload struct {
+		After   json.RawMessage `json:"after"`
+		Before  json.RawMessage `json:"before"`
+		Key     json.RawMessage `json:"key"`
+		Updated string          `json:"updated"`
+	}
+	for _, b := range batch.Data {
+		for _, t := range b.Data.Entries() {
+			for _, v := range t.Value.Data {
+				msg := &payload{
+					After:   v.Data,
+					Before:  v.Before,
+					Key:     v.Key,
+					Updated: v.Time.String(),
+				}
+				err := p.sendMessage(t.Value.Table.Raw(), -1, v.Key, msg)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (p *kafkaProducer) writeResolved(resolved hlc.Time) error {
+	type resolvedPayload struct {
+		Resolved string `json:"resolved"`
+	}
+	r := resolvedPayload{
+		Resolved: resolved.String(),
+	}
+	for _, topic := range p.topics {
+		var i int32
+		for ; i < numPartitions; i++ {
+			err := p.sendMessage(topic, i, nil, r)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isPrime(i int) bool {
+	return big.NewInt(int64(i)).ProbablyPrime(0)
+}
+
+// hlcNow returns an hlc timestamp that is after
+// the given timestamp.
+func hlcNow(lastTime hlc.Time) hlc.Time {
+	nextNanos := time.Now().UnixNano()
+	if nextNanos > lastTime.Nanos() {
+		lastTime = hlc.New(nextNanos, 0)
+		return lastTime
+	}
+	lastTime = lastTime.Next()
+	return lastTime
 }
 
 // getConfig is a helper function to create a configuration for the connector
-func getConfig(fixture *base.Fixture, fc *fixtureConfig, tgt ident.Table) (*Config, error) {
+func getConfig(
+	fixture *base.Fixture, fc *fixtureConfig, topics []string, tgt ident.Table,
+) (*Config, error) {
 	dbName := fixture.TargetSchema.Schema()
 	crdbPool := fixture.TargetPool
 	config := &Config{
@@ -197,7 +433,7 @@ func getConfig(fixture *base.Fixture, fc *fixtureConfig, tgt ident.Table) (*Conf
 		Group:            dbName.Raw(),
 		ResolvedInterval: time.Second,
 		Strategy:         "sticky",
-		Topics:           []string{tgt.Raw()},
+		Topics:           topics,
 	}
 	if fc.chaos {
 		config.Sequencer.Chaos = 0.0005
