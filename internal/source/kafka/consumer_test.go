@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/stretchr/testify/assert"
@@ -147,13 +146,13 @@ func TestAccumulate(t *testing.T) {
 			wantErr: "invalid syntax",
 		},
 	}
-	toProcess := &types.MultiBatch{}
+	batch := newPartitionBatch()
 	consumer := &Consumer{
 		timeRange: hlc.RangeIncluding(hlc.New(10, 0), hlc.New(13, 0)),
 		schema:    ident.MustSchema(ident.New("db"), ident.New("public")),
 	}
 	for _, test := range tests {
-		_, err := consumer.accumulate(toProcess, test.msg)
+		_, err := consumer.accumulate(batch, hlc.Zero(), test.msg)
 		if test.wantErr != "" {
 			a.Error(err)
 			a.ErrorContains(err, test.wantErr)
@@ -162,14 +161,15 @@ func TestAccumulate(t *testing.T) {
 		}
 
 	}
+	processed := batch.data
 	// Verify the we accumulated all the messages within the time range.
-	a.Equal(3, len(toProcess.Data))
-	r.NotNil(toProcess.ByTime[hlc.New(10, 0)])
-	a.Equal(1, toProcess.ByTime[hlc.New(10, 0)].Count())
-	r.NotNil(toProcess.ByTime[hlc.New(11, 0)])
-	a.Equal(1, toProcess.ByTime[hlc.New(11, 0)].Count())
-	a.Nil(toProcess.ByTime[hlc.New(12, 0)])
-	r.NotNil(toProcess.ByTime[hlc.New(13, 0)])
-	a.Equal(1, toProcess.ByTime[hlc.New(13, 0)].Count())
-	a.Nil(toProcess.ByTime[hlc.New(20, 0)])
+	a.Equal(3, len(processed.Data))
+	r.NotNil(processed.ByTime[hlc.New(10, 0)])
+	a.Equal(1, processed.ByTime[hlc.New(10, 0)].Count())
+	r.NotNil(processed.ByTime[hlc.New(11, 0)])
+	a.Equal(1, processed.ByTime[hlc.New(11, 0)].Count())
+	a.Nil(processed.ByTime[hlc.New(12, 0)])
+	r.NotNil(processed.ByTime[hlc.New(13, 0)])
+	a.Equal(1, processed.ByTime[hlc.New(13, 0)].Count())
+	a.Nil(processed.ByTime[hlc.New(20, 0)])
 }

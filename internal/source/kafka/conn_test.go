@@ -99,7 +99,8 @@ func (a *mockConveyor) getTimestamp(partition ident.Ident) hlc.Time {
 
 // TestConn verifies that we can process messages using a simple mock broker.
 func TestConn(t *testing.T) {
-	ctx := stopper.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	a := assert.New(t)
 	r := require.New(t)
 	mb := sarama.NewMockBroker(t, 1)
@@ -170,7 +171,8 @@ func TestConn(t *testing.T) {
 		config:   config,
 		conveyor: conv,
 	}
-	err = conn.Start(ctx)
+	connCtx := stopper.WithContext(ctx)
+	err = conn.Start(connCtx)
 	r.NoError(err)
 	for !conv.done() {
 		time.Sleep(1 * time.Second)
@@ -178,6 +180,7 @@ func TestConn(t *testing.T) {
 	part := ident.New("my-topic@31")
 	a.Equal(true, conv.getEnsured(part))
 	a.Equal(hlc.New(2, 0), conv.getTimestamp(part))
-
+	connCtx.Stop(time.Second)
+	r.NoError(connCtx.Wait())
 	mb.Close()
 }
