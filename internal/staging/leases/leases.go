@@ -144,9 +144,9 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 	}
 
 	l := &leases{cfg: cfg}
-	l.sql.acquire = fmt.Sprintf(acquireTemplate, cfg.Target)
-	l.sql.release = fmt.Sprintf(releaseTemplate, cfg.Target)
-	l.sql.renew = fmt.Sprintf(renewTemplate, cfg.Target)
+	l.sql.acquire = fmt.Sprintf(acquireTemplate, cfg.Pool.HintNoFTS(cfg.Target))
+	l.sql.release = fmt.Sprintf(releaseTemplate, cfg.Pool.HintNoFTS(cfg.Target))
+	l.sql.renew = fmt.Sprintf(renewTemplate, cfg.Pool.HintNoFTS(cfg.Target))
 
 	if l.hostname, err = os.Hostname(); err == nil {
 		log.Tracef("lease hostname: %s", l.hostname)
@@ -378,18 +378,14 @@ func (l *leases) copy() *leases {
 // multiple names by making $1 an array and unnest().
 const acquireTemplate = `
 WITH
-  proposed (name, expires, nonce, hostname) AS (
-    VALUES ($1::STRING, $2::TIMESTAMP, gen_random_uuid(), $3::STRING)),
   blocking AS (
     SELECT x.expires
     FROM %[1]s x
-    JOIN proposed USING (name)
-    WHERE x.expires > $4::TIMESTAMP
+    WHERE x.name=$1::STRING AND x.expires > $4::TIMESTAMP
     FOR UPDATE),
   acquired AS (
     UPSERT INTO %[1]s (name, expires, nonce, hostname)
-    SELECT name, expires, nonce, hostname
-    FROM proposed
+    SELECT $1::STRING, $2::TIMESTAMP, gen_random_uuid(), $3::STRING
     WHERE NOT EXISTS (SELECT * FROM blocking)
     RETURNING nonce)
 SELECT (SELECT expires FROM blocking), (SELECT nonce FROM acquired)
