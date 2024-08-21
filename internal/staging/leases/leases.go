@@ -144,9 +144,9 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 	}
 
 	l := &leases{cfg: cfg}
-	l.sql.acquire = fmt.Sprintf(acquireTemplate, cfg.Target)
-	l.sql.release = fmt.Sprintf(releaseTemplate, cfg.Target)
-	l.sql.renew = fmt.Sprintf(renewTemplate, cfg.Target)
+	l.sql.acquire = fmt.Sprintf(acquireTemplate, cfg.Pool.HintNoFTS(cfg.Target))
+	l.sql.release = fmt.Sprintf(releaseTemplate, cfg.Pool.HintNoFTS(cfg.Target))
+	l.sql.renew = fmt.Sprintf(renewTemplate, cfg.Pool.HintNoFTS(cfg.Target))
 
 	if l.hostname, err = os.Hostname(); err == nil {
 		log.Tracef("lease hostname: %s", l.hostname)
