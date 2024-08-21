@@ -170,7 +170,8 @@ func TestConn(t *testing.T) {
 		config:   config,
 		conveyor: conv,
 	}
-	err = conn.Start(ctx)
+	connCtx := stopper.WithContext(ctx)
+	err = conn.Start(connCtx)
 	r.NoError(err)
 	for !conv.done() {
 		time.Sleep(1 * time.Second)
@@ -178,6 +179,7 @@ func TestConn(t *testing.T) {
 	part := ident.New("my-topic@31")
 	a.Equal(true, conv.getEnsured(part))
 	a.Equal(hlc.New(2, 0), conv.getTimestamp(part))
-
+	connCtx.Stop(time.Second)
+	a.True(connCtx.IsStopping())
 	mb.Close()
 }

@@ -17,11 +17,13 @@
 package kafka
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -76,6 +78,14 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 	ctx.Go(func(ctx *stopper.Context) error {
 		defer c.group.Close()
 		for !ctx.IsStopping() {
+			if err := c.ensureCheckpoints(ctx); err != nil {
+				log.WithError(err).Error("error while writing default checkpoints; will retry")
+				select {
+				case <-ctx.Stopping():
+				case <-time.After(time.Second):
+				}
+				continue
+			}
 			if err := c.copyMessages(ctx); err != nil {
 				log.WithError(err).Error("error while copying messages; will retry")
 				select {
@@ -98,6 +108,29 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 // to the source, accumulate messages, and commit data to the target.
 func (c *Conn) copyMessages(ctx *stopper.Context) error {
 	return c.group.Consume(ctx, c.config.Topics, c.consumer)
+}
+
+// ensureCheckpoints makes sure that we checkpoints for all the partitions and topics.
+func (c *Conn) ensureCheckpoints(ctx *stopper.Context) error {
+	cl, err := sarama.NewClient(c.config.Brokers, c.config.saramaConfig)
+	if err != nil {
+		return errors.Wrap(err, "unable to instantiate client")
+	}
+	defer cl.Close()
+	for _, topic := range c.config.Topics {
+		partitions, err := cl.Partitions(topic)
+		if err != nil {
+			return errors.Wrap(err, "unable to get partitions")
+		}
+		for _, partition := range partitions {
+			partition := fmt.Sprintf("%s@%d", topic, partition)
+			if err := c.conveyor.Ensure(ctx, []ident.Ident{ident.New(partition)}); err != nil {
+				return errors.Wrap(err, "unable to persist default checkpoint")
+			}
+
+		}
+	}
+	return nil
 }
 
 // getOffsets finds the offsets based on resolved timestamp messages
