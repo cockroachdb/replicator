@@ -20,6 +20,7 @@ package types
 
 import (
 	"context"
+	"strings"
 
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -136,8 +137,25 @@ func (t *orderedAdapter) AcceptMultiBatch(
 				if err := t.AcceptTableBatch(ctx, nextBatch, options); err != nil {
 					return errors.Wrap(err, table.String())
 				}
+				mutsByTable.Delete(table)
 			}
 		}
+	}
+
+	// Ensure that we haven't ignored any tables in the input.
+	if mutsByTable.Len() > 0 {
+		var unknown strings.Builder
+		// Callback returns nil.
+		_ = mutsByTable.Range(func(table ident.Table, _ []Mutation) error {
+			if unknown.Len() > 0 {
+				unknown.WriteString(", ")
+			}
+			unknown.WriteString(table.Raw())
+			return nil
+		})
+		return errors.Errorf(
+			"unable to determine apply order for unknown tables: %s",
+			unknown.String())
 	}
 
 	return nil

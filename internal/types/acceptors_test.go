@@ -94,6 +94,16 @@ func TestOrderedAcceptor(t *testing.T) {
 		}
 	}
 	r.Equal(levels-1, expectedLevelIdx)
+
+	// Detect cases where an unknown table is present in the input.
+	unknownTable := ident.NewTable(schema, ident.New("unknown"))
+	badBatch := &types.MultiBatch{}
+	r.NoError(badBatch.Accumulate(unknownTable, types.Mutation{
+		Time: hlc.New(1, 1),
+	}))
+	r.ErrorContains(
+		acc.AcceptMultiBatch(ctx, badBatch, &types.AcceptOptions{}),
+		"unable to determine apply order")
 }
 
 type fakeWatchers struct {
