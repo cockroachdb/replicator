@@ -99,14 +99,13 @@ func (w *wrapper) Start(
 		})
 
 		opts = opts.Copy()
-		opts.Delegate = types.OrderedAcceptorFrom(&acceptor{
+		opts.Delegate = types.UnorderedAcceptorFrom(&acceptor{
 			delegate:   opts.Delegate,
 			ensureTX:   ensureTX,
 			group:      opts.Group,
 			targetPool: w.targetPool,
 			userScript: scr,
-			watchers:   w.watchers,
-		}, w.watchers)
+		})
 	}
 	return w.delegate.Start(ctx, opts)
 }

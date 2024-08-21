@@ -48,8 +48,9 @@ type MultiAcceptor interface {
 }
 
 // OrderedAcceptorFrom will return an adaptor which iterates over tables
-// in the table-dependency order. The returned acceptor will respect the
-// [AcceptOptions.TableOrder] when iterating within a [TemporalBatch].
+// in the table-dependency order as determined by the schema watcher.
+//
+// See also [UnorderedAcceptorFrom].
 func OrderedAcceptorFrom(acc TableAcceptor, watchers Watchers) MultiAcceptor {
 	return &orderedAdapter{acc, watchers}
 }
@@ -158,5 +159,40 @@ func (t *orderedAdapter) AcceptMultiBatch(
 			unknown.String())
 	}
 
+	return nil
+}
+
+// UnorderedAcceptorFrom adapts a [TableAcceptor] to the [MultiAcceptor]
+// interface. Table data will be delivered in an arbitrary order.
+func UnorderedAcceptorFrom(acc TableAcceptor) MultiAcceptor {
+	return &unorderedAdapter{acc}
+}
+
+type unorderedAdapter struct {
+	TableAcceptor
+}
+
+var _ MultiAcceptor = (*unorderedAdapter)(nil)
+
+func (u *unorderedAdapter) AcceptMultiBatch(
+	ctx context.Context, batch *MultiBatch, opts *AcceptOptions,
+) error {
+	for _, temp := range batch.Data {
+		if err := u.AcceptTemporalBatch(ctx, temp, opts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *unorderedAdapter) AcceptTemporalBatch(
+	ctx context.Context, batch *TemporalBatch, opts *AcceptOptions,
+) error {
+	if err := batch.Data.Range(func(table ident.Table, tableBatch *TableBatch) error {
+		err := u.AcceptTableBatch(ctx, tableBatch, opts)
+		return errors.Wrapf(err, "%s @ %s", table.Raw(), batch.Time)
+	}); err != nil {
+		return err
+	}
 	return nil
 }

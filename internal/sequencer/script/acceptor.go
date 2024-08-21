@@ -36,7 +36,6 @@ type acceptor struct {
 	justMap    bool
 	targetPool *types.TargetPool
 	userScript *script.UserScript
-	watchers   types.Watchers
 }
 
 var _ types.TableAcceptor = (*acceptor)(nil)
@@ -149,7 +148,7 @@ func (a *acceptor) doDispatch(
 	cpy := *a
 	cpy.justMap = true
 
-	return types.OrderedAcceptorFrom(&cpy, a.watchers).AcceptMultiBatch(ctx, nextBatch, opts)
+	return types.UnorderedAcceptorFrom(&cpy).AcceptMultiBatch(ctx, nextBatch, opts)
 }
 
 func (a *acceptor) doMap(

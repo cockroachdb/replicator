@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/workload"
 	"github.com/stretchr/testify/require"
 )
 
@@ -104,6 +105,34 @@ func TestOrderedAcceptor(t *testing.T) {
 	r.ErrorContains(
 		acc.AcceptMultiBatch(ctx, badBatch, &types.AcceptOptions{}),
 		"unable to determine apply order")
+}
+
+func TestUnorderedAcceptor(t *testing.T) {
+	const batches = 1000
+	r := require.New(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	schema := ident.MustSchema(ident.New("my_db"), ident.New("public"))
+
+	gen := workload.NewGeneratorBase(
+		ident.NewTable(schema, ident.New("parent")),
+		ident.NewTable(schema, ident.New("child")))
+	batch := &types.MultiBatch{}
+	for i := range batches {
+		gen.GenerateInto(batch, hlc.New(int64(i+1), i))
+	}
+
+	rec := &recorder.Recorder{}
+	acc := types.UnorderedAcceptorFrom(rec)
+	r.NoError(acc.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{}))
+	r.Equal(batch.Count(), rec.Count())
+	for _, call := range rec.Calls() {
+		r.NotNil(call.Table)
+		r.Nil(call.Multi)
+		r.Nil(call.Temporal)
+	}
 }
 
 type fakeWatchers struct {
