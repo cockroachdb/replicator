@@ -17,11 +17,13 @@
 package kafka
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -76,6 +78,14 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 	ctx.Go(func(ctx *stopper.Context) error {
 		defer c.group.Close()
 		for !ctx.IsStopping() {
+			if err := c.ensureCheckpoints(ctx); err != nil {
+				log.WithError(err).Error("error while writing default checkpoints; will retry")
+				select {
+				case <-ctx.Stopping():
+				case <-time.After(time.Second):
+				}
+				continue
+			}
 			if err := c.copyMessages(ctx); err != nil {
 				log.WithError(err).Error("error while copying messages; will retry")
 				select {
@@ -100,6 +110,32 @@ func (c *Conn) copyMessages(ctx *stopper.Context) error {
 	return c.group.Consume(ctx, c.config.Topics, c.consumer)
 }
 
+// ensureCheckpoints makes sure that we have checkpoints for all the partitions and topics.
+func (c *Conn) ensureCheckpoints(ctx *stopper.Context) error {
+	cl, err := sarama.NewClient(c.config.Brokers, c.config.saramaConfig)
+	if err != nil {
+		return errors.Wrap(err, "unable to instantiate client")
+	}
+	defer cl.Close()
+	for _, topic := range c.config.Topics {
+		partitions, err := cl.Partitions(topic)
+		if err != nil {
+			return errors.Wrapf(err, "unable to get partitions for %s", topic)
+		}
+
+		groupPartitions := make([]ident.Ident, len(partitions))
+		for i, partition := range partitions {
+			groupPartitions[i] = ident.New(topicPartitionID(topic, partition))
+		}
+
+		if err := c.conveyor.Ensure(ctx, groupPartitions); err != nil {
+			return errors.Wrapf(err, "unable to persist default checkpoint for %s", topic)
+		}
+
+	}
+	return nil
+}
+
 // getOffsets finds the offsets based on resolved timestamp messages
 func (c *Conn) getOffsets(min hlc.Time) ([]*partitionState, error) {
 	seeker, err := NewOffsetSeeker(c.config)
@@ -108,4 +144,8 @@ func (c *Conn) getOffsets(min hlc.Time) ([]*partitionState, error) {
 	}
 	defer seeker.Close()
 	return seeker.GetOffsets(c.config.Topics, min)
+}
+
+func topicPartitionID(topic string, partition int32) string {
+	return fmt.Sprintf("%s@%d", topic, partition)
 }

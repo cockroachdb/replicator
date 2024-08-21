@@ -197,7 +197,8 @@ func TestPreflight(t *testing.T) {
 		ClientKey:  "./testdata/test.key",
 		CaCert:     "./testdata/ca.crt",
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	a := assert.New(t)
 	r := require.New(t)
 	tests := []struct {
