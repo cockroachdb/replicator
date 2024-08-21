@@ -18,7 +18,6 @@ package kafka
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -37,6 +35,22 @@ type partitionState struct {
 	topic     string
 	partition int32
 	offset    int64
+}
+
+type partitionBatch struct {
+	data *types.MultiBatch
+	keys map[string]hlc.Time
+}
+
+func newPartitionBatch() *partitionBatch {
+	return &partitionBatch{
+		data: &types.MultiBatch{},
+		keys: make(map[string]hlc.Time),
+	}
+}
+
+func (b *partitionBatch) Count() int {
+	return b.data.Count()
 }
 
 // Consumer represents a Kafka consumer
@@ -89,17 +103,14 @@ func (c *Consumer) Cleanup(session sarama.ConsumerGroupSession) error {
 func (c *Consumer) ConsumeClaim(
 	session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim,
 ) (err error) {
-	log.Debugf("ConsumeClaim topic=%s partition=%d offset=%d", claim.Topic(), claim.Partition(), claim.InitialOffset())
+	log.Infof("ConsumeClaim topic=%s partition=%d offset=%d", claim.Topic(), claim.Partition(), claim.InitialOffset())
 	// Aggregate the mutations by target table.
-	toProcess := &types.MultiBatch{}
+	batch := newPartitionBatch()
+	lastResolved := hlc.Zero()
 	// Track last message received for each topic/partition.
 	consumed := make(map[string]*sarama.ConsumerMessage)
 	ctx := session.Context()
-	partition := fmt.Sprintf("%s@%d", claim.Topic(), claim.Partition())
-	if err := c.conveyor.Ensure(ctx, []ident.Ident{ident.New(partition)}); err != nil {
-		return errors.Wrap(err, "unable to persist default checkpoint")
-	}
-
+	partition := topicPartitionID(claim.Topic(), claim.Partition())
 	c.done(partition, false)
 	// Do not move the code below to a goroutine.
 	// The `ConsumeClaim` itself is called within a goroutine, see:
@@ -111,40 +122,45 @@ func (c *Consumer) ConsumeClaim(
 				log.Debugf("message channel for topic=%s partition=%d was closed", claim.Topic(), claim.Partition())
 				return nil
 			}
-			payload, err := c.accumulate(toProcess, message)
+			payload, err := c.accumulate(batch, lastResolved, message)
 			if err != nil {
 				log.WithError(err).Error("failed to add messages to a batch")
 				return err
 			}
+			if payload == nil {
+				continue
+			}
 			if payload.Resolved != "" {
-				partition := fmt.Sprintf("%s@%d", message.Topic, int(message.Partition))
+
 				timestamp, err := hlc.Parse(payload.Resolved)
 				if err != nil {
 					return err
 				}
+				lastResolved = timestamp
+				log.Tracef("Resolved partition=%s  timestamp=%s", partition, timestamp)
 				if hlc.Compare(timestamp, c.timeRange.Max()) > 0 {
 					log.Infof("Done with topic=%s partition=%d  %+v", claim.Topic(), claim.Partition(), ctx)
 					c.done(partition, true)
 					return nil
 				}
-
-				c.conveyor.Advance(ctx, ident.New(partition), timestamp)
-				if err = c.accept(ctx, toProcess); err != nil {
+				if batch, err = c.accept(ctx, batch); err != nil {
+					log.WithError(err).Error("failed to accept a batch")
 					return err
 				}
-				toProcess = toProcess.Empty()
-				consumed[fmt.Sprintf("%s@%d", message.Topic, message.Partition)] = message
+				if err := c.conveyor.Advance(ctx, ident.New(partition), timestamp); err != nil {
+					return err
+				}
+				consumed[partition] = message
 				c.mark(session, consumed)
 				continue
-
 			}
-			consumed[fmt.Sprintf("%s@%d", message.Topic, message.Partition)] = message
+			consumed[partition] = message
 			// Flush a batch, and mark the latest message for each topic/partition as read.
-			if toProcess.Count() > c.batchSize {
-				if err = c.accept(ctx, toProcess); err != nil {
+			if batch.Count() > c.batchSize {
+				if batch, err = c.accept(ctx, batch); err != nil {
+					log.WithError(err).Error("failed to accept a batch")
 					return err
 				}
-				toProcess = toProcess.Empty()
 				c.mark(session, consumed)
 			}
 		// Should return when `session.Context()` is done.
@@ -154,11 +170,10 @@ func (c *Consumer) ConsumeClaim(
 			return nil
 		case <-time.After(time.Second):
 			// Periodically flush a batch, and mark the latest message for each topic/partition as consumed.
-			if err = c.accept(ctx, toProcess); err != nil {
-				log.Error(err)
+			if batch, err = c.accept(ctx, batch); err != nil {
+				log.WithError(err).Error("failed to accept a batch")
 				return err
 			}
-			toProcess = toProcess.Empty()
 			c.mark(session, consumed)
 		}
 	}
@@ -196,35 +211,38 @@ func (c *Consumer) mark(
 }
 
 // accept process a batch.
-func (c *Consumer) accept(ctx context.Context, toProcess *types.MultiBatch) error {
-	if toProcess.Count() == 0 {
+func (c *Consumer) accept(ctx context.Context, batch *partitionBatch) (*partitionBatch, error) {
+	if batch.Count() == 0 {
 		// Nothing to do.
-		return nil
+		return batch, nil
 	}
-	log.Tracef("flushing %d", toProcess.Count())
-	if err := c.conveyor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{}); err != nil {
-		return err
+	log.Debugf("flushing %d", batch.Count())
+	if err := c.conveyor.AcceptMultiBatch(ctx, batch.data, &types.AcceptOptions{}); err != nil {
+		return newPartitionBatch(), err
 	}
-	return nil
+	return newPartitionBatch(), nil
 }
 
 // accumulate adds the message to the batch and returns the decoded payload.
 func (c *Consumer) accumulate(
-	toProcess *types.MultiBatch, msg *sarama.ConsumerMessage,
+	batch *partitionBatch, lastResolved hlc.Time, msg *sarama.ConsumerMessage,
 ) (*payload, error) {
 	payload, err := asPayload(msg)
 	if err != nil {
 		return nil, err
 	}
 	if payload.Resolved != "" {
-		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
+		log.Debugf("Resolved [%s@%d %d] %s ",
+			msg.Topic, msg.Partition, msg.Offset, payload.Resolved)
 		return payload, nil
 	}
-	log.Tracef("Mutation %s %d [%s@%d]", string(msg.Key), msg.Timestamp.Unix(), msg.Topic, msg.Partition)
+	log.Debugf("Mutation [%s@%d offset=%d time=%s] [key=%s mvcc=%s]",
+		msg.Topic, msg.Partition, msg.Offset, msg.Timestamp, string(msg.Key), payload.Updated)
 	timestamp, err := hlc.Parse(payload.Updated)
 	if err != nil {
 		return nil, err
 	}
+	// Derive table name from topic.
 	table, qual, err := ident.ParseTableRelative(msg.Topic, c.schema.Schema())
 	if err != nil {
 		return nil, err
@@ -233,6 +251,18 @@ func (c *Consumer) accumulate(
 	if qual != ident.TableOnly {
 		table = ident.NewTable(c.schema.Schema(), table.Table())
 	}
+	// Discard mutations that are older that the last resolved timestamp seen.
+	if hlc.Compare(timestamp, lastResolved) < 0 {
+		log.Warnf("timestamp after before last resolved for key %s (%s < %s)", msg.Key, timestamp, lastResolved)
+		return nil, nil
+	}
+	// Keep the most recent mutation for a specific key within a batch.
+	key := string(msg.Key)
+	if seen, ok := batch.keys[key]; ok && hlc.Compare(seen, timestamp) >= 0 {
+		log.Debugf("skipping duplicate %s@%s", string(msg.Key), timestamp)
+		return nil, nil
+	}
+	batch.keys[key] = timestamp
 	if !c.timeRange.Contains(timestamp) {
 		log.Debugf("skipping mutation %s %s %s", string(msg.Key), timestamp, c.timeRange)
 		return nil, nil
@@ -244,6 +274,5 @@ func (c *Consumer) accumulate(
 		Time:   timestamp,
 	}
 	script.AddMeta("kafka", table, &mut)
-	log.Debugf("adding mutation %s", string(msg.Key))
-	return payload, toProcess.Accumulate(table, mut)
+	return payload, batch.data.Accumulate(table, mut)
 }
