@@ -103,38 +103,6 @@ func (w *watcher) Refresh(ctx context.Context, tx *types.TargetPool) error {
 	return nil
 }
 
-// Snapshot returns the known tables in the given user-defined schema.
-func (w *watcher) Snapshot(in ident.Schema) *types.SchemaData {
-	data := w.Get()
-
-	ret := &types.SchemaData{
-		Columns: &ident.TableMap[[]types.ColData]{},
-		Order:   make([][]ident.Table, 0, len(data.Order)),
-	}
-
-	_ = data.Columns.Range(func(table ident.Table, cols []types.ColData) error {
-		if in.Contains(table) {
-			// https://github.com/golang/go/wiki/SliceTricks#copy
-			out := make([]types.ColData, len(cols))
-			copy(out, cols)
-			ret.Columns.Put(table, out)
-		}
-		return nil
-	})
-	for _, tables := range data.Order {
-		filtered := make([]ident.Table, 0, len(tables))
-		for _, tbl := range tables {
-			if in.Contains(tbl) {
-				filtered = append(filtered, tbl)
-			}
-		}
-		if len(filtered) > 0 {
-			ret.Order = append(ret.Order, filtered)
-		}
-	}
-	return ret
-}
-
 // String is for debugging use only.
 func (w *watcher) String() string {
 	return fmt.Sprintf("Watcher(%s)", w.schema)
@@ -277,12 +245,19 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 			}
 			ret.Columns.Put(tbl, cols)
 		}
+		if err != nil {
+			return err
+		}
 
 		// Empty if there were no tables.
-		if !sch.Empty() {
-			ret.Order, err = getDependencyOrder(ctx, tx, sch)
+		if sch.Empty() {
+			return nil
 		}
-		return err
+		order, err := getDependencyRefs(ctx, tx, sch)
+		if err != nil {
+			return err
+		}
+		return ret.SetComponents(order)
 	})
 
 	return ret, err

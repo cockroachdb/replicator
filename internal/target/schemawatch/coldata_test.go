@@ -557,9 +557,7 @@ func TestColDataIgnoresViews(t *testing.T) {
 	a.False(ok)
 	a.Nil(viewData)
 
-	for _, level := range schemaData.Order {
-		for _, entry := range level {
-			a.False(ident.Equal(viewName, entry), "should not find view in Order")
-		}
+	for _, table := range schemaData.Entire.Order {
+		a.False(ident.Equal(viewName, table), "should not find view in Order")
 	}
 }

@@ -40,7 +40,6 @@ import (
 )
 
 func TestUserScriptSequencer(t *testing.T) {
-	log.SetLevel(log.TraceLevel)
 	for mode := switcher.MinMode; mode <= switcher.MaxMode; mode++ {
 		t.Run(mode.String(), func(t *testing.T) {
 			testUserScriptSequencer(t, mode)

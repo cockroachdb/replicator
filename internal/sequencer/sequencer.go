@@ -62,6 +62,7 @@ type StartOptions struct {
 	Bounds      *notify.Var[hlc.Range] // Control the range of eligible timestamps.
 	Delegate    types.MultiAcceptor    // The acceptor to use when continuing to process mutations.
 	Group       *types.TableGroup      // The tables that should be operated on.
+	IdleExit    bool                   // Soft exit if no data has been copied.
 	MaxDeferred int                    // Back off after deferring this many mutations.
 }
 

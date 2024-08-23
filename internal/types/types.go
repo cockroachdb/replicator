@@ -94,11 +94,11 @@ func IsLeaseBusy(err error) (busy *LeaseBusyError, ok bool) {
 type Leases interface {
 	// Acquire the named lease. A [LeaseBusyError] will be returned if
 	// another caller has already acquired the lease.
-	Acquire(ctx context.Context, name string) (Lease, error)
+	Acquire(ctx context.Context, names ...string) (Lease, error)
 
-	// Singleton executes a callback when the named lease is acquired.
+	// Singleton executes a callback when all named leases are acquired.
 	//
-	// The lease will be released in the following circumstances:
+	// The leases will be released in the following circumstances:
 	//   * The callback function returns.
 	//   * The lease cannot be renewed before it expires.
 	//   * The outer context is canceled.
@@ -106,8 +106,8 @@ type Leases interface {
 	// If the callback returns a non-nil error, the error will be
 	// logged. If the callback returns ErrCancelSingleton, it will not
 	// be retried. In all other cases, the callback function is retried
-	// once a lease is re-acquired.
-	Singleton(ctx context.Context, name string, fn func(ctx context.Context) error)
+	// once the leases are re-acquired.
+	Singleton(ctx context.Context, names []string, fn func(ctx context.Context) error)
 }
 
 // A Memo is a key store that persists a value associated to a key
@@ -303,28 +303,6 @@ func (d ColData) Equal(o ColData) bool {
 		// Parse is excluded, since functions are not comparable.
 		d.Primary == o.Primary &&
 		d.Type == o.Type
-}
-
-// SchemaData holds SQL schema metadata.
-type SchemaData struct {
-	Columns *ident.TableMap[[]ColData]
-
-	// Order is a two-level slice that represents equivalency-groups
-	// with respect to table foreign-key ordering. That is, if all
-	// updates for tables in Order[N] are applied, then updates in
-	// Order[N+1] can then be applied.
-	//
-	// The need for this data can be revisited if CRDB adds support
-	// for deferrable foreign-key constraints:
-	// https://github.com/cockroachdb/cockroach/issues/31632
-	Order [][]ident.Table
-}
-
-// OriginalName returns the name of the table as it is defined in the
-// underlying database.
-func (s *SchemaData) OriginalName(tbl ident.Table) (ident.Table, bool) {
-	ret, _, ok := s.Columns.Match(tbl)
-	return ret, ok
 }
 
 // Product is an enum type to make it easy to switch on the underlying

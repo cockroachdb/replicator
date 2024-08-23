@@ -78,6 +78,19 @@ func (p *poisonSet) IsFull() bool {
 	return p.mu.full
 }
 
+// IsMutationPoisoned returns true if the mutation has been poisoned.
+// Unlike [poisonSet.IsPoisoned], this method has no side-effects.
+func (p *poisonSet) IsMutationPoisoned(table ident.Table, mut types.Mutation) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if p.mu.full {
+		return true
+	}
+	_, poisoned := p.mu.data[poisonKey(table, mut)]
+	return poisoned
+}
+
 // IsPoisoned returns true if the maximum number of poisoned keys has
 // been hit or if the batch contains any poisoned keys. Poisoning is
 // contagious. If the batch contains any keys that were not already
@@ -144,6 +157,21 @@ func (p *poisonSet) toPoison(
 	return toContaminate, true
 }
 
+// MarkMutation marks an individual mutation as poisoned.
+func (p *poisonSet) MarkMutation(table ident.Table, mut types.Mutation) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.mu.full {
+		return
+	}
+	p.mu.data[poisonKey(table, mut)] = struct{}{}
+	p.mu.full = len(p.mu.data) >= p.maxCount
+	if p.mu.full {
+		p.mu.data = nil
+	}
+}
+
 // MarkPoisoned records the keys in the batch to prevent any other
 // attempts at processing them.
 func (p *poisonSet) MarkPoisoned(batch *types.MultiBatch) {
@@ -162,4 +190,33 @@ func (p *poisonSet) MarkPoisoned(batch *types.MultiBatch) {
 	if p.mu.full {
 		p.mu.data = nil
 	}
+}
+
+// Merge incorporates all keys from the given set.
+func (p *poisonSet) Merge(other *poisonSet) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	other.mu.RLock()
+	defer other.mu.RUnlock()
+
+	if other.mu.full {
+		p.mu.data = nil
+		p.mu.full = true
+	}
+	for k := range other.mu.data {
+		p.mu.data[k] = struct{}{}
+	}
+}
+
+// RemoveMark will remove the mutation from the set, unless the set is
+// full.
+func (p *poisonSet) RemoveMark(table ident.Table, mut types.Mutation) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.mu.full {
+		return
+	}
+	delete(p.mu.data, poisonKey(table, mut))
 }

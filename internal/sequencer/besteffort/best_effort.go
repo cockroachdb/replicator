@@ -19,6 +19,7 @@ package besteffort
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
@@ -27,7 +28,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
-	"github.com/cockroachdb/replicator/internal/sequencer/sequtil"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -78,86 +78,101 @@ type bestEffort struct {
 var _ sequencer.Sequencer = (*bestEffort)(nil)
 
 // Start implements [sequencer.Starter]. It will launch a background
-// goroutine to attempt to apply staged mutations for each table within
-// the group.
+// goroutine to attempt to apply staged mutations for each referential
+// group within the target schema.
 func (s *bestEffort) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
 	stats := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
+	watcher, err := s.watchers.Get(opts.Group.Enclosing)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	sequtil.LeaseGroup(ctx, s.leases, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
-		for _, table := range opts.Group.Tables {
-			table := table // Capture.
+	// Start a delegate sequencer for each non-overlapping subgroup of
+	// tables in the target schema. This ensures that tables with FK
+	// relationships can be swept in a coordinated fashion.
+	for _, comp := range watcher.Get().Components {
+		// Make a shallow copy and then filter by input groups.
+		tables := slices.Clone(comp.Order)
+		slices.DeleteFunc(tables, func(toDelete ident.Table) bool {
+			return !slices.ContainsFunc(opts.Group.Tables, func(requested ident.Table) bool {
+				return ident.Equal(toDelete, requested)
+			})
+		})
 
-			// Create an options configuration that executes the
-			// delegate Sequencer as though it were configured only as a
-			// single table. The group name is changed to ensure that
-			// each Start call can acquire its own lease.
-			subOpts := opts.Copy()
-			subOpts.MaxDeferred = s.cfg.TimestampLimit
-			subOpts.Group.Name = ident.New(subOpts.Group.Name.Raw() + ":" + table.Raw())
-			subOpts.Group.Tables = []ident.Table{table}
+		subOpts := opts.Copy()
+		// We want the sequencer to be restarted once it has read all
+		// available data. We aren't going to apply all mutations within
+		// the time bounds, so we need a way to re-attempt staged
+		// mutations that have been skipped over.
+		subOpts.IdleExit = true
+		// Execute on the filtered table group.
+		subOpts.Group.Tables = tables
+		// Allow partial processing of batches. The sequencer will
+		// restart once it has skipped this many mutations, in the hopes
+		// that the previously-missing FK references will have been
+		// delivered.
+		subOpts.MaxDeferred = s.cfg.ScanSize
 
-			_, subStats, err := s.delegate.Start(ctx, subOpts)
-			if err != nil {
-				log.WithError(err).Warnf(
-					"BestEffort.Start: could not start nested Sequencer for %s", table)
-				return
-			}
+		_, subStats, err := s.delegate.Start(ctx, subOpts)
+		if err != nil {
+			log.WithError(err).Warnf(
+				"BestEffort.Start: could not start nested Sequencer for %s", tables)
+			return nil, nil, err
+		}
 
-			// Start a helper to aggregate the progress values together.
-			ctx.Go(func(ctx *stopper.Context) error {
-				// Ignoring error since innermost callback returns nil.
-				_, _ = stopvar.DoWhenChanged(ctx, nil, subStats, func(ctx *stopper.Context, _, subStat sequencer.Stat) error {
-					_, _, err := stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
+		// Start a helper to aggregate the progress values together.
+		ctx.Go(func(ctx *stopper.Context) error {
+			// Ignoring error since innermost callback returns nil.
+			_, _ = stopvar.DoWhenChanged(ctx, nil, subStats, func(ctx *stopper.Context, _, subStat sequencer.Stat) error {
+				_, _, err := stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
+					next := old.Copy()
+					for _, table := range tables {
 						nextProgress, ok := subStat.Progress().Get(table)
 						if !ok {
 							return nil, notify.ErrNoUpdate
 						}
-						next := old.Copy()
 						next.Progress().Put(table, nextProgress)
-						return next, nil
-					})
-					return err
+					}
+					return next, nil
 				})
-				return nil
+				return err
 			})
-		}
-
-		// Generate a synthetic maximum checkpoint bound in the absence
-		// of any existing checkpoints. This allows partial progress to
-		// be made in advance of receiving any checkpoints from the
-		// source.
-		ctx.Go(func(ctx *stopper.Context) error {
-			for {
-				if _, _, err := opts.Bounds.Update(func(old hlc.Range) (hlc.Range, error) {
-					// Cancel this task once there are checkpoints.
-					if old.Min() != hlc.Zero() {
-						return hlc.Range{}, context.Canceled
-					}
-					// This source has a negative offset from the
-					// current time. If there's a single, unapplied
-					// checkpoint, it should be in the relative future
-					// from the synthetic ones.
-					proposed := s.timeSource()
-					if hlc.Compare(proposed, old.MaxInclusive()) > 0 {
-						return hlc.RangeIncluding(old.Min(), proposed), nil
-					}
-					return hlc.Range{}, notify.ErrNoUpdate
-				}); err != nil {
-					// Will be context.Canceled from callback above.
-					return nil
-				}
-				select {
-				case <-time.After(time.Second):
-				case <-ctx.Stopping():
-					return nil
-				}
-			}
+			return nil
 		})
+	}
 
-		// Wait until shutdown.
-		<-ctx.Stopping()
+	// Generate a synthetic maximum checkpoint bound in the absence
+	// of any existing checkpoints. This allows partial progress to
+	// be made in advance of receiving any checkpoints from the
+	// source.
+	ctx.Go(func(ctx *stopper.Context) error {
+		for {
+			if _, _, err := opts.Bounds.Update(func(old hlc.Range) (hlc.Range, error) {
+				// Cancel this task once there are checkpoints.
+				if old.Min() != hlc.Zero() {
+					return hlc.Range{}, context.Canceled
+				}
+				// This source has a negative offset from the
+				// current time. If there's a single, unapplied
+				// checkpoint, it should be in the relative future
+				// from the synthetic ones.
+				proposed := s.timeSource()
+				if hlc.Compare(proposed, old.MaxInclusive()) > 0 {
+					return hlc.RangeIncluding(old.Min(), proposed), nil
+				}
+				return hlc.Range{}, notify.ErrNoUpdate
+			}); err != nil {
+				// Will be context.Canceled from callback above.
+				return nil
+			}
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Stopping():
+				return nil
+			}
+		}
 	})
 
 	acc := opts.Delegate

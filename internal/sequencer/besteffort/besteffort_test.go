@@ -77,8 +77,9 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %s(parent)
 	sweepBounds := &notify.Var[hlc.Range]{}
 
 	group := &types.TableGroup{
-		Name:   ident.New(fixture.StagingDB.Raw()),
-		Tables: []ident.Table{parentInfo.Name(), childInfo.Name()},
+		Name:      ident.New(fixture.StagingDB.Raw()),
+		Enclosing: fixture.TargetSchema.Schema(),
+		Tables:    []ident.Table{parentInfo.Name(), childInfo.Name()},
 	}
 
 	seq, err := bestEffort.Wrap(ctx, seqFixture.Core)

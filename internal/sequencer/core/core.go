@@ -298,11 +298,20 @@ func (s *Core) Start(
 			toMonitor = toMonitor[:idx]
 
 			select {
-			case <-time.After(time.Second):
-				// Perform maintenance
+			case <-time.After(s.cfg.QuiescentPeriod):
+				// Perform maintenance. If the copier is the only task
+				// we may perform a soft exit.
+				if opts.IdleExit && len(toMonitor) == 1 {
+					log.Tracef("idle exit: %s", group)
+					return
+				}
 			case taskOutcome := <-errorReports:
 				// New task launched, monitor it.
 				toMonitor = append(toMonitor, taskOutcome)
+				// Consume any other tasks that may be in the channel.
+				for len(errorReports) > 0 {
+					toMonitor = append(toMonitor, <-errorReports)
+				}
 			case <-ctx.Stopping():
 				// Clean shutdown
 				return

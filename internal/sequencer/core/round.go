@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/cockroachdb/replicator/internal/types"
@@ -80,20 +81,13 @@ func (r *round) accumulate(segment *types.MultiBatch) error {
 func (r *round) scheduleCommit(
 	ctx context.Context, progressReport chan<- hlc.Range,
 ) lockset.Outcome {
-	start := time.Now()
+	scheduledAt := time.Now()
 	return r.Core.scheduler.Batch(r.batch, func() error {
-		// We want to close the reporting channel, unless we're asking
-		// to be retried.
-		finalReport := true
-		defer func() {
-			if finalReport {
-				close(progressReport)
-			}
-		}()
+		defer close(progressReport)
 
-		// If the batch touches poisoned keys, do nothing. This method
-		// has a side effect of contaminating all keys in the batch to
-		// ensure correct dependencies.
+		// If the batch touches already-poisoned keys, do nothing. This
+		// method has a side effect of contaminating all keys in the
+		// batch to ensure correct dependencies.
 		if r.poisoned.IsPoisoned(r.batch) {
 			return errPoisoned
 		}
@@ -107,10 +101,10 @@ func (r *round) scheduleCommit(
 		if err == nil {
 			progressReport <- r.advanceTo
 
-			log.Tracef("round.tryCommit: commited %s (%d mutations, %d timestamps) to %s",
+			log.Tracef("commited %s (%d mutations, %d timestamps) to %s",
 				r.group, r.mutationCount, r.timestampCount, r.advanceTo)
 			r.applied.Add(float64(r.mutationCount))
-			r.duration.Observe(time.Since(start).Seconds())
+			r.duration.Observe(time.Since(scheduledAt).Seconds())
 			r.lastSuccess.SetToCurrentTime()
 
 			return nil
@@ -119,11 +113,21 @@ func (r *round) scheduleCommit(
 		// Give the keys in the batch a second chance to be applied if
 		// the initial error is an FK violation. If the keys can't be
 		// retried, mark them as poisoned.
-		if r.targetPool.IsDeferrable(err) {
-			finalReport = false
-			return lockset.RetryAtHead(err).Or(func() {
-				r.poisoned.MarkPoisoned(r.batch)
-				close(progressReport)
+		if r.targetPool.IsDeferrable(err) && r.poisoned.maxCount > 0 {
+			return retry.Retry(ctx, r.targetPool, func(ctx context.Context) error {
+				count, toPoison, err := r.tryCommitPartial(ctx)
+				if err != nil {
+					return err
+				}
+				r.poisoned.Merge(toPoison)
+
+				log.Tracef("partially commited %s (%d of %d mutations, %d timestamps) to %s",
+					r.group, count, r.mutationCount, r.timestampCount, r.advanceTo)
+				r.applied.Add(float64(count))
+				r.duration.Observe(time.Since(scheduledAt).Seconds())
+				r.lastSuccess.SetToCurrentTime()
+
+				return nil
 			})
 		}
 
@@ -197,4 +201,104 @@ func (r *round) tryCommit(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// tryCommitPartial attempts to commit the batch, one mutation at a
+// time, using savepoints. This method will allow mutations for an
+// individual row to be skipped over if a later mutation can be applied.
+// The number of successfully-applied rows is returned, along with
+// a poisonSet containing the mutations that could not be applied.
+func (r *round) tryCommitPartial(ctx context.Context) (int, *poisonSet, error) {
+	r.lastAttempt.SetToCurrentTime()
+
+	log.Tracef("round.tryCommitPartial: beginning tx for %s to %s", r.group, r.advanceTo)
+	poisoned := newPoisonSet(math.MaxInt)
+
+	targetTx, err := r.targetPool.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, nil, errors.WithStack(err)
+	}
+	defer func() { _ = targetTx.Rollback() }()
+
+	if err := r.batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+		_, err := targetTx.Exec("SAVEPOINT replicator")
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = r.delegate.AcceptTableBatch(ctx,
+			&types.TableBatch{
+				Data:  []types.Mutation{mut},
+				Table: table,
+			},
+			&types.AcceptOptions{TargetQuerier: targetTx})
+
+		// Record the mutation to be marked later. We've been able to
+		// skip ahead, so remove the poison marker from the row.
+		if err == nil {
+			poisoned.RemoveMark(table, mut)
+			return nil
+		}
+
+		// Ignore deferrable error by rolling back to savepoint. We'll
+		// mark the individual mutation as being poisoned to filter is
+		// later.
+		if r.targetPool.IsDeferrable(err) {
+			poisoned.MarkMutation(table, mut)
+			_, err = targetTx.Exec("ROLLBACK TO SAVEPOINT replicator")
+			err = errors.WithStack(err)
+		}
+		return err
+	})); err != nil {
+		return 0, nil, err
+	}
+
+	if err := targetTx.Commit(); err != nil {
+		return 0, nil, errors.WithStack(err)
+	}
+
+	// Mark all non-poisoned mutations as complete.
+	toMark := ident.TableMap[[]types.Mutation]{}
+	_ = r.batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+		if !poisoned.IsMutationPoisoned(table, mut) {
+			toMark.Put(table, append(toMark.GetZero(table), mut))
+		}
+		return nil
+	}))
+
+	// We're going to manage the target and the staging transaction
+	// concurrently. The target transaction must commit before the
+	// staging transaction. Without X/A transactions, we are in a
+	// vulnerable state here. If the staging transaction fails to
+	// commit, however, we'd re-apply the work that was just performed.
+	// This should wind up being a no-op in the general case.
+	didSkew := true
+	stagingTx, err := r.stagingPool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, nil, errors.WithStack(err)
+	}
+	defer func() {
+		_ = stagingTx.Rollback(context.Background())
+		if didSkew {
+			r.skew.Inc()
+		}
+	}()
+
+	markCount := 0
+	if err := toMark.Range(func(table ident.Table, muts []types.Mutation) error {
+		markCount += len(muts)
+		stager, err := r.stagers.Get(ctx, table)
+		if err != nil {
+			return err
+		}
+		return stager.MarkApplied(ctx, stagingTx, muts)
+	}); err != nil {
+		return 0, nil, err
+	}
+
+	if err := stagingTx.Commit(ctx); err != nil {
+		return 0, nil, errors.WithStack(err)
+	}
+	didSkew = false
+
+	return markCount, poisoned, nil
 }

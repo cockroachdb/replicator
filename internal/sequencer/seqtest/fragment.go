@@ -18,6 +18,7 @@ package seqtest
 
 import (
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/batches"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
@@ -25,26 +26,23 @@ import (
 // which are representative of how the bulk-transfer CDC feed delivers
 // data (i.e. payloads per table). The data for any given table will
 // remain in a time-ordered fashion.
-func Fragment(batch *types.MultiBatch) ([]*types.MultiBatch, error) {
-	var tableBatches ident.TableMap[*types.MultiBatch]
-	if err := batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
-		tableMulti := tableBatches.GetZero(table)
-		if tableMulti == nil {
-			tableMulti = &types.MultiBatch{}
-			tableBatches.Put(table, tableMulti)
-		}
-		return tableMulti.Accumulate(table, mut)
-	})); err != nil {
-		return nil, err
-	}
+func Fragment(batch *types.MultiBatch, windowSize int) ([]*types.MultiBatch, error) {
+	var ret []*types.MultiBatch
 
-	ret := make([]*types.MultiBatch, 0, tableBatches.Len())
-	if err := tableBatches.Range(func(table ident.Table, tableMulti *types.MultiBatch) error {
-		ret = append(ret, tableMulti)
-		return nil
+	byTable := types.FlattenByTable[*types.MultiBatch](batch)
+	if err := byTable.Range(func(table ident.Table, muts []types.Mutation) error {
+		return batches.Window(windowSize, len(muts), func(begin, end int) error {
+			next := &types.MultiBatch{}
+			ret = append(ret, next)
+			for _, mut := range muts[begin:end] {
+				if err := next.Accumulate(table, mut); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	}); err != nil {
 		return nil, err
 	}
-
 	return ret, nil
 }

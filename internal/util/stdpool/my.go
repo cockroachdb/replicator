@@ -50,8 +50,16 @@ func myErrDeferrable(err error) bool {
 	if !ok {
 		return false
 	}
-	// Cannot add or update a child row: a foreign key constraint fails
-	return code == "1452"
+	switch code {
+	case "1451":
+		// Cannot add or update a parent row: a foreign key constraint fails
+		return true
+	case "1452":
+		// Cannot add or update a child row: a foreign key constraint fails
+		return true
+	default:
+		return false
+	}
 }
 
 func myErrRetryable(err error) bool {

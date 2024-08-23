@@ -66,6 +66,47 @@ func TestPoison(t *testing.T) {
 		r.True(s.IsFull())
 	})
 
+	t.Run("individual", func(t *testing.T) {
+		r := require.New(t)
+		s := newPoisonSet(2)
+
+		// Mark and then remove the mark.
+		s.MarkMutation(table, m1)
+		r.False(s.IsClean())
+		r.False(s.IsFull())
+
+		s.RemoveMark(table, m1)
+		r.True(s.IsClean())
+		r.False(s.IsFull())
+
+		// Once full, removal should be a no-op.
+		s.MarkMutation(table, m1)
+		s.MarkMutation(table, m2)
+		r.False(s.IsClean())
+		r.True(s.IsFull())
+
+		s.RemoveMark(table, m1)
+		r.False(s.IsClean())
+		r.True(s.IsFull())
+	})
+
+	t.Run("merge", func(t *testing.T) {
+		r := require.New(t)
+		sA := newPoisonSet(5) // Larger than sB to test full flag.
+		sB := newPoisonSet(2)
+
+		sA.MarkMutation(table, m1)
+		sB.Merge(sA)
+		r.False(sB.IsClean())
+		r.True(sB.IsMutationPoisoned(table, m1))
+
+		sB.MarkMutation(table, m2)
+		r.True(sB.IsFull())
+
+		sA.Merge(sB)
+		r.True(sA.IsFull())
+	})
+
 	t.Run("full", func(t *testing.T) {
 		r := require.New(t)
 
