@@ -17,8 +17,10 @@
 package seqtest
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
@@ -42,6 +44,7 @@ type CheckFlag int
 const (
 	checkStage CheckFlag = 1 << iota
 	checkIdempotent
+	checkPartitioned
 	checkChaos
 
 	checkMax           // Sentinel
@@ -57,19 +60,36 @@ func CheckFlags() []CheckFlag {
 	return ret
 }
 
+// Chaos returns true if the chaos shims will be installed.
+func (f CheckFlag) Chaos() bool { return f&checkChaos == checkChaos }
+
+// Idempotent returns true if the source should have idempotent replay.
+func (f CheckFlag) Idempotent() bool { return f&checkIdempotent == checkIdempotent }
+
+// Partitioned returns true if the source should have table names which
+// do not exist in the target schema.
+func (f CheckFlag) Partitioned() bool { return f&checkPartitioned == checkPartitioned }
+
+// Stage returns true if mutations should be pre-staged before starting
+// the sequencer.
+func (f CheckFlag) Stage() bool { return f&checkStage == checkStage }
+
 func (f CheckFlag) String() string {
 	var sb strings.Builder
-	if f&checkStage == checkStage {
+	if f.Stage() {
 		sb.WriteString("stage")
 	} else {
 		sb.WriteString("direct")
 	}
-	if f&checkIdempotent == checkIdempotent {
+	if f.Idempotent() {
 		sb.WriteString("-idempotent")
 	} else {
 		sb.WriteString("-non-idempotent")
 	}
-	if f&checkChaos == checkChaos {
+	if f.Partitioned() {
+		sb.WriteString("-partitioned")
+	}
+	if f.Chaos() {
 		sb.WriteString("-chaos")
 	}
 	return sb.String()
@@ -86,7 +106,7 @@ func CheckSequencer(
 ) {
 	const batches = 1_000
 	check := func(t *testing.T, flags CheckFlag) {
-		if workloadCfg.DisablePreStaging && flags&checkStage == checkStage {
+		if workloadCfg.DisablePreStaging && flags.Stage() {
 			t.Log("staging disabled by WorkloadConfig")
 			return
 		}
@@ -99,7 +119,7 @@ func CheckSequencer(
 		// Create sequencer test fixture.
 		cfg := &sequencer.Config{
 			FlushSize:        batches/10 + 1,
-			IdempotentSource: flags&checkIdempotent == checkIdempotent,
+			IdempotentSource: flags.Idempotent(),
 			Parallelism:      8,
 			QuiescentPeriod:  100 * time.Millisecond,
 			ScanSize:         batches/5 + 1,
@@ -107,21 +127,47 @@ func CheckSequencer(
 		}
 		r.NoError(cfg.Preflight())
 
-		seqFixture, err := NewSequencerFixture(fixture, cfg, &script.Config{})
+		scriptConfig := &script.Config{}
+		if flags.Partitioned() {
+			// Install a userscript that will strip trailing underscores
+			// from input table names. That is, foo_N --> foo.
+			scriptConfig.MainPath = "/main.ts"
+			scriptConfig.FS = fstest.MapFS{
+				"main.ts": {
+					Data: []byte(fmt.Sprintf(`
+import api from "replicator@v1";
+function trimUnder(doc, meta) {
+  let dest = meta.table.substring(0, meta.table.lastIndexOf("_"));
+  return { [dest]: [ doc ] };
+}
+api.configureSource("%[1]s", {
+  dispatch: trimUnder,
+  deletesTo: trimUnder,
+});
+`, fixture.TargetSchema.Raw())),
+				},
+			}
+		}
+		seqFixture, err := NewSequencerFixture(fixture, cfg, scriptConfig)
 		r.NoError(err)
 
 		seq := pre(t, fixture, seqFixture)
-		if flags&checkChaos == checkChaos {
-			cfg.Chaos = 0.1
+		if scriptConfig.MainPath != "" {
+			seq, err = seqFixture.Script.Wrap(ctx, seq)
+			r.NoError(err)
+		}
+		if flags.Chaos() {
+			cfg.Chaos = 0.001
 			seq, err = seqFixture.Chaos.Wrap(ctx, seq)
 			r.NoError(err)
 		}
 		basic := &Check{
-			Batches:    batches,
-			Idempotent: flags&checkIdempotent == checkIdempotent,
-			Fixture:    fixture,
-			Sequencer:  seq,
-			Stage:      flags&checkStage == checkStage,
+			Batches:     batches,
+			Idempotent:  flags.Idempotent(),
+			Fixture:     fixture,
+			Partitioned: flags.Partitioned(),
+			Sequencer:   seq,
+			Stage:       flags.Stage(),
 		}
 		basic.Check(ctx, t, workloadCfg)
 		if post != nil {
@@ -152,6 +198,9 @@ type Check struct {
 	Group *types.TableGroup
 	// Suppress non-idempotent replay of previous data.
 	Idempotent bool
+	// Simulate a fan-in case, where data from multiple source tables is
+	// aggregated into a single target table.
+	Partitioned bool
 	// The Sequencer under test.
 	Sequencer sequencer.Sequencer
 	// If true, generated data will be loaded into staging first. This
@@ -194,26 +243,53 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 				return stager.Stage(ctx, c.Fixture.StagingPool, batch.Data)
 			}))
 		}
-	} else {
-		// We're going to fragment the batch to simulate data being
-		// received piecemeal by multiple instances of Replicator. We
-		// ensure that the child fragments must be processed before the
-		// parent fragments to ensure FK relationships are correctly
-		// implemented.
-		fragments, err := Fragment(testData)
-		r.NoError(err)
-		r.Len(fragments, 2)
-		if _, isChild := fragments[1].Data[0].Data.Get(generator.Child.Name()); isChild {
-			fragments[0], fragments[1] = fragments[1], fragments[0]
-		}
+	}
 
-		for _, fragment := range fragments {
-		retry:
-			if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
+	if c.Partitioned {
+		// Shuffle the test data into multiple source tables.
+		count := 0
+		partitionedBatch := &types.MultiBatch{}
+		r.NoError(testData.CopyInto(types.AccumulatorFunc(
+			func(table ident.Table, mut types.Mutation) error {
+				partition := ident.NewTable(
+					table.Schema(),
+					ident.New(fmt.Sprintf("%s_%d", table.Table().Raw(), count%10)))
+				count++
+				return partitionedBatch.Accumulate(partition, mut)
+			})))
+		testData = partitionedBatch
+	}
+
+	if !c.Stage {
+		if c.Partitioned {
+		retryPartitioned:
+			if err := seqAcc.AcceptMultiBatch(ctx, testData, &types.AcceptOptions{}); err != nil {
 				if errors.Is(err, chaos.ErrChaos) {
-					goto retry
+					goto retryPartitioned
 				}
 				r.NoError(err)
+			}
+		} else {
+			// We're going to fragment the batch to simulate data being
+			// received piecemeal by multiple instances of Replicator. We
+			// ensure that the child fragments must be processed before the
+			// parent fragments to ensure FK relationships are correctly
+			// implemented.
+			fragments, err := Fragment(testData)
+			r.NoError(err)
+			r.Len(fragments, 2)
+			if _, isChild := fragments[1].Data[0].Data.Get(generator.Child.Name()); isChild {
+				fragments[0], fragments[1] = fragments[1], fragments[0]
+			}
+
+			for _, fragment := range fragments {
+			retryFragment:
+				if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
+					if errors.Is(err, chaos.ErrChaos) {
+						goto retryFragment
+					}
+					r.NoError(err)
+				}
 			}
 		}
 

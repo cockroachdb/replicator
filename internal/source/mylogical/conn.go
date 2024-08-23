@@ -386,12 +386,11 @@ func (c *conn) onDataTuple(
 		if err != nil {
 			return err
 		}
-		if operation != deleteMutation {
-			mut.Data, err = json.Marshal(enc)
-			if err != nil {
-				return err
-			}
+		mut.Data, err = json.Marshal(enc)
+		if err != nil {
+			return err
 		}
+		mut.Deletion = operation == deleteMutation
 		mut.Time = hlc.New(c.nextConsistentPoint.AsTime().UnixNano(), 0)
 		script.AddMeta("mylogical", tbl, &mut)
 		if err := batch.Accumulate(tbl, mut); err != nil {

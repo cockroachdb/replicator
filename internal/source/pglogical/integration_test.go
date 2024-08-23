@@ -62,8 +62,10 @@ func TestMain(m *testing.M) {
 }
 
 type fixtureConfig struct {
-	chaos  bool
-	script bool
+	chaos     bool
+	partition bool // Generate source table names that don't exist in the target.
+	rif       bool // Enable REPLICA IDENTITY FULL
+	script    bool
 }
 
 // This is a general smoke-test of the logical replication feed.
@@ -76,6 +78,15 @@ func TestPGLogical(t *testing.T) {
 	})
 	t.Run("consistent-chaos", func(t *testing.T) {
 		testPGLogical(t, &fixtureConfig{chaos: true})
+	})
+	t.Run("consistent-partition-script", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{partition: true, script: true})
+	})
+	t.Run("consistent-partition-rif-script", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{partition: true, rif: true, script: true})
+	})
+	t.Run("consistent-rif", func(t *testing.T) {
+		testPGLogical(t, &fixtureConfig{rif: true})
 	})
 	t.Run("consistent-script", func(t *testing.T) {
 		testPGLogical(t, &fixtureConfig{script: true})
@@ -107,34 +118,38 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	r.NoError(err)
 	defer cancel()
 	// Create the schema in both locations.
-	var tgts []ident.Table
-	if fc.script {
-		// The logical_test script rig is only set up to deal with one
-		// table. We really just want to verify that the end-to-end
-		// wiring is in place.
-		tgts = []ident.Table{
-			ident.NewTable(dbSchema, ident.New("script_tbl")),
-		}
-	} else {
-		tgts = []ident.Table{
-			ident.NewTable(dbSchema, ident.New("t1")),
-			ident.NewTable(dbSchema, ident.New("t2")),
+	tgts := []ident.Table{
+		ident.NewTable(dbSchema, ident.New("t1")),
+		ident.NewTable(dbSchema, ident.New("t2")),
+	}
+	srcs := tgts
+	if fc.partition {
+		srcs = []ident.Table{
+			ident.NewTable(dbSchema, ident.New("t1_P_0")),
+			ident.NewTable(dbSchema, ident.New("t2_P_0")),
 		}
 	}
 
 	var crdbCol string
+	for _, src := range srcs {
+		pgSchema := fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v TEXT)`, src)
+		if _, err := pgPool.Exec(ctx, pgSchema); !a.NoError(err) {
+			return
+		}
+		if fc.rif {
+			if _, err := pgPool.Exec(ctx, fmt.Sprintf(
+				`ALTER TABLE %s REPLICA IDENTITY FULL`, src)); !a.NoError(err) {
+				return
+			}
+		}
+	}
 	for _, tgt := range tgts {
-		var crdbSchema, pgSchema string
-		pgSchema = fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v TEXT)`, tgt)
-		crdbSchema = pgSchema
+		crdbSchema := fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v TEXT)`, tgt)
 		crdbCol = "v"
 		if fc.script {
 			// Ensure that script is wired up by renaming a column.
 			crdbSchema = fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v_mapped TEXT)`, tgt)
 			crdbCol = "v_mapped"
-		}
-		if _, err := pgPool.Exec(ctx, pgSchema); !a.NoError(err) {
-			return
 		}
 		if _, err := crdbPool.ExecContext(ctx, crdbSchema); !a.NoError(err) {
 			return
@@ -150,10 +165,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	// Insert data into source tables with overlapping transactions.
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(128)
-	for _, tgt := range tgts {
-		tgt := tgt // Capture
+	for _, src := range srcs {
 		for i := 0; i < len(vals); i += 2 {
-			i := i // Capture
 			eg.Go(func() error {
 				keys[i] = i
 				keys[i+1] = i + 1
@@ -165,14 +178,14 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 					return err
 				}
 				_, err = tx.Exec(egCtx,
-					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", tgt),
+					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", src),
 					keys[i], vals[i],
 				)
 				if err != nil {
 					return err
 				}
 				_, err = tx.Exec(egCtx,
-					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", tgt),
+					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", src),
 					keys[i+1], vals[i+1],
 				)
 				if err != nil {
@@ -234,8 +247,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	// Let's perform an update in a single transaction.
 	tx, err := pgPool.Begin(ctx)
 	r.NoError(err)
-	for _, tgt := range tgts {
-		if _, err := tx.Exec(ctx, fmt.Sprintf("UPDATE %s SET v = 'updated'", tgt)); !a.NoError(err) {
+	for _, src := range srcs {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("UPDATE %s SET v = 'updated'", src)); !a.NoError(err) {
 			return
 		}
 	}
@@ -260,8 +273,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	// Delete some rows.
 	tx, err = pgPool.Begin(ctx)
 	r.NoError(err)
-	for _, tgt := range tgts {
-		if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE pk < 50", tgt)); !a.NoError(err) {
+	for _, src := range srcs {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE pk < 50", src)); !a.NoError(err) {
 			return
 		}
 	}

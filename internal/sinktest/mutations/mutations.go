@@ -96,6 +96,8 @@ func Generator(ctx context.Context, idCount int, deleteFraction float32) <-chan 
 					panic(err)
 				}
 				mut.Before = mut.Data
+			} else {
+				mut.Deletion = true
 			}
 
 			select {

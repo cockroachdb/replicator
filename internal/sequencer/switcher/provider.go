@@ -48,7 +48,6 @@ func ProvideSequencer(
 	core *core.Core,
 	diags *diag.Diagnostics,
 	imm *immediate.Immediate,
-	script *script.Sequencer,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
 ) *Switcher {
@@ -57,7 +56,6 @@ func ProvideSequencer(
 		core:        core,
 		diags:       diags,
 		immediate:   imm,
-		script:      script,
 		stagingPool: stagingPool,
 		targetPool:  targetPool,
 	}

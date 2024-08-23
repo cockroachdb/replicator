@@ -45,17 +45,47 @@ api.configureSource("expander", {
                     "table1": [doc],
                     "table2": [{idx: 42}],
                 };
+            case "not_in_target_schema":
+                // This demonstrates how an incoming from a mutation
+                // with no corresponding target table is presented to
+                // the script. This will happen, say, if partitioned
+                // source tables are being fanned into a single
+                // destination table.
+                let key = doc[api.replicationKey];
+                if (!Array.isArray(key)) {
+                    throw "did not find expected replication key " + typeof key;
+                }
+                // This would represent some deployment-specific logic
+                // where the userscript is able to produce a deletion
+                // document from some data embedded in the key array.
+                return {"table1": [{"msg": key[0]}]};
             default:
-                // Passthrough.
-                let ret: Record<api.Table, api.Document[]> = {};
-                ret["" + meta.table] = [doc];
-                return ret;
+                // Basic pass-through case.
+                return {["" + meta.table]: [doc]};
         }
     },
 });
 
 api.configureSource("passthrough", {
     target: "some_table"
+});
+
+const splitPartition = /^(.*)_\d+$/;
+
+// trimPartition will look for tables named "my_table_1234" to dispatch
+// mutations to "my_table".
+function trimPartition(doc: api.Document, meta: api.Document): Record<api.Table, api.Document[]> {
+    let table = "" + meta.table;
+    let match = table.match(splitPartition);
+    if (match !== null) {
+        table = match[1];
+    }
+    return {[table]: [doc]};
+}
+
+api.configureSource("partitioned", {
+    dispatch: trimPartition,
+    deletesTo: trimPartition,
 });
 
 api.configureSource("recursive", {

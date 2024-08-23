@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
+	"github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/target/apply"
@@ -44,6 +45,7 @@ type Conveyors struct {
 	checkpoints   *checkpoint.Checkpoints // Checkpoints factory.
 	kind          string                  // Used by metrics.
 	retire        *retire.Retire          // Removes old mutations.
+	script        *script.Sequencer       // Userscript wrappers.
 	stopper       *stopper.Context        // Manages the lifetime of the goroutines.
 	switcher      *switcher.Switcher      // Switches between mode of operations.
 	tableAcceptor *apply.Acceptor         // Writes batches of mutations into target tables.
@@ -102,7 +104,13 @@ func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
 	// Set the mode before starting the switcher.
 	ret.modeSelector(c.stopper)
 
-	ret.acceptor, ret.stat, err = c.switcher.WithMode(&ret.mode).Start(
+	seq := sequencer.Sequencer(c.switcher.WithMode(&ret.mode))
+	seq, err = c.script.Wrap(c.stopper, seq)
+	if err != nil {
+		return nil, err
+	}
+
+	ret.acceptor, ret.stat, err = seq.Start(
 		c.stopper,
 		&sequencer.StartOptions{
 			Bounds:   &ret.resolvingRange,
@@ -163,6 +171,7 @@ func (c *Conveyors) clone() *Conveyors {
 		checkpoints:   c.checkpoints,
 		kind:          c.kind,
 		retire:        c.retire,
+		script:        c.script,
 		stopper:       c.stopper,
 		switcher:      c.switcher,
 		tableAcceptor: c.tableAcceptor,

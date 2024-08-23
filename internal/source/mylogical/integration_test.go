@@ -57,14 +57,18 @@ func TestMain(m *testing.M) {
 const defaultSourceConn = "mysql://root:SoupOrSecret@localhost:3306/mysql/?sslmode=disable"
 
 type fixtureConfig struct {
-	chaos  bool
-	script bool
+	chaos     bool
+	partition bool // Generate source table names that don't exist in the target.
+	script    bool
 }
 
 func TestMYLogical(t *testing.T) {
 	t.Run("consistent", func(t *testing.T) { testMYLogical(t, &fixtureConfig{}) })
 	t.Run("consistent-chaos", func(t *testing.T) {
 		testMYLogical(t, &fixtureConfig{chaos: true})
+	})
+	t.Run("consistent-partition-script", func(t *testing.T) {
+		testMYLogical(t, &fixtureConfig{partition: true, script: true})
 	})
 	t.Run("consistent-script", func(t *testing.T) {
 		testMYLogical(t, &fixtureConfig{script: true})
@@ -82,6 +86,12 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 
 	// Create the schema in both locations.
 	tgt := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("t"))
+	srcTableName := tgt.Table().Raw()
+	if fc.partition {
+		// Add a suffix that will be stripped by the script. This table
+		// name does not exist in the target.
+		srcTableName += "_P_0"
+	}
 
 	config, err := getConfig(fixture, fc, tgt)
 	r.NoError(err)
@@ -93,7 +103,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 
 	// MySQL only has a single-level namespace; that is, no user-defined schemas.
 	_, err = myExec(ctx, myPool,
-		fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v varchar(20))`, tgt.Table().Raw()),
+		fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v varchar(20))`, srcTableName),
 	)
 	r.NoError(err)
 
@@ -127,7 +137,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 
 			for i := 0; i < rowCount; i++ {
 				if _, err := conn.Execute(
-					fmt.Sprintf("INSERT INTO %s VALUES (?, ?)", tgt.Table().Raw()),
+					fmt.Sprintf("INSERT INTO %s VALUES (?, ?)", srcTableName),
 					i, fmt.Sprintf("v=%d", i),
 				); err != nil {
 					return nil, err
@@ -163,7 +173,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 				return nil, err
 			}
 			defer conn.Rollback()
-			conn.Execute(fmt.Sprintf("UPDATE %s SET v = 'updated'", tgt.Table().Raw()))
+			conn.Execute(fmt.Sprintf("UPDATE %s SET v = 'updated'", srcTableName))
 			return nil, conn.Commit()
 		})
 
@@ -188,7 +198,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 				return nil, err
 			}
 			defer conn.Rollback()
-			conn.Execute(fmt.Sprintf("DELETE FROM %s WHERE pk < 50", tgt.Table().Raw()))
+			conn.Execute(fmt.Sprintf("DELETE FROM %s WHERE pk < 50", srcTableName))
 			return nil, conn.Commit()
 		})
 

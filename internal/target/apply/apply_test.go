@@ -1401,6 +1401,70 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 }
 
+// Verifies that we can process deletes when we have a mutation body
+// that aligns with the target schema, and that the replication key
+// may be an arbitrary value.
+func TestDeleteByBody(t *testing.T) {
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+	table, err := fixture.CreateTargetTable(ctx,
+		`CREATE TABLE %s (a INT, b INT, c INT, PRIMARY KEY (a, b))`)
+	r.NoError(err)
+
+	muts := []types.Mutation{
+		{
+			Data: json.RawMessage(`{"a":1,"b":2,"c":3}`),
+			Key:  json.RawMessage(`one`),
+		},
+		{
+			Data: json.RawMessage(`{"a":4,"b":5,"c":6}`),
+			Key:  json.RawMessage(`two`),
+		},
+		{
+			Data: json.RawMessage(`{"a":7,"b":8,"c":9}`),
+			Key:  json.RawMessage(`three`),
+		},
+	}
+
+	apply := fixture.Applier(ctx, table.Name())
+	r.NoError(apply(muts))
+
+	ct, err := table.RowCount(ctx)
+	r.NoError(err)
+	r.Equal(len(muts), ct)
+
+	t.Run("happy_path", func(t *testing.T) {
+		r := require.New(t)
+		// Now we're going to demonstrate that the replication key needs
+		// only to be unique for deletions.
+		for i := range muts {
+			muts[i].Deletion = true
+		}
+
+		r.NoError(apply(muts))
+		ct, err = table.RowCount(ctx)
+		r.NoError(err)
+		r.Zero(ct)
+	})
+
+	// Cook up a mutation that is missing a required PK column.
+	t.Run("schema_drift", func(t *testing.T) {
+		r := require.New(t)
+		muts := []types.Mutation{
+			{
+				Data:     json.RawMessage(`{"a":1,"c":3}`),
+				Deletion: true,
+				Key:      json.RawMessage(`bad`),
+			},
+		}
+		r.ErrorContains(apply(muts), "schema drift detected")
+	})
+}
+
 // Verifies "constant" and substitution params, including cases where
 // the PK is subject to rewriting.
 func TestExpressionColumns(t *testing.T) {

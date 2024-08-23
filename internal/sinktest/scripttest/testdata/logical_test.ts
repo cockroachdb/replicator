@@ -16,33 +16,39 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as api from "cdc-sink@v1";
-import {Document, DocumentValue, Table} from "cdc-sink@v1";
+import * as api from "replicator@v1";
+import {Document, Table} from "replicator@v1";
+
+function trimPartition(table: string): string {
+    let idx = table.indexOf("_P_");
+    if (idx != -1) {
+        table = table.substring(0, idx)
+    }
+    return table;
+}
 
 // The sentinel name will be replaced by the test rig. It would normally be
 // "my_db.public" or "my_db" depending on the target product.
 api.configureSource("{{ SCHEMA }}", {
     dispatch: (doc: Document, meta: Document): Record<Table, Document[]> => {
         console.trace(JSON.stringify(doc), JSON.stringify(meta));
-        let ret: Record<Table, Document> = {};
-        ret[meta.table] = [
-            {
+        return {
+            [trimPartition(meta.table)]: [{
                 pk: doc.pk,
                 ignored: 'by_configuration_below',
                 v_dispatched: doc.v, // Rename the property
-            }
-        ];
-        return ret
+            }]
+        };
     },
-    deletesTo: (doc: Document): Record<Table, Document[]> => ({
-        "{{ TABLE }}": [doc],
+    deletesTo: (doc: Document, meta: Document): Record<Table, Document[]> => ({
+        [trimPartition(meta.table)]: [doc],
     }),
 })
 
 // We introduce an unknown column in the dispatch function above.
 // We'll add an extra configuration here to ignore it.
 // The sentinel name would be replaced by "my_table".
-api.configureTable("{{ TABLE }}", {
+let commonConfig = {
     map: (doc: Document): Document => {
         console.trace("map", JSON.stringify(doc));
         if (doc.v_dispatched === undefined) {
@@ -55,4 +61,7 @@ api.configureTable("{{ TABLE }}", {
     ignore: {
         "ignored": true,
     }
-})
+};
+api.configureTable("{{ TABLE }}", commonConfig);
+api.configureTable("t1", commonConfig);
+api.configureTable("t2", commonConfig);
