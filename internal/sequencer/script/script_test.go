@@ -145,8 +145,9 @@ api.configureTable("t_2", {
 		Bounds:   bounds,
 		Delegate: types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
 		Group: &types.TableGroup{
-			Name:   ident.New("src1"), // Aligns with configureSource() call.
-			Tables: tgts[:1],          // Only drive from the 0th table
+			Enclosing: fixture.TargetSchema.Schema(),
+			Name:      ident.New("src1"), // Aligns with configureSource() call.
+			Tables:    tgts,
 		},
 	})
 	r.NoError(err)

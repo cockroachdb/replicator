@@ -187,8 +187,7 @@ func opsIntoBatch(ctx context.Context, ops []*applyOp, batch *types.TableBatch) 
 		}
 		switch applyAction(strings.ToLower(op.Action)) {
 		case actionDelete:
-			// Absence of data means delete.
-			batch.Data[idx].Data = nil
+			batch.Data[idx].Deletion = true
 		case actionUpsert:
 			// OK.
 		default:

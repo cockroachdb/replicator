@@ -25,6 +25,14 @@
  */
 declare module "replicator@v1" {
     /**
+     * This is a sentinel property key that may be present in the
+     * document passed to a deletesTo() callback if the incoming
+     * mutation does not have a body and there is no obvious target
+     * table schema to synthesize a document based on the key.
+     */
+    const replicationKey: string;
+
+    /**
      * The name of a SQL column.
      */
     type Column = string;
@@ -116,8 +124,15 @@ declare module "replicator@v1" {
          * return a mapping of destination table(s) to (sparse) records
          * to delete. This callback may also return null to elide
          * deletes from the source. The <code>meta.table</code> value
-         * can be used to determine the table that the delete would
+         * can be used to determine the table that the deletion would
          * normally be dispatched to.
+         *
+         * In cases where an incoming deletion is associated with
+         * a source table that does not exist in the target schema,
+         * it may not be possible to convert the mutation's replication
+         * key into a fully-formed document. In this case, the doc parameter
+         * will contain a single key {@link replicationKey} containing
+         * the mutation's replication key.
          */
         deletesTo: Table | ((doc: Document, meta: Document) => Record<Table, Document[]> | null)
     } | {

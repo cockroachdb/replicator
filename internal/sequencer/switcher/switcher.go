@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
-	"github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/pkg/errors"
@@ -56,7 +55,6 @@ type Switcher struct {
 	core        *core.Core
 	diags       *diag.Diagnostics
 	immediate   *immediate.Immediate
-	script      *script.Sequencer
 	stagingPool *types.StagingPool
 	targetPool  *types.TargetPool
 
@@ -95,11 +93,7 @@ func (s *Switcher) Start(
 		s.diags.Unregister(diagName)
 	})
 
-	ret, err := s.script.Wrap(ctx, g)
-	if err != nil {
-		return nil, nil, err
-	}
-	return ret.Start(ctx, opts)
+	return g.Start(ctx, opts)
 }
 
 // WithMode returns a copy of the Switcher that uses the given variable

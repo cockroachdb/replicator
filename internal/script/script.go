@@ -36,6 +36,13 @@ import (
 	"github.com/pkg/errors"
 )
 
+// replicationKey is a constant that we use to pass unreifiable deletion
+// keys into the [DeletesTo] callback.
+const (
+	replicationKeyName  = "replicationKey"
+	replicationKeyValue = "__REPLICATION_KEY__"
+)
+
 // DeleteKey is similar to Map in that it has the opportunity to modify
 // or filter a mutation before subsequent processing. Rather than
 // operating on [types.Mutation.Data], it should instead base its
@@ -384,42 +391,48 @@ func (s *UserScript) bindDeletesToFunction(fnName string, deletesTo deletesToJS)
 	delegate := s.bindDispatch(fnName, dispatchJS(deletesTo))
 
 	return func(ctx context.Context, defaultTable ident.Table, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
-		if defaultTable.Empty() {
-			return nil, errors.New("user-defined deletesTo requires a known table")
-		}
-		// If the default table doesn't actually exist in the target
-		// schema, we'll get zero columns here. This is fine, since we
-		// don't have any information to convert the key array
-		cols, ok := s.watcher.Get().Columns.Get(defaultTable)
-		if !ok {
-			return nil, errors.Errorf("delete routed to unknown table %s", defaultTable)
-		}
-		value, err := crep.Unmarshal(mut.Key)
-		if err != nil {
-			return nil, err
-		}
-		arr, ok := value.([]crep.Value)
-		if !ok {
-			return nil, errors.Errorf("mutation key %s was not an array", mut.Key)
-		}
-
-		// Convert incoming key array into an object containing only the
-		// primary keys.
-		data := make(map[string]crep.Value, len(arr))
-		for idx, col := range cols {
-			if !col.Primary {
-				break
+		// Depending on the frontend, we may or may not have a data
+		// block associated with a deletion. If we don't have a data
+		// block, we'll see if the incoming table name maps onto a
+		// target table for which we have schema information. If we do,
+		// we'll cook up a complete document for the user function. If
+		// we don't have target schema data, we'll pass the replication
+		// key through as a sentinel value. In either case, the callback
+		// will be able to provide us with a destination table.
+		if !mut.HasData() {
+			// Reify the mutation's key.
+			value, err := crep.Unmarshal(mut.Key)
+			if err != nil {
+				return nil, err
 			}
-			if idx >= len(arr) {
-				return nil, errors.Errorf(
-					"mutation key has %d elements, but table %s has at least %d PK columns",
-					len(arr), defaultTable, idx)
+			arr, ok := value.([]crep.Value)
+			if !ok {
+				return nil, errors.Errorf("mutation key %s was not an array", mut.Key)
 			}
-			data[col.Name.Raw()] = arr[idx]
-		}
-		mut.Data, err = json.Marshal(data)
-		if err != nil {
-			return nil, err
+			data := make(map[string]crep.Value, len(arr))
+			if cols, ok := s.watcher.Get().Columns.Get(defaultTable); ok {
+				// We have schema data for the incoming table name, so
+				// we'll cook up a data object for the script.
+				for idx, col := range cols {
+					if !col.Primary {
+						break
+					}
+					if idx >= len(arr) {
+						return nil, errors.Errorf(
+							"mutation key has %d elements, but table %s has at least %d PK columns",
+							len(arr), defaultTable, idx)
+					}
+					// Sanitize key name, too.
+					data[col.Name.Canonical().Raw()] = arr[idx]
+				}
+			} else {
+				// No schema data, just pass through a sentinel value.
+				data[replicationKeyValue] = arr
+			}
+			mut.Data, err = json.Marshal(data)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// Call the user function.
@@ -428,11 +441,10 @@ func (s *UserScript) bindDeletesToFunction(fnName string, deletesTo deletesToJS)
 			return nil, err
 		}
 
-		// Remove the Data slice to convert this to a deletion. Ignoring
-		// error since callback returns nil.
+		// Ensure that any emitted mutation will be a deletion.
 		_ = dispatched.Range(func(_ ident.Table, muts []types.Mutation) error {
 			for idx := range muts {
-				muts[idx].Data = nil
+				muts[idx].Deletion = true
 			}
 			return nil
 		})
@@ -445,7 +457,7 @@ func (s *UserScript) bindDeletesToFunction(fnName string, deletesTo deletesToJS)
 // the given table.
 func bindDeletesToTable(table ident.Table) DeletesTo {
 	return func(_ context.Context, _ ident.Table, mut types.Mutation) (*ident.TableMap[[]types.Mutation], error) {
-		mut.Data = nil // Ensure delete-type.
+		mut.Deletion = true // Ensure delete-type.
 		ret := &ident.TableMap[[]types.Mutation]{}
 		ret.Put(table, []types.Mutation{mut})
 		return ret, nil
@@ -526,21 +538,32 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 				}
 
 				// Extract the revised primary key components.
+				var dataBytes []byte
 				var jsKey []any
-				for _, col := range colData {
-					if col.Primary {
-						keyVal, ok := jsDoc.Get(col.Name)
-						if !ok {
-							return nil, errors.Errorf(
-								"dispatch funcion %s omitted value for PK %s", fnName, col.Name)
-						}
+				if rawKey, ok := rawJsDoc[replicationKeyValue]; ok && len(rawJsDoc) == 1 {
+					passthrough, ok := rawKey.([]crep.Value)
+					if !ok {
+						return nil, errors.Errorf("dispatch function %s returned mangled %s",
+							fnName, replicationKeyValue)
+					}
+					for _, keyVal := range passthrough {
 						jsKey = append(jsKey, keyVal)
 					}
-				}
-
-				dataBytes, err := json.Marshal(jsDoc)
-				if err != nil {
-					return nil, err
+				} else {
+					for _, col := range colData {
+						if col.Primary {
+							keyVal, ok := jsDoc.Get(col.Name)
+							if !ok {
+								return nil, errors.Errorf(
+									"dispatch funcion %s omitted value for PK %s", fnName, col.Name)
+							}
+							jsKey = append(jsKey, keyVal)
+						}
+					}
+					dataBytes, err = json.Marshal(jsDoc)
+					if err != nil {
+						return nil, err
+					}
 				}
 
 				keyBytes, err := json.Marshal(jsKey)
@@ -549,11 +572,12 @@ func (s *UserScript) bindDispatch(fnName string, dispatch dispatchJS) Dispatch {
 				}
 
 				tblMuts[idx] = types.Mutation{
-					Before: mut.Before,
-					Data:   dataBytes,
-					Key:    keyBytes,
-					Meta:   meta,
-					Time:   mut.Time,
+					Before:   mut.Before,
+					Data:     dataBytes,
+					Deletion: mut.Deletion,
+					Key:      keyBytes,
+					Meta:     meta,
+					Time:     mut.Time,
 				}
 			}
 		}

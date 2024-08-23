@@ -246,25 +246,64 @@ func (a *apply) deleteLocked(
 	if len(muts) == 0 {
 		return nil
 	}
-	pkCols := a.mu.templates.PKDelete
-	keyGroups := make([][]any, len(muts))
-	if err := pjson.Decode(ctx, keyGroups, func(i int) []byte {
-		return muts[i].Key
+
+	// A deletion may have a complete message body associated with it,
+	// in which case we'll extract the PK column values from the body.
+	// This supports use cases where the replication identity of the
+	// mutation, as encoded in mut.Key, doesn't necessarily align with
+	// the target database's PK structure. If the mutation lacks a body,
+	// for example a CDC changefeed, we'll reify the replication key and
+	// pass it through.
+	bodies := make([]ident.Map[any], len(muts))
+	noBodyKey := ident.New(`___NO_BODY___`)
+	if err := pjson.Decode(ctx, bodies, func(i int) []byte {
+		data := muts[i].Data
+		if len(data) == 0 || bytes.Equal(data, []byte(`null`)) {
+			return []byte(fmt.Sprintf(`{%s:%s}`, noBodyKey, muts[i].Key))
+		}
+		return data
 	}); err != nil {
 		return err
 	}
 
+	// We'll flatten the bodies into the arguments that will be passed
+	// to the DELETE statement. If we have a body, we'll extract the
+	// relevant PK column values. If we only have a key, the best we can
+	// do is to ensure that we have the same number of columns.
+	pkCols := a.mu.templates.PKDelete
 	allArgs := make([]any, 0, len(pkCols)*len(muts))
-	for i, keyGroup := range keyGroups {
-		if len(keyGroup) != len(pkCols) {
-			return errors.Errorf(
-				"schema drift detected in %s: "+
-					"inconsistent number of key columns: "+
-					"received %d expect %d: "+
-					"key %s@%s",
-				a.target,
-				len(keyGroup), len(pkCols),
-				string(muts[i].Key), muts[i].Time)
+	for i := range bodies {
+		body := &bodies[i] // ident.Map is a no-copy type.
+		var keyGroup []any
+		if keyData, onlyKey := body.Get(noBodyKey); onlyKey {
+			var ok bool
+			keyGroup, ok = keyData.([]any)
+			if !ok {
+				return errors.Errorf("unexpected %s type %T", noBodyKey, keyData)
+			}
+			if len(keyGroup) != len(pkCols) {
+				return errors.Errorf(
+					"schema drift detected in %s: "+
+						"inconsistent number of key columns: "+
+						"received %d expect %d: "+
+						"key %s@%s",
+					a.target,
+					len(keyGroup), len(pkCols),
+					string(muts[i].Key), muts[i].Time)
+			}
+		} else {
+			keyGroup = make([]any, len(pkCols))
+			for pkIdx, col := range pkCols {
+				colValue, found := body.Get(col.Name)
+				if !found {
+					return errors.Errorf(
+						"schema drift detected in %s: "+
+							"could not find target PK column name %s in mutation data: "+
+							"key %s@%s",
+						a.target, col.Name, string(muts[i].Key), muts[i].Time)
+				}
+				keyGroup[pkIdx] = colValue
+			}
 		}
 
 		// See discussion in upsertArgsLocked.

@@ -101,10 +101,11 @@ CREATE TABLE IF NOT EXISTS %[1]s (
       before BYTES NULL,
      applied BOOL NOT NULL DEFAULT false,
   applied_at TIMESTAMPTZ NULL,
+    deletion BOOL NOT NULL DEFAULT false,
   %[2]s
   PRIMARY KEY (nanos, logical, key),
     INDEX %[3]s (key) STORING (applied), -- Improve performance of StageIfExists
-   FAMILY cold (mut, before),
+   FAMILY cold (mut, before, deletion),
    FAMILY hot (applied, applied_at)
 )`
 
@@ -148,6 +149,11 @@ CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 	// old, applied mutations are retired on a regular basis.
 	if err := retry.Execute(ctx, db, fmt.Sprintf(`
 ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
+`, table)); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+ALTER TABLE %s ADD COLUMN IF NOT EXISTS deletion BOOL NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -345,8 +351,13 @@ func (s *stage) GetTable() ident.Table { return s.stage.Base }
 // The byte-array casts on $4 and $5 are because arrays of JSONB aren't implemented:
 // https://github.com/cockroachdb/cockroach/issues/23468
 const stageTemplate = `
-INSERT INTO %s (nanos, logical, key, mut, before)
-SELECT unnest($1::INT[]), unnest($2::INT[]), unnest($3::STRING[]), unnest($4::BYTES[]), unnest($5::BYTES[])
+INSERT INTO %s (nanos, logical, key, mut, before, deletion)
+SELECT unnest($1::INT[]),
+       unnest($2::INT[]),
+       unnest($3::STRING[]),
+       unnest($4::BYTES[]),
+       unnest($5::BYTES[]),
+       unnest($6::BOOL[])
 ON CONFLICT DO NOTHING`
 
 // Stage implements [types.Stager].
@@ -396,22 +407,23 @@ func (s *stage) Stage(
 
 const stageIfExistsTemplate = `
 WITH
-proposed (idx, nanos, logical, key, mut, before) AS ( 
+proposed (idx, nanos, logical, key, mut, before, deletion) AS ( 
   SELECT 
     row_number() OVER (), 
     unnest($1::INT[]),
     unnest($2::INT[]),
     unnest($3::STRING[]),
     unnest($4::BYTES[]),
-    unnest($5::BYTES[])),
+    unnest($5::BYTES[]),
+    unnest($6::BOOL[])),
 existing AS (
   SELECT DISTINCT proposed.key
   FROM proposed
   JOIN %[1]s existing
   ON (proposed.key = existing.key AND NOT existing.applied)),
 action AS (
-  UPSERT INTO %[1]s (nanos, logical, key, mut, before)
-  SELECT nanos, logical, key, mut, before
+  UPSERT INTO %[1]s (nanos, logical, key, mut, before, deletion)
+  SELECT nanos, logical, key, mut, before, deletion
   FROM proposed
   JOIN existing USING (key)
   RETURNING true) 
@@ -423,12 +435,13 @@ JOIN existing USING (key)
 func (s *stage) StageIfExists(
 	ctx context.Context, db types.StagingQuerier, mutations []types.Mutation,
 ) ([]types.Mutation, error) {
-	nanos, logical, keys, jsons, befores, err := s.packArgs(ctx, mutations)
+	nanos, logical, keys, jsons, befores, deletions, err := s.packArgs(ctx, mutations)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := db.Query(ctx, s.sql.stageExists, nanos, logical, keys, jsons, befores)
+	rows, err := db.Query(ctx, s.sql.stageExists,
+		nanos, logical, keys, jsons, befores, deletions)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -463,12 +476,21 @@ func (s *stage) StageIfExists(
 // we'll send to the staging database.
 func (s *stage) packArgs(
 	ctx context.Context, mutations []types.Mutation,
-) (nanos []int64, logical []int, keys []string, jsons [][]byte, befores [][]byte, err error) {
+) (
+	nanos []int64,
+	logical []int,
+	keys []string,
+	jsons [][]byte,
+	befores [][]byte,
+	deletions []bool,
+	err error,
+) {
 	nanos = make([]int64, len(mutations))
 	logical = make([]int, len(mutations))
 	keys = make([]string, len(mutations))
 	jsons = make([][]byte, len(mutations))
 	befores = make([][]byte, len(mutations))
+	deletions = make([]bool, len(mutations))
 
 	numWorkers := runtime.GOMAXPROCS(0)
 	eg, errCtx := errgroup.WithContext(ctx)
@@ -485,19 +507,18 @@ func (s *stage) packArgs(
 				nanos[idx] = mut.Time.Nanos()
 				logical[idx] = mut.Time.Logical()
 				keys[idx] = string(mut.Key)
+				deletions[idx] = mut.IsDelete()
 				befores[idx], err = maybeGZip(mut.Before)
 				if err != nil {
 					return err
 				}
-
-				if mut.IsDelete() {
+				if mut.HasData() {
+					jsons[idx], err = maybeGZip(mut.Data)
+					if err != nil {
+						return err
+					}
+				} else {
 					jsons[idx] = []byte("null")
-					continue
-				}
-
-				jsons[idx], err = maybeGZip(mut.Data)
-				if err != nil {
-					return err
 				}
 			}
 			return nil
@@ -512,11 +533,11 @@ func (s *stage) packArgs(
 func (s *stage) stageOneBatch(
 	ctx context.Context, db types.StagingQuerier, mutations []types.Mutation,
 ) error {
-	nanos, logical, keys, jsons, befores, err := s.packArgs(ctx, mutations)
+	nanos, logical, keys, jsons, befores, deletions, err := s.packArgs(ctx, mutations)
 	if err != nil {
 		return err
 	}
-	tag, err := db.Exec(ctx, s.sql.stage, nanos, logical, keys, jsons, befores)
+	tag, err := db.Exec(ctx, s.sql.stage, nanos, logical, keys, jsons, befores, deletions)
 	if err != nil {
 		return errors.Wrap(err, s.sql.stage)
 	}

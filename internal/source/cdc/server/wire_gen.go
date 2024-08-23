@@ -108,6 +108,7 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	sequencerConfig := cdc.ProvideSequencerConfig(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
@@ -125,9 +126,8 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
-	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
-	conveyors, err := conveyor.ProvideConveyors(ctx, acceptor, conveyorConfig, checkpoints, retireRetire, switcherSwitcher, watchers)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)
+	conveyors, err := conveyor.ProvideConveyors(ctx, acceptor, conveyorConfig, checkpoints, sequencer, retireRetire, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +212,12 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
+	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
+	scriptLoader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
+	sequencer := script2.ProvideSequencer(scriptLoader, targetPool, watchers)
 	sequencerConfig := cdc.ProvideSequencerConfig(cdcConfig)
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
@@ -229,14 +235,8 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
-	scriptConfig := cdc.ProvideScriptConfig(cdcConfig)
-	scriptLoader, err := script.ProvideLoader(context, configs, scriptConfig, diagnostics)
-	if err != nil {
-		return nil, nil, err
-	}
-	sequencer := script2.ProvideSequencer(scriptLoader, targetPool, watchers)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
-	conveyors, err := conveyor.ProvideConveyors(context, acceptor, conveyorConfig, checkpoints, retireRetire, switcherSwitcher, watchers)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)
+	conveyors, err := conveyor.ProvideConveyors(context, acceptor, conveyorConfig, checkpoints, sequencer, retireRetire, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, nil, err
 	}
