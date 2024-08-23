@@ -52,7 +52,20 @@ type MultiAcceptor interface {
 //
 // See also [UnorderedAcceptorFrom].
 func OrderedAcceptorFrom(acc TableAcceptor, watchers Watchers) MultiAcceptor {
-	return &orderedAdapter{acc, watchers}
+	switch t := acc.(type) {
+	case *orderedAdapter:
+		// Avoid accidental double-wrapping.
+		if t.watchers == watchers {
+			return t
+		}
+		// This would be very unexpected.
+		return &orderedAdapter{acc, watchers}
+	case *unorderedAdapter:
+		// Avoid silly delegation.
+		return &orderedAdapter{t.TableAcceptor, watchers}
+	default:
+		return &orderedAdapter{acc, watchers}
+	}
 }
 
 // A TemporalAcceptor operates on a batch of data that has a single
@@ -165,7 +178,16 @@ func (t *orderedAdapter) AcceptMultiBatch(
 // UnorderedAcceptorFrom adapts a [TableAcceptor] to the [MultiAcceptor]
 // interface. Table data will be delivered in an arbitrary order.
 func UnorderedAcceptorFrom(acc TableAcceptor) MultiAcceptor {
-	return &unorderedAdapter{acc}
+	switch t := acc.(type) {
+	case *orderedAdapter:
+		// Prevent silly delegation.
+		return t
+	case *unorderedAdapter:
+		// Prevent double-wrapping.
+		return t
+	default:
+		return &unorderedAdapter{t}
+	}
 }
 
 type unorderedAdapter struct {

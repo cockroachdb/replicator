@@ -19,6 +19,7 @@ package conveyor
 import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
+	"github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/target/apply"
@@ -35,6 +36,7 @@ func ProvideConveyors(
 	acc *apply.Acceptor,
 	cfg *Config,
 	checkpoints *checkpoint.Checkpoints,
+	script *script.Sequencer,
 	retire *retire.Retire,
 	sw *switcher.Switcher,
 	watchers types.Watchers,
@@ -46,6 +48,7 @@ func ProvideConveyors(
 		cfg:           cfg,
 		checkpoints:   checkpoints,
 		retire:        retire,
+		script:        script,
 		stopper:       ctx,
 		switcher:      sw,
 		tableAcceptor: acc,

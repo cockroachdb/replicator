@@ -73,7 +73,7 @@ func (w *wrapper) Start(
 	}
 
 	// Only inject if the source or any tables have a configuration.
-	_, inject := scr.Sources.Get(opts.Group.Name)
+	sourceBindings, inject := scr.Sources.Get(opts.Group.Name)
 	if !inject {
 		for _, tbl := range opts.Group.Tables {
 			_, inject = scr.Targets.Get(tbl)
@@ -82,32 +82,58 @@ func (w *wrapper) Start(
 			}
 		}
 	}
-	if inject {
-		// If the userscript has defined any apply functions, we will
-		// need to ensure that a database transaction will be available
-		// to support the api.getTX() function. This is mainly relevant
-		// to immediate mode, in which the sequencer caller won't
-		// necessarily have created a transaction.
-		ensureTX := false
-		// No interesting error returned from Range.
-		_ = scr.Targets.Range(func(_ ident.Table, target *script.Target) error {
-			if target.UserAcceptor != nil {
-				ensureTX = true
-				return context.Canceled // Arbitrary error to stop early.
-			}
-			return nil
-		})
-
-		opts = opts.Copy()
-		opts.Delegate = types.UnorderedAcceptorFrom(&acceptor{
-			delegate:   opts.Delegate,
-			ensureTX:   ensureTX,
-			group:      opts.Group,
-			targetPool: w.targetPool,
-			userScript: scr,
-		})
+	if !inject {
+		return w.delegate.Start(ctx, opts)
 	}
-	return w.delegate.Start(ctx, opts)
+
+	watcher, err := w.watchers.Get(opts.Group.Enclosing)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// If the userscript has defined any apply functions, we will
+	// need to ensure that a database transaction will be available
+	// to support the api.getTX() function. This is mainly relevant
+	// to immediate mode, in which the sequencer caller won't
+	// necessarily have created a transaction.
+	ensureTX := false
+	// No interesting error returned from Range.
+	_ = scr.Targets.Range(func(_ ident.Table, target *script.Target) error {
+		if target.UserAcceptor != nil {
+			ensureTX = true
+			return context.Canceled // Arbitrary error to stop early.
+		}
+		return nil
+	})
+
+	// Install the target-phase acceptor into the options chain. This
+	// will be invoked for mutations which have passed through the
+	// sequencer stack.
+	opts = opts.Copy()
+	opts.Delegate = types.OrderedAcceptorFrom(&targetAcceptor{
+		delegate:   opts.Delegate,
+		ensureTX:   ensureTX,
+		group:      opts.Group,
+		targetPool: w.targetPool,
+		userScript: scr,
+	}, w.watchers)
+
+	// Initialize downstream sequencer.
+	acc, stat, err := w.delegate.Start(ctx, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Install the source-phase acceptor. This provides the user with
+	// the opportunity to rewrite mutations before they are presented to
+	// the upstream sequencer.
+	acc = types.UnorderedAcceptorFrom(&sourceAcceptor{
+		delegate:       acc,
+		group:          opts.Group,
+		sourceBindings: sourceBindings,
+		watcher:        watcher,
+	})
+	return acc, stat, nil
 }
 
 // Unwrap is an informal protocol to return the delegate.

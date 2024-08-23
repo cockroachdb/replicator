@@ -19,6 +19,7 @@ package stage
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -65,7 +66,7 @@ type tableReader struct {
 //   - ($4, $5): End position nanos, logical
 //   - $6: Row limit
 const readTableTemplate = `
-SELECT nanos, logical, key, mut, before
+SELECT nanos, logical, key, mut, before, deletion
 FROM %s
 WHERE (nanos, logical, key) > ($1::INT8, $2::INT8, COALESCE($3::STRING, ''))
 AND (nanos, logical) < ($4::INT8, $5::INT8)
@@ -243,9 +244,12 @@ func (r *tableReader) queryOnce(ctx context.Context) ([]types.Mutation, error) {
 		var mut types.Mutation
 		var nanos int64
 		var logical int
-		if err := rows.Scan(&nanos, &logical, &mut.Key, &mut.Data, &mut.Before); err != nil {
+		var deletion sql.NullBool // Could be migrated.
+		if err := rows.Scan(&nanos, &logical, &mut.Key,
+			&mut.Data, &mut.Before, &deletion); err != nil {
 			return nil, errors.WithStack(err)
 		}
+		mut.Deletion = deletion.Valid && deletion.Bool
 		mut.Time = hlc.New(nanos, logical)
 
 		ret = append(ret, mut)

@@ -74,6 +74,9 @@ func TestScript(t *testing.T) {
 		fmt.Sprintf("CREATE TABLE %s.delete_swap(pk0 INT, pk1 INT, PRIMARY KEY (pk0, pk1))", schema))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
+		fmt.Sprintf("CREATE TABLE %s.partitioned_target(pk INT PRIMARY KEY, val INT NOT NULL)", schema))
+	r.NoError(err)
+	_, err = fixture.TargetPool.ExecContext(ctx,
 		fmt.Sprintf("CREATE TABLE %s.soft_deletes(pk INT PRIMARY KEY, val INT NOT NULL, is_deleted INT DEFAULT 0 NOT NULL)", schema))
 	r.NoError(err)
 	_, err = fixture.TargetPool.ExecContext(ctx,
@@ -108,7 +111,7 @@ CREATE TABLE %s.skewed_merge_times(
 	r.NoError(err)
 
 	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
-	a.Equal(3, s.Sources.Len())
+	a.Equal(4, s.Sources.Len())
 	a.Equal(10, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
@@ -125,19 +128,36 @@ CREATE TABLE %s.skewed_merge_times(
 		// Check that deletes can be sent to both tables.
 		if a.NotNil(cfg.DeletesTo) {
 			mutNoData := mut
-			mutNoData.Data = nil
+			mutNoData.Data = nil // Implicitly convert to deletion.
 			a.True(mutNoData.IsDelete())
 			if mapped, err := cfg.DeletesTo(ctx, tbl1, mutNoData); a.NoError(err) {
 				a.Equal(2, mapped.Len())
-				// This should pass the original document through.
+				// This should pass the original document through. We
+				// also check that a key-only deletion will provide a
+				// reconstituted PK document.
 				if found := mapped.GetZero(tbl1); a.Len(found, 1) {
-					a.Equal(mutNoData, found[0])
+					expected := mut
+					expected.Data = json.RawMessage(`{"msg":"key"}`) // Set by script
+					expected.Deletion = true
+					a.Equal(expected, found[0])
 				}
 				// We really just care about the key at this point.
 				if found := mapped.GetZero(tbl2); a.Len(found, 1) {
-					a.Zero(found[0].Data)
-					a.Equal(json.RawMessage(`[42]`), found[0].Key)
+					expected := mut
+					expected.Data = json.RawMessage(`{"idx":42}`) // Set by script
+					expected.Deletion = true
+					expected.Key = json.RawMessage(`[42]`)
+					a.Equal(expected, found[0])
 				}
+			}
+
+			// Verify that a deletion to a non-existent and therefore
+			// unreifiable key can still be dispatched.
+			mutToSyntheticTable := mutNoData
+			synthetic := ident.NewTable(schema, ident.New("not_in_target_schema"))
+			AddMeta("test", synthetic, &mutToSyntheticTable)
+			if mapped, err := cfg.DeletesTo(ctx, synthetic, mutToSyntheticTable); a.NoError(err) {
+				a.Equal(1, mapped.Len())
 			}
 		}
 		mapped, err := cfg.Dispatch(context.Background(), tbl1, mut)
@@ -164,11 +184,11 @@ CREATE TABLE %s.skewed_merge_times(
 		mut := types.Mutation{Data: []byte(`{"passthrough":true}`)}
 		someTable := ident.NewTable(schema, ident.New("some_table"))
 		if a.NotNil(cfg.DeletesTo) {
-			mutNoData := mut
-			mutNoData.Data = nil
+			mutDeleted := mut
+			mutDeleted.Deletion = true
 			if mapped, err := cfg.DeletesTo(ctx, someTable, mut); a.NoError(err) {
 				if found := mapped.GetZero(someTable); a.Len(found, 1) {
-					a.Equal(mutNoData, found[0])
+					a.Equal(mutDeleted, found[0])
 				}
 			}
 		}
@@ -302,6 +322,36 @@ CREATE TABLE %s.skewed_merge_times(
 			a.Equal(&merge.Resolution{DLQ: "dead"}, result)
 		}
 	}
+
+	t.Run("partitioned", func(t *testing.T) {
+		r := require.New(t)
+		table := ident.NewTable(schema, ident.New("partitioned_target"))
+		tableP := ident.NewTable(schema, ident.New("partitioned_target_1234"))
+		cfg := s.Sources.GetZero(ident.New("partitioned"))
+		r.NotNil(cfg)
+		mut := types.Mutation{
+			Data: []byte(`{"pk":"123","val":"456"}`),
+			Key:  []byte(`["123"]`),
+		}
+		AddMeta("test", tableP, &mut)
+
+		// Verify dispatch.
+		result, err := cfg.Dispatch(ctx, tableP, mut)
+		r.NoError(err)
+		found, ok := result.Get(table)
+		r.True(ok)
+		r.Len(found, 1)
+		r.Equal(mut, found[0])
+
+		// Verify deletes.
+		mut.Deletion = true
+		result, err = cfg.DeletesTo(ctx, tableP, mut)
+		r.NoError(err)
+		found, ok = result.Get(table)
+		r.True(ok)
+		r.Len(found, 1)
+		r.Equal(mut, found[0])
+	})
 
 	t.Run("soft_delete", func(t *testing.T) {
 		r := require.New(t)

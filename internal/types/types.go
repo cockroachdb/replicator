@@ -130,18 +130,31 @@ const CustomUpsert = "upsert.custom"
 // is, it is a collection of column values to apply to a row in some
 // table.
 type Mutation struct {
-	Before json.RawMessage // Optional encoded JSON object
-	Data   json.RawMessage // An encoded JSON object: { "key" : "hello" }
-	Key    json.RawMessage // An encoded JSON array: [ "hello" ]
-	Meta   map[string]any  // Dialect-specific data, may be nil, not persisted
-	Time   hlc.Time        // The effective time of the mutation
+	Before   json.RawMessage // Optional encoded JSON object
+	Data     json.RawMessage // An encoded JSON object: { "key" : "hello" }
+	Deletion bool            // Consider the mutation to be a deletion, even if Data is present.
+	Key      json.RawMessage // Replication identity, an encoded JSON array: [ "hello" ]
+	Meta     map[string]any  // Dialect-specific data, may be nil, not persisted
+	Time     hlc.Time        // The effective time of the mutation
 }
 
 var nullBytes = []byte("null")
 
+// HasData returns true if the Data field is populated.
+func (m *Mutation) HasData() bool {
+	switch len(m.Data) {
+	case 0:
+		return false
+	case 4:
+		return !bytes.Equal(m.Data, nullBytes)
+	default:
+		return true
+	}
+}
+
 // IsDelete returns true if the Mutation represents a deletion.
-func (m Mutation) IsDelete() bool {
-	return len(m.Data) == 0 || bytes.Equal(m.Data, nullBytes)
+func (m *Mutation) IsDelete() bool {
+	return m.Deletion || len(m.Data) == 0 || bytes.Equal(m.Data, nullBytes)
 }
 
 // MutationFilter checks if a mutation satisfies a condition.

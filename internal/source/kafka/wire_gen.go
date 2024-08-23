@@ -90,6 +90,7 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	if err != nil {
 		return nil, err
 	}
+	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	sequencerConfig := &eagerConfig.Sequencer
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
@@ -107,9 +108,8 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
-	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, sequencer, stagingPool, targetPool)
-	conveyors, err := conveyor.ProvideConveyors(ctx, acceptor, conveyorConfig, checkpoints, retireRetire, switcherSwitcher, watchers)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)
+	conveyors, err := conveyor.ProvideConveyors(ctx, acceptor, conveyorConfig, checkpoints, sequencer, retireRetire, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err
 	}

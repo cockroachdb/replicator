@@ -103,6 +103,9 @@ func ProvideLoader(
 	if err := apiModule.Set("randomUUID", randomUUID); err != nil {
 		return nil, err
 	}
+	if err := apiModule.Set(replicationKeyName, replicationKeyValue); err != nil {
+		return nil, err
+	}
 	if err := apiModule.Set("setOptions", l.setOptions); err != nil {
 		return nil, err
 	}

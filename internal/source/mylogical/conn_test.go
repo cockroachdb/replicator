@@ -204,8 +204,10 @@ func TestOnDataTuple(t *testing.T) {
 			operation: deleteMutation,
 			wantMuts: []types.Mutation{
 				{
-					Key:  json.RawMessage(`[3]`),
-					Time: ts,
+					Data:     json.RawMessage(`{"k":3,"v":2}`),
+					Deletion: true,
+					Key:      json.RawMessage(`[3]`),
+					Time:     ts,
 				},
 			},
 		},

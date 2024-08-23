@@ -362,13 +362,11 @@ func (c *Conn) decodeMutation(
 	if err != nil {
 		return mut, errors.WithStack(err)
 	}
-	// We don't need the actual column data for delete operations.
-	if !isDelete {
-		mut.Data, err = json.Marshal(enc)
-		if err != nil {
-			return mut, errors.WithStack(err)
-		}
+	mut.Data, err = json.Marshal(enc)
+	if err != nil {
+		return mut, errors.WithStack(err)
 	}
+	mut.Deletion = isDelete
 	return mut, errors.WithStack(err)
 }
 

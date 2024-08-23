@@ -22,51 +22,38 @@ import (
 
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
-// acceptor implements [types.TableAcceptor] and intercepts mutations
-// for dispatch, mapping, or user-defined apply functions.
-type acceptor struct {
+// A targetAcceptor is responsible for the actions wired up to a
+// configureTarget() api call. Specifically, the targetAcceptor
+// interacts with user-defined apply functions or final data fixups.
+type targetAcceptor struct {
 	delegate   types.TableAcceptor
 	ensureTX   bool
 	group      *types.TableGroup
-	justMap    bool
 	targetPool *types.TargetPool
 	userScript *script.UserScript
 }
 
-var _ types.TableAcceptor = (*acceptor)(nil)
+var _ types.TableAcceptor = (*targetAcceptor)(nil)
 
 // AcceptTableBatch implements [types.TableAcceptor]. It will invoke
 // user-defined dispatch and/or map functions.
-func (a *acceptor) AcceptTableBatch(
+func (a *targetAcceptor) AcceptTableBatch(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
 	if _, isTX := opts.TargetQuerier.(*sql.Tx); a.ensureTX && !isTX {
 		return a.acceptWithTransaction(ctx, batch, opts)
 	}
-
-	// We're looping around from the bottom of this method.
-	if a.justMap {
-		return a.doMap(ctx, batch, opts)
-	}
-
-	// No configuration, just send down the line.
-	source, ok := a.userScript.Sources.Get(a.group.Name)
-	if !ok {
-		return a.doMap(ctx, batch, opts)
-	}
-
-	return a.doDispatch(ctx, source, batch, opts)
+	return a.doMap(ctx, batch, opts)
 }
 
 // acceptWithTransaction creates a database transaction and calls
 // AcceptTableBatch. This code path is used in immediate mode when the
 // userscript has a user-defined accept function callback.
-func (a *acceptor) acceptWithTransaction(
+func (a *targetAcceptor) acceptWithTransaction(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
 	log.Trace("creating target transaction for user-defined apply function")
@@ -87,71 +74,7 @@ func (a *acceptor) acceptWithTransaction(
 	return errors.WithStack(tx.Commit())
 }
 
-// Unwrap is an informal protocol to return the delegate.
-func (a *acceptor) Unwrap() types.TableAcceptor {
-	return a.delegate
-}
-
-func (a *acceptor) doDispatch(
-	ctx context.Context, source *script.Source, batch *types.TableBatch, opts *types.AcceptOptions,
-) error {
-	// We're going to construct a new batch from the dispatched mutations.
-	nextBatch := &types.MultiBatch{}
-
-	for _, mutToDispatch := range batch.Data {
-		script.AddMeta(a.group.Name.Raw(), batch.Table, &mutToDispatch)
-
-		// Separate deletes from upserts for routing.
-		if mutToDispatch.IsDelete() {
-			deletesTo, err := source.DeletesTo(ctx, batch.Table, mutToDispatch)
-			if err != nil {
-				return err
-			}
-			if err := deletesTo.Range(func(table ident.Table, muts []types.Mutation) error {
-				for _, mut := range muts {
-					if err := nextBatch.Accumulate(table, mut); err != nil {
-						return err
-					}
-				}
-				return err
-			}); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Call the user function to see what mutations(s) go into which table(s).
-		dispatched, err := source.Dispatch(ctx, batch.Table, mutToDispatch)
-		if err != nil {
-			return err
-		}
-		// Push the mutations into the replacement batch.
-		if err := dispatched.Range(func(table ident.Table, muts []types.Mutation) error {
-			for _, dispatchedMut := range muts {
-				// If the time were unset, it would trigger an error.
-				dispatchedMut.Time = mutToDispatch.Time
-				if err := nextBatch.Accumulate(table, dispatchedMut); err != nil {
-					return err
-				}
-			}
-			return err
-		}); err != nil {
-			return err
-		}
-	}
-	// Calls to source.Dispatch may remove mutations.
-	// If the replacement batch is empty, we are done.
-	if nextBatch.Count() == 0 {
-		return nil
-	}
-	// Drop the source so that we'll always call doMap.
-	cpy := *a
-	cpy.justMap = true
-
-	return types.UnorderedAcceptorFrom(&cpy).AcceptMultiBatch(ctx, nextBatch, opts)
-}
-
-func (a *acceptor) doMap(
+func (a *targetAcceptor) doMap(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
 	target, ok := a.userScript.Targets.Get(batch.Table)

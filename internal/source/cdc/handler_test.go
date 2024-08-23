@@ -184,20 +184,38 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 			if a.NoError(err) {
 				a.Len(muts, 2)
 				// The order is stable since the underlying query
-				// is ordered, in part, by the key.
-				a.Equal([]types.Mutation{
-					{
-						Data: []byte(`{"pk":42,"v":9007199254740995}`),
-						Key:  []byte(`[42]`),
-						Time: hlc.New(1, 0),
-					},
-					{
-						Before: []byte(`{"pk":99,"v":33}`),
-						Data:   []byte(`{"pk":99,"v":42}`),
-						Key:    []byte(`[99]`),
-						Time:   hlc.New(1, 0),
-					},
-				}, muts)
+				// orders, in part, on key. We will expect to see the
+				// effects of the userscript dispatch function, which
+				// is called prior to staging a mutation.
+				if htc.script {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{"ignored":"by_configuration_below","pk":"42","v_dispatched":"9007199254740995"}`),
+							Key:  []byte(`["42"]`),
+							Time: hlc.New(1, 0),
+						},
+						{
+							Before: []byte(`{"pk":99,"v":33}`),
+							Data:   []byte(`{"ignored":"by_configuration_below","pk":"99","v_dispatched":"42"}`),
+							Key:    []byte(`["99"]`),
+							Time:   hlc.New(1, 0),
+						},
+					}, muts)
+				} else {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{"pk":42,"v":9007199254740995}`),
+							Key:  []byte(`[42]`),
+							Time: hlc.New(1, 0),
+						},
+						{
+							Before: []byte(`{"pk":99,"v":33}`),
+							Data:   []byte(`{"pk":99,"v":42}`),
+							Key:    []byte(`[99]`),
+							Time:   hlc.New(1, 0),
+						},
+					}, muts)
+				}
 			}
 		}
 
@@ -254,20 +272,38 @@ func testQueryHandler(t *testing.T, htc *fixtureConfig) {
 			if a.NoError(err) {
 				a.Len(muts, 2)
 				// The order is stable since the underlying query
-				// orders by HLC and key.
-				a.Equal([]types.Mutation{
-					{
-						Data: []byte(`{"pk":42,"v":9007199254740995}`),
-						Key:  []byte(`[42]`),
-						Time: hlc.New(10, 0),
-					},
-					{
-						Before: []byte(`{"pk":99,"v":21}`),
-						Data:   []byte(`{"pk":99,"v":42}`),
-						Key:    []byte(`[99]`),
-						Time:   hlc.New(10, 0),
-					},
-				}, muts)
+				// orders, in part, on key. We will expect to see the
+				// effects of the userscript dispatch function, which
+				// is called prior to staging a mutation.
+				if htc.script {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{"ignored":"by_configuration_below","pk":"42","v_dispatched":"9007199254740995"}`),
+							Key:  []byte(`["42"]`),
+							Time: hlc.New(10, 0),
+						},
+						{
+							Before: []byte(`{"pk":99,"v":21}`),
+							Data:   []byte(`{"ignored":"by_configuration_below","pk":"99","v_dispatched":"42"}`),
+							Key:    []byte(`["99"]`),
+							Time:   hlc.New(10, 0),
+						},
+					}, muts)
+				} else {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{"pk":42,"v":9007199254740995}`),
+							Key:  []byte(`[42]`),
+							Time: hlc.New(10, 0),
+						},
+						{
+							Before: []byte(`{"pk":99,"v":21}`),
+							Data:   []byte(`{"pk":99,"v":42}`),
+							Key:    []byte(`[99]`),
+							Time:   hlc.New(10, 0),
+						},
+					}, muts)
+				}
 			}
 		}
 
@@ -386,20 +422,38 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 			if a.NoError(err) {
 				a.Len(muts, 2)
 				// The order is stable since the underlying query
-				// orders, in part, on key
-				a.Equal([]types.Mutation{
-					{
-						Data: []byte(`{ "pk" : 42, "v" : 99 }`),
-						Key:  []byte(`[ 42 ]`),
-						Time: hlc.New(1, 0),
-					},
-					{
-						Before: []byte(`{ "pk" : 99, "v" : 33 }`),
-						Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
-						Key:    []byte(`[ 99 ]`),
-						Time:   hlc.New(1, 0),
-					},
-				}, muts)
+				// orders, in part, on key. We will expect to see the
+				// effects of the userscript dispatch function, which
+				// is called prior to staging a mutation.
+				if cfg.script {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{"ignored":"by_configuration_below","pk":"42","v_dispatched":"99"}`),
+							Key:  []byte(`["42"]`),
+							Time: hlc.New(1, 0),
+						},
+						{
+							Before: []byte(`{ "pk" : 99, "v" : 33 }`),
+							Data:   []byte(`{"ignored":"by_configuration_below","pk":"99","v_dispatched":"42"}`),
+							Key:    []byte(`["99"]`),
+							Time:   hlc.New(1, 0),
+						},
+					}, muts)
+				} else {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{ "pk" : 42, "v" : 99 }`),
+							Key:  []byte(`[ 42 ]`),
+							Time: hlc.New(1, 0),
+						},
+						{
+							Before: []byte(`{ "pk" : 99, "v" : 33 }`),
+							Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
+							Key:    []byte(`[ 99 ]`),
+							Time:   hlc.New(1, 0),
+						},
+					}, muts)
+				}
 			}
 		}
 
@@ -456,20 +510,38 @@ func testHandler(t *testing.T, cfg *fixtureConfig) {
 				hlc.RangeIncluding(hlc.Zero(), hlc.New(10, 1)))
 			if a.NoError(err) {
 				// The order is stable since the underlying query
-				// orders by HLC and key.
-				a.Equal([]types.Mutation{
-					{
-						Data: []byte(`{ "pk" : 42, "v" : 99 }`),
-						Key:  []byte(`[ 42 ]`),
-						Time: hlc.New(10, 0),
-					},
-					{
-						Before: []byte(`{ "pk" : 99, "v" : 21 }`),
-						Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
-						Key:    []byte(`[ 99 ]`),
-						Time:   hlc.New(10, 0),
-					},
-				}, muts)
+				// orders, in part, on key. We will expect to see the
+				// effects of the userscript dispatch function, which
+				// is called prior to staging a mutation.
+				if cfg.script {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{"ignored":"by_configuration_below","pk":"42","v_dispatched":"99"}`),
+							Key:  []byte(`["42"]`),
+							Time: hlc.New(10, 0),
+						},
+						{
+							Before: []byte(`{ "pk" : 99, "v" : 21 }`),
+							Data:   []byte(`{"ignored":"by_configuration_below","pk":"99","v_dispatched":"42"}`),
+							Key:    []byte(`["99"]`),
+							Time:   hlc.New(10, 0),
+						},
+					}, muts)
+				} else {
+					a.Equal([]types.Mutation{
+						{
+							Data: []byte(`{ "pk" : 42, "v" : 99 }`),
+							Key:  []byte(`[ 42 ]`),
+							Time: hlc.New(10, 0),
+						},
+						{
+							Before: []byte(`{ "pk" : 99, "v" : 21 }`),
+							Data:   []byte(`{ "pk" : 99, "v" : 42 }`),
+							Key:    []byte(`[ 99 ]`),
+							Time:   hlc.New(10, 0),
+						},
+					}, muts)
+				}
 			}
 		}
 
