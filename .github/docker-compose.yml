@@ -115,7 +115,8 @@ services:
     depends_on:
       - zookeeper-v7.6
     ports:
-      - "29092:29092"
+      - 29092:29092
+      - 9092:9092
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper-v7.6:2181

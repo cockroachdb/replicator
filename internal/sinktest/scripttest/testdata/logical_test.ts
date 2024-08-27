@@ -31,7 +31,7 @@ function trimPartition(table: string): string {
 // "my_db.public" or "my_db" depending on the target product.
 api.configureSource("{{ SCHEMA }}", {
     dispatch: (doc: Document, meta: Document): Record<Table, Document[]> => {
-        console.trace(JSON.stringify(doc), JSON.stringify(meta));
+        console.log(JSON.stringify(doc), JSON.stringify(meta));
         return {
             [trimPartition(meta.table)]: [{
                 pk: doc.pk,
@@ -50,7 +50,7 @@ api.configureSource("{{ SCHEMA }}", {
 // The sentinel name would be replaced by "my_table".
 let commonConfig = {
     map: (doc: Document): Document => {
-        console.trace("map", JSON.stringify(doc));
+        console.log("map", JSON.stringify(doc));
         if (doc.v_dispatched === undefined) {
             throw "did not find expected property";
         }
