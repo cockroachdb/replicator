@@ -61,9 +61,9 @@ func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema,
 
 	var data *types.SchemaData
 	conn, err := tx.Conn(ctx)
-	if err != nil {
+	if err != nil || conn.PingContext(ctx) != nil {
 		// On start up, when the target database is down, fall back to the staging memo about the table schema
-		data, err = b.restoreSchemaBackup(ctx, schema)
+		data, err = b.restore(ctx, schema)
 	} else {
 		err = conn.Close()
 		if err != nil {
@@ -72,6 +72,12 @@ func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema,
 
 		// Initial data load to sanity-check and make ready.
 		data, err = w.getTables(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+
+		// Update the backup, since we fetched the schema successfully
+		err = b.backup(ctx, schema, data)
 	}
 
 	if err != nil {
@@ -80,7 +86,7 @@ func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema,
 
 	w.data = notify.VarOf(data)
 
-	b.maintainSchemaBackups(ctx, w.data, schema)
+	b.startUpdates(ctx, w.data, schema)
 
 	if w.delay > 0 {
 		ctx.Go(func(ctx *stopper.Context) error {

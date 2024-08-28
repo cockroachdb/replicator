@@ -29,8 +29,9 @@ import (
 )
 
 type Backup interface {
-	restoreSchemaBackup(ctx *stopper.Context, schema ident.Schema) (*types.SchemaData, error)
-	maintainSchemaBackups(ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema)
+	backup(ctx *stopper.Context, schema ident.Schema, data *types.SchemaData) error
+	restore(ctx *stopper.Context, schema ident.Schema) (*types.SchemaData, error)
+	startUpdates(ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema) <-chan struct{}
 }
 
 type memoBackup struct {
@@ -38,11 +39,23 @@ type memoBackup struct {
 	stagingPool *types.StagingPool
 }
 
+func (b *memoBackup) backup(ctx *stopper.Context, schema ident.Schema, data *types.SchemaData) error {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshalling schema data: %w", err)
+	}
+	err = b.memo.Put(ctx, b.stagingPool, b.memoKey(schema), dataBytes)
+	if err != nil {
+		return fmt.Errorf("saving schema data: %w", err)
+	}
+	return nil
+}
+
 func (b *memoBackup) memoKey(schema ident.Schema) string {
 	return fmt.Sprintf("schema-%v", schema)
 }
 
-func (b *memoBackup) restoreSchemaBackup(ctx *stopper.Context, schema ident.Schema) (*types.SchemaData, error) {
+func (b *memoBackup) restore(ctx *stopper.Context, schema ident.Schema) (*types.SchemaData, error) {
 	schemaBytes, err := b.memo.Get(ctx, b.stagingPool, b.memoKey(schema))
 	if err != nil {
 		return nil, err
@@ -55,10 +68,12 @@ func (b *memoBackup) restoreSchemaBackup(ctx *stopper.Context, schema ident.Sche
 	return data, nil
 }
 
-func (b *memoBackup) maintainSchemaBackups(ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema) {
+func (b *memoBackup) startUpdates(ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema) <-chan struct{} {
+	started := make(chan struct{})
 	// watch schemaVar and write changes as a staging memo
 	ctx.Go(func(ctx *stopper.Context) error {
 		oldValue, ch := schemaVar.Get()
+		close(started)
 		for {
 			select {
 			case <-ctx.Stopping():
@@ -66,22 +81,16 @@ func (b *memoBackup) maintainSchemaBackups(ctx *stopper.Context, schemaVar *noti
 			case <-ch:
 				var d *types.SchemaData
 				d, ch = schemaVar.Get()
-				// TODO: Is change detection a good idea here, or is that handled upstream?
 				if !reflect.DeepEqual(d, oldValue) {
-					dataBytes, err := json.Marshal(d)
+					err := b.backup(ctx, schema, d)
 					if err != nil {
-						log.WithError(err).Error("failed to marshal schema data")
-						return err
-					}
-					err = b.memo.Put(ctx, b.stagingPool, b.memoKey(schema), dataBytes)
-					if err != nil {
-						log.WithError(err).Warn("failed to update schema memo")
-						// TODO: maybe just log this?
-						return err
+						// Log the error, but don't exit the loop
+						log.WithError(err).WithField("target", schema).Warn("failed to backup schema data")
 					}
 					oldValue = d
 				}
 			}
 		}
 	})
+	return started
 }
