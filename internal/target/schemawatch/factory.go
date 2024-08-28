@@ -28,9 +28,11 @@ import (
 
 // factory is a memoizing factory for watcher instances.
 type factory struct {
-	pool *types.TargetPool
-	stop *stopper.Context
-	mu   struct {
+	memo        types.Memo
+	pool        *types.TargetPool
+	stagingPool *types.StagingPool
+	stop        *stopper.Context
+	mu          struct {
 		sync.RWMutex
 		data *ident.SchemaMap[*watcher]
 	}
@@ -72,7 +74,11 @@ func (f *factory) createUnlocked(db ident.Schema) (*watcher, error) {
 		return ret, nil
 	}
 
-	ret, err := newWatcher(f.stop, f.pool, db)
+	b := &memoBackup{
+		memo:        f.memo,
+		stagingPool: f.stagingPool,
+	}
+	ret, err := newWatcher(f.stop, f.pool, db, b)
 	if err != nil {
 		return nil, err
 	}
