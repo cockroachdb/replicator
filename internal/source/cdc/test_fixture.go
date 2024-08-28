@@ -51,7 +51,7 @@ func newTestFixture(*all.Fixture, *Config) (*testFixture, error) {
 		wire.FieldsOf(new(*base.Fixture),
 			"Context", "StagingDB", "StagingPool", "TargetCache", "TargetPool"),
 		wire.FieldsOf(new(*all.Fixture),
-			"Configs", "Fixture", "Stagers"),
+			"Configs", "Fixture", "Stagers", "Memo"),
 		diag.New,
 		leases.Set,
 		checkpoint.Set,
