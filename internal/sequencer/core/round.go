@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -77,10 +78,10 @@ func (r *round) accumulate(segment *types.MultiBatch) error {
 
 // scheduleCommit handles the error-retry logic around tryCommit.
 func (r *round) scheduleCommit(
-	ctx context.Context, progressReport chan<- hlc.Range,
+	ctx *stopper.Context, progressReport chan<- hlc.Range,
 ) lockset.Outcome {
 	start := time.Now()
-	return r.Core.scheduler.Batch(r.batch, func() error {
+	work := func(ctx *stopper.Context) error {
 		// We want to close the reporting channel, unless we're asking
 		// to be retried.
 		finalReport := true
@@ -129,6 +130,14 @@ func (r *round) scheduleCommit(
 		// General error case: poison the keys.
 		r.poisoned.MarkPoisoned(r.batch)
 		return err
+	}
+
+	// We want to make this asynchronous work visible to any enclosing
+	// stoppers. This allows other components to be aware of and wait
+	// for background tasks like (relatively) long-running database
+	// queries to complete.
+	return r.Core.scheduler.Batch(r.batch, func() error {
+		return ctx.Call(work)
 	})
 }
 
