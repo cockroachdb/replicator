@@ -36,6 +36,7 @@ type testFixture struct {
 	Config        *Config
 	Diagnostics   *diag.Diagnostics
 	Listener      net.Listener
+	Memo          types.Memo
 	StagingPool   *types.StagingPool
 	Server        *stdserver.Server
 	StagingDB     ident.StagingSchema

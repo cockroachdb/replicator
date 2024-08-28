@@ -53,18 +53,42 @@ var _ types.Watcher = (*watcher)(nil)
 // newWatcher constructs a new watcher to monitor the table schema in the
 // named database. The returned watcher will internally refresh
 // until the cancel callback is executed.
-func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema) (*watcher, error) {
+func newWatcher(
+	ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema, b Backup,
+) (*watcher, error) {
 	w := &watcher{
 		delay:  *RefreshDelay,
 		schema: schema,
 	}
 
-	// Initial data load to sanity-check and make ready.
-	data, err := w.getTables(ctx, tx)
+	var data *types.SchemaData
+	conn, err := tx.Conn(ctx)
+	if err != nil || conn.PingContext(ctx) != nil {
+		// On start up, when the target database is down, fall back to the staging memo about the table schema
+		data, err = b.restore(ctx, schema)
+	} else {
+		err = conn.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		// Initial data load to sanity-check and make ready.
+		data, err = w.getTables(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+
+		// Update the backup, since we fetched the schema successfully
+		err = b.backup(ctx, schema, data)
+	}
+
 	if err != nil {
 		return nil, err
 	}
+
 	w.data = notify.VarOf(data)
+
+	b.startUpdates(ctx, w.data, schema)
 
 	if w.delay > 0 {
 		ctx.Go(func(ctx *stopper.Context) error {

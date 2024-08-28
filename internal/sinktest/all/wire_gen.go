@@ -71,7 +71,12 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -85,10 +90,6 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		return nil, err
 	}
 	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
-	if err != nil {
-		return nil, err
-	}
-	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
