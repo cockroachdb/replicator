@@ -1,4 +1,4 @@
-// Copyright 2023 The Cockroach Authors
+// Copyright 2024 The Cockroach Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,18 +28,23 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Backup handles schema backups and restores. It allows staging progress when the target database is down.
 type Backup interface {
 	backup(ctx *stopper.Context, schema ident.Schema, data *types.SchemaData) error
 	restore(ctx *stopper.Context, schema ident.Schema) (*types.SchemaData, error)
 	startUpdates(ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema) <-chan struct{}
 }
 
+// memoBackup implements Backup and is backed by the staging table memo store
 type memoBackup struct {
 	memo        types.Memo
 	stagingPool *types.StagingPool
 }
 
-func (b *memoBackup) backup(ctx *stopper.Context, schema ident.Schema, data *types.SchemaData) error {
+// backup backs up a schema
+func (b *memoBackup) backup(
+	ctx *stopper.Context, schema ident.Schema, data *types.SchemaData,
+) error {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshalling schema data: %w", err)
@@ -51,10 +56,12 @@ func (b *memoBackup) backup(ctx *stopper.Context, schema ident.Schema, data *typ
 	return nil
 }
 
+// memoKey constructs a
 func (b *memoBackup) memoKey(schema ident.Schema) string {
 	return fmt.Sprintf("schema-%v", schema)
 }
 
+// restore fetches the latest schema backup
 func (b *memoBackup) restore(ctx *stopper.Context, schema ident.Schema) (*types.SchemaData, error) {
 	schemaBytes, err := b.memo.Get(ctx, b.stagingPool, b.memoKey(schema))
 	if err != nil {
@@ -68,7 +75,11 @@ func (b *memoBackup) restore(ctx *stopper.Context, schema ident.Schema) (*types.
 	return data, nil
 }
 
-func (b *memoBackup) startUpdates(ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema) <-chan struct{} {
+// startUpdates watches the supplied schemaVar for changes and updates the backup. The returned channel closes after
+// the update routine has started: updates made after that point will be noticed.
+func (b *memoBackup) startUpdates(
+	ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema,
+) <-chan struct{} {
 	started := make(chan struct{})
 	// watch schemaVar and write changes as a staging memo
 	ctx.Go(func(ctx *stopper.Context) error {

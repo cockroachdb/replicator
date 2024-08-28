@@ -53,7 +53,9 @@ var _ types.Watcher = (*watcher)(nil)
 // newWatcher constructs a new watcher to monitor the table schema in the
 // named database. The returned watcher will internally refresh
 // until the cancel callback is executed.
-func newWatcher(ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema, b Backup) (*watcher, error) {
+func newWatcher(
+	ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema, b Backup,
+) (*watcher, error) {
 	w := &watcher{
 		delay:  *RefreshDelay,
 		schema: schema,
