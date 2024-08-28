@@ -28,7 +28,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type backup interface {
+type Backup interface {
 	restoreSchemaBackup(ctx *stopper.Context, schema ident.Schema) (*types.SchemaData, error)
 	maintainSchemaBackups(ctx *stopper.Context, schemaVar *notify.Var[*types.SchemaData], schema ident.Schema)
 }
