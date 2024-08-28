@@ -20,13 +20,15 @@ import (
 	"context"
 	"sync"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/replicator/internal/types"
 )
 
 // Memory is an implementation of types.Memo backed by memory, used for
 // testing. Transactions are ignored.
 type Memory struct {
-	values sync.Map
+	values       sync.Map
+	WriteCounter *notify.Var[int]
 }
 
 var _ types.Memo = &Memory{}
@@ -43,5 +45,14 @@ func (m *Memory) Get(_ context.Context, _ types.StagingQuerier, key string) ([]b
 // Put implements types.Memo.
 func (m *Memory) Put(_ context.Context, _ types.StagingQuerier, key string, value []byte) error {
 	m.values.Store(key, value)
+	if m.WriteCounter != nil {
+		_, _, err := m.WriteCounter.Update(func(old int) (new int, err error) {
+			new = old + 1
+			return new, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
