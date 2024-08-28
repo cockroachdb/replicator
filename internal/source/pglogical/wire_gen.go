@@ -68,7 +68,8 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	dlqConfig := &eagerConfig.DLQ
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
+	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
