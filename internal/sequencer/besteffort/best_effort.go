@@ -84,8 +84,8 @@ func (s *bestEffort) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
 	stats := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
-
-	sequtil.LeaseGroup(ctx, s.leases, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
+	grace := s.cfg.TaskGracePeriod
+	sequtil.LeaseGroup(ctx, s.leases, grace, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
 		for _, table := range opts.Group.Tables {
 			table := table // Capture.
 

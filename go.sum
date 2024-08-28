@@ -113,6 +113,10 @@ github.com/cockroachdb/crlfmt v0.3.0 h1:IaPIlidTHn7s493ozBcpnkF/HNzCNe7aBJmUMqgI
 github.com/cockroachdb/crlfmt v0.3.0/go.mod h1:iRZvVcb8vDQK4dh64mPRZBucM85Xd/VLTE0cmO95/Kk=
 github.com/cockroachdb/datadriven v1.0.2 h1:H9MtNqVoVhvd9nCBwOyDjUEdZCREqbIdCJD93PBm/jA=
 github.com/cockroachdb/datadriven v1.0.2/go.mod h1:a9RdTaap04u637JoCzcUoIcDmvwSUtcUFtT/C3kJlTU=
+github.com/cockroachdb/field-eng-powertools v0.0.0-20240828183038-0bbf63872b77 h1:7sffr3Hxd+2uNv1vAbdAgjyD/dXWxSNBBkyDGfE564w=
+github.com/cockroachdb/field-eng-powertools v0.0.0-20240828183038-0bbf63872b77/go.mod h1:DXZPzzi9pGluoaYnp6Nn9So+XGGcvgry8juo6hlfRi8=
+github.com/cockroachdb/field-eng-powertools v0.0.0-20240829142217-c680a7021280 h1:NU+dfZLij19FSZvr3E4MESM168MAvyHSz/UzBKbFc2o=
+github.com/cockroachdb/field-eng-powertools v0.0.0-20240829142217-c680a7021280/go.mod h1:DXZPzzi9pGluoaYnp6Nn9So+XGGcvgry8juo6hlfRi8=
 github.com/cockroachdb/field-eng-powertools v0.1.1 h1:xF8Rb8c9oD55W0BE3yIDWYmF1U2RcV3BJ+pzNEKVpLQ=
 github.com/cockroachdb/field-eng-powertools v0.1.1/go.mod h1:qAoRYmqNSHeI44wOoW4LvXnzRySbB2ocTXpd22OQ5aA=
 github.com/cockroachdb/gostdlib v1.19.0 h1:cSISxkVnTlWhTkyple/T6NXzOi5659FkhxvUgZv+Eb0=

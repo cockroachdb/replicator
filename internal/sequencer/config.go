@@ -29,6 +29,7 @@ const AssumeIdempotent = "assumeIdempotent"
 const (
 	DefaultFlushPeriod     = 1 * time.Second
 	DefaultFlushSize       = 1_000
+	DefaultTaskGracePeriod = time.Minute
 	DefaultParallelism     = 16
 	DefaultQuiescentPeriod = 10 * time.Second
 	DefaultRetireOffset    = 24 * time.Hour
@@ -47,6 +48,7 @@ type Config struct {
 	QuiescentPeriod  time.Duration // How often to sweep for queued mutations.
 	RetireOffset     time.Duration // Delay removal of applied mutations.
 	ScanSize         int           // Limit on staging-table read queries.
+	TaskGracePeriod  time.Duration // How long to allow previous iteration to clean up.
 	TimestampLimit   int           // The maximum number of timestamps to operate on.
 }
 
@@ -66,6 +68,8 @@ func (c *Config) Bind(flags *pflag.FlagSet) {
 		"delay removal of applied mutations")
 	flags.IntVar(&c.ScanSize, "scanSize", DefaultScanSize,
 		"the number of rows to retrieve from staging")
+	flags.DurationVar(&c.TaskGracePeriod, "taskGracePeriod", DefaultTaskGracePeriod,
+		"how long to allow for task cleanup when recovering from errors")
 	flags.IntVar(&c.TimestampLimit, "timestampLimit", DefaultTimestampLimit,
 		"the maximum number of source timestamps to coalesce into a target transaction")
 }
@@ -90,6 +94,9 @@ func (c *Config) Preflight() error {
 	}
 	if c.ScanSize == 0 {
 		c.ScanSize = DefaultScanSize
+	}
+	if c.TaskGracePeriod <= 0 {
+		c.TaskGracePeriod = DefaultTaskGracePeriod
 	}
 	if c.TimestampLimit <= 0 {
 		c.TimestampLimit = DefaultTimestampLimit

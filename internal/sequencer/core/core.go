@@ -57,10 +57,10 @@ func (s *Core) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
 	progress := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
-
+	grace := s.cfg.TaskGracePeriod
 	// Acquire a lease on the group name to prevent multiple sweepers
 	// from operating.
-	sequtil.LeaseGroup(ctx, s.leases, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
+	sequtil.LeaseGroup(ctx, s.leases, grace, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
 		// Report which instance of Replicator is processing the tables within the group.
 		activeGauges := make([]prometheus.Gauge, len(group.Tables))
 		for idx, tbl := range group.Tables {
