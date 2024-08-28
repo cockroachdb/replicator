@@ -90,7 +90,8 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 		return nil, err
 	}
 	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
-	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics)
+	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -175,11 +176,11 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	cdcConfig := &config.CDC
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, nil, err
 	}
+	cdcConfig := &config.CDC
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics)
 	if err != nil {
@@ -194,7 +195,8 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		return nil, nil, err
 	}
 	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics)
+	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -255,6 +257,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		Config:        config,
 		Diagnostics:   diagnostics,
 		Listener:      listener,
+		Memo:          memoMemo,
 		StagingPool:   stagingPool,
 		Server:        server,
 		StagingDB:     stagingSchema,
@@ -278,6 +281,7 @@ type testFixture struct {
 	Config        *Config
 	Diagnostics   *diag.Diagnostics
 	Listener      net.Listener
+	Memo          types.Memo
 	StagingPool   *types.StagingPool
 	Server        *stdserver.Server
 	StagingDB     ident.StagingSchema

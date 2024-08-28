@@ -26,17 +26,26 @@ import (
 
 // Set is used by Wire.
 var Set = wire.NewSet(
+	ProvideBackup,
 	ProvideFactory,
 )
 
 // ProvideFactory is called by Wire to construct the Watchers factory.
 func ProvideFactory(
-	ctx *stopper.Context, pool *types.TargetPool, d *diag.Diagnostics,
+	ctx *stopper.Context, pool *types.TargetPool, d *diag.Diagnostics, b Backup,
 ) (types.Watchers, error) {
-	w := &factory{pool: pool, stop: ctx}
+	w := &factory{pool: pool, stop: ctx, backup: b}
 	w.mu.data = &ident.SchemaMap[*watcher]{}
 	if err := d.Register("schema", w); err != nil {
 		return nil, err
 	}
 	return w, nil
+}
+
+// ProvideBackup provides the Backup service used by Watcher
+func ProvideBackup(m types.Memo, stagingPool *types.StagingPool) Backup {
+	return &memoBackup{
+		memo:        m,
+		stagingPool: stagingPool,
+	}
 }
