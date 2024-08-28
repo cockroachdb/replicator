@@ -37,41 +37,61 @@ func LeaseGroup(
 	group *types.TableGroup,
 	fn func(*stopper.Context, *types.TableGroup),
 ) {
+	entry := log.WithFields(log.Fields{
+		"enclosing": group.Enclosing,
+		"name":      group.Name,
+		"tables":    group.Tables,
+	})
+
 	// Start a goroutine in the outer context.
 	outer.Go(func(outer *stopper.Context) error {
 		// Run this in a loop in case of non-renewal. This is likely
 		// caused by database overload or any other case where we can't
 		// run SQL in a timely fashion.
 		for !outer.IsStopping() {
+			entry.Trace("waiting to acquire lease group")
 			// Acquire a lease.
 			leases.Singleton(outer, fmt.Sprintf("sequtil.Lease.%s", group.Name),
 				func(leaseContext context.Context) error {
-					log.Tracef("acquired gloabal lease for %s", group.Name)
-					defer log.Tracef("lost global lease for %s", group.Name)
+					entry.Debug("acquired lease group")
+					defer entry.Debug("released lease group")
 
-					// Create a nested stopper whose lifetime is bound
-					// to that of the lease.
-					sub := stopper.WithContext(leaseContext)
+					for {
+						// Create a nested stopper whose lifetime is bound
+						// to that of the lease.
+						sub := stopper.WithContext(leaseContext)
 
-					// Execute the callback from a goroutine. Tear down
-					// the stopper once the main callback has exited.
-					sub.Go(func(sub *stopper.Context) error {
-						defer sub.Stop(time.Second)
-						fn(sub, group)
-						return nil
-					})
+						// Allow the stopper chain to track this task.
+						_ = sub.Call(func(ctx *stopper.Context) error {
+							fn(ctx, group)
+							return nil
+						})
 
-					select {
-					case <-sub.Stopping():
+						// Shut down the nested stopper.
+						entry.Debugf("stopping; waiting for %d tasks to complete", sub.Len())
+						sub.Stop(time.Minute)
+
 						// Defer release until all work has stopped.
 						// This avoids spammy cancellation errors.
 						<-sub.Done()
-						return types.ErrCancelSingleton
-					case <-sub.Done():
-						// The lease has expired, we'll just exit.
-						return sub.Err()
+
+						// If the outer context is being shut down,
+						// release the lease.
+						if outer.IsStopping() {
+							entry.Trace("clean shutdown")
+							return types.ErrCancelSingleton
+						}
+
+						// If the lease was canceled, return.
+						if err := leaseContext.Err(); err != nil {
+							return err
+						}
+
+						// We still hold the lease.
+						entry.Debug("restarting")
 					}
 				})
+			return nil
 		}
 		return nil
 	})
