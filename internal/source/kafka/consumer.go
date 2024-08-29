@@ -112,7 +112,6 @@ func (c *Consumer) ConsumeClaim(
 				return err
 			}
 			if payload.Resolved != "" {
-
 				partition := fmt.Sprintf("%s@%d", message.Topic, int(message.Partition))
 				timestamp, err := hlc.Parse(payload.Resolved)
 				if err != nil {
@@ -129,6 +128,7 @@ func (c *Consumer) ConsumeClaim(
 					return err
 				}
 				if err := c.accept(ctx, toProcess); err != nil {
+					log.WithError(err).Error("failed to accept a batch")
 					return err
 				}
 				toProcess = toProcess.Empty()
@@ -141,6 +141,7 @@ func (c *Consumer) ConsumeClaim(
 			// Flush a batch, and mark the latest message for each topic/partition as read.
 			if toProcess.Count() > c.batchSize {
 				if err = c.accept(ctx, toProcess); err != nil {
+					log.WithError(err).Error("failed to accept a batch")
 					return err
 				}
 				toProcess = toProcess.Empty()
@@ -154,7 +155,7 @@ func (c *Consumer) ConsumeClaim(
 		case <-time.After(time.Second):
 			// Periodically flush a batch, and mark the latest message for each topic/partition as consumed.
 			if err = c.accept(ctx, toProcess); err != nil {
-				log.Error(err)
+				log.WithError(err).Error("failed to accept a batch")
 				return err
 			}
 			toProcess = toProcess.Empty()
@@ -216,10 +217,12 @@ func (c *Consumer) accumulate(
 		return nil, err
 	}
 	if payload.Resolved != "" {
-		log.Tracef("Resolved %s %d [%s@%d]", payload.Resolved, msg.Timestamp.Unix(), msg.Topic, msg.Partition)
+		log.Infof("Resolved [%s@%d %d] %s ",
+			msg.Topic, msg.Partition, msg.Offset, payload.Resolved)
 		return payload, nil
 	}
-	log.Tracef("Mutation %s %d [%s@%d]", string(msg.Key), msg.Timestamp.Unix(), msg.Topic, msg.Partition)
+	log.Infof("Mutation [%s@%d %d] %s %s",
+		msg.Topic, msg.Partition, msg.Offset, string(msg.Key), payload.Updated)
 	timestamp, err := hlc.Parse(payload.Updated)
 	if err != nil {
 		return nil, err
