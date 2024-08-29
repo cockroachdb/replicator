@@ -142,7 +142,14 @@ jobs:
           # - cockroachdb: v24.1
           #   integration: postgresql-v15
           # Test CRDB via a Kafka cluster
+          
           - cockroachdb: v24.1
+            integration: kafka-v7.6
+            experimental: true # TODO: Investigate connection-refused errors
+          - cockroachdb: v23.1
+            integration: kafka-v7.6
+            experimental: true # TODO: Investigate connection-refused errors
+          - cockroachdb: v23.2
             integration: kafka-v7.6
             experimental: true # TODO: Investigate connection-refused errors
           # # Test CRDB via an object store

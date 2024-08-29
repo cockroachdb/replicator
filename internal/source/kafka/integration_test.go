@@ -17,6 +17,7 @@
 package kafka
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -128,9 +129,36 @@ func testIntegration(t *testing.T, fc *fixtureConfig) {
 
 	createStmt := "CREATE CHANGEFEED FOR TABLE %s INTO" +
 		fmt.Sprintf("'kafka://%s?topic_prefix=%s.'", broker, targetDB.Raw()) +
-		" WITH updated,diff,resolved='5s',min_checkpoint_frequency='5s'"
-	r.NoError(source.Exec(ctx, createStmt))
+		" WITH updated,diff,resolved='1s',min_checkpoint_frequency='1s'"
 
+	row := sourceFixture.SourcePool.QueryRowContext(ctx, fmt.Sprintf(createStmt, source.Name()))
+	var id string
+	r.NoError(row.Scan(&id))
+
+	defer func() {
+		cancelStmt := fmt.Sprintf("CANCEL JOB  %s", id)
+		log.Info(cancelStmt)
+		_, err := sourceFixture.SourcePool.ExecContext(ctx, cancelStmt)
+		r.NoError(err)
+	}()
+	checkStatus := fmt.Sprintf(`
+	SELECT running_status FROM [show changefeed jobs] 
+	WHERE job_id = %s and running_status like '%s'`,
+		id, "%resolved%")
+
+	for {
+		log.Infof("waiting for changefeed %s", target)
+		row = sourceFixture.SourcePool.QueryRowContext(ctx, checkStatus)
+		var status string
+		err := row.Scan(&status)
+		if errors.Is(err, sql.ErrNoRows) {
+			log.Infof("changefeed status %s", status)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		r.NoError(err)
+		break
+	}
 	// Add base data to the source table.
 	r.NoError(source.Exec(ctx, "INSERT INTO %s (pk, v) VALUES (1, 'one')"))
 	ct, err := source.RowCount(ctx)
@@ -196,7 +224,7 @@ func testIntegration(t *testing.T, fc *fixtureConfig) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-
+	connCtx.Stop(time.Second)
 	metrics, err := prometheus.DefaultGatherer.Gather()
 	a.NoError(err)
 	log.WithField("metrics", metrics).Trace()
@@ -302,6 +330,7 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 
 	// Verify that the target database has all the data.
 	workload.CheckConsistent(connCtx, t)
+	connCtx.Stop(time.Second)
 }
 
 type kafkaProducer struct {
