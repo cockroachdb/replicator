@@ -221,8 +221,8 @@ func (c *Consumer) accumulate(
 			msg.Topic, msg.Partition, msg.Offset, payload.Resolved)
 		return payload, nil
 	}
-	log.Infof("Mutation [%s@%d %d] %s %s",
-		msg.Topic, msg.Partition, msg.Offset, string(msg.Key), payload.Updated)
+	log.Infof("Mutation [%s@%d offset=%d time=%s] [key=%s mvcc=%s]",
+		msg.Topic, msg.Partition, msg.Offset, msg.Timestamp, string(msg.Key), payload.Updated)
 	timestamp, err := hlc.Parse(payload.Updated)
 	if err != nil {
 		return nil, err

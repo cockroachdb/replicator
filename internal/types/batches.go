@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // Accumulator contains the Accumulate method.
@@ -211,6 +212,12 @@ func (b *TableBatch) Accumulate(table ident.Table, mut Mutation) error {
 	}
 	if !ident.Equal(b.Table, table) {
 		return errors.Errorf("mutation table (%s) does not equal batch table (%s)", table, b.Table)
+	}
+	for _, m := range b.Data {
+		if bytes.Compare(m.Key, mut.Key) == 0 {
+			log.Warnf("duplicate key in TableBatch %s", string(m.Key))
+			return nil
+		}
 	}
 	b.Data = append(b.Data, mut)
 	return nil
