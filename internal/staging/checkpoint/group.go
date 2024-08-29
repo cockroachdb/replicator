@@ -240,7 +240,7 @@ func (r *Group) TableGroup() *types.TableGroup {
 //   - partition_max_times: Determines the latest known checkpoint for
 //     each partition within the group.
 //   - visible_data: Restricts available_data by the minimum-maximum
-//     value from p_max_times.
+//     value from p_max_times and, potentially, the lookahead limit.
 //   - partition_max_unapplied: Finds the last checkpoint time that
 //     hasn't been processed.
 //   - last_applied: Finds the latest applied timestamp within
@@ -268,6 +268,7 @@ visible_data AS (
 SELECT *
   FROM available_data
  WHERE source_hlc <= (SELECT min(hlc) FROM partition_max_times)
+ %[2]s
 ),
 partition_max_unapplied AS (
 SELECT partition, max(source_hlc) AS hlc
