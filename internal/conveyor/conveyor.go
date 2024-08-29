@@ -96,7 +96,11 @@ func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
 		watcher: w,
 	}
 
-	ret.checkpoint, err = c.checkpoints.Start(c.stopper, tableGroup, &ret.resolvingRange)
+	var opts []checkpoint.Option
+	if l := c.cfg.LimitLookahead; l > 0 {
+		opts = append(opts, checkpoint.LimitLookahead(l))
+	}
+	ret.checkpoint, err = c.checkpoints.Start(c.stopper, tableGroup, &ret.resolvingRange, opts...)
 	if err != nil {
 		return nil, err
 	}

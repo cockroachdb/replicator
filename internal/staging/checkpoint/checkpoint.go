@@ -43,9 +43,19 @@ type Checkpoints struct {
 // conjunction with updating the checkpoint timestamp staging table. The
 // returned Group is not memoized.
 func (r *Checkpoints) Start(
-	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range],
+	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range], options ...Option,
 ) (*Group, error) {
-	ret := r.newGroup(group, bounds)
+	var lookahead int
+	for _, opt := range options {
+		switch t := opt.(type) {
+		case limitLookahead:
+			lookahead = int(t)
+			if lookahead <= 0 {
+				return nil, errors.New("lookahead must be greater than zero")
+			}
+		}
+	}
+	ret := r.newGroup(group, bounds, lookahead)
 	// Populate data immediately.
 	if err := ret.refreshBounds(ctx); err != nil {
 		return nil, err
@@ -56,7 +66,9 @@ func (r *Checkpoints) Start(
 	return ret, nil
 }
 
-func (r *Checkpoints) newGroup(group *types.TableGroup, bounds *notify.Var[hlc.Range]) *Group {
+func (r *Checkpoints) newGroup(
+	group *types.TableGroup, bounds *notify.Var[hlc.Range], lookahead int,
+) *Group {
 	ret := &Group{
 		bounds: bounds,
 		pool:   r.pool,
@@ -73,8 +85,13 @@ func (r *Checkpoints) newGroup(group *types.TableGroup, bounds *notify.Var[hlc.R
 	ret.metrics.proposedTime = proposedTime.With(labels)
 	ret.metrics.refreshDuration = refreshDuration.With(labels)
 
+	var limit string
+	if lookahead > 0 {
+		limit = fmt.Sprintf("LIMIT %d", lookahead)
+	}
 	// This query may indeed require a full table scan.
-	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable)
+	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable, limit)
+
 	hinted := r.pool.HintNoFTS(r.metaTable)
 	ret.sql.advance = fmt.Sprintf(advanceTemplate, hinted)
 	ret.sql.ensure = fmt.Sprintf(ensureTemplate, hinted)
