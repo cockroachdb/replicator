@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 //	to all partitions.
 type Group struct {
 	bounds     *notify.Var[hlc.Range]
+	lookahead  int
 	pool       *types.StagingPool
 	target     *types.TableGroup
 	fastWakeup notify.Var[struct{}]
@@ -234,6 +235,7 @@ func (r *Group) TableGroup() *types.TableGroup {
 // Params:
 //   - $1: group name
 //   - $2: last successful checkpoint to reduce table scan range
+//   - $3: lookahead limit
 //
 // CTE components:
 //   - available_data: A buffer of data after the previous checkpoint.
@@ -268,6 +270,7 @@ visible_data AS (
 SELECT *
   FROM available_data
  WHERE source_hlc <= (SELECT min(hlc) FROM partition_max_times)
+ LIMIT $3
 ),
 partition_max_unapplied AS (
 SELECT partition, max(source_hlc) AS hlc
@@ -324,6 +327,7 @@ func (r *Group) refreshQuery(ctx context.Context, knownCommitted hlc.Time) (hlc.
 		if err := r.pool.QueryRow(ctx, r.sql.refresh,
 			r.target.Name.Canonical().Raw(),
 			knownCommitted,
+			r.lookahead,
 		).Scan(&nextMin, &nextMax); err != nil {
 			return errors.WithStack(err)
 		}

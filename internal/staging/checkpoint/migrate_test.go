@@ -79,9 +79,12 @@ INSERT INTO %s (target_schema, source_nanos, source_logical, target_applied_at) 
 		"quux.public": hlc.RangeIncluding(hlc.New(900, 9), hlc.New(900, 9)),
 	}
 	for id, expect := range expected {
-		rng, err := chk.newGroup(&types.TableGroup{
-			Name: ident.New(id),
-		}, notify.VarOf(hlc.RangeEmpty()),
+		rng, err := chk.newGroup(
+			&types.TableGroup{
+				Name: ident.New(id),
+			},
+			notify.VarOf(hlc.RangeEmpty()),
+			1024,
 		).refreshQuery(ctx, hlc.Zero())
 		r.NoError(err)
 		r.Equal(expect, rng)

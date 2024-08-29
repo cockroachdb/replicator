@@ -21,6 +21,7 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
@@ -43,9 +44,19 @@ type Checkpoints struct {
 // conjunction with updating the checkpoint timestamp staging table. The
 // returned Group is not memoized.
 func (r *Checkpoints) Start(
-	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range],
+	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range], options ...Option,
 ) (*Group, error) {
-	ret := r.newGroup(group, bounds)
+	lookahead := math.MaxInt16
+	for _, opt := range options {
+		switch t := opt.(type) {
+		case limitLookahead:
+			lookahead = int(t)
+			if lookahead <= 0 {
+				return nil, errors.New("lookahead must be greater than zero")
+			}
+		}
+	}
+	ret := r.newGroup(group, bounds, lookahead)
 	// Populate data immediately.
 	if err := ret.refreshBounds(ctx); err != nil {
 		return nil, err
@@ -56,11 +67,14 @@ func (r *Checkpoints) Start(
 	return ret, nil
 }
 
-func (r *Checkpoints) newGroup(group *types.TableGroup, bounds *notify.Var[hlc.Range]) *Group {
+func (r *Checkpoints) newGroup(
+	group *types.TableGroup, bounds *notify.Var[hlc.Range], lookahead int,
+) *Group {
 	ret := &Group{
-		bounds: bounds,
-		pool:   r.pool,
-		target: group,
+		bounds:    bounds,
+		lookahead: lookahead,
+		pool:      r.pool,
+		target:    group,
 	}
 
 	labels := prometheus.Labels{"schema": group.Name.Raw()}

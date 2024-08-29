@@ -142,6 +142,64 @@ func TestResolved(t *testing.T) {
 	})
 }
 
+func TestLimitLookahead(t *testing.T) {
+	const minNanos = int64(1)
+	const maxNanos = int64(10)
+	r := require.New(t)
+
+	fixture, err := base.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+
+	chk, err := ProvideCheckpoints(ctx, fixture.StagingPool, fixture.StagingDB)
+	r.NoError(err)
+
+	bounds1 := &notify.Var[hlc.Range]{}
+	g1, err := chk.Start(ctx,
+		&types.TableGroup{Name: ident.New("fake")},
+		bounds1,
+		LimitLookahead(int(maxNanos/2)),
+	)
+	r.NoError(err)
+
+	part := ident.New("partition")
+	for i := minNanos; i <= maxNanos; i++ {
+		r.NoError(g1.Advance(ctx, part, hlc.New(i, 0)))
+	}
+
+	// Read halfway through.
+	r.NoError(stopvar.WaitForValue(ctx,
+		hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos/2, 0)),
+		bounds1,
+	))
+
+	// Update base range
+	r.NoError(g1.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(1, 0))))
+
+	log.SetLevel(log.TraceLevel)
+
+	// Check boundary condition of marking first timestamp.
+	r.NoError(stopvar.WaitForValue(ctx,
+		hlc.RangeIncluding(hlc.New(1, 0), hlc.New(maxNanos/2, 0)),
+		bounds1,
+	))
+
+	// Verify that max does advance.
+	r.NoError(g1.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(2, 0))))
+	r.NoError(stopvar.WaitForValue(ctx,
+		hlc.RangeIncluding(hlc.New(1, 0), hlc.New(maxNanos/2, 0)),
+		bounds1,
+	))
+
+	// Verify all resolved.
+	r.NoError(g1.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos, 0))))
+	r.NoError(stopvar.WaitForValue(ctx,
+		hlc.RangeIncluding(hlc.New(maxNanos, 0), hlc.New(maxNanos, 0)),
+		bounds1,
+	))
+}
+
 func TestTransitionsInSinglePartition(t *testing.T) {
 	testTransitions(t, 1)
 }
@@ -172,6 +230,7 @@ func testTransitions(t *testing.T, partitionCount int) {
 			Enclosing: fixture.TargetSchema.Schema(),
 		},
 		notify.VarOf(hlc.RangeEmpty()),
+		1024,
 	)
 
 	expect := func(low, high int) {
