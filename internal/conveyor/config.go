@@ -39,6 +39,13 @@ type Config struct {
 	// Write directly to staging tables. May limit compatibility with
 	// schemas that contain foreign keys.
 	Immediate bool
+
+	// If non-zero, limit the number of checkpoint rows that will be
+	// used to compute the resolving range. This will limit the maximum
+	// amount of observable skew in the target due to blocked mutations
+	// (e.g. running into a lock), but will cause replication to stall
+	// if behind by this many checkpoints.
+	LimitLookahead int
 }
 
 // Bind adds configuration flags to the set.
@@ -51,6 +58,9 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.BoolVar(&c.Immediate, "immediate", false,
 		"bypass staging tables and write directly to target; "+
 			"recommended only for KV-style workloads with no FKs")
+	f.IntVar(&c.LimitLookahead, "limitLookahead", 0,
+		"limit number of checkpoints to be considered when computing the resolving range; "+
+			"may cause replication to stall completely if older mutations cannot be applied")
 }
 
 // Preflight ensures the Config is in a known-good state.
