@@ -87,7 +87,9 @@ func (r *Checkpoints) newGroup(
 
 	var limit string
 	if lookahead > 0 {
-		limit = fmt.Sprintf("ORDER BY source_hlc LIMIT %d", lookahead)
+		// +1 to have a window that includes both the last applied
+		// checkpoint and the next unapplied checkpoint.
+		limit = fmt.Sprintf("WHERE r <= %d", lookahead+1)
 	}
 	// This query may indeed require a full table scan.
 	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable, limit)

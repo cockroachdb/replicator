@@ -236,65 +236,98 @@ func (r *Group) TableGroup() *types.TableGroup {
 //   - $2: last successful checkpoint to reduce table scan range
 //
 // CTE components:
-//   - available_data: A buffer of data after the previous checkpoint.
-//   - partition_max_times: Determines the latest known checkpoint for
-//     each partition within the group.
-//   - visible_data: Restricts available_data by the minimum-maximum
-//     value from p_max_times and, potentially, the lookahead limit.
-//   - partition_max_unapplied: Finds the last checkpoint time that
-//     hasn't been processed.
-//   - last_applied: Finds the latest applied timestamp within
-//     visible_data. This is almost always going to be the start point.
-//   - stop: Finds the minimum unapplied timestamp within the visible
-//     data. If there are no unapplied timestamps, this will return the
-//     last-applied time to create an empty range.
-//   - look_back: Handles a degenerate case where there's a gap in the
-//     checkpoint entries and last_applied is actually after the stop
-//     point.
+//   - candidates: A buffer of data after the previous checkpoint. We
+//     try to start from a previous lower bound to minimize the number of
+//     scanned rows.
+//   - partition_first_unapplied: The first unapplied timestamp within a
+//     partition, if any.
+//   - partition_transition: Backs up from the first unapplied timestamp
+//     to find the preceeding applied timestamp.
+//   - partition_next_transition: This identifies any cases where a gap
+//     exists within the checkpoint range. In normal operation, we have a
+//     guard against inserting timestamps that go backwards, so this is
+//     normally empty.
+//   - numbered_rows: This produces a per-partition window of
+//     checkpoints including and after the transition point and up to the
+//     end of the partition data, or the next applied checkpoint in cases
+//     where there's a gap. Each row is numbered within its partition in
+//     order to accommodate filtering the number of checkpoints used for a
+//     lookahead.
+//   - partition_ranges: Aggregates numbered_rows on a per-partition
+//     basis to determine the range of timestamps that the partition
+//     occupies. The coalesce() call ensures that if there are no
+//     applied checkpoints for the partition, we'll use 0 to start.
+//     This can also limit the number of checkpoints to consider for any
+//     partition.
+//   - min_common_progress: The minimum-of-maximums across the
+//     partitions. This ensures that no partition can outrun its peers.
+//   - dirty_range: Aggregates over partition_ranges to produce the
+//     smallest range of dirty checkpoint timestamps to process.
+//   - top level: Returns dirty_range. If there are no dirty ranges
+//     this will skip ahead to minimum_common_progress.
 const refreshTemplate = `
 WITH
-available_data AS (
+candidates AS (
 SELECT partition, source_hlc, target_applied_at
   FROM %[1]s
  WHERE group_name = $1
    AND source_hlc >= $2
+ ORDER BY source_hlc
 ),
-partition_max_times AS (
-SELECT partition, max(source_hlc) AS hlc
-  FROM available_data
- GROUP BY partition
-),
-visible_data AS (
-SELECT *
-  FROM available_data
- WHERE source_hlc <= (SELECT min(hlc) FROM partition_max_times)
- %[2]s
-),
-partition_max_unapplied AS (
-SELECT partition, max(source_hlc) AS hlc
-  FROM visible_data
+partition_first_unappplied AS (
+SELECT partition, min(source_hlc) AS hlc
+  FROM candidates
  WHERE target_applied_at IS NULL
  GROUP BY partition
 ),
-last_applied AS (
-SELECT max(source_hlc) AS hlc
-  FROM visible_data
- WHERE target_applied_at IS NOT NULL
+partition_transition AS (
+SELECT partition, max(source_hlc) AS hlc
+  FROM candidates c
+  LEFT JOIN partition_first_unappplied u USING (partition)
+ WHERE target_applied_at IS NOT NULL AND (u IS NULL OR c.source_hlc < u.hlc)
+ GROUP BY partition
 ),
-stop AS (
-SELECT min(COALESCE(partition_max_unapplied.hlc, (SELECT hlc FROM last_applied))) AS hlc
-  FROM (SELECT DISTINCT partition FROM visible_data)
-  LEFT JOIN partition_max_unapplied USING (partition)
+partition_next_transition AS (
+SELECT partition, min(source_hlc) AS hlc
+  FROM candidates c
+  JOIN partition_transition t USING (partition)
+ WHERE c.target_applied_at IS NOT NULL AND c.source_hlc > t.hlc
+ GROUP BY partition
 ),
-look_back AS (
-SELECT max(source_hlc) AS hlc
-  FROM visible_data
- WHERE target_applied_at IS NOT NULL
-   AND source_hlc <= (SELECT hlc FROM stop)
+numbered_rows AS (
+SELECT partition,
+       source_hlc,
+       row_number() OVER (PARTITION BY partition ORDER BY source_hlc) AS r,
+       target_applied_at IS NULL as dirty
+  FROM candidates c
+  LEFT JOIN partition_transition lower_bound USING (partition)
+  LEFT JOIN partition_next_transition upper_bound USING (partition)
+ WHERE (lower_bound IS NULL OR c.source_hlc >= lower_bound.hlc)
+   AND (upper_bound IS NULL OR c.source_hlc < upper_bound.hlc)
+),
+partition_ranges AS (
+SELECT partition,
+       COALESCE(min(lower_bound.hlc), 0) AS min_hlc,
+       max(source_hlc) AS max_hlc,
+       bool_or(dirty) AS dirty
+  FROM numbered_rows
+  LEFT JOIN partition_transition lower_bound USING (partition)
+ %[2]s
+ GROUP BY partition
+),
+min_common_progress AS (
+SELECT min(max_hlc) AS hlc
+  FROM partition_ranges
+),
+dirty_range as (
+SELECT min(min_hlc) as min_hlc,
+       min(max_hlc) as max_hlc
+  FROM partition_ranges
+ WHERE dirty AND max_hlc <= (SELECT hlc FROM min_common_progress)
 )
-SELECT
-  (SELECT hlc FROM look_back),
-  (SELECT hlc FROM stop)
+SELECT coalesce(min_hlc, (SELECT hlc FROM min_common_progress)),
+       coalesce(max_hlc, (SELECT hlc FROM min_common_progress))
+FROM dirty_range
 `
 
 // refreshBounds synchronizes the in-memory bounds with the database.
@@ -304,6 +337,7 @@ func (r *Group) refreshBounds(ctx context.Context) error {
 			start := time.Now()
 			next, err := r.refreshQuery(ctx, old.Min())
 			if err != nil {
+				log.WithError(err).Warnf("could not refresh %s", r.target.Enclosing)
 				return hlc.RangeEmpty(), nil
 			}
 			if next == old {
