@@ -155,11 +155,10 @@ func TestLimitLookahead(t *testing.T) {
 	chk, err := ProvideCheckpoints(ctx, fixture.StagingPool, fixture.StagingDB)
 	r.NoError(err)
 
-	bounds1 := &notify.Var[hlc.Range]{}
 	g1, err := chk.Start(ctx,
 		&types.TableGroup{Name: ident.New("fake")},
-		bounds1,
-		LimitLookahead(int(maxNanos/2)),
+		&notify.Var[hlc.Range]{},
+		LimitLookahead(int(maxNanos/2-1)),
 	)
 	r.NoError(err)
 
@@ -169,33 +168,49 @@ func TestLimitLookahead(t *testing.T) {
 	}
 
 	// Read halfway through.
-	r.NoError(stopvar.WaitForValue(ctx,
-		hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos/2, 0)),
-		bounds1,
-	))
+	rng, err := g1.refreshQuery(ctx, hlc.Zero())
+	r.NoError(err)
+	r.Equal(hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos/2, 0)), rng)
 
 	// Update base range
 	r.NoError(g1.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(1, 0))))
 
 	// Check boundary condition of marking first timestamp.
-	r.NoError(stopvar.WaitForValue(ctx,
-		hlc.RangeIncluding(hlc.New(1, 0), hlc.New(maxNanos/2, 0)),
-		bounds1,
-	))
+	rng, err = g1.refreshQuery(ctx, hlc.Zero())
+	r.NoError(err)
+	r.Equal(hlc.RangeIncluding(hlc.New(1, 0), hlc.New(maxNanos/2, 0)), rng)
 
-	// Verify that max does advance.
+	// Verify that max continues to advance.
 	r.NoError(g1.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(2, 0))))
-	r.NoError(stopvar.WaitForValue(ctx,
-		hlc.RangeIncluding(hlc.New(2, 0), hlc.New(maxNanos/2+1, 0)),
-		bounds1,
-	))
+	rng, err = g1.refreshQuery(ctx, hlc.Zero())
+	r.NoError(err)
+	r.Equal(hlc.RangeIncluding(hlc.New(2, 0), hlc.New(maxNanos/2+1, 0)), rng)
+
+	// Verify staring a new group will skip to the end of the applied
+	// timestamps.
+	g2, err := chk.Start(ctx,
+		&types.TableGroup{Name: ident.New("fake")},
+		&notify.Var[hlc.Range]{},
+		LimitLookahead(1),
+	)
+	r.NoError(err)
+
+	rng, err = g2.refreshQuery(ctx, hlc.Zero())
+	r.NoError(err)
+	r.Equal(hlc.RangeIncluding(hlc.New(2, 0), hlc.New(3, 0)), rng)
+
+	// Commit remaining timestamps incrementally.
+	count := 0
+	for rng.Min().Nanos() < maxNanos {
+		r.NoError(g2.Commit(ctx, rng))
+		rng, err = g2.refreshQuery(ctx, rng.MaxInclusive())
+		r.NoError(err)
+		count++
+	}
+	r.Equal(8, count)
 
 	// Verify all resolved.
-	r.NoError(g1.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(maxNanos, 0))))
-	r.NoError(stopvar.WaitForValue(ctx,
-		hlc.RangeIncluding(hlc.New(maxNanos, 0), hlc.New(maxNanos, 0)),
-		bounds1,
-	))
+	r.Equal(hlc.RangeIncluding(hlc.New(maxNanos, 0), hlc.New(maxNanos, 0)), rng)
 }
 
 func TestTransitionsInSinglePartition(t *testing.T) {
@@ -343,5 +358,7 @@ func testTransitions(t *testing.T, partitionCount int) {
 	r.NoError(group.Ensure(ctx, []ident.Ident{another}))
 	expect(1, 1)
 	r.NoError(group.Advance(ctx, another, hlc.New(110, 110)))
+	expect(1, 110)
+	r.NoError(group.Commit(ctx, hlc.RangeIncluding(hlc.Zero(), hlc.New(110, 110))))
 	expect(110, 110)
 }
