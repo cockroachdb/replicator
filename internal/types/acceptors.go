@@ -54,12 +54,7 @@ type MultiAcceptor interface {
 func OrderedAcceptorFrom(acc TableAcceptor, watchers Watchers) MultiAcceptor {
 	switch t := acc.(type) {
 	case *orderedAdapter:
-		// Avoid accidental double-wrapping.
-		if t.watchers == watchers {
-			return t
-		}
-		// This would be very unexpected.
-		return &orderedAdapter{acc, watchers}
+		return t
 	case *unorderedAdapter:
 		// Avoid silly delegation.
 		return &orderedAdapter{t.TableAcceptor, watchers}
@@ -113,66 +108,110 @@ func (t *orderedAdapter) AcceptTemporalBatch(
 
 // AcceptMultiBatch implements MultiAcceptor. It coalesces updates for
 // all tables in the batch and iterates over the tables in dependency
-// order.
+// order. TemporalBatches that contain deletions will be emitted as
+// though they were a separate batch, and the deletions applied in
+// reverse dependency order.
 func (t *orderedAdapter) AcceptMultiBatch(
-	ctx context.Context, batch *MultiBatch, options *AcceptOptions,
+	ctx context.Context, batch *MultiBatch, opts *AcceptOptions,
 ) error {
-	if batch.Count() == 0 {
+	// Peek to find the current schema.
+	var commonSchema ident.Schema
+	_ = batch.CopyInto(AccumulatorFunc(func(table ident.Table, _ Mutation) error {
+		commonSchema = table.Schema()
+		// Just break the loop.
+		return context.Canceled
+	}))
+
+	// No mutations.
+	if commonSchema.Empty() {
 		return nil
 	}
-	// Coalesce all data by destination table.
-	var commonSchema ident.Schema
-	var mutsByTable ident.TableMap[[]Mutation]
-	for _, temporal := range batch.Data {
-		if err := temporal.Data.Range(func(tbl ident.Table, tblBatch *TableBatch) error {
-			if commonSchema.Empty() {
-				commonSchema = tbl.Schema()
-			} else if !ident.Equal(commonSchema, tbl.Schema()) {
-				return errors.Errorf("mixed-schema batches not currently supported: %s vs %s", commonSchema, tbl.Schema())
-			}
-
-			mutsByTable.Put(tbl, append(mutsByTable.GetZero(tbl), tblBatch.Data...))
-			return nil
-		}); err != nil {
-			return errors.Wrap(err, temporal.Time.String())
-		}
-	}
-
-	w, err := t.watchers.Get(commonSchema)
+	watcher, err := t.watchers.Get(commonSchema)
 	if err != nil {
 		return err
 	}
+	w := watcher.Get()
 
-	// Iterate over data in dependency order.
-	for _, level := range w.Get().Order {
-		for _, table := range level {
-			if muts, ok := mutsByTable.Get(table); ok {
-				nextBatch := &TableBatch{Table: table, Data: muts}
-				if err := t.AcceptTableBatch(ctx, nextBatch, options); err != nil {
-					return errors.Wrap(err, table.String())
+	// This assumes that updates are more common than deletes. We want
+	// to accumulate as many updates as possible, until we see a
+	// deletion. If we have a deletion, we want to flush the
+	// accumulator, apply the deletions, and then continue accumulating
+	// updates.
+	var pendingUpdates ident.TableMap[[]Mutation]
+	for _, temporal := range batch.Data {
+		// These are per-timestamp. The updates will be folded into
+		// pendingUpdates at the bottom of the loop.
+		var currentDeletes, currentUpdates ident.TableMap[[]Mutation]
+		// Segment mutations by type and table. Ignoring return since no
+		// error is returned from the callback.
+		_ = temporal.Data.Range(func(table ident.Table, tableBatch *TableBatch) error {
+			for _, mut := range tableBatch.Data {
+				if mut.IsDelete() {
+					currentDeletes.Put(table, append(currentDeletes.GetZero(table), mut))
+				} else {
+					currentUpdates.Put(table, append(currentUpdates.GetZero(table), mut))
 				}
-				mutsByTable.Delete(table)
 			}
-		}
-	}
-
-	// Ensure that we haven't ignored any tables in the input.
-	if mutsByTable.Len() > 0 {
-		var unknown strings.Builder
-		// Callback returns nil.
-		_ = mutsByTable.Range(func(table ident.Table, _ []Mutation) error {
-			if unknown.Len() > 0 {
-				unknown.WriteString(", ")
-			}
-			unknown.WriteString(table.Raw())
 			return nil
 		})
-		return errors.Errorf(
-			"unable to determine apply order for unknown tables: %s",
-			unknown.String())
+
+		// If we have any deletes in this batch, we want to flush
+		// all preceding updates, then the deletions.
+		if currentDeletes.Len() > 0 {
+			if err := t.flush(ctx, "update", w.Entire.Order, &pendingUpdates, opts); err != nil {
+				return err
+			}
+			if err := t.flush(ctx, "delete", w.Entire.ReverseOrder, &currentDeletes, opts); err != nil {
+				return err
+			}
+		}
+
+		// Continue accumulating updates.
+		_ = currentUpdates.Range(func(table ident.Table, muts []Mutation) error {
+			pendingUpdates.Put(table, append(pendingUpdates.GetZero(table), muts...))
+			return nil
+		})
 	}
 
-	return nil
+	// Final flush. In cases where there are no deletions, this should
+	// be the only time a flush happens. All deletes will have been
+	// flushed in the loop above.
+	return t.flush(ctx, "update", w.Entire.Order, &pendingUpdates, opts)
+}
+
+// Flush an accumulator table. This method guarantees that the
+// accumulator is empty or that an error has been returned.
+func (t *orderedAdapter) flush(
+	ctx context.Context,
+	kind string,
+	order []ident.Table,
+	acc *ident.TableMap[[]Mutation],
+	opts *AcceptOptions,
+) error {
+	for _, table := range order {
+		if muts, ok := acc.Get(table); ok {
+			nextBatch := &TableBatch{Table: table, Data: muts}
+			if err := t.AcceptTableBatch(ctx, nextBatch, opts); err != nil {
+				return errors.Wrap(err, table.String())
+			}
+			acc.Delete(table)
+		}
+	}
+	// We flushed all updates, so we're done.
+	if acc.Len() == 0 {
+		return nil
+	}
+	// There are leftover tables in the batch for which we do not
+	// have a defined order.
+	var sb strings.Builder
+	_ = acc.Range(func(table ident.Table, _ []Mutation) error {
+		if sb.Len() > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(table.Canonical().Raw())
+		return nil
+	})
+	return errors.Errorf("%s sent to unknown tables: %s", kind, sb.String())
 }
 
 // UnorderedAcceptorFrom adapts a [TableAcceptor] to the [MultiAcceptor]
