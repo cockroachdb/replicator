@@ -23,9 +23,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -306,31 +304,11 @@ func ProvideTargetSchema(
 	if pool.Info().Product == types.ProductPostgreSQL {
 		db, _ := sch.Split()
 		conn := fmt.Sprintf("%s/%s", pool.ConnectionString, db.Raw())
-		next, err := stdpool.OpenPgxAsTarget(ctx, conn,
-			stdpool.WithDiagnostics(diags, "target_reopened"))
+		next, err := stdpool.OpenPgxAsTarget(ctx, conn, stdpool.WithDiagnostics(diags, "target_reopened"))
 		if err != nil {
 			return sinktest.TargetSchema{}, err
 		}
 
-		nextCache := ProvideTargetStatements(ctx, next)
-		pool.ConnectionString = conn
-		pool.DB = next.DB
-		stmts.Cache = nextCache.Cache
-	} else if pool.Info().Product == types.ProductOracle {
-		// Similar to the above, we want to reconnect as something other
-		// than the system user the test stack is initialized with.
-		u, err := url.Parse(pool.ConnectionString)
-		if err != nil {
-			return sinktest.TargetSchema{}, errors.Wrap(err, pool.ConnectionString)
-		}
-		u.User = url.UserPassword(sch.Raw(), "SoupOrSecret")
-		conn := u.String()
-
-		next, err := stdpool.OpenOracleAsTarget(ctx, conn,
-			stdpool.WithDiagnostics(diags, "target_reopened"))
-		if err != nil {
-			return sinktest.TargetSchema{}, err
-		}
 		nextCache := ProvideTargetStatements(ctx, next)
 		pool.ConnectionString = conn
 		pool.DB = next.DB
@@ -359,20 +337,14 @@ func provideSchema[P types.AnyPool](
 		// "globally" unique ID.  While PIDs do recycle, they're highly
 		// unlikely to do so during a single run of the test suite.
 		name := ident.New(fmt.Sprintf(
-			"%s_%d_%d", strings.ToUpper(prefix), os.Getpid(), dbIdentCounter.Add(1)))
+			"%s_%d_%d", prefix, os.Getpid(), dbIdentCounter.Add(1)))
 
-		err := retry.Execute(ctx, pool, fmt.Sprintf("CREATE USER %s IDENTIFIED BY SoupOrSecret", name))
+		err := retry.Execute(ctx, pool, fmt.Sprintf("CREATE USER %s", name))
 		if err != nil {
 			return ident.Schema{}, errors.Wrapf(err, "could not create user %s", name)
 		}
 
 		err = retry.Execute(ctx, pool, fmt.Sprintf("ALTER USER %s QUOTA UNLIMITED ON USERS", name))
-		if err != nil {
-			return ident.Schema{}, errors.Wrapf(err, "could not grant quota to %s", name)
-		}
-
-		err = retry.Execute(ctx, pool, fmt.Sprintf(
-			"GRANT CREATE SESSION, CREATE SEQUENCE, CREATE TABLE, CREATE TYPE, CREATE VIEW TO %s", name))
 		if err != nil {
 			return ident.Schema{}, errors.Wrapf(err, "could not grant quota to %s", name)
 		}

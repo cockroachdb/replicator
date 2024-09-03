@@ -34,19 +34,12 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	sequencerConfig := ProvideSequencerConfig(config)
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
-	stagingPool := baseFixture.StagingPool
-	stagingSchema := baseFixture.StagingDB
-	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
-	if err != nil {
-		return nil, err
-	}
-	stagers := fixture.Stagers
-	marker := decorators.ProvideMarker(stagingPool, stagers)
-	once := decorators.ProvideOnce(stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(context, sequencerConfig)
 	if err != nil {
 		return nil, err
 	}
+	stagers := fixture.Stagers
+	stagingPool := baseFixture.StagingPool
 	targetPool := baseFixture.TargetPool
 	diagnostics := diag.New(context)
 	memo := fixture.Memo
@@ -55,7 +48,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	if err != nil {
 		return nil, err
 	}
-	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, typesLeases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
+	bestEffort := besteffort.ProvideBestEffort(sequencerConfig, schedulerScheduler, stagers, stagingPool, watchers)
 	targetStatements := baseFixture.TargetCache
 	configs := fixture.Configs
 	dlqConfig := ProvideDLQConfig(config)
@@ -69,6 +62,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 		return nil, err
 	}
 	conveyorConfig := ProvideConveyorConfig(config)
+	stagingSchema := baseFixture.StagingDB
 	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
@@ -80,7 +74,13 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	}
 	sequencer := script2.ProvideSequencer(scriptLoader, targetPool, watchers)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
+	marker := decorators.ProvideMarker(stagingPool, stagers)
+	once := decorators.ProvideOnce(stagingPool, stagers)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)

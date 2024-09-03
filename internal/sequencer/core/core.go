@@ -98,9 +98,10 @@ func (s *Core) Start(
 						if !poisoned.IsClean() {
 							continue
 						}
-						// This should not happen. We should only
-						// receive a closed channel if there were
-						// poisoned records already.
+						// We'll see a closed channel if an error was
+						// encountered. Once this happens, we shouldn't
+						// send any more progress reports, as this would
+						// incorrectly indicate success.
 						if !advanced {
 							poisoned.ForceFull()
 							continue
@@ -281,7 +282,9 @@ func (s *Core) Start(
 				status, _ := outcome.Get()
 				if status.Success() {
 					continue
-				} else if err := status.Err(); err != nil {
+				}
+				// Err will return nil if the task is still running.
+				if err := status.Err(); err != nil {
 					if errors.Is(err, errPoisoned) {
 						// This is a non-error in best-effort mode.
 						log.Tracef("reach soft FK error limit (%d) for %s; backing off",
@@ -290,19 +293,22 @@ func (s *Core) Start(
 						log.WithError(err).Warnf("error while copying data for %s; will restart", group)
 					}
 					return
-				} else {
-					toMonitor[idx] = outcome
-					idx++
 				}
+				// Retain task outcome.
+				toMonitor[idx] = outcome
+				idx++
 			}
 			toMonitor = toMonitor[:idx]
 
 			select {
-			case <-time.After(time.Second):
-				// Perform maintenance
+			case <-time.After(s.cfg.QuiescentPeriod):
+				// Perform idle maintenance
 			case taskOutcome := <-errorReports:
-				// New task launched, monitor it.
+				// New task(s) launched.
 				toMonitor = append(toMonitor, taskOutcome)
+				for len(errorReports) > 0 {
+					toMonitor = append(toMonitor, <-errorReports)
+				}
 			case <-ctx.Stopping():
 				// Clean shutdown
 				return

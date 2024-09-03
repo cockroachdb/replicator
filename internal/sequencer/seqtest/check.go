@@ -18,6 +18,7 @@ package seqtest
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -55,6 +56,11 @@ const (
 func CheckFlags() []CheckFlag {
 	var ret []CheckFlag
 	for i := checkMin; i < checkMax; i++ {
+		if i.Partitioned() && i.Stage() {
+			// Not a useful combination since remapping would have to
+			// occur before writing data to staging.
+			continue
+		}
 		ret = append(ret, i)
 	}
 	return ret
@@ -104,9 +110,9 @@ func CheckSequencer(
 	pre func(t *testing.T, fixture *all.Fixture, seqFixture *Fixture) sequencer.Sequencer,
 	post func(t *testing.T, check *Check),
 ) {
-	const batches = 1_000
+	const transactions = 1_000
 	check := func(t *testing.T, flags CheckFlag) {
-		if workloadCfg.DisablePreStaging && flags.Stage() {
+		if workloadCfg.DisableStaging && flags.Stage() {
 			t.Log("staging disabled by WorkloadConfig")
 			return
 		}
@@ -118,12 +124,12 @@ func CheckSequencer(
 
 		// Create sequencer test fixture.
 		cfg := &sequencer.Config{
-			FlushSize:        batches/10 + 1,
+			FlushSize:        transactions/10 + 1,
 			IdempotentSource: flags.Idempotent(),
 			Parallelism:      8,
 			QuiescentPeriod:  100 * time.Millisecond,
-			ScanSize:         batches/5 + 1,
-			TimestampLimit:   batches/10 + 1,
+			ScanSize:         transactions/5 + 1,
+			TimestampLimit:   transactions/10 + 1,
 		}
 		r.NoError(cfg.Preflight())
 
@@ -162,12 +168,14 @@ api.configureSource("%[1]s", {
 			r.NoError(err)
 		}
 		basic := &Check{
-			Batches:     batches,
-			Idempotent:  flags.Idempotent(),
-			Fixture:     fixture,
-			Partitioned: flags.Partitioned(),
-			Sequencer:   seq,
-			Stage:       flags.Stage(),
+			Transactions: transactions,
+			Idempotent:   flags.Idempotent(),
+			Fixture:      fixture,
+			Partitioned:  flags.Partitioned(),
+			Sequencer:    seq,
+		}
+		if flags.Stage() {
+			basic.Stage = 0.5
 		}
 		basic.Check(ctx, t, workloadCfg)
 		if post != nil {
@@ -186,8 +194,6 @@ api.configureSource("%[1]s", {
 type Check struct {
 	// The acceptor returned by [sequencer.Sequencer.Start].
 	Acceptor types.MultiAcceptor
-	// The total number of transactions to apply.
-	Batches int
 	// Populated by Check.
 	Bounds notify.Var[hlc.Range]
 	// Access to test services.
@@ -203,9 +209,11 @@ type Check struct {
 	Partitioned bool
 	// The Sequencer under test.
 	Sequencer sequencer.Sequencer
-	// If true, generated data will be loaded into staging first. This
-	// is used to validate the sweeping behavior of a sequencer.
-	Stage bool
+	// A percentage of data to write to staging instead of to the
+	// sequencer's acceptor.
+	Stage float32
+	// The total number of transactions to apply.
+	Transactions int
 }
 
 // Check generates data and verifies that it reaches the target tables.
@@ -228,21 +236,8 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 
 	now := time.Now()
 	testData := &types.MultiBatch{}
-	for i := 0; i < c.Batches; i++ {
+	for i := 0; i < c.Transactions; i++ {
 		generator.GenerateInto(testData, hlc.New(int64(i+1), 0))
-	}
-
-	if c.Stage {
-		// Apply data to the staging table, to test sweeping behavior.
-		for _, temporal := range testData.Data {
-			r.NoError(temporal.Data.Range(func(table ident.Table, batch *types.TableBatch) error {
-				stager, err := c.Fixture.Stagers.Get(ctx, table)
-				if err != nil {
-					return err
-				}
-				return stager.Stage(ctx, c.Fixture.StagingPool, batch.Data)
-			}))
-		}
 	}
 
 	if c.Partitioned {
@@ -258,38 +253,43 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 				return partitionedBatch.Accumulate(partition, mut)
 			})))
 		testData = partitionedBatch
-	}
 
-	if !c.Stage {
-		if c.Partitioned {
-		retryPartitioned:
-			if err := seqAcc.AcceptMultiBatch(ctx, testData, &types.AcceptOptions{}); err != nil {
+	retryPartitioned:
+		if err := seqAcc.AcceptMultiBatch(ctx, testData, &types.AcceptOptions{}); err != nil {
+			if errors.Is(err, chaos.ErrChaos) {
+				goto retryPartitioned
+			}
+			r.NoError(err)
+		}
+	} else {
+		// We're going to fragment the batch to simulate data being
+		// received piecemeal by multiple instances of Replicator.
+		fragments, err := Fragment(testData, c.Transactions/10)
+		r.NoError(err)
+
+		for _, fragment := range fragments {
+			// We may write some fraction of the data directly to the
+			// staging tables. This simulates having another Replicator
+			// instance receiving data behind our backs.
+			if c.Stage > 0 && rand.Float32() < c.Stage {
+				for _, temp := range fragment.Data {
+					r.NoError(temp.Data.Range(func(table ident.Table, batch *types.TableBatch) error {
+						stager, err := c.Fixture.Stagers.Get(ctx, table)
+						if err != nil {
+							return err
+						}
+						return stager.Stage(ctx, c.Fixture.StagingPool, batch.Data)
+					}))
+				}
+				continue
+			}
+
+		retryFragment:
+			if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
 				if errors.Is(err, chaos.ErrChaos) {
-					goto retryPartitioned
+					goto retryFragment
 				}
 				r.NoError(err)
-			}
-		} else {
-			// We're going to fragment the batch to simulate data being
-			// received piecemeal by multiple instances of Replicator. We
-			// ensure that the child fragments must be processed before the
-			// parent fragments to ensure FK relationships are correctly
-			// implemented.
-			fragments, err := Fragment(testData)
-			r.NoError(err)
-			r.Len(fragments, 2)
-			if _, isChild := fragments[1].Data[0].Data.Get(generator.Child.Name()); isChild {
-				fragments[0], fragments[1] = fragments[1], fragments[0]
-			}
-
-			for _, fragment := range fragments {
-			retryFragment:
-				if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
-					if errors.Is(err, chaos.ErrChaos) {
-						goto retryFragment
-					}
-					r.NoError(err)
-				}
 			}
 		}
 
