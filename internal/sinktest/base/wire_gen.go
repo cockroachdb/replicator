@@ -7,7 +7,9 @@
 package base
 
 import (
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"testing"
 )
 
@@ -15,6 +17,7 @@ import (
 
 // NewFixture constructs a self-contained test fixture.
 func NewFixture(t testing.TB) (*Fixture, error) {
+	breakers := sinktest.NewBreakers()
 	context := ProvideContext(t)
 	diagnostics := diag.New(context)
 	sourcePool, err := ProvideSourcePool(context, diagnostics)
@@ -33,16 +36,19 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetPool, err := ProvideTargetPool(context, sourcePool, diagnostics)
+	memo := ProvideMemory()
+	backup := stdpool.ProvideBackup(memo, stagingPool)
+	targetPool, err := ProvideTargetPool(context, sourcePool, backup, diagnostics, breakers)
 	if err != nil {
 		return nil, err
 	}
 	targetStatements := ProvideTargetStatements(context, targetPool)
-	targetSchema, err := ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
+	targetSchema, err := ProvideTargetSchema(context, diagnostics, targetPool, targetStatements, backup, breakers)
 	if err != nil {
 		return nil, err
 	}
 	fixture := &Fixture{
+		Breakers:     breakers,
 		Context:      context,
 		SourcePool:   sourcePool,
 		SourceSchema: sourceSchema,

@@ -14,24 +14,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !(cgo && (target_oracle || target_all))
+package sinktest
 
-package stdpool
+import "sync/atomic"
 
-import (
-	"github.com/cockroachdb/field-eng-powertools/stopper"
-	"github.com/cockroachdb/replicator/internal/sinktest"
-	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/pkg/errors"
-)
+// Breakers is a collection of shared-state runtime controls that cause aspects of the system to fail, for testing.
+type Breakers struct {
+	TargetConnectionFails atomic.Bool
+}
 
-// OpenOracleAsTarget returns an unsupported error.
-func OpenOracleAsTarget(
-	ctx *stopper.Context,
-	connectString string,
-	backup *Backup,
-	breakers *sinktest.Breakers,
-	options ...Option,
-) (*types.TargetPool, error) {
-	return nil, errors.New("this build does not support Oracle Database")
+// NewBreakers constructs a Breakers instance
+func NewBreakers() *Breakers {
+	return &Breakers{}
 }
