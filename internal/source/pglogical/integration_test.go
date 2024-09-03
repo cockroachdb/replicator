@@ -216,7 +216,7 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 		TargetSchema:   dbSchema,
 	}
 	if fc.chaos {
-		cfg.Sequencer.Chaos = 0.001
+		cfg.Sequencer.Chaos = 2
 	}
 	if fc.script {
 		cfg.Script = script.Config{
