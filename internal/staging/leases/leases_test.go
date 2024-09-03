@@ -47,7 +47,7 @@ func TestLeases(t *testing.T) {
 
 	intf, err := New(ctx, Config{
 		Pool:   fixture.StagingPool,
-		Target: tbl.Name(),
+		Target: fixture.StagingPool.HintNoFTS(tbl.Name()),
 	})
 	r.NoError(err)
 	l := intf.(*leases)
@@ -56,45 +56,71 @@ func TestLeases(t *testing.T) {
 
 	t.Run("tryAcquire", func(t *testing.T) {
 		a := assert.New(t)
+		names := []string{t.Name()}
 
 		// No present state, this should succeed.
-		initial, ok, err := l.tryAcquire(ctx, t.Name(), now)
+		initial, ok, err := l.tryAcquire(ctx, names, now)
 		a.NoError(err)
 		a.True(ok)
 		a.NotZero(initial)
 
 		// Acquiring at the same time should not do anything.
-		blocked, ok, err := l.tryAcquire(ctx, t.Name(), now)
+		blocked, ok, err := l.tryAcquire(ctx, names, now)
 		a.NoError(err)
 		a.False(ok)
 		a.Equal(initial.expires, blocked.expires)
 
 		// Acquire within the validity period should be a no-op.
-		blocked, ok, err = l.tryAcquire(ctx, t.Name(), now.Add(l.cfg.Lifetime/2))
+		blocked, ok, err = l.tryAcquire(ctx, names, now.Add(l.cfg.Lifetime/2))
 		a.NoError(err)
 		a.False(ok)
 		a.Equal(initial.expires, blocked.expires)
 
 		// Acquire at the expiration time should succeed.
-		next, ok, err := l.tryAcquire(ctx, t.Name(), now.Add(l.cfg.Lifetime))
+		next, ok, err := l.tryAcquire(ctx, names, now.Add(l.cfg.Lifetime))
 		a.NoError(err)
 		if a.True(ok) {
-			a.Equal(initial.name, next.name)
+			a.Equal(initial.names, next.names)
 			a.NotEqual(initial.expires, next.expires)
 			a.NotEqual(initial.nonce, next.nonce)
 		}
 
 		// Acquire within the extended lifetime should be a no-op.
-		blocked, ok, err = l.tryAcquire(ctx, t.Name(), now.Add(2*l.cfg.Lifetime/3))
+		blocked, ok, err = l.tryAcquire(ctx, names, now.Add(2*l.cfg.Lifetime/3))
 		a.NoError(err)
 		a.False(ok)
 		a.Equal(next.expires, blocked.expires)
 	})
 
+	t.Run("tryAcquireSkew", func(t *testing.T) {
+		a := assert.New(t)
+		namesA := []string{t.Name(), "A"}
+		namesB := []string{t.Name(), "B"}
+
+		// No present state, this should succeed.
+		initial, ok, err := l.tryAcquire(ctx, namesA, now)
+		a.NoError(err)
+		a.True(ok)
+		a.NotZero(initial)
+
+		// Acquiring at the same time should not do anything.
+		blocked, ok, err := l.tryAcquire(ctx, namesA, now)
+		a.NoError(err)
+		a.False(ok)
+		a.Equal(initial.expires, blocked.expires)
+
+		// Ensure all-or-nothing behavior with multiple names.
+		blocked, ok, err = l.tryAcquire(ctx, namesB, now)
+		a.NoError(err)
+		a.False(ok)
+		a.Equal(initial.expires, blocked.expires)
+	})
+
 	t.Run("tryRelease", func(t *testing.T) {
 		a := assert.New(t)
+		names := []string{t.Name(), "foo"}
 
-		initial, ok, err := l.tryAcquire(ctx, t.Name(), now)
+		initial, ok, err := l.tryAcquire(ctx, names, now)
 		a.NoError(err)
 		a.True(ok)
 		a.NotZero(initial)
@@ -119,8 +145,9 @@ func TestLeases(t *testing.T) {
 
 	t.Run("tryRenew", func(t *testing.T) {
 		a := assert.New(t)
+		names := []string{t.Name()}
 
-		initial, ok, err := l.tryAcquire(ctx, t.Name(), now)
+		initial, ok, err := l.tryAcquire(ctx, names, now)
 		a.NoError(err)
 		a.True(ok)
 		a.NotZero(initial)
@@ -130,7 +157,7 @@ func TestLeases(t *testing.T) {
 		a.NoError(err)
 		a.True(ok)
 		a.Equal(now.Add(time.Second+l.cfg.Lifetime), renewed.expires)
-		a.Equal(initial.name, renewed.name)
+		a.Equal(initial.names, renewed.names)
 		a.Equal(initial.nonce, renewed.nonce)
 
 		// Ensure that we can't cross-renew.
@@ -143,6 +170,7 @@ func TestLeases(t *testing.T) {
 
 	t.Run("waitToAcquire", func(t *testing.T) {
 		a := assert.New(t)
+		names := []string{t.Name()}
 
 		// Increase polling rate for this test.
 		l := l.copy()
@@ -151,14 +179,14 @@ func TestLeases(t *testing.T) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		initial, ok, err := l.acquire(ctx, t.Name())
+		initial, ok, err := l.acquire(ctx, names)
 		a.NoError(err)
 		a.True(ok)
 		a.NotZero(initial)
 
 		eg, egCtx := errgroup.WithContext(ctx)
 		eg.Go(func() error {
-			acquired, ok := l.waitToAcquire(egCtx, initial.name)
+			acquired, ok := l.waitToAcquire(egCtx, initial.names)
 			a.True(ok)
 			a.NotZero(acquired)
 			return nil
@@ -178,8 +206,9 @@ func TestLeases(t *testing.T) {
 
 	t.Run("keepRenewed", func(t *testing.T) {
 		a := assert.New(t)
+		names := []string{t.Name(), "more"}
 
-		initial, ok, err := l.acquire(ctx, t.Name())
+		initial, ok, err := l.acquire(ctx, names)
 		a.NoError(err)
 		a.True(ok)
 		a.NotZero(initial)
@@ -200,17 +229,18 @@ func TestLeases(t *testing.T) {
 		a.False(retry)
 	})
 
-	// Verify that keepRenewed will return if the lease row in the
+	// Verify that keepRenewed will return if any lease row in the
 	// database is deleted from underneath.
 	t.Run("keepRenewedExitsIfHijacked", func(t *testing.T) {
 		a := assert.New(t)
+		names := []string{t.Name(), "kaboom"}
 
 		// Increase polling rate.
 		l := l.copy()
 		l.cfg.Lifetime = 100 * time.Millisecond
 		l.cfg.Poll = 5 * time.Millisecond
 
-		initial, ok, err := l.acquire(ctx, t.Name())
+		initial, ok, err := l.acquire(ctx, names)
 		a.NoError(err)
 		a.True(ok)
 		a.NotZero(initial)
@@ -225,9 +255,12 @@ func TestLeases(t *testing.T) {
 			l.keepRenewed(egCtx, initial)
 			return nil
 		})
+		// Release only one of the names.
 		eg.Go(func() error {
 			time.Sleep(l.cfg.Poll)
-			ok, err := l.release(egCtx, initial)
+			leaseCopy := initial
+			leaseCopy.names = names[1:]
+			ok, err := l.release(egCtx, leaseCopy)
 			a.True(ok)
 			a.NoError(err)
 			return err
@@ -256,7 +289,7 @@ func TestLeases(t *testing.T) {
 			eg.Go(func() error {
 				// Each callback verifies that it's the only instance
 				// running, then requests to be shut down.
-				l.Singleton(egCtx, t.Name(), func(ctx context.Context) error {
+				l.Singleton(egCtx, []string{t.Name()}, func(ctx context.Context) error {
 					a.NoError(ctx.Err())
 					if a.True(running.CompareAndSwap(false, true)) {
 						time.Sleep(3 * l.cfg.Poll)
@@ -307,7 +340,9 @@ func TestSanitize(t *testing.T) {
 	cfg.Pool = &types.StagingPool{}
 	a.EqualError(cfg.sanitize(), "target must be set")
 
-	cfg.Target = ident.NewTable(ident.MustSchema(ident.New("db"), ident.Public), ident.New("tbl"))
+	cfg.Target = ident.WithHint(
+		ident.NewTable(ident.MustSchema(ident.New("db"), ident.Public),
+			ident.New("tbl")), "hinted")
 	a.NoError(cfg.sanitize())
 
 	a.Zero(cfg.Guard)
