@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build cgo && linux && (target_oracle || target_all)
+//go:build cgo && (target_oracle || target_all)
 
 package stdpool
 
