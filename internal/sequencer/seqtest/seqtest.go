@@ -70,8 +70,9 @@ func (f *Fixture) SequencerFor(
 func provideLeases(
 	ctx context.Context, pool *types.StagingPool, stagingDB ident.StagingSchema,
 ) (types.Leases, error) {
+	target := pool.HintNoFTS(ident.NewTable(stagingDB.Schema(), ident.New("leases")))
 	return leases.New(ctx, leases.Config{
 		Pool:   pool,
-		Target: ident.NewTable(stagingDB.Schema(), ident.New("leases")),
+		Target: target,
 	})
 }

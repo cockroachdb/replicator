@@ -31,20 +31,16 @@ var Set = wire.NewSet(
 )
 
 // ProvideLeases is called by Wire to configure the work-leasing strategy.
-//
-// This can be removed once stagingDB once SELECT FOR UPDATE uses
-// replicated locks.
-//
-// https://github.com/cockroachdb/cockroach/issues/100194
 func ProvideLeases(
 	ctx context.Context, pool *types.StagingPool, stagingDB ident.StagingSchema,
 ) (types.Leases, error) {
+	target := pool.HintNoFTS(ident.NewTable(stagingDB.Schema(), ident.New("leases")))
 	return New(ctx, Config{
 		Guard:      time.Second,
 		Lifetime:   5 * time.Second,
 		RetryDelay: time.Second,
 		Poll:       time.Second,
 		Pool:       pool,
-		Target:     ident.NewTable(stagingDB.Schema(), ident.New("leases")),
+		Target:     target,
 	})
 }

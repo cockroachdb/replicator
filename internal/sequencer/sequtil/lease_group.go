@@ -52,8 +52,11 @@ func LeaseGroup(
 		// run SQL in a timely fashion.
 		for !outer.IsStopping() {
 			entry.Trace("waiting to acquire lease group")
+			keys := []string{
+				fmt.Sprintf("sequtil.Lease.%s", group.Name),
+			}
 			// Acquire a lease.
-			leases.Singleton(outer, fmt.Sprintf("sequtil.Lease.%s", group.Name),
+			leases.Singleton(outer, keys,
 				func(leaseContext context.Context) error {
 					entry.Debug("acquired lease group")
 					defer entry.Debug("released lease group")
