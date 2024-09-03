@@ -7,6 +7,7 @@
 package all
 
 import (
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
@@ -18,6 +19,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"testing"
 )
 
@@ -26,6 +28,7 @@ import (
 // NewFixture constructs a self-contained test fixture for all services
 // in the target sub-packages.
 func NewFixture(t testing.TB) (*Fixture, error) {
+	breakers := sinktest.NewBreakers()
 	context := base.ProvideContext(t)
 	diagnostics := diag.New(context)
 	sourcePool, err := base.ProvideSourcePool(context, diagnostics)
@@ -44,16 +47,22 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetPool, err := base.ProvideTargetPool(context, sourcePool, diagnostics)
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	backup := stdpool.ProvideBackup(memoMemo, stagingPool)
+	targetPool, err := base.ProvideTargetPool(context, sourcePool, backup, diagnostics, breakers)
 	if err != nil {
 		return nil, err
 	}
 	targetStatements := base.ProvideTargetStatements(context, targetPool)
-	targetSchema, err := base.ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
+	targetSchema, err := base.ProvideTargetSchema(context, diagnostics, targetPool, targetStatements, backup, breakers)
 	if err != nil {
 		return nil, err
 	}
 	fixture := &base.Fixture{
+		Breakers:     breakers,
 		Context:      context,
 		SourcePool:   sourcePool,
 		SourceSchema: sourceSchema,
@@ -71,12 +80,8 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
-	if err != nil {
-		return nil, err
-	}
-	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	schemawatchBackup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, schemawatchBackup)
 	if err != nil {
 		return nil, err
 	}

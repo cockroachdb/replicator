@@ -23,9 +23,11 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/source/cdc/server"
+	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
 	log "github.com/sirupsen/logrus"
@@ -115,6 +117,166 @@ func TestWorkload(t *testing.T) {
 		}
 	}
 	log.Infof("resolved timestamps have caught up; validating workload")
+
+	workload.CheckConsistent(ctx, t)
+}
+
+func initSystem(
+	t *testing.T,
+) (
+	*runner,
+	*types.TableGroup,
+	*server.Server,
+	*all.Workload,
+	*stopper.Context,
+	*sinktest.Breakers,
+) {
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+	ctx := fixture.Context
+
+	serverCfg := &server.Config{
+		HTTP: stdserver.Config{
+			BindAddr:           "127.0.0.1:0",
+			GenerateSelfSigned: true,
+		},
+		Staging: sinkprod.StagingConfig{
+			CommonConfig: sinkprod.CommonConfig{
+				Conn: fixture.StagingPool.ConnectionString,
+			},
+			CreateSchema: true,
+			Schema:       fixture.StagingDB.Schema(),
+		},
+		Target: sinkprod.TargetConfig{
+			CommonConfig: sinkprod.CommonConfig{
+				Conn: fixture.TargetPool.ConnectionString,
+			},
+		},
+	}
+
+	workload, group, err := fixture.NewWorkload(ctx, &all.WorkloadConfig{})
+	r.NoError(err)
+
+	cfg := &clientConfig{
+		childTable:   workload.Child.Name(),
+		parentTable:  workload.Parent.Name(),
+		targetSchema: fixture.TargetSchema.Schema(),
+	}
+
+	svr, err := cfg.newServer(ctx, serverCfg)
+	r.NoError(err)
+
+	r.NoError(cfg.initURL(svr.GetListener()))
+
+	r.NoError(cfg.generateJWT(ctx, svr))
+
+	// Create a runner, but inject the generator from above. This will
+	// allow us to validate the behavior later.
+	runner, err := cfg.newRunner(ctx, workload.GeneratorBase)
+	r.NoError(err)
+
+	return runner, group, svr, workload, ctx, fixture.Breakers
+}
+
+// This is a white-box test that creates a server and executes the
+// workload against it for a few seconds, stops the workload, then
+// starts it again, but this time with a failed connection to the
+// target database. The target database connection then recovers
+// after a period.
+func TestColdStart(t *testing.T) {
+	t.Parallel()
+	const initialTime = 5 * time.Second
+	const targetDownTime = 5 * time.Second
+	const recoveryTime = 5 * time.Second
+
+	runner, group, svr, workload, ctx, _ := initSystem(t)
+
+	// Phase one: initial connection and run
+
+	// Create a nested stopper, so we can run the workload generator
+	// for a period of time.
+	runnerCtx := stopper.WithContext(ctx)
+	runnerCtx.Go(func(runnerCtx *stopper.Context) error {
+		return runner.Run(runnerCtx)
+	})
+
+	r := require.New(t)
+	// Wait for a bit.
+	select {
+	case <-time.After(initialTime):
+		log.Info("waiting for runner context to finish")
+		runnerCtx.Stop(time.Second)
+		r.NoError(runnerCtx.Wait())
+	case <-ctx.Stopping():
+		r.Fail("test context stopping")
+	}
+
+	var resolvedRange notify.Var[hlc.Range]
+	_, err := svr.Checkpoints.Start(ctx, group, &resolvedRange)
+	r.NoError(err)
+	for {
+		progress, changed := resolvedRange.Get()
+		if hlc.Compare(progress.Min(), runner.lastResolved) >= 0 {
+			break
+		}
+		log.Infof("waiting for resolved timestamp progress: %s vs %s", progress, runner.lastResolved)
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			r.NoError(ctx.Err())
+		}
+	}
+	log.Infof("resolved timestamps have caught up; validating initial workload")
+
+	workload.CheckConsistent(ctx, t)
+
+	// Second phase: start the workload with the target down
+	runner, group, svr, workload, ctx, breakers := initSystem(t)
+	breakers.TargetConnectionFails.Store(true)
+
+	// Create a nested stopper, so we can run the workload generator
+	// for a period of time.
+	runnerCtx = stopper.WithContext(ctx)
+	runnerCtx.Go(func(runnerCtx *stopper.Context) error {
+		return runner.Run(runnerCtx)
+	})
+
+	// Wait for a bit, re-enable target connections
+	select {
+	case <-time.After(targetDownTime):
+		breakers.TargetConnectionFails.Store(false)
+	case <-ctx.Stopping():
+		r.Fail("test context stopping")
+	}
+
+	// Third phase: target recovers, and we proceed
+	select {
+	case <-time.After(recoveryTime):
+		log.Info("waiting for runner context to finish")
+		runnerCtx.Stop(time.Second)
+		r.NoError(runnerCtx.Wait())
+	case <-ctx.Stopping():
+		r.Fail("test context stopping")
+	}
+
+	var resolvedRangeFinal notify.Var[hlc.Range]
+	_, err = svr.Checkpoints.Start(ctx, group, &resolvedRangeFinal)
+	r.NoError(err)
+	for {
+		progress, changed := resolvedRangeFinal.Get()
+		if hlc.Compare(progress.Min(), runner.lastResolved) >= 0 {
+			break
+		}
+		log.Infof("waiting for resolved timestamp progress: %s vs %s", progress, runner.lastResolved)
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			r.NoError(ctx.Err())
+		}
+	}
+	log.Infof("resolved timestamps have caught up; validating final workload")
 
 	workload.CheckConsistent(ctx, t)
 }
