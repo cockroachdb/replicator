@@ -80,7 +80,7 @@ func (c *Config) sanitize() error {
 
 type lease struct {
 	expires time.Time
-	name    string
+	names   []string
 	nonce   uuid.UUID
 }
 
@@ -158,9 +158,9 @@ func New(ctx context.Context, cfg Config) (types.Leases, error) {
 	return l, nil
 }
 
-// Acquire the named lease, keep it alive, and return a facade.
-func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) {
-	leaseRow, ok, err := l.acquire(ctx, name)
+// Acquire the named leases, keep them alive, and return a facade.
+func (l *leases) Acquire(ctx context.Context, names ...string) (types.Lease, error) {
+	leaseRow, ok, err := l.acquire(ctx, names)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) 
 	return ret, nil
 }
 
-// Singleton executes a callback when the named lease is acquired.
+// Singleton executes a callback when the named leases are acquired.
 //
 // The lease will be released in the following circumstances:
 //   - The callback function returns.
@@ -198,7 +198,9 @@ func (l *leases) Acquire(ctx context.Context, name string) (types.Lease, error) 
 // the callback returns ErrCancelSingleton, it will not be retried. In
 // all other cases, the callback function is retried once a lease is
 // re-acquired.
-func (l *leases) Singleton(ctx context.Context, name string, fn func(ctx context.Context) error) {
+func (l *leases) Singleton(
+	ctx context.Context, names []string, fn func(ctx context.Context) error,
+) {
 	// It's easier to ensure cleanup behavior using defer keyword. This
 	// function returns -1 when the singleton should be torn down.
 	// Otherwise, it returns the expected delay between retries.
@@ -206,15 +208,15 @@ func (l *leases) Singleton(ctx context.Context, name string, fn func(ctx context
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
-		lease, err := l.Acquire(ctx, name)
+		lease, err := l.Acquire(ctx, names...)
 		if err != nil {
 			if _, busy := types.IsLeaseBusy(err); busy {
-				log.WithField("lease", name).Trace("lease is busy, waiting")
+				log.WithField("lease", names).Trace("lease is busy, waiting")
 				// Jitter the polling time to even out the load.
 				return l.cfg.Poll + time.Duration(rand.Int31n(10))*time.Millisecond
 			}
 
-			log.WithField("lease", name).WithError(err).Error("unable to acquire lease")
+			log.WithField("lease", names).WithError(err).Error("unable to acquire lease")
 			return l.cfg.RetryDelay
 		}
 		defer lease.Release()
@@ -223,10 +225,10 @@ func (l *leases) Singleton(ctx context.Context, name string, fn func(ctx context
 		err = fn(lease.Context())
 
 		if errors.Is(err, types.ErrCancelSingleton) || errors.Is(err, context.Canceled) {
-			log.WithField("lease", name).Trace("callback requested shutdown or was canceled")
+			log.WithField("lease", names).Trace("callback requested shutdown or was canceled")
 			return -1
 		}
-		log.WithField("lease", name).WithError(err).Error("lease callback exited; continuing")
+		log.WithField("lease", names).WithError(err).Error("lease callback exited; continuing")
 		return l.cfg.RetryDelay
 	}
 
@@ -246,8 +248,8 @@ func (l *leases) Singleton(ctx context.Context, name string, fn func(ctx context
 
 // waitToAcquire blocks until the named lease can be acquired. If the
 // context is canceled, this method will return nil.
-func (l *leases) waitToAcquire(ctx context.Context, name string) (acquired lease, ok bool) {
-	entry := log.WithField("lease", name)
+func (l *leases) waitToAcquire(ctx context.Context, names []string) (acquired lease, ok bool) {
+	entry := log.WithField("lease", names)
 
 	// The zero value means the first read to the timer channel will
 	// return immediately.
@@ -263,7 +265,7 @@ func (l *leases) waitToAcquire(ctx context.Context, name string) (acquired lease
 		}
 
 		entry.Trace("attempting to acquire")
-		ret, ok, err := l.acquire(ctx, name)
+		ret, ok, err := l.acquire(ctx, names)
 
 		switch {
 		case err != nil:
@@ -329,7 +331,7 @@ func (l *leases) keepRenewedOnce(
 
 	entry := log.WithFields(log.Fields{
 		"expires": tgt.expires, // Include renewed expiration time.
-		"lease":   tgt.name,
+		"lease":   tgt.names,
 	})
 
 	switch {
@@ -350,11 +352,15 @@ func (l *leases) keepRenewedOnce(
 
 // acquire returns a non-nil lease if it was able to acquire the named lease.
 func (l *leases) acquire(
-	ctx context.Context, name string,
+	ctx context.Context, names []string,
 ) (leaseRow lease, acquired bool, err error) {
+	if len(names) == 0 {
+		err = errors.New("no lease names provided")
+		return
+	}
 	err = retry.Retry(ctx, l.cfg.Pool, func(ctx context.Context) error {
 		var err error
-		leaseRow, acquired, err = l.tryAcquire(ctx, name, time.Now())
+		leaseRow, acquired, err = l.tryAcquire(ctx, names, time.Now())
 		return err
 	})
 	return
@@ -368,37 +374,42 @@ func (l *leases) copy() *leases {
 
 // SQL template to claim a lease
 //
-//	$1 = name
+//	$1 = array of lease names to acquire
 //	$2 = caller-assigned expiration
-//	$3 = caller-assigned now(), to ease testing
+//	$3 = hostname for operator convenience
+//	$4 = caller-assigned now(), to ease testing
 //
 // Returns a nonce value if the lease was acquired.
-//
-// If needed, this could be extended to support atomic acquisition of
-// multiple names by making $1 an array and unnest().
 const acquireTemplate = `
 WITH
-  proposed (name, expires, nonce, hostname) AS (
-    VALUES ($1::STRING, $2::TIMESTAMP, gen_random_uuid(), $3::STRING)),
-  blocking AS (
-    SELECT x.expires
-    FROM %[1]s x
-    JOIN proposed USING (name)
-    WHERE x.expires > $4::TIMESTAMP
-    FOR UPDATE),
-  acquired AS (
-    UPSERT INTO %[1]s (name, expires, nonce, hostname)
-    SELECT name, expires, nonce, hostname
-    FROM proposed
-    WHERE NOT EXISTS (SELECT * FROM blocking)
-    RETURNING nonce)
-SELECT (SELECT expires FROM blocking), (SELECT nonce FROM acquired)
+nonce (nonce) AS (
+SELECT gen_random_uuid()
+),
+proposed (name, expires, nonce, hostname) AS (
+SELECT unnest($1::STRING[]), $2::TIMESTAMP, nonce, $3::STRING
+  FROM nonce
+),
+blocking AS (
+SELECT x.expires
+  FROM %[1]s x
+  JOIN proposed USING (name)
+ WHERE x.expires > $4::TIMESTAMP
+   FOR UPDATE
+),
+acquired AS (
+UPSERT INTO %[1]s (name, expires, nonce, hostname)
+SELECT name, expires, nonce, hostname
+  FROM proposed
+ WHERE NOT EXISTS (SELECT * FROM blocking)
+RETURNING nonce
+)
+SELECT (SELECT max(expires) FROM blocking), (SELECT DISTINCT nonce FROM acquired)
 `
 
 // tryAcquire returns the current state of the named lease in the
 // database. The ok value will be true if this call acquired the lease.
 func (l *leases) tryAcquire(
-	ctx context.Context, name string, now time.Time,
+	ctx context.Context, names []string, now time.Time,
 ) (leaseRow lease, acquired bool, err error) {
 	// We only have millisecond-level resolution in the db.
 	now = now.UTC().Truncate(time.Millisecond)
@@ -408,7 +419,7 @@ func (l *leases) tryAcquire(
 
 	if err := l.cfg.Pool.QueryRow(ctx,
 		l.sql.acquire,
-		name,
+		names,
 		expires,
 		l.hostname,
 		now,
@@ -416,9 +427,9 @@ func (l *leases) tryAcquire(
 		return lease{}, false, errors.WithStack(err)
 	}
 	if blockedUntil != nil {
-		return lease{*blockedUntil, name, uuid.UUID{}}, false, nil
+		return lease{*blockedUntil, names, uuid.UUID{}}, false, nil
 	}
-	return lease{expires, name, nonce}, true, nil
+	return lease{expires, names, nonce}, true, nil
 }
 
 // release destroys the given lease.
@@ -436,13 +447,17 @@ func (l *leases) release(ctx context.Context, rel lease) (bool, error) {
 //
 //	$1 = name
 //	$2 = nonce previously allocated by the database
-const releaseTemplate = `DELETE FROM %s WHERE name=$1::STRING AND nonce=$2::UUID`
+const releaseTemplate = `
+DELETE FROM %s
+ WHERE name IN (SELECT unnest($1::STRING[]))
+   AND nonce=$2::UUID
+`
 
 // tryRelease deletes the lease from the database.
 func (l *leases) tryRelease(ctx context.Context, rel lease) (ok bool, err error) {
-	tag, err := l.cfg.Pool.Exec(ctx, l.sql.release, rel.name, rel.nonce)
+	tag, err := l.cfg.Pool.Exec(ctx, l.sql.release, rel.names, rel.nonce)
 	if err != nil {
-		return false, errors.WithStack(err)
+		return false, errors.Wrap(err, l.sql.release)
 	}
 	if tag.RowsAffected() == 0 {
 		return false, nil
@@ -459,12 +474,29 @@ func (l *leases) renew(ctx context.Context, tgt lease) (renewed lease, ok bool, 
 	return
 }
 
-// SQL template to update the expiration time on a lease.
+// SQL template to update the expiration time on a lease. This query has
+// an all-or-nothing behavior.
 //
 //	$1 = new expiration time
-//	$2 = name
+//	$2 = names
 //	$3 = nonce
-const renewTemplate = `UPDATE %s SET expires=$1::TIMESTAMP WHERE name=$2::STRING AND nonce=$3::UUID`
+const renewTemplate = `
+WITH
+proposed(expires, name, nonce) AS (
+SELECT $1::TIMESTAMP, unnest($2::STRING[]), $3::UUID
+),
+matches (name) AS (
+SELECT name
+  FROM %[1]s
+  JOIN proposed USING (name, nonce)
+   FOR UPDATE
+)
+UPDATE %[1]s AS l
+   SET expires=$1::TIMESTAMP
+  FROM matches m
+ WHERE l.name = m.name
+   AND (SELECT count(*) FROM proposed) = (SELECT count(*) FROM matches)
+`
 
 // tryRenew updates the lease record in the database. If successful, the
 // input lease struct will be updated with the new expiration time and
@@ -474,9 +506,9 @@ func (l *leases) tryRenew(ctx context.Context, tgt lease, now time.Time) (lease,
 	now = now.UTC()
 	expires := now.Add(l.cfg.Lifetime)
 
-	tag, err := l.cfg.Pool.Exec(ctx, l.sql.renew, expires, tgt.name, tgt.nonce)
+	tag, err := l.cfg.Pool.Exec(ctx, l.sql.renew, expires, tgt.names, tgt.nonce)
 	if err != nil {
-		return tgt, false, errors.WithStack(err)
+		return tgt, false, errors.Wrap(err, l.sql.renew)
 	}
 
 	if tag.RowsAffected() == 0 {

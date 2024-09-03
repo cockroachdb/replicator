@@ -68,7 +68,7 @@ func (c *Conn) Start(ctx *stopper.Context) (err error) {
 	ctx.Go(func(ctx *stopper.Context) error {
 		log.Infof("Acquiring lease %s", c.config.identifier)
 		c.leases.Singleton(ctx,
-			c.config.identifier,
+			[]string{c.config.identifier},
 			func(ctx context.Context) error {
 				if err := c.apply(stopper.WithContext(ctx), c.config.prefix); err != nil && err != stopper.ErrStopped {
 					log.WithField("bucket", c.config.bucketName).

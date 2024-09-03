@@ -92,13 +92,14 @@ func IsLeaseBusy(err error) (busy *LeaseBusyError, ok bool) {
 
 // Leases coordinates behavior across multiple instances of Replicator.
 type Leases interface {
-	// Acquire the named lease. A [LeaseBusyError] will be returned if
-	// another caller has already acquired the lease.
-	Acquire(ctx context.Context, name string) (Lease, error)
+	// Acquire the named leases in an all-or-nothing fashion. A
+	// [LeaseBusyError] will be returned if another caller has already
+	// acquired any of the leases.
+	Acquire(ctx context.Context, names ...string) (Lease, error)
 
-	// Singleton executes a callback when the named lease is acquired.
+	// Singleton executes a callback when all named leases are acquired.
 	//
-	// The lease will be released in the following circumstances:
+	// The leases will be released in the following circumstances:
 	//   * The callback function returns.
 	//   * The lease cannot be renewed before it expires.
 	//   * The outer context is canceled.
@@ -106,8 +107,8 @@ type Leases interface {
 	// If the callback returns a non-nil error, the error will be
 	// logged. If the callback returns ErrCancelSingleton, it will not
 	// be retried. In all other cases, the callback function is retried
-	// once a lease is re-acquired.
-	Singleton(ctx context.Context, name string, fn func(ctx context.Context) error)
+	// once the leases are re-acquired.
+	Singleton(ctx context.Context, names []string, fn func(ctx context.Context) error)
 }
 
 // A Memo is a key store that persists a value associated to a key
