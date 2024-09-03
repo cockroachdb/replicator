@@ -224,6 +224,10 @@ ORDER BY ordered.ordinal_position, column_name
 //
 // See also:
 // https://docs.oracle.com/en/database/oracle/oracle-database/19/refrn/ALL_TAB_COLS.html
+//
+// The gather_plan_statistics hint appears to enable some adaptive
+// optimizer choices that significantly increase the performance of this
+// query.
 const sqlColumnsQueryOra = `
 WITH atc AS (
   SELECT OWNER, TABLE_NAME, COLUMN_NAME,
@@ -245,7 +249,8 @@ WITH atc AS (
 ),
      pk_cols  AS (SELECT OWNER, TABLE_NAME, CONSTRAINT_NAME FROM ALL_CONSTRAINTS WHERE CONSTRAINT_TYPE='P'),
      acc AS (SELECT OWNER, TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, POSITION, 't' IS_PK FROM ALL_CONS_COLUMNS)
-SELECT COLUMN_NAME,
+SELECT /*+  gather_plan_statistics */
+       COLUMN_NAME,
        COALESCE(IS_PK, 'f'),
        atc.DATA_TYPE,
        atc.DATA_DEFAULT,

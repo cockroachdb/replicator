@@ -18,6 +18,7 @@ package schemawatch
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
@@ -30,26 +31,30 @@ import (
 )
 
 func TestBackup_BackupRestore(t *testing.T) {
-	b := &memoBackup{
-		memo:        &memo.Memory{},
-		stagingPool: nil,
-	}
+	r := require.New(t)
+	ctx := stopper.Background()
 
 	schema := ident.MustSchema(ident.New("test"))
-	schemaData := &types.SchemaData{Order: make([][]ident.Table, 3)}
+	schemaData, err := newSchemaData(schema, 11)
+	r.NoError(err)
 
-	ctx := stopper.Background()
-	r := require.New(t)
+	b := &memoBackup{
+		memo: &memo.Memory{},
+	}
 
-	err := b.backup(ctx, schema, schemaData)
+	err = b.backup(ctx, schema, schemaData)
 	r.NoError(err)
 
 	restored, err := b.restore(ctx, schema)
 	r.NoError(err)
-	r.Equal(restored, schemaData)
+
+	// Serialization is tested elsewhere, so we just want to make
+	// sure we got some data back.
+	r.Equal(schemaData.Entire.Order, restored.Entire.Order)
 }
 
 func TestBackup_Update(t *testing.T) {
+	r := require.New(t)
 	memory := &memo.Memory{
 		WriteCounter: notify.VarOf(0),
 	}
@@ -59,12 +64,13 @@ func TestBackup_Update(t *testing.T) {
 	}
 
 	schema := ident.MustSchema(ident.New("test"))
-	schemaData := &types.SchemaData{Order: make([][]ident.Table, 3)}
-	schemaData2 := &types.SchemaData{Order: make([][]ident.Table, 2)}
+	schemaData, err := newSchemaData(schema, 3)
+	r.NoError(err)
+	schemaData2, err := newSchemaData(schema, 2)
+	r.NoError(err)
 
 	ctx := stopper.WithContext(context.Background())
 	defer ctx.Stop(0)
-	r := require.New(t)
 
 	nv := notify.VarOf(schemaData)
 
@@ -79,5 +85,34 @@ func TestBackup_Update(t *testing.T) {
 
 	restored, err := b.restore(ctx, schema)
 	r.NoError(err)
-	r.Equal(schemaData2, restored)
+	// Serialization is tested elsewhere, so we just want to make
+	// sure we got some data back.
+	r.Equal(schemaData2.Entire.Order, restored.Entire.Order)
+}
+
+func newSchemaData(schema ident.Schema, numTables int) (*types.SchemaData, error) {
+	sd := &types.SchemaData{
+		Columns: &ident.TableMap[[]types.ColData]{},
+	}
+	refs := &ident.TableMap[[]ident.Table]{}
+	tables := make([]ident.Table, numTables)
+	for i := range tables {
+		table := ident.NewTable(schema, ident.New(fmt.Sprintf("table_%d", i)))
+
+		// Add some fake column data to test serialization below.
+		sd.Columns.Put(table, []types.ColData{
+			{Name: ident.New("pk"), Primary: true, Type: "int"},
+			{Name: ident.New("val"), Type: "varchar"},
+		})
+
+		var children []ident.Table
+		for j := range i {
+			if len(tables)%(j+1) == 0 {
+				children = append(children, table)
+			}
+		}
+		refs.Put(table, children)
+		tables[i] = table
+	}
+	return sd, sd.SetDependencies(refs)
 }
