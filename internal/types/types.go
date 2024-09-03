@@ -279,54 +279,6 @@ type Stagers interface {
 	Read(ctx *stopper.Context, q *StagingQuery) (<-chan *StagingCursor, error)
 }
 
-// ColData hold SQL column metadata.
-type ColData struct {
-	// A SQL expression to use with sparse payloads.
-	DefaultExpr string
-	Ignored     bool
-	Name        ident.Ident
-	// A Parse function may be supplied to allow a datatype
-	// to be converted into a type more readily
-	// used by a target database driver.
-	Parse   func(any) (any, error) `json:"-"`
-	Primary bool
-	// Type of the column.
-	Type string
-}
-
-// Equal returns true if the two ColData are equivalent under
-// case-insensitivity.
-func (d ColData) Equal(o ColData) bool {
-	return d.DefaultExpr == o.DefaultExpr &&
-		d.Ignored == o.Ignored &&
-		ident.Equal(d.Name, o.Name) &&
-		// Parse is excluded, since functions are not comparable.
-		d.Primary == o.Primary &&
-		d.Type == o.Type
-}
-
-// SchemaData holds SQL schema metadata.
-type SchemaData struct {
-	Columns *ident.TableMap[[]ColData]
-
-	// Order is a two-level slice that represents equivalency-groups
-	// with respect to table foreign-key ordering. That is, if all
-	// updates for tables in Order[N] are applied, then updates in
-	// Order[N+1] can then be applied.
-	//
-	// The need for this data can be revisited if CRDB adds support
-	// for deferrable foreign-key constraints:
-	// https://github.com/cockroachdb/cockroach/issues/31632
-	Order [][]ident.Table
-}
-
-// OriginalName returns the name of the table as it is defined in the
-// underlying database.
-func (s *SchemaData) OriginalName(tbl ident.Table) (ident.Table, bool) {
-	ret, _, ok := s.Columns.Match(tbl)
-	return ret, ok
-}
-
 // Product is an enum type to make it easy to switch on the underlying
 // database.
 type Product int

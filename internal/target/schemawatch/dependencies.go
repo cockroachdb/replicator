@@ -24,292 +24,208 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
-// depOrderTemplateMySQL computes the "referential depth" of tables based on
-// foreign-key constraints.
+// depOrderTemplateMySQL creates a mapping of child to parent tables.
 //
-// The query is structured as follows:
-//   - tables: Tables in the schema.
-//   - refs: Maps referring tables (child) to referenced tables
-//     (parent). Table self-references are excluded from this query.
-//   - roots: Tables with no FK references.
-//   - depths: Recursively computes the depth of each table from the root, walking
-//     the foreign keys constraints.
-//   - cycle_detect: ensure that all tables have a depth, by injecting a default depth.
-//     Finally, compute the maximum depth for each table in the given schema.
-
+// - $1: Table catalog (always "def" in MySQL)
+// - $2: Table schema ("my_database")
+//
+// CTE elements:
+//   - q: The catalog and schema to query
+//   - tables: All base tables in the target schema
+//   - refs: Creates child to parent mappings. In information_schema, an
+//     FK reference is expressed as a constraint applied to some (child)
+//     table that references a unique constraint on another (parent)
+//     table.
+//   - seeds: Emits a dummy row for all tables in the schema. This
+//     ensures that tables with no children are still in the result set.
+//   - top level: Union of refs and seeds
 const depOrderTemplateMySQL = `
-WITH RECURSIVE
-  tables
-    AS (
-      SELECT
-        table_catalog, table_schema, table_name
-      FROM
-        information_schema.tables
-      WHERE table_type = 'BASE TABLE'
-    ),
-  refs
-    AS (
-        SELECT
-            constraint_catalog AS child_catalog,
-            constraint_schema AS child_schema,
-            table_name AS child_table_name,
-            unique_constraint_catalog AS parent_catalog,
-            unique_constraint_schema AS parent_schema,
-            referenced_table_name AS parent_table_name
-            FROM information_schema.referential_constraints
-       WHERE
-        (constraint_catalog, constraint_schema, table_name)
-        != (unique_constraint_catalog, unique_constraint_schema,referenced_table_name)
-    ),
-  roots
-    AS (
-      SELECT
-        tables.table_catalog, tables.table_schema, tables.table_name
-      FROM
-        tables
-      WHERE
-        (tables.table_catalog, tables.table_schema, tables.table_name)
-        NOT IN (SELECT child_catalog, child_schema, child_table_name FROM refs)
-    ),
-  depths
-    AS (
-      SELECT table_catalog, table_schema, table_name, 0 AS depth FROM roots
-      UNION ALL
-        SELECT
-          refs.child_catalog,
-          refs.child_schema,
-          refs.child_table_name,
-          depths.depth + 1
-        FROM
-          depths, refs
-        WHERE
-          refs.parent_catalog = depths.table_catalog
-          AND refs.parent_schema = depths.table_schema
-          AND refs.parent_table_name = depths.table_name
-    ),
-  cycle_detect
-    AS (
-      SELECT table_catalog, table_schema, table_name, -1 AS depth FROM tables
-      UNION ALL
-        SELECT table_catalog, table_schema, table_name, depth FROM depths
-    )
-SELECT
-  table_name, max(depth) AS depth
-FROM
-  cycle_detect
-WHERE
-   table_schema = ?
-GROUP BY
-  table_name
-ORDER BY
-  depth, table_name`
+WITH
+ q (table_catalog, table_schema) AS (SELECT ?, ?),
+ tables
+  AS (
+   SELECT
+    table_catalog, table_schema, table_name
+   FROM
+    information_schema.tables JOIN q USING (table_catalog, table_schema)
+   WHERE
+    table_type = 'BASE TABLE'
+  ),
+ refs
+  AS (
+   SELECT
+    constraint_catalog AS child_catalog,
+    constraint_schema AS child_schema,
+    table_name AS child_table_name,
+    unique_constraint_catalog AS parent_catalog,
+    unique_constraint_schema AS parent_schema,
+    referenced_table_name AS parent_table_name
+   FROM
+    information_schema.referential_constraints AS r
+    JOIN q ON
+      r.unique_constraint_catalog = q.table_catalog
+      AND (
+        r.unique_constraint_schema = q.table_schema
+        OR r.constraint_schema = q.table_schema
+       )
+   WHERE
+    (constraint_schema, table_name) != (unique_constraint_schema, referenced_table_name)
+  ),
+ seeds
+  AS (
+   SELECT
+    NULL AS child_catalog,
+    NULL AS child_schema,
+    NULL AS child_table_name,
+    table_catalog AS parent_catalog,
+    table_schema AS parent_schema,
+    table_name AS parent_table_name
+   FROM
+    tables
+  )
+SELECT * FROM seeds
+UNION ALL
+SELECT * FROM refs
+`
 
-// depOrderTemplateOra computes the "referential depth" of tables based on
-// foreign-key constraints.
+// depOrderTemplateOra creates a mapping of child to parent tables.
+//
+// - owner: The owner of the tables to query ("my_application")
 //
 // The query is structured as follows:
+//   - q: The schema to query.
 //   - parent_refs: Identifies all index References as a mapping of
 //     (owner, table) -> (owner, constraint).
 //   - ref_to_tbl: Resolves the constraint name references to Primary or
 //     Unique indexes to parent table names.
 //   - tbl_to_parent: Joins parent_refs and ref_to_tbl to produce
 //     child(owner, table) -> parent(owner, table) mappings.
-//   - root: Any table that is not referenced in tbl_to_parent. Contains
-//     extra columns to be column-compatible with tbl_to_parent.
-//   - combo: A union of root and tbl_to_parent. This serves as the
-//     source of data for the recursive query.
-//   - levels: A recursive query that computes the level by finding the
-//     child tables of the previous level. The START WITH clause selects
-//     tables which have no parent or which are self-referential.
-//   - cyclic: Adds a dummy level for every table to detect any cyclic
-//     structures which were excluded by levels.
-//   - The top-level query finds the maximum depth for each table.  We
-//     subtract one from the magic LEVEL value to align with the PG query
-//     below.
+//   - seeds: Emits a dummy row for all tables in the schema. This
+//     ensures that tables with no children are still in the result set.
+//   - top-level: A union of seeds and tbl_to_parent.
 const depOrderTemplateOra = `
-WITH parent_refs AS (SELECT OWNER tbl_owner, TABLE_NAME tbl_name, R_OWNER parent_owner, R_CONSTRAINT_NAME ref_name
-                     FROM ALL_CONSTRAINTS
-                     WHERE CONSTRAINT_TYPE = 'R'),
-     ref_to_tbl AS (SELECT CONSTRAINT_NAME ref_name, OWNER parent_owner, TABLE_NAME parent_name
-                    FROM ALL_CONSTRAINTS
-                    WHERE CONSTRAINT_TYPE IN ('P', 'U')),
-     tbl_to_parent AS (SELECT tbl_owner, tbl_name, parent_owner, parent_name
-                       FROM parent_refs
-                       JOIN ref_to_tbl USING (parent_owner, ref_name)),
-     roots AS (SELECT OWNER tbl_owner, TABLE_NAME tbl_name, NULL parent_owner, NULL parent_name
-               FROM ALL_TABLES
-               WHERE (OWNER, TABLE_NAME) NOT IN (SELECT tbl_owner, tbl_name FROM tbl_to_parent)),
-     combo AS (SELECT * FROM roots UNION ALL SELECT * from tbl_to_parent),
-     levels AS (SELECT LEVEL lvl, tbl_owner, tbl_name, parent_owner, parent_name
-                FROM combo
-                START WITH (parent_owner IS NULL AND parent_name IS NULL)
-                        OR (tbl_owner = parent_owner AND tbl_name = parent_name)
-                CONNECT BY NOCYCLE (parent_owner, parent_name) = ((PRIOR tbl_owner, PRIOR tbl_name))),
-     cyclic AS (SELECT 0 lvl, OWNER tbl_owner, TABLE_NAME tbl_name
-                FROM ALL_TABLES
-                UNION ALL
-                SELECT lvl, tbl_owner, tbl_name
-                FROM levels)
-SELECT tbl_name, max(lvl) - 1 lvl
-FROM cyclic
-WHERE tbl_owner = (:owner)
-GROUP BY tbl_name
-ORDER BY lvl, tbl_name`
+WITH
+parent_refs AS (
+    SELECT OWNER child_owner, TABLE_NAME child_name, R_OWNER parent_owner, R_CONSTRAINT_NAME ref_name
+    FROM ALL_CONSTRAINTS
+    WHERE OWNER = :owner AND CONSTRAINT_TYPE = 'R'),
+ref_to_tbl AS (
+    SELECT CONSTRAINT_NAME ref_name, OWNER parent_owner, TABLE_NAME parent_name
+    FROM ALL_CONSTRAINTS
+    WHERE OWNER = :owner AND CONSTRAINT_TYPE IN ('P', 'U')),
+tbl_to_parent AS (
+    SELECT NULL child_cat, child_owner, child_name, '' parent_cat, parent_owner, parent_name
+    FROM ref_to_tbl
+    JOIN parent_refs USING (parent_owner, ref_name)
+    WHERE child_name != parent_name),
+seeds AS (
+    SELECT NULL child_cat, NULL child_owner, NULL child_name, '' parent_cat, OWNER parent_owner, TABLE_NAME parent_name
+    FROM ALL_TABLES
+    WHERE OWNER = :owner)
+SELECT /*+  gather_plan_statistics */ * FROM seeds
+UNION ALL
+SELECT * from tbl_to_parent
+`
 
-// depOrderTemplateCRDB uses the SHOW TABLES porcelain to calculate the referential depth.
-// Older version of CRDB (<= 21.2) experience an infinite loop when executing
-// depOrderTemplatePg.
-const depOrderTemplateCRDB = `
-WITH RECURSIVE
- tables AS (
-   SELECT schema_name AS sch, table_name AS tbl
-   FROM [SHOW TABLES FROM %[1]s]
-   WHERE type='table'),
- refs AS (
-   SELECT
-    constraint_schema AS child_sch, table_name AS child_tbl, referenced_table_name AS parent_tbl
-   FROM %[2]s.information_schema.referential_constraints
-   WHERE table_name != referenced_table_name
- ),
- roots AS (
-   SELECT tables.sch, tables.tbl, 0 AS depth
-   FROM tables
-   WHERE (tables.sch, tables.tbl) NOT IN (SELECT (child_sch, child_tbl) FROM refs)
- ),
- depths AS (
-   SELECT * FROM roots
-   UNION ALL
-    SELECT refs.child_sch, refs.child_tbl, max(depths.depth) + 1
-    FROM depths, refs
-    WHERE refs.parent_tbl = depths.tbl
-    GROUP BY 1, 2
- )
-SELECT tbl, max(depth)
-FROM (SELECT *, -1 AS depth FROM tables UNION ALL SELECT * FROM depths)
-GROUP BY 1
-ORDER BY 2, 1`
-
-// depOrderTemplatePg computes the "referential depth" of tables based on
-// foreign-key constraints. Note that this only works with acyclic FK
-// dependency graphs. This is ok because CRDB's lack of deferrable
-// constraints means that a cyclic dependency graph would be unusable.
-// Once CRDB has deferrable constraints, the need for computing this
-// dependency ordering goes away.
+// depOrderTemplatePg creates a mapping of child to parent tables.
 //
-// The query is structured as follows:
-//   - constraints: Used to resolve constraint names (i.e. primary or
-//     unique indexes) to the table that defines them.
-//   - tables: A list of all tables in the db.
-//   - refs: Maps referring tables (child) to referenced tables
-//     (parent). Table self-references are excluded from this query.
-//   - roots: Tables that contain no FK references to ensure that
-//     cyclical references remain unprocessed.
-//   - depths: A recursive CTE that builds up from the roots. In each
-//     step of the recursion, we select the child tables of the previous
-//     iteration whose parent table has a known depth and use the maximum
-//     parent's depth to derive the child's (updated) depth. The recursion
-//     halts when the previous iteration contains only leaf tables.
-//   - cycle_detect: Adds a sentinel depth value (-1) for all tables.
-//   - The top-level query then finds the maximum depth for each table.
-//     Any tables for which a depth cannot be computed (e.g. cyclical
-//     references) will return the sentinel value from cycle_detect.
+// - $1: Target table catalog ("my_database")
+// - $2: Target table schema ("public")
+// - $3: Boolean to enable <= v23.1 hack; see below.
 //
-// One limitation in this query is that the information_schema doesn't
-// appear to provide any way to know about the schema in which the
-// referenced table is defined.
+// CTE elements:
+//   - q: The catalog and schema to query
+//   - constraints: Associates constraint ids with tables ids
+//   - all_refs: Creates parent-child table name mappings. In
+//     information_schema, an FK reference is expressed as a constraint
+//     applied to some (child) table that references a unique constraint
+//     on another (parent) table. This clause also filters out any
+//     table self-references.
+//   - refs: A recursive clause that chases parents to children,
+//     potentially across schema boundaries. It starts by joining against
+//     q and then fills in any child tables as needed.
+//   - seeds: Emits a dummy row for all tables in the schema. This
+//     ensures that tables with no children are still in the result set.
+//   - top level: Union of refs and seeds.
+//
+// There's a hack for legacy versions of CRDB <= 23.1 which report an
+// incorrect unique_constraint_schema. Cross-schema FK references should
+// be relatively rare, and the FK constraint name can be made unique if
+// required. https://github.com/cockroachdb/cockroach/issues/111419
 const depOrderTemplatePg = `
 WITH RECURSIVE
+  q (table_catalog, table_schema) AS (VALUES ($1::TEXT, $2::TEXT)),
   constraints
     AS (
-      SELECT
-        table_catalog, table_schema, table_name, constraint_name
-      FROM
-        %[1]s.information_schema.table_constraints
+      SELECT table_catalog, table_schema, table_name,
+             constraint_catalog, constraint_schema, constraint_name
+      FROM %[1]s.information_schema.table_constraints
     ),
-  tables
+  all_refs
     AS (
       SELECT
-        table_catalog, table_schema, table_name
-      FROM
-        %[1]s.information_schema.tables
-      WHERE
-        table_type = 'BASE TABLE'
-    ),
-  refs
-    AS (
-      SELECT
-        ref.constraint_catalog AS child_catalog,
-        ref.constraint_schema AS child_schema,
+        child.table_catalog AS child_catalog,
+        child.table_schema AS child_schema,
         child.table_name AS child_table_name,
-        ref.unique_constraint_catalog AS parent_catalog,
-        ref.unique_constraint_schema AS parent_schema,
+        parent.table_catalog AS parent_catalog,
+        parent.table_schema AS parent_schema,
         parent.table_name AS parent_table_name
       FROM
         %[1]s.information_schema.referential_constraints AS ref
         JOIN constraints AS child ON
-            ref.constraint_catalog = child.table_catalog
-            AND ref.constraint_schema = child.table_schema
+            ref.constraint_catalog = child.constraint_catalog
+            AND ref.constraint_schema = child.constraint_schema
             AND ref.constraint_name = child.constraint_name
         JOIN constraints AS parent ON
             ref.unique_constraint_catalog = parent.table_catalog
-            AND ref.unique_constraint_schema = parent.table_schema
+            AND (CASE WHEN $3::BOOLEAN THEN
+                   ref.unique_constraint_schema = child.table_schema
+                ELSE
+                   ref.unique_constraint_schema = parent.table_schema
+                END)
             AND ref.unique_constraint_name = parent.constraint_name
       WHERE
         (child.table_catalog, child.table_schema, child.table_name)
-        != (parent.table_catalog, parent.table_schema, parent.table_name)
+        != (parent.table_catalog, parent.table_schema, parent.table_name)),
+  refs AS (
+    SELECT ar.* FROM all_refs ar
+    JOIN q ON (ar.parent_catalog, ar.parent_schema) =
+              (q.table_catalog, q.table_schema)
+    UNION
+    SELECT ar.* FROM all_refs ar
+    JOIN refs r ON (ar.parent_catalog, ar.parent_schema, ar.parent_table_name) =
+                   (r.child_catalog, r.child_schema, r.child_table_name)
+   ),
+  tables
+    AS (
+      SELECT table_catalog, table_schema, table_name
+      FROM %[1]s.information_schema.tables t
+      WHERE table_type = 'BASE TABLE'
     ),
-  roots
+  seeds
     AS (
       SELECT
-        tables.table_catalog, tables.table_schema, tables.table_name
-      FROM
-        tables
-      WHERE
-        (tables.table_catalog, tables.table_schema, tables.table_name)
-        NOT IN (SELECT child_catalog, child_schema, child_table_name FROM refs)
-    ),
-  depths
-    AS (
-      SELECT table_catalog, table_schema, table_name, 0 AS depth FROM roots
-      UNION ALL
-        SELECT
-          refs.child_catalog,
-          refs.child_schema,
-          refs.child_table_name,
-          depths.depth + 1
-        FROM
-          depths, refs
-        WHERE
-          refs.parent_catalog = depths.table_catalog
-          AND refs.parent_schema = depths.table_schema
-          AND refs.parent_table_name = depths.table_name
-    ),
-  cycle_detect
-    AS (
-      SELECT table_catalog, table_schema, table_name, -1 AS depth FROM tables
-      UNION ALL
-        SELECT table_catalog, table_schema, table_name, depth FROM depths
+        NULL, NULL, NULL,
+        table_catalog, table_schema, table_name
+      FROM %[1]s.information_schema.tables t
+      JOIN q USING (table_catalog, table_schema)
+      WHERE table_type = 'BASE TABLE'
     )
-SELECT
-  table_name, max(depth) AS depth
-FROM
-  cycle_detect
-WHERE
-  table_catalog = $1 AND table_schema = $2
-GROUP BY
-  table_name
-ORDER BY
-  depth, table_name`
+SELECT * FROM refs UNION ALL SELECT * FROM seeds
+`
 
-// getDependencyOrder returns equivalency groups of tables defined
-// within the given database. The order of the slice will satisfy
-// the (acyclic) foreign-key dependency graph.
-func getDependencyOrder(
+// getDependencyRefs returns a map describing the parent-to-children
+// relationships of tables. That is, the map values are the tables that
+// have some immediate dependency on the key. Tables with no
+// dependencies will have a zero-length slice as the value.
+func getDependencyRefs(
 	ctx context.Context, tx *types.TargetPool, db ident.Schema,
-) ([][]ident.Table, error) {
+) (*ident.TableMap[[]ident.Table], error) {
 	var args []any
 	var stmt string
 	switch tx.Product {
@@ -320,19 +236,18 @@ func getDependencyOrder(
 			return nil, errors.Errorf("expecting two schema parts, had %d", len(parts))
 		}
 
-		// We are using a different template for CRDB
-		// Older release (<= 21.2) may experience infinite loops using
-		// More recent releases may fail to report a correct depth
-		// when there are cross-schema dependencies.
-		// See https://github.com/cockroachdb/cockroach/issues/111419
-		// Once the issue above is fixed and we are not supporting 21.2
-		// we can use depOrderTemplatePg for CRDB as well.
+		// See discussion on depOrderTemplatePg.
+		legacyHack := false
 		if tx.Product == types.ProductCockroachDB {
-			stmt = fmt.Sprintf(depOrderTemplateCRDB, db, parts[0])
-		} else {
-			stmt = fmt.Sprintf(depOrderTemplatePg, parts[0])
-			args = []any{parts[0].Raw(), parts[1].Raw()}
+			modern, err := stdpool.CockroachMinVersion(tx.Version, "v23.2.0")
+			if err != nil {
+				return nil, err
+			}
+			legacyHack = !modern
 		}
+
+		stmt = fmt.Sprintf(depOrderTemplatePg, parts[0])
+		args = []any{parts[0].Raw(), parts[1].Raw(), legacyHack}
 
 	case types.ProductMariaDB, types.ProductMySQL:
 		parts := db.Idents(make([]ident.Ident, 0, 1))
@@ -340,7 +255,8 @@ func getDependencyOrder(
 			return nil, errors.Errorf("expecting one schema parts, had %d", len(parts))
 		}
 		stmt = depOrderTemplateMySQL
-		args = []any{parts[0].Raw()}
+		// Catalog names are hardcoded to "def" in MySQL.
+		args = []any{`def`, parts[0].Raw()}
 
 	case types.ProductOracle:
 		stmt = depOrderTemplateOra
@@ -349,46 +265,78 @@ func getDependencyOrder(
 		return nil, errors.Errorf("getDependencyOrder unimplemented product: %s", tx.Product)
 	}
 
-	var cycles []ident.Table
-	var depOrder [][]ident.Table
+	var ret *ident.TableMap[[]ident.Table]
 	err := retry.Retry(ctx, tx, func(ctx context.Context) error {
+		ret = &ident.TableMap[[]ident.Table]{}
 		rows, err := tx.QueryContext(ctx, stmt, args...)
 		if err != nil {
 			return errors.Wrap(err, stmt)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 
-		currentOrder := -1
+		// We have a switch statement here since PG-style databases have
+		// an extra level in the namespace. Tables with no incoming
+		// dependencies will have a single row with a NULL child table.
 		for rows.Next() {
-			var tableName string
-			var nextOrder int
+			var childDBRaw, childSchemaRaw, childTableRaw sql.NullString
+			var parentDBRaw, parentSchemaRaw, parentTableRaw string
 
-			if err := rows.Scan(&tableName, &nextOrder); err != nil {
-				return err
+			if err := rows.Scan(&childDBRaw, &childSchemaRaw, &childTableRaw,
+				&parentDBRaw, &parentSchemaRaw, &parentTableRaw); err != nil {
+				return errors.WithStack(err)
 			}
 
-			tbl := ident.NewTable(db, ident.New(tableName))
+			var childSchema, parentSchema ident.Schema
+			var childTableName, parentTableName ident.Ident
+			switch tx.Product {
+			case types.ProductCockroachDB, types.ProductPostgreSQL:
+				parentSchema, err = ident.NewSchema(ident.New(parentDBRaw), ident.New(parentSchemaRaw))
+				if err != nil {
+					return err
+				}
+				parentTableName = ident.New(parentTableRaw)
 
-			// Table has no well-defined ordering.
-			if nextOrder < 0 {
-				cycles = append(cycles, tbl)
-				continue
+				if childDBRaw.Valid && childSchemaRaw.Valid && childTableRaw.Valid {
+					childSchema, err = ident.NewSchema(ident.New(childDBRaw.String), ident.New(childSchemaRaw.String))
+					if err != nil {
+						return err
+					}
+					childTableName = ident.New(childTableRaw.String)
+				}
+
+			default:
+				parentSchema, err = ident.NewSchema(ident.New(parentSchemaRaw))
+				if err != nil {
+					return err
+				}
+				parentTableName = ident.New(parentTableRaw)
+
+				if childSchemaRaw.Valid && childTableRaw.Valid {
+					childSchema, err = ident.NewSchema(ident.New(childSchemaRaw.String))
+					if err != nil {
+						return err
+					}
+					childTableName = ident.New(childTableRaw.String)
+				}
 			}
 
-			// Allow skipping a level. This might happen if there
-			// are references across schemas.
-			for nextOrder > currentOrder {
-				depOrder = append(depOrder, nil)
-				currentOrder++
+			parentTable := ident.NewTable(parentSchema, parentTableName)
+			if parentTable.Empty() {
+				// Sanity-check, this should not happen.
+				return errors.New("created an empty parent table")
 			}
-			depOrder[currentOrder] = append(depOrder[currentOrder], tbl)
+
+			// We want to ensure that root tables have an entry, even if
+			// it's zero-length.
+			children := ret.GetZero(parentTable)
+			if !childSchema.Empty() && !childTableName.Empty() {
+				childTable := ident.NewTable(childSchema, childTableName)
+				children = append(children, childTable)
+				log.Tracef("schema query: parent %s -> child %s", parentTable, childTable)
+			}
+			ret.Put(parentTable, children)
 		}
-		return nil
+		return errors.WithStack(rows.Err())
 	})
-
-	if len(cycles) > 0 {
-		return nil, errors.Errorf("cyclical FK references involving tables %s", cycles)
-	}
-
-	return depOrder, err
+	return ret, err
 }
