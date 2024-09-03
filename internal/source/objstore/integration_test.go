@@ -425,7 +425,7 @@ func getConfig(
 		Workers:      defaultNumberOfWorkers,
 	}
 	if fc.chaos {
-		config.Sequencer.Chaos = 0.005
+		config.Sequencer.Chaos = 2
 	}
 	if fc.script {
 		config.Script = script.Config{

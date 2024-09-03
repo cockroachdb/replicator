@@ -40,7 +40,7 @@ const (
 // Config is an injection point common to sequencer implementations. Not
 // all sequencers necessarily respond to all configuration options.
 type Config struct {
-	Chaos            float32       // Set by tests to inject errors.
+	Chaos            int           // Set by tests to inject errors this many times per call site.
 	FlushPeriod      time.Duration // Don't queue mutations for longer than this.
 	FlushSize        int           // Ideal target database transaction size
 	IdempotentSource bool          // The upstream source is idempotent, disable extra marking.

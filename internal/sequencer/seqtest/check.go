@@ -157,7 +157,7 @@ api.configureSource("%[1]s", {
 			r.NoError(err)
 		}
 		if flags.Chaos() {
-			cfg.Chaos = 0.001
+			cfg.Chaos = 2
 			seq, err = seqFixture.Chaos.Wrap(ctx, seq)
 			r.NoError(err)
 		}

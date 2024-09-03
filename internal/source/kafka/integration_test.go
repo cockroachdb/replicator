@@ -200,7 +200,7 @@ func getConfig(fixture *base.Fixture, fc *fixtureConfig, tgt ident.Table) (*Conf
 		Topics:           []string{tgt.Raw()},
 	}
 	if fc.chaos {
-		config.Sequencer.Chaos = 0.0005
+		config.Sequencer.Chaos = 2
 	}
 	if fc.script {
 		config.Script = script.Config{
