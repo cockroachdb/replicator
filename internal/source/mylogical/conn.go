@@ -502,8 +502,9 @@ var (
 // getConnection returns a connection to the source database
 func getConnection(config *Config) (*client.Conn, error) {
 	addr := fmt.Sprintf("%s:%d", config.host, config.port)
-	return client.Connect(addr, config.user, config.password, "", func(c *client.Conn) {
+	return client.Connect(addr, config.user, config.password, "", func(c *client.Conn) error {
 		c.SetTLSConfig(config.tlsConfig)
+		return nil
 	})
 }
 
