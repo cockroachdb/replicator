@@ -18,8 +18,10 @@ package types_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
@@ -43,22 +45,26 @@ func TestOrderedAcceptor(t *testing.T) {
 	const tables = 3
 	allTables := make([]ident.Table, 0, levels*tables)
 	schema := ident.MustSchema(ident.New("my_db"), ident.New("public"))
-	schemaData := &types.SchemaData{Order: make([][]ident.Table, levels)}
-	for levelIdx := range schemaData.Order {
-		level := make([]ident.Table, tables)
-		for tableIdx := range level {
+	schemaData := &types.SchemaData{
+		Entire: &types.SchemaComponent{},
+	}
+	for levelIdx := range levels {
+		for tableIdx := range tables {
 			table := ident.NewTable(schema, ident.New(fmt.Sprintf("%d-%d", levelIdx, tableIdx)))
-			level[tableIdx] = table
+			schemaData.Entire.Order = append(schemaData.Entire.Order, table)
 			allTables = append(allTables, table)
 		}
-		schemaData.Order[levelIdx] = level
 	}
+	schemaData.Entire.ReverseOrder = slices.Clone(schemaData.Entire.Order)
+	slices.Reverse(schemaData.Entire.ReverseOrder)
 
 	// Create a batch with mutations striped across the levels.
 	const mutations = 128
 	batch := &types.MultiBatch{}
 	for i := 0; i < mutations; i++ {
 		r.NoError(batch.Accumulate(allTables[i%len(allTables)], types.Mutation{
+			Data: json.RawMessage(`{"fake":true}`),
+			Key:  json.RawMessage(`[ "fake" ]`),
 			Time: hlc.New(int64(i+1), i+1),
 		}))
 	}
@@ -69,6 +75,10 @@ func TestOrderedAcceptor(t *testing.T) {
 	r.NoError(acc.AcceptMultiBatch(ctx, &types.MultiBatch{}, &types.AcceptOptions{}))
 	// We check that the batch created before works
 	r.NoError(acc.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{}))
+
+	// Validate unwrapping.
+	r.Same(acc, types.OrderedAcceptorFrom(acc, &fakeWatchers{schemaData}))
+	r.Same(acc, types.UnorderedAcceptorFrom(acc))
 
 	// We expect to see exactly one call per table and the table order
 	// should respect the level order.
@@ -100,11 +110,12 @@ func TestOrderedAcceptor(t *testing.T) {
 	unknownTable := ident.NewTable(schema, ident.New("unknown"))
 	badBatch := &types.MultiBatch{}
 	r.NoError(badBatch.Accumulate(unknownTable, types.Mutation{
-		Time: hlc.New(1, 1),
+		Deletion: true,
+		Time:     hlc.New(1, 1),
 	}))
 	r.ErrorContains(
 		acc.AcceptMultiBatch(ctx, badBatch, &types.AcceptOptions{}),
-		"unable to determine apply order")
+		"delete sent to unknown table")
 }
 
 func TestUnorderedAcceptor(t *testing.T) {
@@ -133,6 +144,10 @@ func TestUnorderedAcceptor(t *testing.T) {
 		r.Nil(call.Multi)
 		r.Nil(call.Temporal)
 	}
+
+	// Validate unwrapping.
+	r.NotSame(acc, types.OrderedAcceptorFrom(acc, &fakeWatchers{}))
+	r.Same(acc, types.UnorderedAcceptorFrom(acc))
 }
 
 type fakeWatchers struct {
