@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"database/sql"
 	sqldriver "database/sql/driver"
+	errors2 "errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/secure"
 	"github.com/go-sql-driver/mysql"
@@ -87,7 +89,12 @@ func (o *onomastic) newName(prefix string) string {
 // OpenMySQLAsTarget opens a database connection, returning it as
 // a single connection.
 func OpenMySQLAsTarget(
-	ctx *stopper.Context, connectString string, url *url.URL, options ...Option,
+	ctx *stopper.Context,
+	connectString string,
+	url *url.URL,
+	backup *Backup,
+	breakers *sinktest.Breakers,
+	options ...Option,
 ) (*types.TargetPool, error) {
 	var tc TestControls
 	if err := attachOptions(ctx, &tc, options); err != nil {
@@ -144,6 +151,7 @@ func OpenMySQLAsTarget(
 		}
 		ctx.Defer(func() { _ = ret.Close() })
 
+		// TODO: need to figure out a better way than ping, if we're going to memoize the version
 	ping:
 		if err := ret.Ping(); err != nil {
 			// For some errors, we retry.
@@ -163,7 +171,17 @@ func OpenMySQLAsTarget(
 		}
 		// Testing that connection is usable.
 		if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
-			return nil, errors.Wrap(err, "could not query version")
+			queryErr := errors.Wrap(err, "could not query version")
+			ver, err := backup.Load(ctx, connectString)
+			if err != nil {
+				return nil, errors2.Join(queryErr, errors.Wrap(err, "could not load version from staging"))
+			}
+			if ver == "" {
+				return nil, fmt.Errorf("empty version loaded from staging")
+			}
+			ret.Version = ver
+		} else if err := backup.Store(ctx, connectString, ret.Version); err != nil {
+			return nil, errors.Wrap(err, "could not store version to staging")
 		}
 		log.Infof("Version %s.", ret.Version)
 		if strings.Contains(ret.Version, "MariaDB") {

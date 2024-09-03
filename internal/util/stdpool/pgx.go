@@ -20,9 +20,13 @@ package stdpool
 import (
 	"context"
 	"database/sql"
+	errors2 "errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/jackc/pgx/v5"
@@ -132,11 +136,15 @@ func OpenPgxAsStaging(
 // OpenPgxAsTarget uses pgx to open a database connection, returning it as a
 // stdlib pool.
 func OpenPgxAsTarget(
-	ctx *stopper.Context, connectString string, options ...Option,
+	ctx *stopper.Context,
+	connectString string,
+	backup *Backup,
+	breakers *sinktest.Breakers,
+	options ...Option,
 ) (*types.TargetPool, error) {
 	db, err := openPgx(ctx, connectString, options,
 		func(ctx *stopper.Context, cfg *pgxpool.Config) (*sql.DB, error) {
-			impl := stdlib.OpenDB(*cfg.ConnConfig)
+			impl := stdlib.OpenDB(*cfg.ConnConfig, pgxBeforeConnectBreaker(&breakers.TargetConnectionFails))
 			ctx.Defer(func() { _ = impl.Close() })
 			return impl, nil
 		})
@@ -155,10 +163,21 @@ func OpenPgxAsTarget(
 	}
 
 	if err := retry.Retry(ctx, ret, func(ctx context.Context) error {
-		return ret.QueryRowContext(ctx, "SELECT version()").Scan(&ret.Version)
+		return ret.QueryRow("SELECT VERSION();").Scan(&ret.Version)
 	}); err != nil {
-		return nil, errors.Wrap(err, "could not determine cluster version")
+		queryErr := errors.Wrap(err, "could not query version")
+		ver, err := backup.Load(ctx, connectString)
+		if err != nil {
+			return nil, errors2.Join(queryErr, errors.Wrap(err, "could not load version from staging"))
+		}
+		if ver == "" {
+			return nil, fmt.Errorf("empty version loaded from staging")
+		}
+		ret.Version = ver
+	} else if err := backup.Store(ctx, connectString, ret.Version); err != nil {
+		return nil, errors.Wrap(err, "could not store version to staging")
 	}
+
 	if err := setTableHint(ret.Info()); err != nil {
 		return nil, err
 	}
@@ -204,4 +223,13 @@ func openPgx[P attachable](
 	}
 
 	return ret, attachOptions(ctx, ret, options)
+}
+
+func pgxBeforeConnectBreaker(flag *atomic.Bool) stdlib.OptionOpenDB {
+	return stdlib.OptionBeforeConnect(func(ctx context.Context, config *pgx.ConnConfig) error {
+		if flag.Load() {
+			return errors.New("testing connection failure")
+		}
+		return nil
+	})
 }

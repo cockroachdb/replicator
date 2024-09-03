@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
 	staging2 "github.com/cockroachdb/replicator/internal/staging"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
@@ -36,6 +37,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
 	"github.com/google/wire"
 	"net"
@@ -82,7 +84,9 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 		return nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	targetPool, err := sinkprod.ProvideTargetPool(ctx, checker, targetConfig, diagnostics)
+	backup := stdpool.ProvideBackup(memoMemo, stagingPool)
+	breakers := sinktest.NewBreakers()
+	targetPool, err := sinkprod.ProvideTargetPool(ctx, checker, targetConfig, diagnostics, backup, breakers)
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +95,8 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 		return nil, err
 	}
 	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
-	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics, backup)
+	schemawatchBackup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics, schemawatchBackup)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +188,9 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	}
 	cdcConfig := &config.CDC
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics)
+	backup := stdpool.ProvideBackup(memoMemo, stagingPool)
+	breakers := sinktest.NewBreakers()
+	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics, backup, breakers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -197,8 +203,8 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		return nil, nil, err
 	}
 	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
-	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	schemawatchBackup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, schemawatchBackup)
 	if err != nil {
 		return nil, nil, err
 	}
