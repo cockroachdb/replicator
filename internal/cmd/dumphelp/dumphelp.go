@@ -39,18 +39,36 @@ func Command() *cobra.Command {
 				return err
 			}
 
-			for _, toDump := range cmd.Parent().Commands() {
-				out, err := os.Create(filepath.Join(base, toDump.Name()+".help.txt"))
-				if err != nil {
-					return err
-				}
-				_, err = io.WriteString(out, toDump.UsageString())
-				_ = out.Close()
-				if err != nil {
+			for _, cmd := range cmd.Root().Commands() {
+				if err := emit(cmd, base, ""); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
+}
+
+func emit(cmd *cobra.Command, base, prefix string) error {
+	if len(prefix) > 0 {
+		prefix += "_"
+	}
+	prefix += cmd.Name()
+
+	out, err := os.Create(filepath.Join(base, prefix+".help.txt"))
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(out, cmd.UsageString()); err != nil {
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	for _, sub := range cmd.Commands() {
+		if err := emit(sub, base, prefix); err != nil {
+			return err
+		}
+	}
+	return nil
 }
