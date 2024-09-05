@@ -209,8 +209,8 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 	workload, _, err := fixture.NewWorkload(ctx,
 		&all.WorkloadConfig{
 			// Don't create foreign keys references in immediate mode
-			DisableFK:         fc.immediate,
-			DisablePreStaging: true,
+			DisableFK:      fc.immediate,
+			DisableStaging: true,
 		})
 	r.NoError(err)
 	bucketName := fixture.TargetSchema.Schema().Raw()

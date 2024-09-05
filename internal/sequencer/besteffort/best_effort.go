@@ -14,38 +14,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package besteffort contains a best-effort implementation of [types.MultiAcceptor].
+// Package besteffort relaxes the consistency of a target schema.
 package besteffort
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/sequencer"
-	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
-	"github.com/cockroachdb/replicator/internal/sequencer/sequtil"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	log "github.com/sirupsen/logrus"
 )
 
-// BestEffort injects an acceptor shim that will attempt to write
-// directly to the target table. It will also run a concurrent
-// sequencer for each table that is provided.
+// BestEffort relaxes the overall consistency of a target schema to
+// improve throughput for smaller groups of tables defined by
+// foreign-key relationships.
 type BestEffort struct {
 	cfg         *sequencer.Config
-	leases      types.Leases
-	marker      *decorators.Marker
-	once        *decorators.Once
 	scheduler   *scheduler.Scheduler
-	stagingPool *types.StagingPool
 	stagers     types.Stagers
-	targetPool  *types.TargetPool
+	stagingPool *types.StagingPool
 	timeSource  func() hlc.Time
 	watchers    types.Watchers
 }
@@ -77,99 +72,115 @@ type bestEffort struct {
 
 var _ sequencer.Sequencer = (*bestEffort)(nil)
 
-// Start implements [sequencer.Starter]. It will launch a background
-// goroutine to attempt to apply staged mutations for each table within
-// the group.
+// Start implements [sequencer.Starter]. It will start multiple
+// instances of the delegate sequencer, once for each
+// referentially-connected group of tables.
 func (s *bestEffort) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
-	stats := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
-	grace := s.cfg.TaskGracePeriod
-	sequtil.LeaseGroup(ctx, s.leases, grace, opts.Group, func(ctx *stopper.Context, group *types.TableGroup) {
-		for _, table := range opts.Group.Tables {
-			table := table // Capture.
+	watcher, err := s.watchers.Get(opts.Group.Enclosing)
+	if err != nil {
+		return nil, nil, err
+	}
 
-			// Create an options configuration that executes the
-			// delegate Sequencer as though it were configured only as a
-			// single table. The group name is changed to ensure that
-			// each Start call can acquire its own lease.
-			subOpts := opts.Copy()
-			subOpts.MaxDeferred = s.cfg.TimestampLimit
-			subOpts.Group.Name = ident.New(subOpts.Group.Name.Raw() + ":" + table.Raw())
-			subOpts.Group.Tables = []ident.Table{table}
+	// Ensure the initial map has all tables in it. This ensures that
+	// all tables must make some progress before the stat will advance.
+	statMap := &ident.TableMap[hlc.Range]{}
+	for _, table := range opts.Group.Tables {
+		statMap.Put(table, hlc.RangeEmpty())
+	}
+	stats := notify.VarOf(sequencer.NewStat(opts.Group, statMap))
 
-			_, subStats, err := s.delegate.Start(ctx, subOpts)
-			if err != nil {
-				log.WithError(err).Warnf(
-					"BestEffort.Start: could not start nested Sequencer for %s", table)
-				return
-			}
+	// This will route table data to the appropriate sub-sequencer.
+	ret := &router{}
 
-			// Start a helper to aggregate the progress values together.
-			ctx.Go(func(ctx *stopper.Context) error {
-				// Ignoring error since innermost callback returns nil.
-				_, _ = stopvar.DoWhenChanged(ctx, nil, subStats, func(ctx *stopper.Context, _, subStat sequencer.Stat) error {
-					_, _, err := stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
-						nextProgress, ok := subStat.Progress().Get(table)
-						if !ok {
-							return nil, notify.ErrNoUpdate
-						}
-						next := old.Copy()
-						next.Progress().Put(table, nextProgress)
-						return next, nil
-					})
-					return err
-				})
-				return nil
+	// Start a delegate sequencer for each non-overlapping subgroup of
+	// tables in the target schema. This ensures that tables with FK
+	// relationships can be swept in a coordinated fashion.
+	for _, comp := range watcher.Get().Components {
+		// Make a shallow copy and then filter by input groups.
+		tables := slices.Clone(comp.Order)
+		slices.DeleteFunc(tables, func(toDelete ident.Table) bool {
+			return !slices.ContainsFunc(opts.Group.Tables, func(requested ident.Table) bool {
+				return ident.Equal(toDelete, requested)
 			})
-		}
-
-		// Generate a synthetic maximum checkpoint bound in the absence
-		// of any existing checkpoints. This allows partial progress to
-		// be made in advance of receiving any checkpoints from the
-		// source.
-		ctx.Go(func(ctx *stopper.Context) error {
-			for {
-				if _, _, err := opts.Bounds.Update(func(old hlc.Range) (hlc.Range, error) {
-					// Cancel this task once there are checkpoints.
-					if old.Min() != hlc.Zero() {
-						return hlc.Range{}, context.Canceled
-					}
-					// This source has a negative offset from the
-					// current time. If there's a single, unapplied
-					// checkpoint, it should be in the relative future
-					// from the synthetic ones.
-					proposed := s.timeSource()
-					if hlc.Compare(proposed, old.MaxInclusive()) > 0 {
-						return hlc.RangeIncluding(old.Min(), proposed), nil
-					}
-					return hlc.Range{}, notify.ErrNoUpdate
-				}); err != nil {
-					// Will be context.Canceled from callback above.
-					return nil
-				}
-				select {
-				case <-time.After(time.Second):
-				case <-ctx.Stopping():
-					return nil
-				}
-			}
 		})
 
-		// Wait until shutdown.
-		<-ctx.Stopping()
+		subOpts := opts.Copy()
+		subOpts.Group.Tables = tables
+		subOpts.MaxDeferred = s.cfg.TimestampLimit
+
+		subAcc, subStats, err := s.delegate.Start(ctx, subOpts)
+		if err != nil {
+			log.WithError(err).Warnf(
+				"BestEffort.Start: could not start nested Sequencer for %s", tables)
+			return nil, nil, err
+		}
+
+		// Route incoming mutations to the component's sequencer.
+		for _, table := range comp.Order {
+			// This is a special case for single-table groups, where
+			// we'll try to write directly to the target table, rather
+			// than wait for a stage-apply cycle.
+			if len(comp.Order) == 1 {
+				log.Tracef("enabling direct path for %s", comp.Order[0])
+				subAcc = types.UnorderedAcceptorFrom(&directAcceptor{
+					BestEffort: s.BestEffort,
+					apply:      subOpts.Delegate,
+					fallback:   subAcc,
+				})
+			}
+			ret.routes.Put(table, subAcc)
+		}
+
+		// Start a helper to aggregate the progress values together.
+		ctx.Go(func(ctx *stopper.Context) error {
+			// Ignoring error since innermost callback returns nil.
+			_, _ = stopvar.DoWhenChanged(ctx, nil, subStats, func(ctx *stopper.Context, _, subStat sequencer.Stat) error {
+				_, _, err := stats.Update(func(old sequencer.Stat) (sequencer.Stat, error) {
+					next := old.Copy()
+					subStat.Progress().CopyInto(next.Progress())
+					buf, _ := next.Progress().MarshalJSON()
+					log.Tracef("aggregated progress: %s", buf)
+					return next, nil
+				})
+				return err
+			})
+			return nil
+		})
+	}
+
+	// Generate a synthetic maximum checkpoint bound in the absence
+	// of any existing checkpoints. This allows partial progress to
+	// be made in advance of receiving any checkpoints from the
+	// source.
+	ctx.Go(func(ctx *stopper.Context) error {
+		for {
+			if _, _, err := opts.Bounds.Update(func(old hlc.Range) (hlc.Range, error) {
+				// Cancel this task once there are checkpoints.
+				if old.Min() != hlc.Zero() {
+					return hlc.Range{}, context.Canceled
+				}
+				// This source has a negative offset from the
+				// current time. If there's a single, unapplied
+				// checkpoint, it should be in the relative future
+				// from the synthetic ones.
+				proposed := s.timeSource()
+				if hlc.Compare(proposed, old.MaxInclusive()) > 0 {
+					return hlc.RangeIncluding(old.Min(), proposed), nil
+				}
+				return hlc.Range{}, notify.ErrNoUpdate
+			}); err != nil {
+				// Will be context.Canceled from callback above.
+				return nil
+			}
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Stopping():
+				return nil
+			}
+		}
 	})
 
-	acc := opts.Delegate
-	// Write staging entries only for immediately-applied mutations.
-	if !s.cfg.IdempotentSource {
-		acc = s.marker.MultiAcceptor(acc)
-	}
-	// Respect table-dependency ordering.
-	acc = types.OrderedAcceptorFrom(&acceptor{s.BestEffort, acc}, s.watchers)
-	// Filter repeated messages.
-	if !s.cfg.IdempotentSource {
-		acc = s.once.MultiAcceptor(acc)
-	}
-	return acc, stats, nil
+	return types.UnorderedAcceptorFrom(ret), stats, nil
 }

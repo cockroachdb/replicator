@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/replicator/internal/sequencer"
-	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
@@ -35,24 +34,16 @@ var Set = wire.NewSet(
 // ProvideBestEffort is called by Wire.
 func ProvideBestEffort(
 	cfg *sequencer.Config,
-	leases types.Leases,
-	marker *decorators.Marker,
-	once *decorators.Once,
 	scheduler *scheduler.Scheduler,
-	stagingPool *types.StagingPool,
 	stagers types.Stagers,
-	targetPool *types.TargetPool,
+	stagingPool *types.StagingPool,
 	watchers types.Watchers,
 ) *BestEffort {
 	return &BestEffort{
 		cfg:         cfg,
-		leases:      leases,
-		marker:      marker,
-		once:        once,
 		scheduler:   scheduler,
-		stagingPool: stagingPool,
 		stagers:     stagers,
-		targetPool:  targetPool,
+		stagingPool: stagingPool,
 		timeSource: func() hlc.Time {
 			// Allow synthetic timestamps to be created at a reasonable
 			// point in the past, in the absence of any checkpoints.
