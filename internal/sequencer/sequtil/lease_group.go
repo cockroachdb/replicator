@@ -30,8 +30,8 @@ import (
 
 // LeaseGroup ensures that multiple sequencers do not operate on the
 // same tables. This function will create a goroutine within the context
-// that acquires a lease based on the group name. The callback will be
-// executed as a goroutine within a suitably nested stopper.
+// that acquires a lease based on the tables in the group. The callback
+// will be executed as a goroutine within a suitably nested stopper.
 func LeaseGroup(
 	outer *stopper.Context,
 	leases types.Leases,
@@ -47,16 +47,18 @@ func LeaseGroup(
 
 	// Start a goroutine in the outer context.
 	outer.Go(func(outer *stopper.Context) error {
+		// Acquire a lease on each table in the group.
+		names := make([]string, len(group.Tables))
+		for idx, table := range group.Tables {
+			names[idx] = fmt.Sprintf("sequtil.Lease.%s", table.Canonical().Raw())
+		}
+
 		// Run this in a loop in case of non-renewal. This is likely
 		// caused by database overload or any other case where we can't
 		// run SQL in a timely fashion.
 		for !outer.IsStopping() {
 			entry.Trace("waiting to acquire lease group")
-			keys := []string{
-				fmt.Sprintf("sequtil.Lease.%s", group.Name),
-			}
-			// Acquire a lease.
-			leases.Singleton(outer, keys,
+			leases.Singleton(outer, names,
 				func(leaseContext context.Context) error {
 					entry.Debug("acquired lease group")
 					defer entry.Debug("released lease group")

@@ -99,8 +99,8 @@ func TestStepByStep(t *testing.T) {
 func TestImmediate(t *testing.T) {
 	seqtest.CheckSequencer(t,
 		&all.WorkloadConfig{
-			DisableFK:         true,
-			DisablePreStaging: true,
+			DisableFK:      true,
+			DisableStaging: true,
 		},
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
 			return seqFixture.Immediate

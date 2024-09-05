@@ -40,7 +40,6 @@ import (
 )
 
 func TestUserScriptSequencer(t *testing.T) {
-	log.SetLevel(log.TraceLevel)
 	for mode := switcher.MinMode; mode <= switcher.MaxMode; mode++ {
 		t.Run(mode.String(), func(t *testing.T) {
 			testUserScriptSequencer(t, mode)
@@ -172,10 +171,10 @@ api.configureTable("t_2", {
 	// Make staged mutations eligible for processing.
 	bounds.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
 
-	// Wait for (async) replication for the first table name.
+	// Wait for (async) replication.
 	progress, progressMade := stats.Get()
 	for {
-		targetProgress := progress.Progress().GetZero(tgts[0])
+		targetProgress := sequencer.CommonProgress(progress)
 		if hlc.Compare(targetProgress.MaxInclusive(), endTime) >= 0 {
 			break
 		}
@@ -234,10 +233,10 @@ api.configureTable("t_2", {
 	// Make next batch of mutations eligible for processing.
 	bounds.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
 
-	// Wait for (async) replication for the first table name.
+	// Wait for (async) replication for the tables.
 	progress, progressMade = stats.Get()
 	for {
-		targetProgress := progress.Progress().GetZero(tgts[0])
+		targetProgress := sequencer.CommonProgress(progress)
 		if hlc.Compare(targetProgress.MaxInclusive(), endTime) >= 0 {
 			break
 		}

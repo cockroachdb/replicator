@@ -112,6 +112,11 @@ func (w *watcher) Get() *types.SchemaData {
 	return ret
 }
 
+// GetNotify implements types.Watcher.
+func (w *watcher) GetNotify() *notify.Var[*types.SchemaData] {
+	return w.data
+}
+
 // Refresh immediately refreshes the watcher's internal cache. This
 // is intended for use by tests.
 func (w *watcher) Refresh(ctx context.Context, tx *types.TargetPool) error {
@@ -273,10 +278,11 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 			return err
 		}
 
-		// Empty if there were no tables.
+		// No tables. Initialize the remaining fields with empty data.
 		if sch.Empty() {
-			return nil
+			return ret.SetDependencies(&ident.TableMap[[]ident.Table]{})
 		}
+
 		order, err := getDependencyRefs(ctx, tx, sch)
 		if err != nil {
 			return err
