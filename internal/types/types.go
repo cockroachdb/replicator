@@ -444,6 +444,9 @@ type Watcher interface {
 	// Get returns a snapshot of all tables in the target database.
 	// The returned struct must not be modified.
 	Get() *SchemaData
+	// GetNotify returns a notification variable containing snapshots of
+	// table in the target database.
+	GetNotify() *notify.Var[*SchemaData]
 	// Refresh will force the Watcher to immediately query the database
 	// for updated schema information. This is intended for testing and
 	// does not need to be called in the general case.

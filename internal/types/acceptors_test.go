@@ -166,6 +166,9 @@ type fakeWatcher struct {
 }
 
 func (w *fakeWatcher) Get() *types.SchemaData { return w.data }
+
+func (w *fakeWatcher) GetNotify() *notify.Var[*types.SchemaData] { return notify.VarOf(w.data) }
+
 func (w *fakeWatcher) Refresh(_ context.Context, _ *types.TargetPool) error {
 	return errors.New("unimplemented")
 }

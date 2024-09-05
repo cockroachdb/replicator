@@ -281,7 +281,8 @@ func (s *Core) Start(
 				status, _ := outcome.Get()
 				if status.Success() {
 					continue
-				} else if err := status.Err(); err != nil {
+				}
+				if err := status.Err(); err != nil {
 					if errors.Is(err, errPoisoned) {
 						// This is a non-error in best-effort mode.
 						log.Tracef("reach soft FK error limit (%d) for %s; backing off",
@@ -290,19 +291,21 @@ func (s *Core) Start(
 						log.WithError(err).Warnf("error while copying data for %s; will restart", group)
 					}
 					return
-				} else {
-					toMonitor[idx] = outcome
-					idx++
 				}
+				toMonitor[idx] = outcome
+				idx++
 			}
 			toMonitor = toMonitor[:idx]
 
 			select {
-			case <-time.After(time.Second):
-				// Perform maintenance
+			case <-time.After(s.cfg.QuiescentPeriod):
+				// Perform idle maintenance
 			case taskOutcome := <-errorReports:
-				// New task launched, monitor it.
+				// New task(s) launched.
 				toMonitor = append(toMonitor, taskOutcome)
+				for len(errorReports) > 0 {
+					toMonitor = append(toMonitor, <-errorReports)
+				}
 			case <-ctx.Stopping():
 				// Clean shutdown
 				return

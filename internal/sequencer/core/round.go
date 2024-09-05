@@ -101,7 +101,7 @@ func (r *round) scheduleCommit(
 
 		// Internally retry 40001, etc. errors.
 		err := retry.Retry(ctx, r.targetPool, func(ctx context.Context) error {
-			return r.tryCommit(ctx)
+			return r.tryCommit(stopper.From(ctx))
 		})
 
 		// Report successful progress.
@@ -144,9 +144,14 @@ func (r *round) scheduleCommit(
 
 // tryCommit attempts to commit the batch. It will send the data to the
 // target and mark the mutations as applied within staging.
-func (r *round) tryCommit(ctx context.Context) error {
+func (r *round) tryCommit(ctx *stopper.Context) error {
+	// We may have been delayed for an arbitrarily long period of time.
+	if ctx.IsStopping() {
+		return stopper.ErrStopped
+	}
+
+	log.Tracef("round.tryCommit: beginning for %s to %s", r.group, r.advanceTo)
 	r.lastAttempt.SetToCurrentTime()
-	var err error
 
 	// Passed to staging.
 	toMark := ident.TableMap[[]types.Mutation]{}
@@ -154,8 +159,6 @@ func (r *round) tryCommit(ctx context.Context) error {
 		toMark.Put(table, append(toMark.GetZero(table), mut))
 		return nil
 	}))
-
-	log.Tracef("round.tryCommit: beginning tx for %s to %s", r.group, r.advanceTo)
 
 	// We're going to manage the target and the staging transaction
 	// concurrently. The target transaction must commit before the
@@ -168,7 +171,7 @@ func (r *round) tryCommit(ctx context.Context) error {
 
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
-		targetTx, err := r.targetPool.BeginTx(ctx, nil)
+		targetTx, err := r.targetPool.BeginTx(egCtx, nil)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -182,11 +185,11 @@ func (r *round) tryCommit(ctx context.Context) error {
 	})
 	eg.Go(func() error {
 		return toMark.Range(func(table ident.Table, muts []types.Mutation) error {
-			stager, err := r.stagers.Get(ctx, table)
+			stager, err := r.stagers.Get(egCtx, table)
 			if err != nil {
 				return err
 			}
-			return stager.MarkApplied(ctx, stagingTx, muts)
+			return stager.MarkApplied(egCtx, stagingTx, muts)
 		})
 	})
 
@@ -199,8 +202,7 @@ func (r *round) tryCommit(ctx context.Context) error {
 	// commit, however, we'd re-apply the work that was just
 	// performed. This should wind up being a no-op in the
 	// general case.
-	err = errors.WithStack(stagingTx.Commit(ctx))
-	if err != nil {
+	if err := stagingTx.Commit(ctx); err != nil {
 		r.skew.Inc()
 		return errors.Wrap(err, "round.tryCommit: skew condition")
 	}

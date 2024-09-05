@@ -98,8 +98,9 @@ func (g *GeneratorBase) ChildRows() []*ChildRow {
 
 // GenerateInto will add mutations to the batch at the requested time.
 func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
+	const cases = 7 // Number of switch cases below.
 	val := time.Nanos()
-	switch g.generation % 5 {
+	switch g.generation % cases {
 	case 0: // Insert a parent row
 		parent := g.pickNewParent()
 		g.ParentVals[parent] = val
@@ -150,6 +151,47 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time: time,
 		})
+
+	case 5: // Delete a child 20% of the time this case fires.
+		if g.generation%5 != 0 {
+			break
+		}
+		child := g.pickExistingChild()
+		delete(g.Children, child)
+		delete(g.ChildToParent, child)
+		delete(g.ChildVals, child)
+		_ = batch.Accumulate(g.Child, types.Mutation{
+			Deletion: true,
+			Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
+			Time:     time,
+		})
+
+	case 6: // Delete a parent and cascade to children.
+		if g.generation%5 != 0 {
+			break
+		}
+		parent := g.pickExistingParent()
+		delete(g.Parents, parent)
+		delete(g.ParentVals, parent)
+		_ = batch.Accumulate(g.Parent, types.Mutation{
+			Deletion: true,
+			Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, parent)),
+			Time:     time,
+		})
+
+		for child, p := range g.ChildToParent {
+			if p != parent {
+				continue
+			}
+			delete(g.Children, child)
+			delete(g.ChildToParent, child)
+			delete(g.ChildVals, child)
+			_ = batch.Accumulate(g.Child, types.Mutation{
+				Deletion: true,
+				Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
+				Time:     time,
+			})
+		}
 
 	default:
 		panic("check your modulus")

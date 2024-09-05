@@ -26,26 +26,26 @@ import (
 func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptConfig *script.Config) (*Fixture, error) {
 	baseFixture := fixture.Fixture
 	context := baseFixture.Context
+	schedulerScheduler, err := scheduler.ProvideScheduler(context, config)
+	if err != nil {
+		return nil, err
+	}
+	stagers := fixture.Stagers
 	stagingPool := baseFixture.StagingPool
+	watchers := fixture.Watchers
+	bestEffort := besteffort.ProvideBestEffort(config, schedulerScheduler, stagers, stagingPool, watchers)
+	chaosChaos := &chaos.Chaos{
+		Config: config,
+	}
 	stagingSchema := baseFixture.StagingDB
 	leases, err := provideLeases(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
-	stagers := fixture.Stagers
+	targetPool := baseFixture.TargetPool
+	coreCore := core.ProvideCore(config, leases, schedulerScheduler, stagers, stagingPool, targetPool)
 	marker := decorators.ProvideMarker(stagingPool, stagers)
 	once := decorators.ProvideOnce(stagingPool, stagers)
-	schedulerScheduler, err := scheduler.ProvideScheduler(context, config)
-	if err != nil {
-		return nil, err
-	}
-	targetPool := baseFixture.TargetPool
-	watchers := fixture.Watchers
-	bestEffort := besteffort.ProvideBestEffort(config, leases, marker, once, schedulerScheduler, stagingPool, stagers, targetPool, watchers)
-	chaosChaos := &chaos.Chaos{
-		Config: config,
-	}
-	coreCore := core.ProvideCore(config, leases, schedulerScheduler, stagers, stagingPool, targetPool)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(config, targetPool, marker, once, retryTarget, stagers)
 	retireRetire := retire.ProvideRetire(config, stagingPool, stagers)
