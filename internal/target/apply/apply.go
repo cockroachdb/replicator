@@ -151,13 +151,17 @@ func (f *factory) newApply(
 func (a *apply) Apply(ctx context.Context, tx types.TargetQuerier, muts []types.Mutation) error {
 	start := time.Now()
 
-	// We want to ensure that we achieve a last-one-wins behavior within
-	// an immediate-mode batch. This does perform unnecessary work
-	// in the staged mode, since we perform the per-key deduplication
-	// and sorting as part of de-queuing mutations.
-	//
-	// See also the discussion on TestRepeatedKeysWithIgnoredColumns
-	muts = msort.UniqueByKey(muts)
+	// A frontend may or may not coalesce multiple updates to the same
+	// row together. Thus, it's possible that there are multiple
+	// mutations for the same key present in the input. This is
+	// furthermore compounded by some frontends only providing sparse
+	// updates to rows, rather than complete rows. Instead of pushing
+	// this complexity out to the frontend, we'll solve it here by
+	// folding mutations for the same key together.
+	muts, err := msort.FoldByKey(muts)
+	if err != nil {
+		return err
+	}
 
 	countError := func(err error) error {
 		if err != nil {
