@@ -24,7 +24,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
-	"github.com/cockroachdb/replicator/internal/util/msort"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -108,10 +107,9 @@ func (a *directAcceptor) AcceptTableBatch(
 
 		// Apply the remaining mutations. This call disregards the
 		// original options, since we wouldn't want to use any
-		// pre-existing transaction. We'll also apply a last-one-wins
-		// approach to further reduce the number of applied mutations.
+		// pre-existing transaction.
 		attemptBatch := batch.Empty()
-		attemptBatch.Data = msort.UniqueByKey(attempt)
+		attemptBatch.Data = attempt
 		if err = a.apply.AcceptTableBatch(ctx, attemptBatch, &types.AcceptOptions{}); err != nil {
 			return err
 		}

@@ -18,6 +18,7 @@ package apply_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2028,10 +2029,6 @@ CREATE TABLE %s (
 			next.Val2 = "val2_updated"
 			patchP.Val2 = next.Val2
 		}
-		if i&(1<<3) != 0 {
-			next.Val3 = "val3_updated"
-			patchP.Val3 = next.Val3
-		}
 		expected[i] = next
 		patchData, err := json.Marshal(patchP)
 		r.NoError(err)
@@ -2040,14 +2037,45 @@ CREATE TABLE %s (
 			Key:  []byte(fmt.Sprintf(`[%d]`, i)),
 		}
 	}
+	// Generate supplemental, sparse mutations for a subset of the keys.
+	// This ensures that two mutations for the same key in the same
+	// target transaction will have their data elements folded together.
+	for i := range patches {
+		if i%7 == 0 {
+			expected[i].Val3 = "val3_updated"
+
+			patchP := &Payload{PK: i}
+			patchP.Val3 = expected[i].Val3
+
+			patchData, err := json.Marshal(patchP)
+			r.NoError(err)
+			patches = append(patches, types.Mutation{
+				Data: patchData,
+				Key:  []byte(fmt.Sprintf(`[%d]`, i)),
+			})
+		}
+		if i%11 == 0 {
+			expected[i] = &Payload{PK: i}
+
+			patches = append(patches, types.Mutation{
+				Deletion: true,
+				Key:      []byte(fmt.Sprintf(`[%d]`, i)),
+			})
+		}
+	}
+
 	r.NoError(app(patches))
 
 	found := make([]*Payload, numRows)
 	for i := range found {
 		next := &Payload{PK: i}
-		r.NoError(fixture.TargetPool.QueryRow(fmt.Sprintf(
+		err := fixture.TargetPool.QueryRow(fmt.Sprintf(
 			"SELECT val0, val1, val2, val3 FROM %s WHERE pk=%d", tbl.Name(), i,
-		)).Scan(&next.Val0, &next.Val1, &next.Val2, &next.Val3))
+		)).Scan(&next.Val0, &next.Val1, &next.Val2, &next.Val3)
+		// Handle deletion case.
+		if !errors.Is(err, sql.ErrNoRows) {
+			r.NoError(err)
+		}
 		found[i] = next
 	}
 

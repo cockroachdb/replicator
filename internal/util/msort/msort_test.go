@@ -18,6 +18,7 @@ package msort
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/cockroachdb/replicator/internal/types"
@@ -27,9 +28,13 @@ import (
 
 func mut(k int, v string, t ...hlc.Time) types.Mutation {
 	ret := types.Mutation{
-		Data: []byte(fmt.Sprintf(`{"key":%d, "value":%s}`, k, v)),
 		Key:  []byte(fmt.Sprintf(`[%d]`, k)),
 		Time: hlc.New(int64(k), k),
+	}
+	if v == "deleted" {
+		ret.Deletion = true
+	} else {
+		ret.Data = []byte(fmt.Sprintf(`{"key":%d,"value":%q}`, k, v))
 	}
 	if len(t) >= 1 {
 		ret.Time = t[0]
@@ -37,7 +42,7 @@ func mut(k int, v string, t ...hlc.Time) types.Mutation {
 	return ret
 }
 
-func TestUniqueByKey(t *testing.T) {
+func TestFoldByKey(t *testing.T) {
 	tcs := []struct {
 		data, expected []types.Mutation
 	}{
@@ -66,10 +71,10 @@ func TestUniqueByKey(t *testing.T) {
 				mut(3, "expected"),
 			},
 			expected: []types.Mutation{
-				mut(2, "expected"),
-				mut(4, "expected"),
 				mut(1, "expected"),
+				mut(2, "expected"),
 				mut(3, "expected"),
+				mut(4, "expected"),
 			},
 		},
 		{
@@ -79,8 +84,20 @@ func TestUniqueByKey(t *testing.T) {
 				mut(1, "expected"),
 			},
 			expected: []types.Mutation{
+				mut(1, "expected"),
+				mut(2, "expected"),
+			},
+		},
+		{
+			data: []types.Mutation{
+				mut(1, "deleted"),
 				mut(2, "expected"),
 				mut(1, "expected"),
+				mut(1, "deleted"),
+			},
+			expected: []types.Mutation{
+				mut(1, "deleted"),
+				mut(2, "expected"),
 			},
 		},
 		// Test the case where timestamps are out of order for a key.
@@ -91,8 +108,8 @@ func TestUniqueByKey(t *testing.T) {
 				mut(1, "expected"),
 			},
 			expected: []types.Mutation{
-				mut(2, "expected"),
 				mut(1, "expected", hlc.New(100, 100)),
+				mut(2, "expected"),
 			},
 		},
 	}
@@ -100,11 +117,25 @@ func TestUniqueByKey(t *testing.T) {
 	for idx, tc := range tcs {
 		t.Run(fmt.Sprintf("%d", idx), func(t *testing.T) {
 			a := assert.New(t)
-
-			data := UniqueByKey(tc.data)
+			originalData := slices.Clone(tc.data)
+			data, err := FoldByKey(tc.data)
+			a.NoError(err)
 			a.Equal(tc.expected, data)
+			// Verify function doesn't damage the input slice.
+			a.Equal(originalData, tc.data)
 		})
 	}
+}
+
+// Ensure error case if a mutation has no key.
+func TestFoldNoKey(t *testing.T) {
+	a := assert.New(t)
+	_, err := FoldByKey([]types.Mutation{
+		mut(1, "ok"),
+		{Key: nil},
+		mut(2, "ok"),
+	})
+	a.ErrorContains(err, "mutation key must not be empty")
 }
 
 func TestUniqueByTimeKey(t *testing.T) {
@@ -176,14 +207,4 @@ func TestUniqueByTimeKey(t *testing.T) {
 			a.Equal(tc.expected, data)
 		})
 	}
-}
-
-// Document the panic behavior.
-func TestUniqueByKeyPanic(t *testing.T) {
-	a := assert.New(t)
-	a.Panics(func() {
-		UniqueByKey([]types.Mutation{
-			{Key: nil},
-		})
-	})
 }
