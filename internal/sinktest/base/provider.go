@@ -416,22 +416,22 @@ func CreateSchema[P types.AnyPool](
 	// correctly quoted when sent in SQL commands.
 	name := ident.New(fmt.Sprintf("%s-%d-%d", prefix, os.Getpid(), dbNum))
 
-	cancel := func() {
-		option := "CASCADE"
-		switch pool.Info().Product {
-		case types.ProductMariaDB, types.ProductMySQL:
-			option = ""
-		default:
-			// nothing to do.
-		}
-		// Called from stopper.Context.Defer, so we must use Background.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		err := retry.Execute(ctx, pool,
-			fmt.Sprintf("DROP DATABASE IF EXISTS %s %s", name, option))
-		log.WithError(err).WithField("target", name).Debug("dropped database")
-	}
-	ctx.Defer(cancel)
+	//cancel := func() {
+	//	option := "CASCADE"
+	//	switch pool.Info().Product {
+	//	case types.ProductMariaDB, types.ProductMySQL:
+	//		option = ""
+	//	default:
+	//		// nothing to do.
+	//	}
+	//	// Called from stopper.Context.Defer, so we must use Background.
+	//	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	//	defer cancel()
+	//	err := retry.Execute(ctx, pool,
+	//		fmt.Sprintf("DROP DATABASE IF EXISTS %s %s", name, option))
+	//	log.WithError(err).WithField("target", name).Debug("dropped database")
+	//}
+	//ctx.Defer(cancel)
 
 	if err := retry.Execute(ctx, pool, fmt.Sprintf(
 		"CREATE DATABASE %s", name)); err != nil {

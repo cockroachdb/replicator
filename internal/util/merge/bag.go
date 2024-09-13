@@ -83,6 +83,8 @@ func NewBag(spec *BagSpec) *Bag {
 		ret.Mapped.Put(name, &Entry{
 			Column: &ret.Columns[idx],
 		})
+		nameStr := name.String()
+		_ = nameStr
 	}
 
 	return ret
