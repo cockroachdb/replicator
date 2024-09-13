@@ -137,6 +137,7 @@ type Mutation struct {
 	Key      json.RawMessage // Replication identity, an encoded JSON array: [ "hello" ]
 	Meta     map[string]any  // Dialect-specific data, may be nil, not persisted
 	Time     hlc.Time        // The effective time of the mutation
+	SCN      string
 }
 
 var nullBytes = []byte("null")

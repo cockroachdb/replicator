@@ -110,7 +110,8 @@ func (m *IdentifierMap[I, V]) newMap() cmap.Map[I, V] {
 			if t.atom == nil {
 				return (*atom)(nil)
 			}
-			return t.atom.lowered
+			// return t.atom.lowered
+			return t.atom
 		case Schema:
 			if t.array == nil {
 				return (*array)(nil)

@@ -53,7 +53,9 @@ func ValidatePK(bag *Bag) error {
 		if !col.Primary {
 			break
 		}
-		if !bag.Mapped.GetZero(col.Name).Valid {
+		mapped := bag.Mapped
+		getZero := mapped.GetZero(col.Name)
+		if !getZero.Valid {
 			missingPKs.Put(col.Name, struct{}{})
 		}
 	}
