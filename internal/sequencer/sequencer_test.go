@@ -52,4 +52,8 @@ func TestCommonProgress(t *testing.T) {
 	// All tables have progress.
 	progress.Put(group.Tables[1], hlc.RangeIncluding(hlc.Zero(), hlc.New(2, 1)))
 	r.Equal(hlc.RangeIncluding(hlc.Zero(), hlc.New(1, 1)), CommonProgress(stat))
+
+	// Empty group with no tables.
+	r.Equal(hlc.RangeEmpty(),
+		CommonProgress(NewStat(&types.TableGroup{}, &ident.TableMap[hlc.Range]{})))
 }

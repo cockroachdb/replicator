@@ -36,7 +36,7 @@ type runner struct {
 	cfg          *clientConfig
 	gen          *workload.GeneratorBase
 	lastResolved hlc.Time
-	lastTime     hlc.Time // Ensures distinct values from hlcNow.
+	monotonic    hlc.Clock
 	limiter      *rate.Limiter
 	sender       *sender
 }
@@ -49,11 +49,10 @@ func newRunner(
 		return nil, err
 	}
 	return &runner{
-		cfg:      cfg,
-		gen:      gen,
-		lastTime: hlc.Time{},
-		limiter:  rate.NewLimiter(rate.Limit(cfg.rate), 1),
-		sender:   sender,
+		cfg:     cfg,
+		gen:     gen,
+		limiter: rate.NewLimiter(rate.Limit(cfg.rate), 1),
+		sender:  sender,
 	}, nil
 }
 
@@ -102,14 +101,14 @@ func (r *runner) Run(ctx *stopper.Context) error {
 		select {
 		case <-ctx.Stopping():
 			// Send a final checkpoint to allow the test to complete.
-			resolved := r.hlcNow()
+			resolved := r.monotonic.Now()
 			r.lastResolved = resolved
 			final := r.sendResolved(ctx, resolved, sendResolvedAfter)
 			return lockset.Wait(ctx, []lockset.Outcome{final})
 
 		case <-resolvedTicker.C:
 			// Enough time has elapsed that we want to send a checkpoint.
-			resolved := r.hlcNow()
+			resolved := r.monotonic.Now()
 			r.lastResolved = resolved
 			waitFor := sendResolvedAfter
 			sendResolvedAfter = nil
@@ -128,7 +127,7 @@ func (r *runner) sendBatch(ctx *stopper.Context) (int, lockset.Outcome) {
 	}
 	batch := &types.MultiBatch{}
 	for range r.cfg.batchSize {
-		r.gen.GenerateInto(batch, r.hlcNow())
+		r.gen.GenerateInto(batch, r.monotonic.Now())
 
 		// Send a smaller payload if we've hit the rate limit.
 		if !r.limiter.Allow() {
@@ -153,17 +152,4 @@ func (r *runner) sendResolved(
 		return notify.VarOf(lockset.StatusFor(err))
 	}
 	return r.sender.Send(ctx, payload)
-}
-
-// hlcNow returns a new HLC time that is always greater than the one
-// returned previously. It will increment the logical counter if the
-// wall time has not advanced.
-func (r *runner) hlcNow() hlc.Time {
-	nextNanos := time.Now().UnixNano()
-	if nextNanos > r.lastTime.Nanos() {
-		r.lastTime = hlc.New(nextNanos, 0)
-		return r.lastTime
-	}
-	r.lastTime = r.lastTime.Next()
-	return r.lastTime
 }

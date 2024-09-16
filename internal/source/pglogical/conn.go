@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -45,13 +46,13 @@ import (
 // status updates.
 type Conn struct {
 	// The destination for writes.
-	acceptor types.MultiAcceptor
+	acceptor types.TemporalAcceptor
 	// Columns, as ordered by the source database.
 	columns *ident.TableMap[[]types.ColData]
-	// The time of the transaction being received.
-	nextCommitTime time.Time
 	// Persistent storage for WAL data.
 	memo types.Memo
+	// Ensure the timestamps we generate always march forward.
+	monotonic hlc.Clock
 	// The pg publication name to subscribe to.
 	publicationName string
 	// Map source ids to target tables.
@@ -64,11 +65,13 @@ type Conn struct {
 	standbyTimeout time.Duration
 	// Access to the staging cluster.
 	stagingDB *types.StagingPool
+	// Progress reports from the underlying sequencer.
+	stat *notify.Var[sequencer.Stat]
 	// The destination for writes.
 	target ident.Schema
 	// Access to the target database.
 	targetDB *types.TargetPool
-	// Managed by persistWALOffset.
+	// Holds the guaranteed-committed LSN.
 	walOffset notify.Var[pglogrepl.LSN]
 }
 
@@ -93,6 +96,24 @@ func (c *Conn) Start(ctx *stopper.Context) error {
 		}
 		return nil
 	})
+	// Sync the sequencer's progress back to our LSN value.
+	ctx.Go(func(ctx *stopper.Context) error {
+		// Inner callback returns nil.
+		_, _ = stopvar.DoWhenChanged(ctx, nil, c.stat,
+			func(ctx *stopper.Context, old, next sequencer.Stat) error {
+				oldProgress := sequencer.CommonProgress(old).Max()
+				progress := sequencer.CommonProgress(next).Max()
+				// Debounce intermediate progress updates (e.g. partial
+				// table progress).
+				if hlc.Compare(progress, oldProgress) > 0 {
+					lsn := progress.External().(pglogrepl.LSN)
+					log.Debugf("progressed to LSN: %s", lsn)
+					c.walOffset.Set(lsn)
+				}
+				return nil
+			})
+		return nil
+	})
 
 	return nil
 }
@@ -101,8 +122,8 @@ func (c *Conn) Start(ctx *stopper.Context) error {
 // the acceptor when a complete transaction has been read. The returned
 // batch should be passed to the next invocation of accumulateBatch.
 func (c *Conn) accumulateBatch(
-	ctx *stopper.Context, msg pglogrepl.Message, batch *types.MultiBatch,
-) (*types.MultiBatch, error) {
+	ctx *stopper.Context, msg pglogrepl.Message, batch *types.TemporalBatch,
+) (*types.TemporalBatch, error) {
 	log.Tracef("message %T", msg)
 	switch msg := msg.(type) {
 	case *pglogrepl.RelationMessage:
@@ -113,24 +134,14 @@ func (c *Conn) accumulateBatch(
 		return batch, nil
 
 	case *pglogrepl.BeginMessage:
-		c.nextCommitTime = msg.CommitTime
+		log.Tracef("received transaction beginning at %s", msg.FinalLSN)
 		// Create a new batch to accumulate into. It may be discarded
 		// later if the timestamp precedes the latest commit.
-		return &types.MultiBatch{}, nil
+		return &types.TemporalBatch{
+			Time: c.monotonic.External(msg.FinalLSN),
+		}, nil
 
 	case *pglogrepl.CommitMessage:
-		// We rely on the upstream database to replay events in the case of
-		// errors, so we may receive events that we've already processed.
-		// We use the COMMIT LSN offset as the consistent point, which is
-		// written in the WAL synchronously with the upstream transaction.
-		ignoreLSN, _ := c.walOffset.Get()
-
-		if msg.CommitLSN <= ignoreLSN {
-			// Just discard the entire batch in this case.
-			log.Tracef("ignoring CommitMessage at %s before %s",
-				msg.CommitLSN, ignoreLSN)
-			return nil, nil
-		}
 		// In Postgres version < v15, the stream might contain empty transactions.
 		// See https://github.com/postgres/postgres/commit/d5a9d86d8f
 		// We will skip them to avoid unnecessary writes to the memo table.
@@ -144,7 +155,7 @@ func (c *Conn) accumulateBatch(
 			}
 			defer tx.Rollback()
 
-			if err := c.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{
+			if err := c.acceptor.AcceptTemporalBatch(ctx, batch, &types.AcceptOptions{
 				TargetQuerier: tx,
 			}); err != nil {
 				return nil, err
@@ -153,8 +164,19 @@ func (c *Conn) accumulateBatch(
 			if err := tx.Commit(); err != nil {
 				return nil, errors.WithStack(err)
 			}
+			// TODO(bob): This is a temporary hack until this frontend
+			// is switched to using the core sequencer. Very shortly,
+			// the sequencer stat will reflect the progress of
+			// transactions that have been committed to the target. In
+			// the meantime, we're in immediate operation, so we'll fake
+			// one up.
+			fakeProgress := &ident.TableMap[hlc.Range]{}
+			fakeTable := ident.NewTable(c.target, ident.New("fake"))
+			fakeProgress.Put(fakeTable, hlc.RangeIncluding(hlc.Zero(), batch.Time))
+			c.stat.Set(sequencer.NewStat(&types.TableGroup{
+				Tables: []ident.Table{fakeTable},
+			}, fakeProgress))
 		}
-		c.walOffset.Set(msg.CommitLSN)
 		return nil, nil
 
 	case *pglogrepl.DeleteMessage:
@@ -203,7 +225,7 @@ func (c *Conn) copyMessages(ctx *stopper.Context) error {
 	}
 	dialSuccessCount.Inc()
 
-	var batch *types.MultiBatch
+	var batch *types.TemporalBatch
 	standbyDeadline := time.Now().Add(c.standbyTimeout)
 
 	for !ctx.IsStopping() {
@@ -373,7 +395,7 @@ func (c *Conn) decodeMutation(
 // onDataTuple will add an incoming row tuple to the in-memory slice,
 // possibly flushing it when the batch size limit is reached.
 func (c *Conn) onDataTuple(
-	batch *types.MultiBatch, relation uint32, tuple *pglogrepl.TupleData, isDelete bool,
+	batch *types.TemporalBatch, relation uint32, tuple *pglogrepl.TupleData, isDelete bool,
 ) error {
 	if batch == nil {
 		log.Trace("ignoring replayed message")
@@ -388,8 +410,7 @@ func (c *Conn) onDataTuple(
 	if err != nil {
 		return err
 	}
-	// Set an approximate timestamp.
-	mut.Time = hlc.New(c.nextCommitTime.UnixNano(), 0)
+	mut.Time = batch.Time
 	// Set script metadata, which will be acted on by the acceptor.
 	script.AddMeta("pglogical", tbl, &mut)
 
@@ -437,19 +458,29 @@ func (c *Conn) persistWALOffset(ctx *stopper.Context) error {
 		if err := lsn.Scan(found); err != nil {
 			return errors.WithStack(err)
 		}
+		c.monotonic.External(lsn)
 		c.walOffset.Set(lsn)
+	}
+	store := func(ctx context.Context, lsn pglogrepl.LSN) {
+		if err := c.memo.Put(ctx, c.stagingDB, key, []byte(lsn.String())); err == nil {
+			log.Tracef("stored WAL offset %s: %s", key, lsn)
+		} else {
+			log.WithError(err).Warn("could not persist LSN offset")
+		}
 	}
 	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, lsn, &c.walOffset,
 			func(ctx *stopper.Context, _, lsn pglogrepl.LSN) error {
-				if err := c.memo.Put(ctx, c.stagingDB, key, []byte(lsn.String())); err == nil {
-					log.Tracef("stored WAL offset %s: %s", key, lsn)
-				} else {
-					log.WithError(err).Warn("could not persist LSN offset")
-				}
+				store(ctx, lsn)
 				return nil
 			})
 		return err
+	})
+	// Make a final update on the way out.
+	ctx.Defer(func() {
+		last, _ := c.walOffset.Get()
+		// Use background because the stopper has stopped.
+		store(context.Background(), last)
 	})
 	return nil
 }
