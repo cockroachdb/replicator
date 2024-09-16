@@ -35,14 +35,14 @@ import (
 
 // A ChildRow contains an expected snapshot of some child table row.
 type ChildRow struct {
-	ID     int
-	Parent int
+	ID     int64
+	Parent int64
 	Val    int64
 }
 
 // A ParentRow contains an expected snapshot of some parent table row.
 type ParentRow struct {
-	ID  int
+	ID  int64
 	Val int64
 }
 
@@ -50,20 +50,20 @@ type ParentRow struct {
 // a parent table and a child table.
 type GeneratorBase struct {
 	// Tables and expected rows.
-	Child    ident.Table      `json:"child"`
-	Children map[int]struct{} `json:"children"`
-	Parent   ident.Table      `json:"parent"`
-	Parents  map[int]struct{} `json:"parents"`
+	Child    ident.Table        `json:"child"`
+	Children map[int64]struct{} `json:"children"`
+	Parent   ident.Table        `json:"parent"`
+	Parents  map[int64]struct{} `json:"parents"`
 
 	// The highest timestamp passed to GenerateInto.
 	MaxTime hlc.Time `json:"maxTime"`
 
 	// Compare data to ensure time order is maintained.
-	ChildVals  map[int]int64 `json:"childVals"`
-	ParentVals map[int]int64 `json:"parentVals"`
+	ChildVals  map[int64]int64 `json:"childVals"`
+	ParentVals map[int64]int64 `json:"parentVals"`
 
 	// The keys are child ids and the value the parent id.
-	ChildToParent map[int]int `json:"childToParent"`
+	ChildToParent map[int64]int64 `json:"childToParent"`
 
 	// generation tracks the number of times that [GenerateInto] has
 	// been called in order to select different scenarios.
@@ -74,12 +74,12 @@ type GeneratorBase struct {
 func NewGeneratorBase(parent, child ident.Table) *GeneratorBase {
 	return &GeneratorBase{
 		Child:         child,
-		Children:      make(map[int]struct{}),
-		ChildToParent: make(map[int]int),
-		ChildVals:     make(map[int]int64),
+		Children:      make(map[int64]struct{}),
+		ChildToParent: make(map[int64]int64),
+		ChildVals:     make(map[int64]int64),
 		Parent:        parent,
-		Parents:       make(map[int]struct{}),
-		ParentVals:    make(map[int]int64),
+		Parents:       make(map[int64]struct{}),
+		ParentVals:    make(map[int64]int64),
 	}
 }
 
@@ -94,6 +94,25 @@ func (g *GeneratorBase) ChildRows() []*ChildRow {
 		})
 	}
 	return ret
+}
+
+// CopyFrom adds the state of the other generator to the receiver.
+func (g *GeneratorBase) CopyFrom(other *GeneratorBase) {
+	for k, v := range other.Children {
+		g.Children[k] = v
+	}
+	for k, v := range other.ChildToParent {
+		g.ChildToParent[k] = v
+	}
+	for k, v := range other.ChildVals {
+		g.ChildVals[k] = v
+	}
+	for k, v := range other.Parents {
+		g.Parents[k] = v
+	}
+	for k, v := range other.ParentVals {
+		g.ParentVals[k] = v
+	}
 }
 
 // GenerateInto will add mutations to the batch at the requested time.
@@ -157,10 +176,12 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 			break
 		}
 		child := g.pickExistingChild()
+		parent := g.ChildToParent[child]
 		delete(g.Children, child)
 		delete(g.ChildToParent, child)
 		delete(g.ChildVals, child)
 		_ = batch.Accumulate(g.Child, types.Mutation{
+			Data:     json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d }`, child, parent)),
 			Deletion: true,
 			Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time:     time,
@@ -174,6 +195,7 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 		delete(g.Parents, parent)
 		delete(g.ParentVals, parent)
 		_ = batch.Accumulate(g.Parent, types.Mutation{
+			Data:     json.RawMessage(fmt.Sprintf(`{ "parent": %d }`, parent)),
 			Deletion: true,
 			Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, parent)),
 			Time:     time,
@@ -187,6 +209,7 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 			delete(g.ChildToParent, child)
 			delete(g.ChildVals, child)
 			_ = batch.Accumulate(g.Child, types.Mutation{
+				Data:     json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d }`, child, parent)),
 				Deletion: true,
 				Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 				Time:     time,
@@ -242,7 +265,7 @@ func (g *GeneratorBase) WaitForCatchUp(
 	}
 }
 
-func (g *GeneratorBase) pickExistingChild() int {
+func (g *GeneratorBase) pickExistingChild() int64 {
 	// Rely on random iteration order.
 	for child := range g.Children {
 		return child
@@ -250,7 +273,7 @@ func (g *GeneratorBase) pickExistingChild() int {
 	panic("no children")
 }
 
-func (g *GeneratorBase) pickExistingParent() int {
+func (g *GeneratorBase) pickExistingParent() int64 {
 	// Rely on random iteration order.
 	for parent := range g.Parents {
 		return parent
@@ -258,9 +281,9 @@ func (g *GeneratorBase) pickExistingParent() int {
 	panic("no parents")
 }
 
-func (g *GeneratorBase) pickNewChild() int {
+func (g *GeneratorBase) pickNewChild() int64 {
 	for {
-		child := int(rand.Int31())
+		child := rand.Int63()
 		if _, exists := g.Children[child]; exists {
 			continue
 		}
@@ -269,9 +292,9 @@ func (g *GeneratorBase) pickNewChild() int {
 	}
 }
 
-func (g *GeneratorBase) pickNewParent() int {
+func (g *GeneratorBase) pickNewParent() int64 {
 	for {
-		parent := int(rand.Int31())
+		parent := rand.Int63()
 		if _, exists := g.Parents[parent]; exists {
 			continue
 		}

@@ -116,3 +116,66 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	}
 	return allFixture, nil
 }
+
+// NewFixtureFromBase constructs a new Fixture over a [base.Fixture].
+func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
+	context := fixture.Context
+	targetStatements := fixture.TargetCache
+	diagnostics := diag.New(context)
+	configs, err := applycfg.ProvideConfigs(diagnostics)
+	if err != nil {
+		return nil, err
+	}
+	config, err := ProvideDLQConfig()
+	if err != nil {
+		return nil, err
+	}
+	targetPool := fixture.TargetPool
+	stagingPool := fixture.StagingPool
+	stagingSchema := fixture.StagingDB
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	if err != nil {
+		return nil, err
+	}
+	dlQs := dlq.ProvideDLQs(config, targetPool, watchers)
+	loader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, err
+	}
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, loader, targetPool, watchers)
+	if err != nil {
+		return nil, err
+	}
+	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	targetSchema := fixture.TargetSchema
+	watcher, err := ProvideWatcher(targetSchema, watchers)
+	if err != nil {
+		return nil, err
+	}
+	allFixture := &Fixture{
+		Fixture:        fixture,
+		ApplyAcceptor:  acceptor,
+		Checkpoints:    checkpoints,
+		Configs:        configs,
+		Diagnostics:    diagnostics,
+		DLQConfig:      config,
+		DLQs:           dlQs,
+		Loader:         loader,
+		Memo:           memoMemo,
+		Stagers:        stagers,
+		VersionChecker: checker,
+		Watchers:       watchers,
+		Watcher:        watcher,
+	}
+	return allFixture, nil
+}

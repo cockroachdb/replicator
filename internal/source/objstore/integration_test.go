@@ -322,6 +322,11 @@ func (b *sourceBucket) writeBatch(ctx context.Context, batch *types.MultiBatch) 
 					Key:     v.Key,
 					Updated: v.Time.String(),
 				}
+				// Changefeed encodes a deletion as an absence of an
+				// after block.
+				if v.IsDelete() {
+					p.After = nil
+				}
 				out, err := json.Marshal(p)
 				if err != nil {
 					return err

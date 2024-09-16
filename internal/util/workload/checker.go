@@ -28,8 +28,8 @@ import (
 // by a [GeneratorBase].
 type Checker struct {
 	*GeneratorBase
-	LoadChild    func(id int) (parent int, val int64, ok bool, err error)
-	LoadParent   func(id int) (val int64, ok bool, err error)
+	LoadChild    func(id int64) (parent int64, val int64, ok bool, err error)
+	LoadParent   func(id int64) (val int64, ok bool, err error)
 	RowCounter   func(table ident.Table) (int, error)
 	StageCounter func(table ident.Table, rng hlc.Range) (int, error)
 }

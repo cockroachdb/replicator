@@ -18,12 +18,16 @@
 package all
 
 import (
+	"context"
+
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging"
 	"github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/google/wire"
 )
 
@@ -36,6 +40,23 @@ var TestSet = wire.NewSet(
 	ProvideDLQConfig,
 	ProvideWatcher,
 
+	wire.Struct(new(Fixture), "*"),
+)
+
+// TestSetBase creates a Fixture from a [base.Fixture].
+var TestSetBase = wire.NewSet(
+	wire.FieldsOf(new(*base.Fixture),
+		"Context", "SourcePool", "SourceSchema",
+		"StagingPool", "StagingDB",
+		"TargetCache", "TargetPool", "TargetSchema"),
+	diag.New,
+	staging.Set,
+	target.Set,
+
+	ProvideDLQConfig,
+	ProvideWatcher,
+
+	wire.Bind(new(context.Context), new(*stopper.Context)),
 	wire.Struct(new(Fixture), "*"),
 )
 

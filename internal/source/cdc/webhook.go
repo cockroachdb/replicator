@@ -60,6 +60,10 @@ func NewWebhookPayload(batch *types.MultiBatch) (*WebhookPayload, error) {
 			Topic:   table.Raw(),
 			Updated: mut.Time.String(),
 		}
+		// Webhook encodes a deletion as an absence of an after block.
+		if mut.IsDelete() {
+			line.After = nil
+		}
 		ret.Payload = append(ret.Payload, line)
 		ret.Range = ret.Range.Extend(mut.Time)
 		return nil
