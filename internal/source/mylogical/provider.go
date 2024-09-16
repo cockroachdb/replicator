@@ -80,7 +80,7 @@ func ProvideConn(
 	if err != nil {
 		return nil, err
 	}
-	connAcceptor, _, err := seq.Start(ctx, &sequencer.StartOptions{
+	connAcceptor, stat, err := seq.Start(ctx, &sequencer.StartOptions{
 		Delegate: types.OrderedAcceptorFrom(acc, watchers),
 		Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
 		Group: &types.TableGroup{
@@ -101,6 +101,7 @@ func ProvideConn(
 		relations:    make(map[uint64]ident.Table),
 		sourceConfig: cfg,
 		stagingDB:    stagingPool,
+		stat:         stat,
 		target:       config.TargetSchema,
 		targetDB:     targetPool,
 		walOffset:    notify.Var[*consistentPoint]{},

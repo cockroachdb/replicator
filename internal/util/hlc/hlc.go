@@ -40,6 +40,10 @@ import (
 type Time struct {
 	nanos   int64
 	logical int
+
+	// ext is populated by [Clock.External]. It is not serialized by the
+	// Time type, nor is it used as the basis for any comparisons.
+	ext any
 }
 
 var (
@@ -58,12 +62,12 @@ func Compare(a, b Time) int {
 
 // From constructs an HLC time from a wall time.
 func From(t time.Time) Time {
-	return Time{t.UnixNano(), 0}
+	return Time{t.UnixNano(), 0, nil}
 }
 
 // New constructs a new Time with wall and logical parts.
 func New(nanos int64, logical int) Time {
-	return Time{nanos, logical}
+	return Time{nanos, logical, nil}
 }
 
 // Parse splits a timestmap of the format NNNN.LLL into an int64
@@ -84,7 +88,7 @@ func Parse(timestamp string) (Time, error) {
 	if len(splits[1]) != 10 && logical != 0 {
 		return Time{}, errors.Errorf("logical part %q must be 10 digits or zero-valued", splits[1])
 	}
-	return Time{nanos, logical}, err
+	return Time{nanos, logical, nil}, err
 }
 
 // Zero returns a zero-valued Time.
@@ -96,9 +100,15 @@ func Zero() Time {
 // zero logical component, the previous nanosecond will be returned.
 func (t Time) Before() Time {
 	if t.logical > 0 {
-		return Time{t.nanos, t.logical - 1}
+		return Time{t.nanos, t.logical - 1, t.ext}
 	}
-	return Time{t.nanos - 1, math.MaxInt32}
+	return Time{t.nanos - 1, math.MaxInt32, t.ext}
+}
+
+// External returns the value that was provided to [Clock.External] when
+// the Time was constructed.
+func (t Time) External() any {
+	return t.ext
 }
 
 // Logical returns the logical counter.
@@ -109,7 +119,7 @@ func (t Time) Nanos() int64 { return t.nanos }
 
 // Next returns the time plus one logical tick.
 func (t Time) Next() Time {
-	return Time{t.nanos, t.logical + 1}
+	return Time{t.nanos, t.logical + 1, t.ext}
 }
 
 // Set implements pflag.Value

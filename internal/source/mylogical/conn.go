@@ -35,6 +35,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
@@ -57,19 +58,21 @@ type Conn conn
 // status updates.
 type conn struct {
 	// The destination for writes.
-	acceptor types.MultiAcceptor
+	acceptor types.TemporalAcceptor
 	// Columns, as ordered by the source database.
 	columns *ident.TableMap[[]types.ColData]
 	// The connector configuration.
 	config *Config
-	// The consistent point of the transaction being accumulated.
-	nextConsistentPoint *consistentPoint
-	// Persistent storage for WAL data.
-	memo types.Memo
 	// Flavor is one of the mysql.MySQLFlavor or mysql.MariaDBFlavor constants
 	flavor string
+	// Persistent storage for WAL data.
+	memo types.Memo
+	// Ensure the timestamps we generate always march forward.
+	monotonic hlc.Clock
 	// Map source ids to target tables.
 	relations map[uint64]ident.Table
+	// Progress reports from the underlying sequencer.
+	stat *notify.Var[sequencer.Stat]
 	// The configuration for opening replication connections.
 	sourceConfig replication.BinlogSyncerConfig
 	// Access to the staging cluster.
@@ -125,6 +128,24 @@ func (c *conn) Start(ctx *stopper.Context) error {
 		}
 		return nil
 	})
+	// Sync the sequencer's progress back to our GTID value.
+	ctx.Go(func(ctx *stopper.Context) error {
+		// Inner callback returns nil.
+		_, _ = stopvar.DoWhenChanged(ctx, nil, c.stat,
+			func(ctx *stopper.Context, old, next sequencer.Stat) error {
+				oldProgress := sequencer.CommonProgress(old).Max()
+				progress := sequencer.CommonProgress(next).Max()
+				// Debounce intermediate progress updates (e.g. partial
+				// table progress).
+				if hlc.Compare(progress, oldProgress) > 0 {
+					cp := progress.External().(*consistentPoint)
+					log.Debugf("progressed to consistent point: %s", cp)
+					c.walOffset.Set(cp)
+				}
+				return nil
+			})
+		return nil
+	})
 
 	return nil
 }
@@ -132,8 +153,8 @@ func (c *conn) Start(ctx *stopper.Context) error {
 // Process implements logical.Dialect and receives a sequence of logical
 // replication messages, or possibly a rollbackMessage.
 func (c *conn) accumulateBatch(
-	ctx *stopper.Context, ev *replication.BinlogEvent, batch *types.MultiBatch,
-) (*types.MultiBatch, error) {
+	ctx *stopper.Context, ev *replication.BinlogEvent, batch *types.TemporalBatch,
+) (*types.TemporalBatch, error) {
 	// See https://dev.mysql.com/doc/internals/en/binlog-event.html
 	// Assumptions:
 	// We will be handling Row Based Replication Events
@@ -168,7 +189,7 @@ func (c *conn) accumulateBatch(
 			}
 			defer tx.Rollback()
 
-			if err := c.acceptor.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{
+			if err := c.acceptor.AcceptTemporalBatch(ctx, batch, &types.AcceptOptions{
 				TargetQuerier: tx,
 			}); err != nil {
 				return nil, err
@@ -176,9 +197,21 @@ func (c *conn) accumulateBatch(
 			if err := tx.Commit(); err != nil {
 				return nil, errors.WithStack(err)
 			}
+
+			// TODO(bob): This is a temporary hack until this frontend
+			// is switched to using the core sequencer. Very shortly,
+			// the sequencer stat will reflect the progress of
+			// transactions that have been committed to the target. In
+			// the meantime, we're in immediate operation, so we'll fake
+			// one up.
+			fakeProgress := &ident.TableMap[hlc.Range]{}
+			fakeTable := ident.NewTable(c.target, ident.New("fake"))
+			fakeProgress.Put(fakeTable, hlc.RangeIncluding(hlc.Zero(), batch.Time))
+			c.stat.Set(sequencer.NewStat(&types.TableGroup{
+				Tables: []ident.Table{fakeTable},
+			}, fakeProgress))
 		}
 
-		c.walOffset.Set(c.nextConsistentPoint)
 		return nil, nil
 
 	case *replication.GTIDEvent:
@@ -194,9 +227,11 @@ func (c *conn) accumulateBatch(
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		c.nextConsistentPoint = c.nextConsistentPoint.withMysqlGTIDSet(e.OriginalCommitTime(), toAdd)
-		// Expect to see a QueryEvent to create the batch.
-		return nil, nil
+		lastCP := c.monotonic.Last().External().(*consistentPoint)
+		nextCP := lastCP.withMysqlGTIDSet(e.OriginalCommitTime(), toAdd)
+		return &types.TemporalBatch{
+			Time: c.monotonic.External(nextCP),
+		}, nil
 
 	case *replication.MariadbGTIDEvent:
 		// We ignore events that won't have a terminating COMMIT
@@ -206,21 +241,21 @@ func (c *conn) accumulateBatch(
 			return nil, nil
 		}
 		ts := time.Unix(int64(ev.Header.Timestamp), 0)
-		var err error
-		c.nextConsistentPoint, err = c.nextConsistentPoint.withMariaGTIDSet(ts, &e.GTID)
+		lastCP := c.monotonic.Last().External().(*consistentPoint)
+		nextCP, err := lastCP.withMariaGTIDSet(ts, &e.GTID)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		// Return a batch to accumulate data, since this event
-		// represents a transaction.
-		return &types.MultiBatch{}, nil
+		return &types.TemporalBatch{
+			Time: c.monotonic.External(nextCP),
+		}, nil
 
 	case *replication.QueryEvent:
 		// Only supporting BEGIN
 		// DDL statement would also sent here.
 		log.Tracef("Query:  %s %+v\n", e.Query, e.GSet)
 		if bytes.Equal(e.Query, []byte("BEGIN")) {
-			return &types.MultiBatch{}, nil
+			return batch, nil
 		}
 
 	case *replication.TableMapEvent:
@@ -268,7 +303,7 @@ func (c *conn) copyMessages(ctx *stopper.Context) error {
 	}
 	dialSuccessCount.Inc()
 
-	var batch *types.MultiBatch
+	var batch *types.TemporalBatch
 
 	for {
 		// Make GetEvent interruptable.
@@ -330,7 +365,7 @@ func (c *conn) ZeroStamp() stamp.Stamp {
 }
 
 func (c *conn) onDataTuple(
-	batch types.Accumulator, tuple *replication.RowsEvent, operation mutationType,
+	batch *types.TemporalBatch, tuple *replication.RowsEvent, operation mutationType,
 ) error {
 	tbl, ok := c.relations[tuple.TableID]
 	if !ok {
@@ -391,7 +426,7 @@ func (c *conn) onDataTuple(
 			return err
 		}
 		mut.Deletion = operation == deleteMutation
-		mut.Time = hlc.New(c.nextConsistentPoint.AsTime().UnixNano(), 0)
+		mut.Time = batch.Time
 		script.AddMeta("mylogical", tbl, &mut)
 		if err := batch.Accumulate(tbl, mut); err != nil {
 			return err
@@ -585,9 +620,10 @@ func (c *conn) persistWALOffset(ctx *stopper.Context) error {
 		}
 		log.Infof("Using GTID from the command line: %s", cp)
 	}
-	// We need to clone cp before we store it to nextConsistentPoint to
-	// avoid race conditions.
-	c.nextConsistentPoint = cp.clone()
+	// We need to clone cp before we store it to the clock to avoid race
+	// conditions; the set acts as accumulated for (disjoint)
+	// transaction logs.
+	c.monotonic.External(cp.clone())
 	c.walOffset.Set(cp)
 
 	ctx.Go(func(ctx *stopper.Context) error {
