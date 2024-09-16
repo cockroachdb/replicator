@@ -17,9 +17,7 @@
 package oraclelogminer
 
 import (
-	"bytes"
 	"database/sql"
-	"encoding/json"
 	"os"
 	"time"
 
@@ -96,156 +94,42 @@ func ProvideDB(
 		return nil, errors.Wrapf(err, "failed to start replicator for oracle source")
 	}
 
-	schema := config.TargetSchema
+	// Change core seq to accept chan of mut, rather than chan of batch
+	seq, err := scriptSeq.Wrap(ctx, imm)
+	if err != nil {
+		return nil, err
+	}
+	seq, err = chaos.Wrap(ctx, seq) // No-op if probability is 0.
+	if err != nil {
+		return nil, err
+	}
 
-	db := &DB{ConnStr: config.SourceConn, DB: godrorDB, UserName: params.Username}
+	connAcceptor, _, err := seq.Start(ctx, &sequencer.StartOptions{
+		Delegate: types.OrderedAcceptorFrom(acc, watchers),
+		Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
+		Group: &types.TableGroup{
+			Name:      ident.New(config.TargetSchema.Raw()),
+			Enclosing: config.TargetSchema,
+		},
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	db := &DB{
+		DB:       godrorDB,
+		acceptor: connAcceptor,
+		target:   config.TargetSchema,
+		targetDB: targetPool,
+		config:   config,
+	}
+
 	if config.SCN != "" {
-		db.SCN = config.SCN
+		db.scn = config.SCN
 	}
 
-	// Create a ticker that triggers every second
-	ticker := time.NewTicker(logMinerPullFrequency)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			// TODO(janexing): make the changefeed acquiring executed IN PARALLEL TO the applying logic.
-			logs, err := GetChangeFeedLogs(ctx, db, config.TableUser)
-
-			// Logs with the same XID (transaction ID) will be put into the same temporalBatch.
-			temporalBatch := &types.TemporalBatch{}
-			// Once all logs are processed, the batches are sent to conn acceptor one by one.
-			temporalBatches := make([]*types.TemporalBatch, 0)
-
-			var prevXID, currXID []byte
-			for _, lg := range logs {
-				// Parse the redo sql stmt to a kv struct.
-				kv, err := LogToKV(lg.SqlRedo)
-				if err != nil {
-					return nil, err
-				}
-
-				currXID = lg.TxnID
-				if len(prevXID) == 0 {
-					prevXID = lg.TxnID
-				}
-
-				// If the transaction ID changed, push the current temporal batch to the collection,
-				// and create a new batch for the new transaction ID.
-				if !bytes.Equal(currXID, prevXID) {
-					temporalBatches = append(temporalBatches, temporalBatch)
-					temporalBatch = &types.TemporalBatch{}
-				}
-
-				prevXID = lg.TxnID
-
-				// We need to get the primary key values for the changefeed, as in the update stmt
-				// that logminer provides there might not explicitly contains the pk values, but just
-				// the rowid.
-				// TODO(janexing): consider the ordinal order of pks.
-				if lg.Operation != Insert {
-					pkNames, pkVals, err := RowIDToPKs(ctx, godrorDB, lg.RowID, lg.UserName, lg.TableName, lg.SCN)
-					if err != nil {
-						return nil, err
-					}
-					for i, name := range pkNames {
-						if pkVals != nil {
-							kv[name] = string(pkVals[i])
-						}
-					}
-				}
-
-				// Convert the kv struct into a mutation obj.
-				byteRes, err := json.Marshal(kv)
-				if err != nil {
-					return db, errors.Wrapf(err, "failed to marshal kv")
-				}
-				mut := types.Mutation{Data: byteRes}
-
-				rowIDRaw, err := json.Marshal(lg.RowID)
-				if err != nil {
-					return db, errors.Wrapf(err, "failed to marshal rowID")
-				}
-				mut.Key = rowIDRaw
-
-				// Set the timestamp of mutation.
-				// THE CURRENT IMPLEMENTATION HERE IS WRONG, as we don't have convenient way to
-				// convert a SCN to a timestamp with sufficiently precision at this moment,
-				// so we use this function as a placeholder for now.
-				hlcTime, err := scnToHLCTime(lg.CommitSCN)
-				if err != nil {
-					return db, err
-				}
-				mut.Time = hlcTime
-
-				if temporalBatch.Time.Nanos() == 0 {
-					temporalBatch.Time = hlcTime
-				}
-				mut.SCN = lg.CommitSCN
-
-				targetTbl := ident.NewTable(schema, ident.New(lg.TableName))
-				if err := temporalBatch.Accumulate(targetTbl, mut); err != nil {
-					return nil, errors.Wrapf(err, "failed to accumulate mut to batch")
-				}
-			}
-
-			if temporalBatch.Time.Nanos() != 0 {
-				temporalBatches = append(temporalBatches, temporalBatch)
-			}
-
-			// Change core seq to accept chan of mut, rather than chan of batch
-			seq, err := scriptSeq.Wrap(ctx, imm)
-			if err != nil {
-				return nil, err
-			}
-			seq, err = chaos.Wrap(ctx, seq) // No-op if probability is 0.
-			if err != nil {
-				return nil, err
-			}
-
-			connAcceptor, _, err := seq.Start(ctx, &sequencer.StartOptions{
-				Delegate: types.OrderedAcceptorFrom(acc, watchers),
-				Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
-				Group: &types.TableGroup{
-					Name:      ident.New(config.TargetSchema.Raw()),
-					Enclosing: config.TargetSchema,
-				},
-			})
-
-			if err != nil {
-				return nil, err
-			}
-
-			if len(temporalBatches) > 0 {
-				log.Debug("started txn to apply temporal batches on target")
-				tx, err := targetPool.DB.BeginTx(ctx, &sql.TxOptions{})
-				if err != nil {
-					return nil, errors.Wrapf(err, "failed to begin a txn on the target db")
-				}
-
-				log.Debug("start accepting temporal batches")
-
-				for _, tmpBatch := range temporalBatches {
-					if err := connAcceptor.AcceptTemporalBatch(ctx, tmpBatch, &types.AcceptOptions{
-						TargetQuerier: tx,
-					}); err != nil {
-						return nil, errors.Wrapf(err, "failed to accept temporal batch")
-					}
-				}
-
-				log.Debug("finished accepting temporal batches")
-				if err := tx.Commit(); err != nil {
-					return nil, err
-				}
-				log.Debug("txn committed")
-			}
-
-			log.Debugf("Next SCN:%s", db.SCN)
-		case <-ctx.Done():
-			return db, nil
-		}
-	}
+	return db, db.Start(ctx)
 }
 
 // logMnrEnabledCheck checks if essential settings required by LogMiner are enabled.

@@ -118,7 +118,7 @@ ORDER BY
 )
 
 // GetChangeFeedLogs returns the redo log.
-func GetChangeFeedLogs(ctx *stopper.Context, db *DB, tableUser string) ([]RedoLog, error) {
+func GetChangeFeedLogs(ctx *stopper.Context, db *DB) ([]RedoLog, error) {
 	res := make([]RedoLog, 0)
 	logFileGroups := make([]LogFileGroup, 0)
 
@@ -173,15 +173,15 @@ func GetChangeFeedLogs(ctx *stopper.Context, db *DB, tableUser string) ([]RedoLo
 	}
 
 	// Have the logminer start analyze the uploaded logs.
-	if _, err := db.ExecContext(ctx, startLogMiner, db.SCN, endSCNLogMinerExec.String); err != nil {
-		return nil, errors.Wrapf(err, "failed to start the logminer for starting scn %s", db.SCN)
+	if _, err := db.ExecContext(ctx, startLogMiner, db.scn, endSCNLogMinerExec.String); err != nil {
+		return nil, errors.Wrapf(err, "failed to start the logminer for starting scn %s", db.scn)
 	}
 
-	q := fmt.Sprintf(queryRedoLogs, tableUser)
+	q := fmt.Sprintf(queryRedoLogs, db.config.TableUser)
 	redoLogRows, err := db.QueryContext(ctx, q)
 	log.Debugf("getting redo log rows: %s", q)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to read from V$LOGMNR_CONTENTS for log content with start scn %s", db.SCN)
+		return nil, errors.Wrapf(err, "failed to read from V$LOGMNR_CONTENTS for log content with start scn %s", db.scn)
 	}
 
 	defer redoLogRows.Close()
