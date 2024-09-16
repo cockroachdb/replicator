@@ -26,7 +26,6 @@ import (
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
@@ -34,34 +33,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type mockAccumulator struct {
-	mutations ident.Map[[]types.Mutation]
-}
-
-var _ types.Accumulator = &mockAccumulator{}
-
-// Accumulate implements Accumulator.
-func (m *mockAccumulator) Accumulate(table ident.Table, mut types.Mutation) error {
-	mutations, ok := m.mutations.Get(table.Table())
-	if !ok {
-		mutations = make([]types.Mutation, 0)
-	}
-	mutations = append(mutations, mut)
-	m.mutations.Put(table.Table(), mutations)
-	return nil
-}
-
-func (m *mockAccumulator) compare(a *assert.Assertions, table ident.Table, muts []types.Mutation) {
-	mutations, ok := m.mutations.Get(table.Table())
-	if !ok {
-		a.Failf("unknown table %s", table.Raw())
+func compare(
+	a *assert.Assertions, batch *types.TemporalBatch, table ident.Table, muts []types.Mutation,
+) {
+	tableBatch, ok := batch.Data.Get(table)
+	if !a.Truef(ok, "unknown table %s", table) {
 		return
 	}
-	if len(mutations) != len(muts) {
-		a.Fail("mutations are not the same")
+	tableMutations := tableBatch.Data
+	if !a.Len(tableMutations, len(muts), "table %s", table) {
 		return
 	}
-	for idx, mut := range mutations {
+	for idx, mut := range tableMutations {
 		a.Equal(muts[idx].Before, mut.Before)
 		a.Equal(muts[idx].Data, mut.Data)
 		a.Equal(muts[idx].Key, mut.Key)
@@ -74,7 +57,6 @@ func (m *mockAccumulator) compare(a *assert.Assertions, table ident.Table, muts 
 func TestOnDataTuple(t *testing.T) {
 	r := require.New(t)
 	consistentPoint, err := newConsistentPoint(mysql.MariaDBFlavor).parseFrom("1-1-1")
-	ts := hlc.New(consistentPoint.AsTime().UnixNano(), 0)
 	r.NoError(err)
 	schema := ident.MustSchema(ident.Public)
 	// Simple KV table
@@ -95,14 +77,14 @@ func TestOnDataTuple(t *testing.T) {
 	columns.Put(kvTable, kvCols)
 	columns.Put(noKeyTable, noKeyCols)
 	c := &conn{
-		columns:             columns,
-		nextConsistentPoint: consistentPoint,
+		columns: columns,
 		relations: map[uint64]ident.Table{
 			kvTableID: kvTable,
 			noKeyID:   noKeyTable,
 		},
 		target: schema,
 	}
+	ts := c.monotonic.External(consistentPoint)
 	tests := []struct {
 		name      string
 		tuple     *replication.RowsEvent
@@ -226,14 +208,16 @@ func TestOnDataTuple(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := assert.New(t)
-			batch := &mockAccumulator{}
+			batch := &types.TemporalBatch{
+				Time: ts,
+			}
 			err := c.onDataTuple(batch, tt.tuple, tt.operation)
 			if tt.wantErr != "" {
 				a.ErrorContains(err, tt.wantErr)
 				return
 			}
 			a.NoError(err)
-			batch.compare(a, tables[tt.tuple.TableID], tt.wantMuts)
+			compare(a, batch, tables[tt.tuple.TableID], tt.wantMuts)
 		})
 	}
 }
@@ -386,10 +370,6 @@ func (m *mockMemo) Put(
 
 // TestInitialConsistentPoint verifies that we are persisting the correct initial value
 func TestInitialConsistentPoint(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	stop := stopper.WithContext(ctx)
-	defer cancel()
-
 	tests := []struct {
 		config string
 		flavor string
@@ -449,6 +429,10 @@ func TestInitialConsistentPoint(t *testing.T) {
 	for _, tt := range tests {
 		name := fmt.Sprintf("%s_%s", tt.name, tt.flavor)
 		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			stop := stopper.WithContext(ctx)
+
 			a := assert.New(t)
 			m := &mockMemo{}
 			c := &conn{
@@ -461,10 +445,10 @@ func TestInitialConsistentPoint(t *testing.T) {
 			}
 			key := fmt.Sprintf("mysql-wal-offset-%s", c.target.Raw())
 			if tt.stored != "" {
-				m.Put(stop, nil, key, []byte(tt.stored))
+				a.NoError(m.Put(stop, nil, key, []byte(tt.stored)))
 			}
-			c.persistWALOffset(stop)
-			a.Equal(c.nextConsistentPoint.String(), tt.want)
+			a.NoError(c.persistWALOffset(stop))
+			a.Equal(c.monotonic.Last().External().(*consistentPoint).String(), tt.want)
 		})
 	}
 }
