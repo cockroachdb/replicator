@@ -87,9 +87,10 @@ func NewStat(group *types.TableGroup, progress *ident.TableMap[hlc.Range]) Stat 
 
 // CommonProgress returns the minimum progress across all tables within
 // the [Stat.Group]. If no progress has been made for one or more tables
-// in the group, [hlc.RangeEmpty] will be returned.
+// in the group, or if the group is empty, [hlc.RangeEmpty] will be
+// returned.
 func CommonProgress(s Stat) hlc.Range {
-	if s == nil {
+	if s == nil || len(s.Group().Tables) == 0 {
 		return hlc.RangeEmpty()
 	}
 	group := s.Group()
