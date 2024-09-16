@@ -52,45 +52,25 @@ type WorkloadConfig struct {
 func (f *Fixture) NewWorkload(
 	ctx context.Context, cfg *WorkloadConfig,
 ) (*Workload, *types.TableGroup, error) {
-	// We want at least a 64-bit value.
-	bigType := "BIGINT"
-	if f.TargetPool.Product == types.ProductOracle {
-		bigType = "NUMBER(38)"
-	}
+	parentInfo := base.AllocateTable(f.TargetPool, f.TargetSchema.Schema())
+	childInfo := base.AllocateTable(f.TargetPool, f.TargetSchema.Schema())
+	parentSQL, childSQL := WorkloadSchema(cfg, f.TargetPool.Product,
+		parentInfo.Name(), childInfo.Name())
 
-	parentInfo, err := f.CreateTargetTable(ctx, fmt.Sprintf(
-		"CREATE TABLE %%s (parent %[1]s PRIMARY KEY, val %[1]s DEFAULT 0 NOT NULL)",
-		bigType))
-	if err != nil {
-		return nil, nil, err
+	if _, err := f.TargetPool.ExecContext(ctx, parentSQL); err != nil {
+		return nil, nil, errors.WithStack(err)
 	}
-
-	// The child table may be generated with or without an FK reference.
-	childSchema := fmt.Sprintf(
-		`CREATE TABLE %%s (
-child %[2]s PRIMARY KEY,
-parent %[2]s NOT NULL,
-val %[2]s DEFAULT 0 NOT NULL,
-CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %[1]s(parent)
-)`, parentInfo.Name(), bigType)
-	if cfg.DisableFK {
-		childSchema = fmt.Sprintf(
-			`CREATE TABLE %%s (
-child %[1]s PRIMARY KEY,
-parent %[1]s NOT NULL,
-val %[1]s DEFAULT 0 NOT NULL
-)`, bigType)
+	if _, err := f.TargetPool.ExecContext(ctx, childSQL); err != nil {
+		return nil, nil, errors.WithStack(err)
 	}
-
-	childInfo, err := f.CreateTargetTable(ctx, childSchema)
-	if err != nil {
+	if err := f.Watcher.Refresh(ctx, f.TargetPool); err != nil {
 		return nil, nil, err
 	}
 
 	return &Workload{
 			Checker: &workload.Checker{
 				GeneratorBase: workload.NewGeneratorBase(parentInfo.Name(), childInfo.Name()),
-				LoadChild: func(id int) (parent int, val int64, ok bool, err error) {
+				LoadChild: func(id int64) (parent int64, val int64, ok bool, err error) {
 					if err = f.TargetPool.QueryRowContext(ctx,
 						fmt.Sprintf("SELECT parent, val FROM %s WHERE child=%d",
 							childInfo.Name(), id),
@@ -101,7 +81,7 @@ val %[1]s DEFAULT 0 NOT NULL
 					}
 					return
 				},
-				LoadParent: func(id int) (val int64, ok bool, err error) {
+				LoadParent: func(id int64) (val int64, ok bool, err error) {
 					if err = f.TargetPool.QueryRowContext(ctx,
 						fmt.Sprintf("SELECT val FROM %s WHERE parent=%d",
 							parentInfo.Name(), id),
@@ -148,4 +128,41 @@ func (g *Workload) CheckConsistent(_ context.Context, t testing.TB) (ok bool) {
 		return a.Empty(failures)
 	}
 	return false
+}
+
+// WorkloadSchema returns a pair of CREATE TABLE commands appropriate
+// for the given product.
+func WorkloadSchema(
+	cfg *WorkloadConfig, product types.Product, parent, child ident.Table,
+) (parentSQL, childSQL string) {
+	// We want at least a 64-bit value.
+	bigType := "BIGINT"
+	if product == types.ProductOracle {
+		bigType = "NUMBER(38)"
+	}
+
+	parentSQL = fmt.Sprintf(
+		"CREATE TABLE %[1]s (parent %[2]s PRIMARY KEY, val %[2]s DEFAULT 0 NOT NULL)",
+		parent,
+		bigType)
+
+	// The child table may be generated with or without an FK reference.
+	if cfg.DisableFK {
+		childSQL = fmt.Sprintf(
+			`CREATE TABLE %[1]s (
+child %[2]s PRIMARY KEY,
+parent %[2]s NOT NULL,
+val %[2]s DEFAULT 0 NOT NULL
+)`, child, bigType)
+	} else {
+		childSQL = fmt.Sprintf(
+			`CREATE TABLE %[1]s (
+child %[3]s PRIMARY KEY,
+parent %[3]s NOT NULL,
+val %[3]s DEFAULT 0 NOT NULL,
+CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %[2]s(parent)
+)`, child, parent, bigType)
+	}
+
+	return
 }

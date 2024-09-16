@@ -427,6 +427,10 @@ func (p *kafkaProducer) writeBatch(batch *types.MultiBatch) error {
 					Key:     v.Key,
 					Updated: v.Time.String(),
 				}
+				// Changfeeds encode a deletion as an absence of an after block.
+				if v.IsDelete() {
+					msg.After = nil
+				}
 				err := p.sendMessage(t.Value.Table.Raw(), -1, v.Key, msg)
 				if err != nil {
 					return err

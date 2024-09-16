@@ -22,6 +22,7 @@ package all
 import (
 	"testing"
 
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/google/wire"
 )
 
@@ -29,4 +30,9 @@ import (
 // in the target sub-packages.
 func NewFixture(t testing.TB) (*Fixture, error) {
 	panic(wire.Build(TestSet))
+}
+
+// NewFixtureFromBase constructs a new Fixture over a [base.Fixture].
+func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
+	panic(wire.Build(TestSetBase))
 }

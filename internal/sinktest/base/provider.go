@@ -138,6 +138,19 @@ func (f *Fixture) CreateTargetTable(
 	return CreateTable(ctx, f.TargetPool, f.TargetSchema.Schema(), schemaSpec)
 }
 
+// Swapped returns a new base Fixture with the source and target
+// databases swapped.
+func (f *Fixture) Swapped() *Fixture {
+	ret := *f
+	ret.TargetPool, ret.SourcePool =
+		(*types.TargetPool)(ret.SourcePool), (*types.SourcePool)(ret.TargetPool)
+	ret.TargetSchema, ret.SourceSchema =
+		sinktest.TargetSchema(ret.SourceSchema), sinktest.SourceSchema(ret.TargetSchema)
+	ret.TargetCache = ProvideTargetStatements(ret.Context, ret.TargetPool)
+
+	return &ret
+}
+
 var caseTimout = flag.Duration(
 	"caseTimout",
 	2*time.Minute,
@@ -464,17 +477,23 @@ func CreateSchema[P types.AnyPool](
 // convenient for all test table names to be unique as well.
 var tempTable atomic.Int32
 
+// AllocateTable returns a uniquely-named table within the enclosing
+// schema.
+func AllocateTable[P types.AnyPool](pool P, enclosing ident.Schema) TableInfo[P] {
+	tableNum := tempTable.Add(1)
+	// We use a dash here to ensure that the table name must be
+	// correctly quoted when sent as a SQL command.
+	tableName := ident.New(fmt.Sprintf("tbl-%d", tableNum))
+	return TableInfo[P]{pool, ident.NewTable(enclosing, tableName)}
+}
+
 // CreateTable creates a test table. The schemaSpec parameter must have
 // exactly one %s substitution parameter for the database name and table
 // name.
 func CreateTable[P types.AnyPool](
 	ctx context.Context, pool P, enclosing ident.Schema, schemaSpec string,
 ) (TableInfo[P], error) {
-	tableNum := tempTable.Add(1)
-	// We use a dash here to ensure that the table name must be
-	// correctly quoted when sent as a SQL command.
-	tableName := ident.New(fmt.Sprintf("tbl-%d", tableNum))
-	table := ident.NewTable(enclosing, tableName)
-	err := retry.Execute(ctx, pool, fmt.Sprintf(schemaSpec, table))
-	return TableInfo[P]{pool, table}, errors.WithStack(err)
+	table := AllocateTable(pool, enclosing)
+	err := retry.Execute(ctx, pool, fmt.Sprintf(schemaSpec, table.Name()))
+	return table, errors.WithStack(err)
 }

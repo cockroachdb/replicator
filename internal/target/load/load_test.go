@@ -90,7 +90,7 @@ func TestLoad(t *testing.T) {
 
 		// Verify data against workload generator.
 		for _, filled := range parentsToFill {
-			id := filled.GetZero(parentCol).(int)
+			id := filled.GetZero(parentCol).(int64)
 			val := filled.GetZero(valCol)
 
 			expectedVal, ok := work.ParentVals[id]
@@ -99,7 +99,7 @@ func TestLoad(t *testing.T) {
 		}
 
 		for _, filled := range childrenToFill {
-			id := filled.GetZero(childCol).(int)
+			id := filled.GetZero(childCol).(int64)
 			parent := filled.GetZero(parentCol)
 			val := filled.GetZero(valCol)
 
