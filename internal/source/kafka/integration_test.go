@@ -309,21 +309,19 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 		Stat() *notify.Var[sequencer.Stat]
 	}).Stat()
 
-	lastTime := hlc.New(time.Now().UnixNano(), 0)
-	r.NoError(producer.writeResolved(lastTime))
+	var clock hlc.Clock
+	r.NoError(producer.writeResolved(clock.Now()))
 	for iter := 1; iter <= maxIterations; iter++ {
 		batch := &types.MultiBatch{}
 		size := rand.IntN(maxBatchSize) + 1
 		for i := 0; i < size; i++ {
-			lastTime = hlcNow(lastTime)
-			workload.GenerateInto(batch, lastTime)
+			workload.GenerateInto(batch, clock.Now())
 		}
 		r.NoError(producer.writeBatch(batch))
 		// Write a resolved timestamp file once in a while.
 		// Ensure that we have resolved file at the end.
 		if isPrime(iter) || iter == maxIterations {
-			lastTime = hlcNow(lastTime)
-			r.NoError(producer.writeResolved(lastTime))
+			r.NoError(producer.writeResolved(clock.Now()))
 		}
 	}
 	log.Info("waiting for rows")
@@ -333,10 +331,10 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 	defer ticker.Stop()
 	for {
 		parent, err := workload.Checker.StageCounter(workload.Parent.Name(),
-			hlc.RangeIncluding(hlc.Zero(), lastTime))
+			hlc.RangeIncluding(hlc.Zero(), clock.Last()))
 		r.NoError(err)
 		child, err := workload.Checker.StageCounter(workload.Child.Name(),
-			hlc.RangeIncluding(hlc.Zero(), lastTime))
+			hlc.RangeIncluding(hlc.Zero(), clock.Last()))
 		r.NoError(err)
 		log.Infof("staging database content parent rows: %d, child rows: %d", parent, child)
 		if parent == 0 && child == 0 {
@@ -460,18 +458,6 @@ func (p *kafkaProducer) writeResolved(resolved hlc.Time) error {
 
 func isPrime(i int) bool {
 	return big.NewInt(int64(i)).ProbablyPrime(0)
-}
-
-// hlcNow returns an hlc timestamp that is after
-// the given timestamp.
-func hlcNow(lastTime hlc.Time) hlc.Time {
-	nextNanos := time.Now().UnixNano()
-	if nextNanos > lastTime.Nanos() {
-		lastTime = hlc.New(nextNanos, 0)
-		return lastTime
-	}
-	lastTime = lastTime.Next()
-	return lastTime
 }
 
 // getConfig is a helper function to create a configuration for the connector
