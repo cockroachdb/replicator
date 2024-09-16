@@ -29,20 +29,20 @@ import (
 func TestBefore(t *testing.T) {
 	a := assert.New(t)
 
-	a.Equal(Time{1, 0}, Time{1, 1}.Before())
-	a.Equal(Time{1, math.MaxInt32}, Time{2, 0}.Before())
+	a.Equal(New(1, 0), New(1, 1).Before())
+	a.Equal(New(1, math.MaxInt32), New(2, 0).Before())
 }
 
 func TestCompare(t *testing.T) {
 	a := assert.New(t)
 
-	a.True(Compare(Time{1, 1}, Time{1, 1}) == 0)
+	a.True(Compare(New(1, 1), New(1, 1)) == 0)
 
-	a.True(Compare(Time{2, 1}, Time{1, 1}) > 0)
-	a.True(Compare(Time{1, 1}, Time{2, 1}) < 0)
+	a.True(Compare(New(2, 1), New(1, 1)) > 0)
+	a.True(Compare(New(1, 1), New(2, 1)) < 0)
 
-	a.True(Compare(Time{1, 2}, Time{1, 1}) > 0)
-	a.True(Compare(Time{1, 1}, Time{1, 2}) < 0)
+	a.True(Compare(New(1, 2), New(1, 1)) > 0)
+	a.True(Compare(New(1, 1), New(1, 2)) < 0)
 }
 
 func TestExtend(t *testing.T) {
@@ -115,10 +115,10 @@ func TestEmpty(t *testing.T) {
 	a := assert.New(t)
 
 	a.True(RangeEmpty().Empty())
-	a.True(RangeEmptyAt(Time{1, 0}).Empty())
+	a.True(RangeEmptyAt(New(1, 0)).Empty())
 
-	a.False(RangeIncluding(Time{1, 0}, Time{1, 0}).Empty())
-	a.False(RangeIncluding(Time{1, 0}, Time{1, 1}).Empty())
+	a.False(RangeIncluding(New(1, 0), New(1, 0)).Empty())
+	a.False(RangeIncluding(New(1, 0), New(1, 1)).Empty())
 }
 
 func TestWithMin(t *testing.T) {

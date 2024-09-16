@@ -111,7 +111,7 @@ func ProvideConn(
 	if err != nil {
 		return nil, err
 	}
-	connAcceptor, _, err := seq.Start(ctx, &sequencer.StartOptions{
+	connAcceptor, statVar, err := seq.Start(ctx, &sequencer.StartOptions{
 		Delegate: types.OrderedAcceptorFrom(acc, watchers),
 		Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
 		Group: &types.TableGroup{
@@ -133,6 +133,7 @@ func ProvideConn(
 		sourceConfig:    sourceConfig,
 		standbyTimeout:  config.StandbyTimeout,
 		stagingDB:       stagingPool,
+		stat:            statVar,
 		target:          config.TargetSchema,
 		targetDB:        targetPool,
 	}

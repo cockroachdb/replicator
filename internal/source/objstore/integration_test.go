@@ -238,32 +238,30 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 		Stat() *notify.Var[sequencer.Stat]
 	}).Stat()
 
-	lastTime := hlc.New(time.Now().UnixNano(), 0)
-	r.NoError(sourceBucket.writeResolved(ctx, lastTime))
+	var clock hlc.Clock
+	r.NoError(sourceBucket.writeResolved(ctx, clock.Now()))
 	for iter := 1; iter <= maxIterations; iter++ {
 		batch := &types.MultiBatch{}
 		r.NoError(err)
 		size := rand.IntN(maxBatchSize) + 1
 		for i := 0; i < size; i++ {
-			lastTime = hlcNow(lastTime)
-			workload.GenerateInto(batch, lastTime)
+			workload.GenerateInto(batch, clock.Now())
 		}
 		r.NoError(sourceBucket.writeBatch(ctx, batch))
 		// Write a resolved timestamp file once in a while.
 		// Ensure that we have resolved file at the end.
 		if isPrime(iter) || iter == maxIterations {
-			lastTime = hlcNow(lastTime)
-			r.NoError(sourceBucket.writeResolved(ctx, lastTime))
+			r.NoError(sourceBucket.writeResolved(ctx, clock.Now()))
 		}
 	}
 	// Waiting for the rows to show in the target database.
 	r.NoError(workload.WaitForCatchUp(ctx, stats))
 
 	parent, err := workload.Checker.StageCounter(workload.Parent.Name(),
-		hlc.RangeIncluding(hlc.Zero(), lastTime))
+		hlc.RangeIncluding(hlc.Zero(), clock.Last()))
 	r.NoError(err)
 	child, err := workload.Checker.StageCounter(workload.Child.Name(),
-		hlc.RangeIncluding(hlc.Zero(), lastTime))
+		hlc.RangeIncluding(hlc.Zero(), clock.Last()))
 	r.NoError(err)
 	log.Infof("staging database content parent rows: %d, child rows: %d", parent, child)
 
@@ -384,18 +382,6 @@ func (b *sourceBucket) writeResolved(ctx context.Context, resolved hlc.Time) err
 	)
 	return err
 
-}
-
-// hlcNow returns an hlc timestamp that is after
-// the given timestamp.
-func hlcNow(lastTime hlc.Time) hlc.Time {
-	nextNanos := time.Now().UnixNano()
-	if nextNanos > lastTime.Nanos() {
-		lastTime = hlc.New(nextNanos, 0)
-		return lastTime
-	}
-	lastTime = lastTime.Next()
-	return lastTime
 }
 
 // getConfig is a helper function to create a configuration for the connector
