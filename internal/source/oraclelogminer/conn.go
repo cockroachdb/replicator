@@ -97,6 +97,7 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 				return errors.Wrapf(err, "failed to obtain changefeed logs")
 			}
 			// Logs with the same XID (transaction ID) will be put into the same temporalBatch.
+			// TODO(janexing): set the commit SCN as the ext time for this temporal batch.
 			temporalBatch := &types.TemporalBatch{}
 			// Once all logs are processed, the batches are sent to conn acceptor one by one.
 			temporalBatches := make([]*types.TemporalBatch, 0)
@@ -123,9 +124,9 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 
 				prevXID = lg.TxnID
 
-				// We need to get the primary key values for the changefeed, as in the update stmt
-				// that logminer provides there might not explicitly contains the pk values, but just
-				// the rowid.
+				// We need to get the primary key values for the changefeed, as in the update or
+				// delete stmt that logminer provides there might not explicitly contains the pk
+				// values, but just the rowid.
 				// TODO(janexing): consider the ordinal order of pks.
 				if lg.Operation != Insert {
 					pkNames, pkVals, err := RowIDToPKs(ctx, db.DB, lg.RowID, lg.UserName, lg.TableName, lg.SCN)
@@ -144,7 +145,10 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 				if err != nil {
 					return errors.Wrapf(err, "failed to marshal kv")
 				}
-				mut := types.Mutation{Data: byteRes}
+				mut := types.Mutation{
+					Data:     byteRes,
+					Deletion: lg.Operation == Delete,
+				}
 
 				rowIDRaw, err := json.Marshal(lg.RowID)
 				if err != nil {
@@ -156,6 +160,7 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 				// THE CURRENT IMPLEMENTATION HERE IS WRONG, as we don't have convenient way to
 				// convert a SCN to a timestamp with sufficiently precision at this moment,
 				// so we use this function as a placeholder for now.
+				// TODO(janexing): use the commit SCN for ext for time.
 				hlcTime, err := scnToHLCTime(lg.CommitSCN)
 				if err != nil {
 					return err

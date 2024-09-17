@@ -26,7 +26,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TODO(janexing): we might not want to query for the pk col names for every changefeed.
 const (
 	getPKColNamesQuery = `
 SELECT column_name
@@ -44,7 +43,8 @@ SELECT %s FROM %s.%s AS OF SCN %s WHERE ROWID = '%s'
 `
 )
 
-// RowIDToKeys converts the corresponding primary key values of a rowID at the SCN.
+// RowIDToPKs converts a rowID to the corresponding primary key values at the given SCN.
+// This is needed for UPDATE changefeed, where the PK values are not specified in the sql stmt.
 func RowIDToPKs(
 	ctx *stopper.Context, db *sql.DB, rowID string, userName string, tableName string, SCN string,
 ) ([]string, [][]byte, error) {
@@ -53,6 +53,8 @@ func RowIDToPKs(
 	}
 
 	//  Get the name of all PK columns for the table.
+	// TODO(janexing): we might not want to query for the pk col names for every changefeed.
+	// Consider moving this to a prior step where we determine the schema of the table.
 	pkNameRows, err := db.QueryContext(ctx, fmt.Sprintf(getPKColNamesQuery, tableName, userName))
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "failed to get the primary key of table %s", tableName)

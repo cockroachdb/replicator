@@ -22,6 +22,10 @@ import (
 	orclantl "github.com/cockroachdb/replicator/internal/util/oracleparser/thirdparty"
 )
 
+// LogToKV parse a sql stmt log to a KV struct, where the key is the column to be rewritten, the value
+// is the value to override / insert. The true extraction logic can be found in the functions related
+// to oracleparser.MockListener.
+// Examples can be found in TestLogToKV().
 func LogToKV(log string) (oracleparser.KVStruct, error) {
 	lexer := orclantl.NewPlSqlLexer(antlr.NewInputStream(log))
 	stream := antlr.NewCommonTokenStream(lexer, 0)

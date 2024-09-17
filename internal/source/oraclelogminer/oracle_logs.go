@@ -264,6 +264,11 @@ func GetChangeFeedLogs(ctx *stopper.Context, db *DB) ([]RedoLog, error) {
 			redoLog.SeqNum = int(seqNum.Int64)
 		}
 
+		if redoLog.Operation != Insert && redoLog.Operation != Update && redoLog.Operation != Delete {
+			log.Warnf("log ignored as it is not DML: %s", sqlRedo.String)
+			continue
+		}
+
 		res = append(res, redoLog)
 	}
 
