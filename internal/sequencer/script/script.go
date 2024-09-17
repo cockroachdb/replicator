@@ -127,12 +127,12 @@ func (w *wrapper) Start(
 	// Install the source-phase acceptor. This provides the user with
 	// the opportunity to rewrite mutations before they are presented to
 	// the upstream sequencer.
-	acc = types.UnorderedAcceptorFrom(&sourceAcceptor{
+	acc = &sourceAcceptor{
 		delegate:       acc,
 		group:          opts.Group,
 		sourceBindings: sourceBindings,
 		watcher:        watcher,
-	})
+	}
 	return acc, stat, nil
 }
 
