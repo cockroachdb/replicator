@@ -46,7 +46,14 @@ func pgErrDeferrable(err error) bool {
 	if !ok {
 		return false
 	}
-	return code == "23503" // foreign_key_violation
+	switch code {
+	case "23503": // foreign_key_violation
+		return true
+	case "23505": // unique_key_violation
+		return true
+	default:
+		return false
+	}
 }
 
 func pgErrRetryable(err error) bool {

@@ -71,6 +71,7 @@ func (f *Fixture) NewWorkload(
 child %[2]s PRIMARY KEY,
 parent %[2]s NOT NULL,
 val %[2]s DEFAULT 0 NOT NULL,
+uniq %[2]s NOT NULL UNIQUE,
 CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %[1]s(parent)
 )`, parentInfo.Name(), bigType)
 	if cfg.DisableFK {
@@ -78,7 +79,8 @@ CONSTRAINT parent_fk FOREIGN KEY(parent) REFERENCES %[1]s(parent)
 			`CREATE TABLE %%s (
 child %[1]s PRIMARY KEY,
 parent %[1]s NOT NULL,
-val %[1]s DEFAULT 0 NOT NULL
+val %[1]s DEFAULT 0 NOT NULL,
+uniq %[1]s NOT NULL UNIQUE
 )`, bigType)
 	}
 

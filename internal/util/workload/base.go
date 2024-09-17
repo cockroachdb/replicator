@@ -65,6 +65,10 @@ type GeneratorBase struct {
 	// The keys are child ids and the value the parent id.
 	ChildToParent map[int]int `json:"childToParent"`
 
+	ChildToUnique    map[int]int
+	Uniques          map[int]struct{}
+	UniqueToChildren map[int]int
+
 	// generation tracks the number of times that [GenerateInto] has
 	// been called in order to select different scenarios.
 	generation int
@@ -73,13 +77,16 @@ type GeneratorBase struct {
 // NewGeneratorBase constructs an empty payload generator.
 func NewGeneratorBase(parent, child ident.Table) *GeneratorBase {
 	return &GeneratorBase{
-		Child:         child,
-		Children:      make(map[int]struct{}),
-		ChildToParent: make(map[int]int),
-		ChildVals:     make(map[int]int64),
-		Parent:        parent,
-		Parents:       make(map[int]struct{}),
-		ParentVals:    make(map[int]int64),
+		Child:            child,
+		Children:         make(map[int]struct{}),
+		ChildToParent:    make(map[int]int),
+		ChildToUnique:    make(map[int]int),
+		ChildVals:        make(map[int]int64),
+		Parent:           parent,
+		Parents:          make(map[int]struct{}),
+		ParentVals:       make(map[int]int64),
+		Uniques:          make(map[int]struct{}),
+		UniqueToChildren: make(map[int]int),
 	}
 }
 
@@ -122,11 +129,14 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 	case 2: // Insert a child row referencing an existing parent
 		parent := g.pickExistingParent()
 		child := g.pickNewChild()
+		uniq := g.pickUnique()
 		g.ChildVals[child] = val
 		g.ChildToParent[child] = parent
+		g.ChildToUnique[child] = uniq
+		g.UniqueToChildren[uniq] = child
 		_ = batch.Accumulate(g.Child, types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d }`,
-				child, parent, val)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d, "uniq": %d }`,
+				child, parent, val, uniq)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time: time,
 		})
@@ -145,9 +155,10 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 		child := g.pickExistingChild()
 		g.ChildVals[child] = val
 		g.ChildToParent[child] = parent
+		uniq := g.ChildToUnique[child]
 		_ = batch.Accumulate(g.Child, types.Mutation{
-			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d }`,
-				child, parent, val)),
+			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d, "uniq": %d }`,
+				child, parent, val, uniq)),
 			Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time: time,
 		})
@@ -157,10 +168,18 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 			break
 		}
 		child := g.pickExistingChild()
+		parent := g.ChildToParent[child]
+		uniq := g.ChildToUnique[child]
+
 		delete(g.Children, child)
 		delete(g.ChildToParent, child)
 		delete(g.ChildVals, child)
+		delete(g.ChildToUnique, child)
+		delete(g.Uniques, uniq)
+		delete(g.UniqueToChildren, uniq)
 		_ = batch.Accumulate(g.Child, types.Mutation{
+			Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d, "uniq": %d }`,
+				child, parent, val, uniq)),
 			Deletion: true,
 			Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 			Time:     time,
@@ -183,10 +202,16 @@ func (g *GeneratorBase) GenerateInto(batch *types.MultiBatch, time hlc.Time) {
 			if p != parent {
 				continue
 			}
+			uniq := g.ChildToUnique[child]
 			delete(g.Children, child)
 			delete(g.ChildToParent, child)
 			delete(g.ChildVals, child)
+			delete(g.ChildToUnique, child)
+			delete(g.Uniques, uniq)
+			delete(g.UniqueToChildren, uniq)
 			_ = batch.Accumulate(g.Child, types.Mutation{
+				Data: json.RawMessage(fmt.Sprintf(`{ "child": %d, "parent": %d, "val": %d, "uniq": %d }`,
+					child, parent, val, uniq)),
 				Deletion: true,
 				Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, child)),
 				Time:     time,
@@ -277,5 +302,17 @@ func (g *GeneratorBase) pickNewParent() int {
 		}
 		g.Parents[parent] = struct{}{}
 		return parent
+	}
+}
+
+func (g *GeneratorBase) pickUnique() int {
+	uniq := 0
+	for {
+		if _, exists := g.Uniques[uniq]; exists {
+			uniq++
+			continue
+		}
+		g.Uniques[uniq] = struct{}{}
+		return uniq
 	}
 }

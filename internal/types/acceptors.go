@@ -20,6 +20,8 @@ package types
 
 import (
 	"context"
+	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/cockroachdb/replicator/internal/util/hlc"
@@ -132,6 +134,11 @@ func (t *orderedAdapter) AcceptMultiBatch(
 	}
 	w := watcher.Get()
 
+	if !slices.IsSortedFunc(batch.Data, func(a, b *TemporalBatch) int {
+		return hlc.Compare(a.Time, b.Time)
+	}) {
+		runtime.Breakpoint()
+	}
 	// This assumes that updates are more common than deletes. We want
 	// to accumulate as many updates as possible, until we see a
 	// deletion. If we have a deletion, we want to flush the
@@ -139,6 +146,7 @@ func (t *orderedAdapter) AcceptMultiBatch(
 	// updates.
 	var pendingUpdates ident.TableMap[[]Mutation]
 	for _, temporal := range batch.Data {
+
 		// These are per-timestamp. The updates will be folded into
 		// pendingUpdates at the bottom of the loop.
 		var currentDeletes, currentUpdates ident.TableMap[[]Mutation]
