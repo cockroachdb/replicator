@@ -45,7 +45,7 @@ func Equal(a types.Mutation, b types.Mutation) bool {
 		equalish(a.Data, b.Data) &&
 		equalish(a.Key, b.Key) &&
 		reflect.DeepEqual(a.Meta, b.Meta) &&
-		hlc.Compare(a.Time, b.Time) == 0
+		hlc.Compare(a.Time, b.Time) == 0 && a.SCN == b.SCN
 }
 
 // equalish returns true if the messages are both nullish or both
