@@ -36,6 +36,7 @@ type Checker struct {
 
 // CheckConsistent validates the expected state within the generator to
 // the relevant external store.
+// It checks after the mutations / txns being applied on the target.
 func (c *Checker) CheckConsistent() (failures []string, _ error) {
 	failf := func(msg string, args ...any) {
 		failures = append(failures, fmt.Sprintf(msg, args...))

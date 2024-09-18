@@ -14,12 +14,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build cgo && (target_oracle || target_all)
+//go:build cgo && (target_oracle || target_all || source_oracle || source_all)
 
 package stdpool
 
 import (
 	"database/sql"
+	"os"
 	"strconv"
 	"time"
 
@@ -75,11 +76,10 @@ func oraErrorRetryable(err error) bool {
 	}
 }
 
-// OpenOracleAsTarget opens a connection to an Oracle database endpoint and
-// return it as a [types.TargetPool].
-func OpenOracleAsTarget(
-	ctx *stopper.Context, connectString string, options ...Option,
-) (*types.TargetPool, error) {
+// OCIPathEnvVar is the path where the Oracle Instant Client library is stored.
+const OCIPathEnvVar = `OIC_LIBRARY_PATH`
+
+func openOracle(ctx *stopper.Context, connectString string, options ...Option) (*sql.DB, error) {
 	var tc TestControls
 	if err := attachOptions(ctx, &tc, options); err != nil {
 		return nil, err
@@ -99,23 +99,15 @@ func OpenOracleAsTarget(
 	if params.Timezone == nil {
 		params.Timezone = time.UTC
 	}
-	connector := godror.NewConnector(params)
 
-	ret := &types.TargetPool{
-		DB: sql.OpenDB(connector),
-		PoolInfo: types.PoolInfo{
-			ConnectionString: connectString,
-			Product:          types.ProductOracle,
-
-			ErrCode:      oraErrorCode,
-			IsDeferrable: oraErrorDeferrable,
-			ShouldRetry:  oraErrorRetryable,
-		},
+	if ociLibPath := os.Getenv(OCIPathEnvVar); ociLibPath != "" {
+		params.LibDir = ociLibPath
 	}
-	ctx.Defer(func() { _ = ret.Close() })
+
+	db := sql.OpenDB(godror.NewConnector(params))
 
 ping:
-	if err := ret.Ping(); err != nil {
+	if err := db.Ping(); err != nil {
 		if tc.WaitForStartup && isOracleStartupError(err) {
 			log.WithError(err).Info("waiting for database to become ready")
 			select {
@@ -127,6 +119,63 @@ ping:
 		}
 		return nil, errors.Wrap(err, "could not ping the database")
 	}
+
+	return db, nil
+}
+
+// OpenOracleAsTarget opens a connection to an Oracle database endpoint and
+// return it as a [types.SourcePool].
+func OpenOracleAsSource(
+	ctx *stopper.Context, connectString string, options ...Option,
+) (*types.SourcePool, error) {
+
+	db, err := openOracle(ctx, connectString, options...)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := &types.SourcePool{
+		DB: db,
+		PoolInfo: types.PoolInfo{
+			ConnectionString: connectString,
+			Product:          types.ProductOracle,
+
+			ErrCode:      oraErrorCode,
+			IsDeferrable: oraErrorDeferrable,
+			ShouldRetry:  oraErrorRetryable,
+		},
+	}
+	ctx.Defer(func() { _ = ret.Close() })
+
+	if err := logMnrEnabledCheck(ctx, ret); err != nil {
+		return nil, errors.Wrapf(err, "failed to start replicator for oracle source")
+	}
+
+	return ret, nil
+}
+
+// OpenOracleAsTarget opens a connection to an Oracle database endpoint and
+// return it as a [types.TargetPool].
+func OpenOracleAsTarget(
+	ctx *stopper.Context, connectString string, options ...Option,
+) (*types.TargetPool, error) {
+	db, err := openOracle(ctx, connectString, options...)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := &types.TargetPool{
+		DB: db,
+		PoolInfo: types.PoolInfo{
+			ConnectionString: connectString,
+			Product:          types.ProductOracle,
+
+			ErrCode:      oraErrorCode,
+			IsDeferrable: oraErrorDeferrable,
+			ShouldRetry:  oraErrorRetryable,
+		},
+	}
+	ctx.Defer(func() { _ = ret.Close() })
 
 	if err := ret.QueryRow("SELECT banner FROM V$VERSION").Scan(&ret.Version); err != nil {
 		return nil, errors.Wrap(err, "could not query version")
@@ -158,4 +207,41 @@ func isOracleStartupError(err error) bool {
 		return false
 	}
 	return oracleStartupErrors[code]
+}
+
+const (
+	logModeCheckStmt = `SELECT log_mode FROM v$database`
+	archiveLog       = `ARCHIVELOG`
+)
+const (
+	supplementalLogDataStmt = `SELECT SUPPLEMENTAL_LOG_DATA_MIN, SUPPLEMENTAL_LOG_DATA_PK FROM V$DATABASE`
+)
+
+// logMnrEnabledCheck checks if essential settings required by LogMiner are enabled.
+func logMnrEnabledCheck(ctx *stopper.Context, db *types.SourcePool) error {
+	var logModeStr sql.NullString
+	if err := db.QueryRowContext(ctx, logModeCheckStmt).Scan(&logModeStr); err != nil {
+		return errors.Wrapf(err, "failed to query the log mode")
+	}
+
+	if !logModeStr.Valid || logModeStr.String != archiveLog {
+		return errors.New("archive log is not enabled")
+	}
+
+	var supplementLogMinStr, supplementLogPKStr sql.NullString
+
+	if err := db.QueryRowContext(ctx, supplementalLogDataStmt).Scan(&supplementLogMinStr, &supplementLogPKStr); err != nil {
+		return errors.Wrapf(err, "failed to check if supplement log has been enabled")
+	}
+
+	if !supplementLogMinStr.Valid || supplementLogMinStr.String != "YES" {
+		return errors.WithMessage(errors.New("supplemental log data is not enabled"), "please run ALTER DATABASE ADD SUPPLEMENTAL LOG DATA")
+	}
+
+	if !supplementLogPKStr.Valid || supplementLogPKStr.String != "YES" {
+		return errors.WithMessage(errors.New("supplemental log data with PK is not enabled"), "please run ALTER DATABASE ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS")
+	}
+	log.Info("logMiner is confirmed enabled")
+
+	return nil
 }
