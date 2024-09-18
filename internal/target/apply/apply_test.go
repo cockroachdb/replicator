@@ -1478,7 +1478,7 @@ func TestExpressionColumns(t *testing.T) {
 
 	ctx := fixture.Context
 
-	// KV payload, but with different column names.
+	// ValKV payload, but with different column names.
 	type Payload struct {
 		PK    int    `json:"pk"`
 		Val   string `json:"val"`
@@ -1544,7 +1544,7 @@ func TestMergeWiring(t *testing.T) {
 
 	ctx := fixture.Context
 
-	// KV payload, but with different column names.
+	// ValKV payload, but with different column names.
 	type Payload struct {
 		PK  int       `json:"pk"`
 		Val int       `json:"val"`
@@ -1770,7 +1770,7 @@ func TestIgnoredColumns(t *testing.T) {
 
 	ctx := fixture.Context
 
-	// KV payload, but with different column names.
+	// ValKV payload, but with different column names.
 	type Payload struct {
 		PK0        int    `json:"pk0"`
 		PKDeleted  int    `json:"pk_deleted"`
@@ -1823,7 +1823,7 @@ func TestRenamedColumns(t *testing.T) {
 
 	ctx := fixture.Context
 
-	// KV payload, but with different column names.
+	// ValKV payload, but with different column names.
 	type Payload struct {
 		PK  int    `json:"pk_source"`
 		Val string `json:"val_source"`
@@ -1969,7 +1969,7 @@ func TestSparsePayload(t *testing.T) {
 	r.NoError(err)
 	ctx := fixture.Context
 
-	// KV payload, but with different column names.
+	// ValKV payload, but with different column names.
 	type Payload struct {
 		PK   int    `json:"pk"`
 		Val0 string `json:"val0,omitempty"`

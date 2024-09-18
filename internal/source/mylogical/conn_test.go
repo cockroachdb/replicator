@@ -59,7 +59,7 @@ func TestOnDataTuple(t *testing.T) {
 	consistentPoint, err := newConsistentPoint(mysql.MariaDBFlavor).parseFrom("1-1-1")
 	r.NoError(err)
 	schema := ident.MustSchema(ident.Public)
-	// Simple KV table
+	// Simple ValKV table
 	kvTableID := uint64(0)
 	kvTable := ident.NewTable(schema, ident.New("t1"))
 	kvCols := []types.ColData{
