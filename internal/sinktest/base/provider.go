@@ -21,6 +21,7 @@ package base
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"net/url"
@@ -56,6 +57,8 @@ const (
 	// chosen arbitrarily, we don't really generate this many different
 	// SQL statements.
 	statementCacheSize = 128
+
+	oracleCDBUserNamePrefix = "C##"
 )
 
 var (
@@ -356,6 +359,7 @@ func ProvideTargetSchema(
 			return sinktest.TargetSchema{}, errors.Wrap(err, pool.ConnectionString)
 		}
 		u.User = url.UserPassword(sch.Raw(), DummyPassword)
+		u.RawQuery = strings.Replace(u.RawQuery, `sysdba=true`, "", -1)
 		conn := u.String()
 
 		next, err := stdpool.OpenOracleAsTarget(ctx, conn,
@@ -387,6 +391,24 @@ func provideSchema[P types.AnyPool](
 		return CreateSchema(ctx, pool, prefix)
 
 	case types.ProductOracle:
+		checkIfCDBRow, err := retry.QueryRow(ctx, pool, `SELECT CDB FROM V$DATABASE`)
+		if err != nil {
+			return ident.Schema{}, errors.Wrapf(err, "failed to check if database is CDB")
+		}
+		var isCDB sql.NullString
+		if err := checkIfCDBRow.(*sql.Row).Scan(&isCDB); err != nil {
+			return ident.Schema{}, errors.Wrapf(err, "failed to scan to confirm if database is CDB")
+		}
+		if !isCDB.Valid {
+			return ident.Schema{}, errors.Errorf("failed to confirm if database is CDB, result is invalid")
+		}
+
+		log.Infof("CDB Check result: %s", isCDB.String)
+
+		if isCDB.String == "YES" {
+			prefix = fmt.Sprintf("%s%s", oracleCDBUserNamePrefix, prefix)
+		}
+
 		// Each package tests run in a separate binary, so we need a
 		// "globally" unique ID.  While PIDs do recycle, they're highly
 		// unlikely to do so during a single run of the test suite.
@@ -395,8 +417,9 @@ func provideSchema[P types.AnyPool](
 
 		// This syntax doesn't use a string literal, but an identifier
 		// for the password.
-		err := retry.Execute(ctx, pool, fmt.Sprintf(
-			"CREATE USER %s IDENTIFIED BY %s", name, DummyPassword))
+		createUserQuery := fmt.Sprintf("CREATE USER %s IDENTIFIED BY %s", name, DummyPassword)
+		log.Infof("creating user with %s", createUserQuery)
+		err = retry.Execute(ctx, pool, createUserQuery)
 		if err != nil {
 			return ident.Schema{}, errors.Wrapf(err, "could not create user %s", name)
 		}
@@ -510,6 +533,7 @@ func CreateTable[P types.AnyPool](
 	ctx context.Context, pool P, enclosing ident.Schema, schemaSpec string,
 ) (TableInfo[P], error) {
 	table := AllocateTable(pool, enclosing)
-	err := retry.Execute(ctx, pool, fmt.Sprintf(schemaSpec, table.Name()))
-	return table, errors.WithStack(err)
+	stmt := fmt.Sprintf(schemaSpec, table.Name())
+	err := retry.Execute(ctx, pool, stmt)
+	return table, errors.WithStack(errors.Wrapf(err, "failed to execute %q", stmt))
 }
