@@ -32,7 +32,7 @@ var Set = wire.NewSet(
 	wire.Bind(new(types.Memo), new(*Memo)),
 )
 
-// ProvideMemo is called by Wire to construct the KV wrapper.
+// ProvideMemo is called by Wire to construct the SetKV wrapper.
 func ProvideMemo(
 	ctx context.Context, db *types.StagingPool, staging ident.StagingSchema,
 ) (*Memo, error) {
