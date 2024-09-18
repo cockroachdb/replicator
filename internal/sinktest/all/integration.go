@@ -48,6 +48,11 @@ const (
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
 	PostgreSQLName = "postgresql"
+
+	// OracleName must be kept in alignment with the
+	// .github/docker-compose.yml file and the integration matrix
+	// variable in workflows/tests.yaml.
+	OracleName = "oracle"
 )
 
 // IntegrationMain runs the tests if the value of IntegrationEnvName

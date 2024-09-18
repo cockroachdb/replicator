@@ -7,8 +7,9 @@
 package base
 
 import (
-	"github.com/cockroachdb/replicator/internal/util/diag"
 	"testing"
+
+	"github.com/cockroachdb/replicator/internal/util/diag"
 )
 
 // Injectors from injector.go:
