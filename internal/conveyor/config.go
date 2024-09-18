@@ -67,7 +67,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 		"disable cross-Replicator checkpoint notifications and rely only on polling")
 	f.BoolVar(&c.Immediate, "immediate", false,
 		"bypass staging tables and write directly to target; "+
-			"recommended only for KV-style workloads with no FKs")
+			"recommended only for ValKV-style workloads with no FKs")
 	f.IntVar(&c.LimitLookahead, "limitLookahead", 0,
 		"limit number of checkpoints to be considered when computing the resolving range; "+
 			"may cause replication to stall completely if older mutations cannot be applied")
