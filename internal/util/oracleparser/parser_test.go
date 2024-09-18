@@ -17,117 +17,17 @@
 package oracleparser
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/antlr4-go/antlr/v4"
 	"github.com/cockroachdb/datadriven"
 	orclantl "github.com/cockroachdb/replicator/internal/util/oracleparser/thirdparty"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
-// mockListener is the actual listener to expose to the parser.
-type mockListener struct {
-	orclantl.BasePlSqlParserListener
-	kv  kvStruct
-	err error
-}
-
-const (
-	emptyClobStr = `EMPTY_CLOB()`
-	nullStr      = `NULL`
-)
-
-const errHeader = `ERROR`
-
-type emptyClob struct{}
-
-func (c *emptyClob) MarshalJSON() ([]byte, error) {
-	return []byte(`"ORACLE_EMPTY_CLOB()"`), nil
-}
-
-// Column Name > Value
-type kvStruct map[string]interface{}
-
-func (kv kvStruct) String() (string, error) {
-	byteRes, err := json.MarshalIndent(kv, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(byteRes), nil
-}
-
-// EnterUpdate_statement implements antlr.PlSqlParserListener.
-func (s *mockListener) EnterUpdate_statement(ctx *orclantl.Update_statementContext) {
-	set := ctx.Update_set_clause()
-	allColSets := set.AllColumn_based_update_set_clause()
-	for i, colSet := range allColSets {
-		colName := colSet.Column_name().GetText()
-		valStr := colSet.Expression().GetText()
-		children := colSet.GetChildren()
-		if strings.HasPrefix(colName, `"`) && strings.HasSuffix(colName, `"`) {
-			colName = strings.TrimPrefix(strings.TrimSuffix(colName, `"`), `"`)
-		}
-		if strings.HasPrefix(valStr, `'`) && strings.HasSuffix(valStr, `'`) {
-			valStr = strings.TrimPrefix(strings.TrimSuffix(valStr, `'`), `'`)
-		}
-
-		switch valStr {
-		case emptyClobStr:
-			// The first entry of the children is Column Name Context.
-			treeNode := children[i+1]
-			if _, ok := treeNode.(*orclantl.ExpressionContext); ok {
-				s.kv[colName] = &emptyClob{}
-			}
-		case nullStr:
-			s.kv[colName] = nil
-		default:
-			s.kv[colName] = valStr
-		}
-	}
-}
-
-// EnterInsert_statement implements antlr.PlSqlParserListener.
-func (s *mockListener) EnterInsert_statement(ctx *orclantl.Insert_statementContext) {
-	singTblInsert := ctx.Single_table_insert()
-	insertInto := singTblInsert.Insert_into_clause()
-	parenColList := insertInto.Paren_column_list()
-	if parenColList == nil {
-		s.err = errors.Wrap(errors.New(fmt.Sprintf("column list is not specified")), errHeader)
-		return
-	}
-	colList := parenColList.Column_list()
-	valChildren := singTblInsert.Values_clause().GetChildren()
-	ValList := singTblInsert.Values_clause().Expressions().AllExpression()
-
-	colNames := colList.AllColumn_name()
-	for i, col := range colNames {
-		colName := col.GetText()
-		valStr := ValList[i].GetText()
-		if strings.HasPrefix(colName, `"`) && strings.HasSuffix(colName, `"`) {
-			colName = strings.TrimPrefix(strings.TrimSuffix(colName, `"`), `"`)
-		}
-		if strings.HasPrefix(valStr, `'`) && strings.HasSuffix(valStr, `'`) {
-			valStr = strings.TrimPrefix(strings.TrimSuffix(valStr, `'`), `'`)
-		}
-		switch valStr {
-		case emptyClobStr:
-			treeNode := valChildren[i]
-			if _, ok := treeNode.(*orclantl.ExpressionsContext); ok {
-				s.kv[colName] = &emptyClob{}
-			}
-		case nullStr:
-			s.kv[colName] = nil
-		default:
-			s.kv[colName] = valStr
-		}
-	}
-}
-
 func TestDataDriven(t *testing.T) {
+
 	const testdataPath = `./testdata`
 	datadriven.Walk(t, testdataPath, func(t *testing.T, path string) {
 		datadriven.RunTest(t, path, func(t *testing.T, td *datadriven.TestData) string {
@@ -149,18 +49,34 @@ func TestDataDriven(t *testing.T) {
 				p := orclantl.NewPlSqlParser(stream)
 				tree := p.Sql_script()
 
-				l := &mockListener{
-					kv: make(map[string]interface{}),
+				valKV := make(map[string]interface{})
+				whereKV := make(map[string]interface{})
+
+				l := &MockListener{
+					SetAndWhere: SetAndWhereKVStructs{
+						ValKV:   valKV,
+						WhereKV: whereKV,
+					},
 				}
 				antlr.ParseTreeWalkerDefault.Walk(l, tree)
-				if l.err != nil {
-					return l.err.Error()
+				if l.Err != nil {
+					return l.Err.Error()
 				}
-				strRes, err = l.kv.String()
+				strRes, err = l.SetAndWhere.ValKV.String()
 				if !expectError {
 					require.NoError(t, err)
 				} else {
 					return err.Error()
+				}
+
+				if len(l.SetAndWhere.WhereKV) > 0 {
+					whereRes, err := l.SetAndWhere.WhereKV.String()
+					if !expectError {
+						require.NoError(t, err)
+					} else {
+						return err.Error()
+					}
+					strRes = fmt.Sprintf("%s\nWHERE\n%s", strRes, whereRes)
 				}
 
 				return strRes

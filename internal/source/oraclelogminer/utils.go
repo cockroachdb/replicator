@@ -14,26 +14,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package kafka contains a command to perform logical replication
-// from a kafka feed.
-package kafka
+package oraclelogminer
 
 import (
-	"github.com/cockroachdb/field-eng-powertools/stopper"
-	"github.com/cockroachdb/replicator/internal/source/kafka"
-	"github.com/cockroachdb/replicator/internal/util/stdlogical"
-	"github.com/spf13/cobra"
+	"strconv"
+	"time"
+
+	"github.com/cockroachdb/replicator/internal/util/hlc"
+	"github.com/pkg/errors"
 )
 
-// Command returns the kafka subcommand.
-func Command() *cobra.Command {
-	cfg := &kafka.Config{}
-	return stdlogical.New(&stdlogical.Template{
-		Config: cfg,
-		Short:  "start a kafka replication feed",
-		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
-			return kafka.Start(ctx, cfg)
-		},
-		Use: "kafka",
-	})
+func scnToHLCTime(scnStr string) (hlc.Time, error) {
+	baseTime := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	scn, err := strconv.ParseInt(scnStr, 10, 64)
+	if err != nil {
+		return hlc.Time{}, errors.Wrapf(err, "failed to parse the scn string %s into integer", scnStr)
+	}
+
+	// Calculate timestamp by adding (SCN * 1ms) to baseTime
+	// Here, we use 1 millisecond per SCN increment
+	return hlc.From(baseTime.Add(time.Duration(scn) * time.Millisecond)), nil
 }
