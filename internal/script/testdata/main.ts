@@ -239,6 +239,50 @@ api.configureTable("soft_deletes", {
     }
 })
 
+// Demonstrate how a custom apply function can be used to reroute
+// mutations that could be applied in replication scenarios that
+// aren't a direct one-to-one copy of the data.
+api.configureTable("uniquer", {
+    apply: async (ops: ApplyOp[]): Promise<any> => {
+        let tx = api.getTX();
+
+        // Create a savepoint, so we can bring the transaction out of a
+        // potential error condition.
+        await tx.exec("SAVEPOINT yolo");
+        try {
+            // In the general case, the operations can be applied
+            // in bulk. If this succeeds, we can just return here.
+            await tx.apply(ops);
+            return;
+        } catch (e) {
+            console.log(e.toString())
+            // Unique value violation.
+            if (!e.toString().includes("SQLSTATE 23505")) {
+                throw e;
+            }
+        }
+
+        // Bring the transaction out of the error state.
+        await tx.exec("ROLLBACK TO SAVEPOINT yolo");
+
+        // The whole batch failed, we'll try individual ones.
+        for (let op of ops) {
+            await tx.exec("SAVEPOINT yolo");
+            try {
+                await tx.apply([op])
+                continue;
+            } catch (e) {
+                if (!e.toString().includes("SQLSTATE 23505")) {
+                    throw e;
+                }
+            }
+            // Found a bad message, write it to the dlq table.
+            await tx.exec("ROLLBACK TO SAVEPOINT yolo");
+            await tx.exec(`INSERT INTO ${tx.schema()}.uniquer_dlq(data) VALUES ($1)`, JSON.stringify(op));
+        }
+    }
+});
+
 // Demonstrate how upsert and delete SQL operations can be entirely
 // overridden by the userscript. In this test, we perform some basic
 // arithmetic on the keys and values to validate that this script is

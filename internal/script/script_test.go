@@ -112,7 +112,7 @@ CREATE TABLE %s.skewed_merge_times(
 
 	r.NoError(s.watcher.Refresh(ctx, fixture.TargetPool))
 	a.Equal(4, s.Sources.Len())
-	a.Equal(10, s.Targets.Len())
+	a.Equal(11, s.Targets.Len())
 	a.Equal(map[string]string{"hello": "world"}, opts.data)
 
 	tbl1 := ident.NewTable(schema, ident.New("table1"))
@@ -493,6 +493,68 @@ CREATE TABLE %s.skewed_merge_times(
 				&types.AcceptOptions{TargetQuerier: fixture.TargetPool},
 			))
 		}
+	})
+
+	t.Run("uniquer_dlq", func(t *testing.T) {
+		if fixture.TargetPool.Product != types.ProductCockroachDB {
+			t.Skip("user script has opinionated SQL schema")
+		}
+		r := require.New(t)
+
+		_, err = fixture.TargetPool.ExecContext(ctx,
+			fmt.Sprintf("CREATE TABLE %s.uniquer(pk INT PRIMARY KEY, val INT UNIQUE)", schema))
+		r.NoError(err)
+		_, err = fixture.TargetPool.ExecContext(ctx,
+			fmt.Sprintf("CREATE TABLE %s.uniquer_dlq("+
+				"id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "+
+				"created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "+
+				"data JSONB NOT NULL)", schema))
+		r.NoError(err)
+
+		r.NoError(fixture.Watcher.Refresh(ctx, fixture.TargetPool))
+
+		table = ident.NewTable(schema, ident.New("uniquer"))
+		cfg := s.Targets.GetZero(table)
+		r.NotNil(cfg)
+		acceptor := cfg.UserAcceptor
+		r.NotNil(acceptor)
+
+		tx, err := fixture.TargetPool.BeginTx(ctx, nil)
+		r.NoError(err)
+		defer func() { _ = tx.Rollback() }()
+
+		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table, hlc.New(100, 1), []types.Mutation{
+				{
+					Data: json.RawMessage(`{"pk":1,"val":1}`),
+					Key:  json.RawMessage(`[1]`),
+				},
+			},
+		), &types.AcceptOptions{TargetQuerier: tx}))
+
+		r.NoError(acceptor.AcceptTableBatch(ctx, sinktest.TableBatchOf(
+			table, hlc.New(100, 1), []types.Mutation{
+				// This mutation has val: 1 again.
+				{
+					Data: json.RawMessage(`{"pk":2,"val":1}`),
+					Key:  json.RawMessage(`[2]`),
+				},
+				// This mutation should proceed.
+				{
+					Data: json.RawMessage(`{"pk":3,"val":2}`),
+					Key:  json.RawMessage(`[3]`),
+				},
+			},
+		), &types.AcceptOptions{TargetQuerier: tx}))
+
+		r.NoError(tx.Commit())
+
+		var readBack string
+		r.NoError(fixture.TargetPool.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT data FROM %s",
+				ident.NewTable(schema, ident.New("uniquer_dlq")))).Scan(&readBack))
+		r.Equal(`{"action": "upsert", "before": null, `+
+			`"data": {"pk": "2", "val": "1"}, "meta": null, "pk": ["2"]}`, readBack)
 	})
 }
 
