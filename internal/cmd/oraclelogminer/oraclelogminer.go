@@ -1,4 +1,4 @@
-// Copyright 2023 The Cockroach Authors
+// Copyright 2024 The Cockroach Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,26 +14,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package mylogical contains a command to perform logical replication
-// from a mysql source server.
-package mylogical
+// Package oraclelogminer contains cli command to start a logMiner replication feed loop.
+package oraclelogminer
 
 import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
-	"github.com/cockroachdb/replicator/internal/source/mylogical"
+	"github.com/cockroachdb/replicator/internal/source/oraclelogminer"
 	"github.com/cockroachdb/replicator/internal/util/stdlogical"
 	"github.com/spf13/cobra"
 )
 
-// Command returns the mylogical subcommand.
+// Command returns the logMiner subcommand.
 func Command() *cobra.Command {
-	cfg := &mylogical.Config{}
+	cfg := &oraclelogminer.Config{}
 	return stdlogical.New(&stdlogical.Template{
 		Config: cfg,
-		Short:  "start a mySQL replication feed",
+		Short:  "start an Oracle Database LogMiner replication feed",
 		Start: func(ctx *stopper.Context, cmd *cobra.Command) (any, error) {
-			return mylogical.Start(ctx, cfg)
+			return oraclelogminer.Start(ctx, cfg)
 		},
-		Use: "mylogical",
+		Use: "oraclelogminer",
 	})
 }

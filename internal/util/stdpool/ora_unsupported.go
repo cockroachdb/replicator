@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build !(cgo && (target_oracle || target_all))
+//go:build !(cgo && (target_oracle || target_all || source_oracle || source_all))
 
 package stdpool
 
@@ -24,9 +24,18 @@ import (
 	"github.com/pkg/errors"
 )
 
+// OCIPathEnvVar is the path where the Oracle Instant Client library is stored.
+const OCIPathEnvVar = `OIC_LIBRARY_PATH`
+
 // OpenOracleAsTarget returns an unsupported error.
 func OpenOracleAsTarget(
 	ctx *stopper.Context, connectString string, options ...Option,
 ) (*types.TargetPool, error) {
+	return nil, errors.New("this build does not support Oracle Database")
+}
+
+func OpenOracleAsSource(
+	ctx *stopper.Context, connectString string, options ...Option,
+) (*types.SourcePool, error) {
 	return nil, errors.New("this build does not support Oracle Database")
 }

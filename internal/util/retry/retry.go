@@ -21,9 +21,9 @@ package retry
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/stdpool/generic"
 	"github.com/pkg/errors"
 )
 
@@ -45,19 +45,50 @@ func (m *Marker) Marked() bool { return bool(*m) }
 // queries that don't have any return values.
 func Execute[P types.AnyPool](ctx context.Context, db P, query string, args ...any) error {
 	return Retry(ctx, db, func(ctx context.Context) error {
-		var err error
-		switch t := any(db).(type) {
-		case *types.SourcePool:
-			_, err = t.ExecContext(ctx, query, args...)
-		case *types.StagingPool:
-			_, err = t.Exec(ctx, query, args...)
-		case *types.TargetPool:
-			_, err = t.ExecContext(ctx, query, args...)
-		default:
-			err = fmt.Errorf("unimplemented %T", t)
-		}
+		return generic.Execute(ctx, db, query, args...)
+	})
+}
+
+// Query is a wrapper around Retry that can be used for sql
+// queries that returns rows.
+func Query[P types.AnyPool](ctx context.Context, db P, query string, args ...any) (any, error) {
+	var err error
+	var res any
+
+	err = Retry(ctx, db, func(ctx context.Context) error {
+		res, err = generic.Query(ctx, db, query, args...)
 		return err
 	})
+	return res, err
+}
+
+// QueryRow is a wrapper around Retry that can be used for sql
+// queries that don't have any return at most 1 rows.
+func QueryRow[P types.AnyPool](ctx context.Context, db P, query string, args ...any) (any, error) {
+	var err error
+	var res any
+
+	err = Retry(ctx, db, func(ctx context.Context) error {
+		res, err = generic.QueryRow(ctx, db, query, args...)
+		return err
+	})
+	return res, err
+}
+
+// QueryWithDynamicRes is a wrapper around Retry that runs a query and
+// scan it into a 2D array with {#rows} x {#cols}. The size of the 2D
+// arrays is completed determined by the result of the query.
+func QueryWithDynamicRes[P types.AnyPool](
+	ctx context.Context, db P, query string, args ...any,
+) ([][]any, error) {
+	var err error
+	res := make([][]any, 0)
+
+	err = Retry(ctx, db, func(ctx context.Context) error {
+		res, err = generic.QueryWithDynamicRes(ctx, db, query, args...)
+		return err
+	})
+	return res, err
 }
 
 // Retry is a convenience wrapper to automatically retry idempotent
