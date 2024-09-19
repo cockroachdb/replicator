@@ -306,6 +306,18 @@ func TestGetColumns(t *testing.T) {
 				"d", "VARCHAR2(1 CHAR)",
 			),
 		},
+		// Verify that hidden columns are ignored.
+		{
+			products:    []types.Product{types.ProductOracle},
+			tableSchema: "a INT PRIMARY KEY, b VARCHAR2(1 CHAR) DEFAULT 'n' NULL, c INT INVISIBLE",
+			primaryKeys: []string{"a"},
+			dataCols:    []string{"b", "ignored_c"},
+			types: ident.MapOf[string](
+				"a", "NUMBER",
+				"b", "VARCHAR2(1 CHAR)",
+				"c", "NUMBER",
+			),
+		},
 		// Check default value extraction
 		{
 			products: []types.Product{types.ProductCockroachDB, types.ProductMariaDB,
