@@ -113,7 +113,7 @@ func (s *mergeBuffer) ingest(cursor *tableCursor) error {
 // to merge multiple channels of table data into a consistent view.
 type tableMerger struct {
 	group  *types.TableGroup
-	out    chan<- *types.StagingCursor
+	out    chan<- *types.BatchCursor
 	states []*mergeBuffer
 
 	mergeLag   prometheus.Gauge
@@ -122,7 +122,7 @@ type tableMerger struct {
 
 // newTableMerger initializes the internal state of a tableMerger.
 func newTableMerger(
-	group *types.TableGroup, sources []<-chan *tableCursor, out chan<- *types.StagingCursor,
+	group *types.TableGroup, sources []<-chan *tableCursor, out chan<- *types.BatchCursor,
 ) *tableMerger {
 	labels := metrics.SchemaValues(group.Enclosing)
 	ret := &tableMerger{
@@ -150,7 +150,7 @@ func (m *tableMerger) run(ctx *stopper.Context) {
 	for _, state := range m.states {
 		if err := state.Refresh(ctx); err != nil {
 			select {
-			case m.out <- &types.StagingCursor{Error: err}:
+			case m.out <- &types.BatchCursor{Error: err}:
 			case <-ctx.Stopping():
 			}
 			return
@@ -190,7 +190,7 @@ func (m *tableMerger) run(ctx *stopper.Context) {
 			}
 			if err != nil {
 				select {
-				case m.out <- &types.StagingCursor{Error: err}:
+				case m.out <- &types.BatchCursor{Error: err}:
 				case <-ctx.Stopping():
 				}
 				return
@@ -201,7 +201,7 @@ func (m *tableMerger) run(ctx *stopper.Context) {
 
 // nextStep will find the event(s) with the lowest common timestamp
 // to send.
-func (m *tableMerger) nextStep() (cursor *types.StagingCursor, refill []*mergeBuffer, block bool) {
+func (m *tableMerger) nextStep() (cursor *types.BatchCursor, refill []*mergeBuffer, block bool) {
 	// Find the buffer(s) with the least progress.
 	minTime := hlc.New(math.MaxInt64, math.MaxInt)
 	empty := make([]*mergeBuffer, 0, len(m.states))
@@ -229,7 +229,7 @@ func (m *tableMerger) nextStep() (cursor *types.StagingCursor, refill []*mergeBu
 	}
 
 	// We can always notify the consumer of progress made.
-	cursor = &types.StagingCursor{Progress: hlc.RangeExcluding(hlc.Zero(), minTime)}
+	cursor = &types.BatchCursor{Progress: hlc.RangeExcluding(hlc.Zero(), minTime)}
 
 	// Some buffers are empty. Exit now to force a blocking refresh to
 	// let db scans catch up.

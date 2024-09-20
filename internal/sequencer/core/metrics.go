@@ -44,8 +44,4 @@ var (
 		Name: "core_sweep_success_timestamp_seconds",
 		Help: "the wall time at which a sweep attempt last succeeded",
 	}, metrics.SchemaLabels)
-	sweepSkewCount = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "core_sweep_skew_count",
-		Help: "the number of times a target transaction committed, but the staging tx did not",
-	}, metrics.SchemaLabels)
 )

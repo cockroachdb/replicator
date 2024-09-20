@@ -25,8 +25,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
@@ -197,51 +195,6 @@ type Stager interface {
 	StageIfExists(ctx context.Context, db StagingQuerier, muts []Mutation) ([]Mutation, error)
 }
 
-// StagingCursor is emitted by [Stagers.Read].
-type StagingCursor struct {
-	// A batch of data, corresponding to a transaction in the source
-	// database. This may be nil for a progress-only update.
-	Batch *TemporalBatch
-
-	// This field will be populated if the reader encounters an
-	// unrecoverable error while processing. A result containing an
-	// error will be the final message in the channel before it is
-	// closed.
-	Error error
-
-	// Fragment will be set if the Batch is not guaranteed to contain
-	// all data for its given timestamp. This will occur, for example,
-	// if the number of mutations for the timestamp exceeds
-	// [StagingQuery.FragmentSize] or if an underlying database query is
-	// not guaranteed to have yet read all values at the the batch's
-	// time (e.g. scan boundary alignment). Consumers that require
-	// transactionally-consistent views of the data should wait for the
-	// next, non-fragmented, cursor update.
-	Fragment bool
-
-	// Jump indicates that the scanning bounds changed such that the
-	// data in the stream may be disjoint.
-	Jump bool
-
-	// Progress indicates the range of data which has been successfully
-	// scanned so far. Receivers may encounter progress-only updates
-	// which happen when the end of the scanned bounds have been reached
-	// or if there is a "pipeline bubble" when reading data from the
-	// staging tables.
-	Progress hlc.Range
-}
-
-// String is for debugging use only.
-func (c *StagingCursor) String() string {
-	var buf strings.Builder
-	enc := json.NewEncoder(&buf)
-	enc.SetIndent("", " ")
-	if err := enc.Encode(c); err != nil {
-		return fmt.Sprintf("error: %v", err)
-	}
-	return buf.String()
-}
-
 // StagingQuery is passed to [Stagers.Read].
 type StagingQuery struct {
 	// The bounds variable governs the reader to ensure that it does not
@@ -253,7 +206,7 @@ type StagingQuery struct {
 
 	// FragmentSize places an upper bound on the size of any individual
 	// cursor entry. If a batch has exceeded the requested segment size,
-	// the [StagingCursor.Fragment] flag will be set.
+	// the [BatchCursor.Fragment] flag will be set.
 	FragmentSize int
 
 	// The tables to query.
@@ -264,20 +217,9 @@ type StagingQuery struct {
 type Stagers interface {
 	Get(ctx context.Context, target ident.Table) (Stager, error)
 
-	// Read provides access to joined staging data. Because this can
-	// be a potentially expensive or otherwise unbounded amount of data,
-	// the results are provided via a channel which may be incrementally
-	// consumed from buffered data. Results will be provided in temporal
-	// order.
-	//
-	// Any errors encountered while reading will be returned in the
-	// final message before closing the channel.
-	//
-	// Care should be taken to [stopper.Context.Stop] the context passed
-	// into this method to prevent goroutine or database leaks. When the
-	// context is gracefully stopped, the channel will be closed
-	// normally.
-	Read(ctx *stopper.Context, q *StagingQuery) (<-chan *StagingCursor, error)
+	// Query provides access to joined staging data via a BatchReader
+	// interface.
+	Query(ctx context.Context, q *StagingQuery) (BatchReader, error)
 }
 
 // Product is an enum type to make it easy to switch on the underlying

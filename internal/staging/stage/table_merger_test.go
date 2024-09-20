@@ -117,7 +117,7 @@ func TestTableMerger(t *testing.T) {
 		})
 	}
 
-	out := make(chan *types.StagingCursor)
+	out := make(chan *types.BatchCursor)
 	merge := newTableMerger(&types.TableGroup{
 		Name:      ident.New("testing"),
 		Enclosing: fixture.TargetSchema.Schema(),

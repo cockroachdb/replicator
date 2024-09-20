@@ -128,7 +128,6 @@ func CheckSequencer(
 			IdempotentSource: flags.Idempotent(),
 			Parallelism:      8,
 			QuiescentPeriod:  100 * time.Millisecond,
-			ScanSize:         transactions/5 + 1,
 			TimestampLimit:   transactions/10 + 1,
 		}
 		r.NoError(cfg.Preflight())
@@ -168,14 +167,18 @@ api.configureSource("%[1]s", {
 			r.NoError(err)
 		}
 		basic := &Check{
-			Transactions: transactions,
-			Idempotent:   flags.Idempotent(),
 			Fixture:      fixture,
+			Fragment:     !workloadCfg.DisableFragment,
+			Idempotent:   flags.Idempotent(),
 			Partitioned:  flags.Partitioned(),
 			Sequencer:    seq,
+			Transactions: transactions,
 		}
 		if flags.Stage() {
 			basic.Stage = 0.5
+		}
+		if workloadCfg.DisableAcceptor {
+			basic.Stage = 1
 		}
 		basic.Check(ctx, t, workloadCfg)
 		if post != nil {
@@ -192,12 +195,13 @@ api.configureSource("%[1]s", {
 
 // Check implements a reusable test over a parent/child table pair.
 type Check struct {
-	// The acceptor returned by [sequencer.Sequencer.Start].
-	Acceptor types.MultiAcceptor
 	// Populated by Check.
 	Bounds notify.Var[hlc.Range]
 	// Access to test services.
 	Fixture *all.Fixture
+	// Break the generated data up as though it's being received by
+	// multiple instances of Replicator.
+	Fragment bool
 	// Populated by Check.
 	Generator *all.Workload
 	// Populated by Check.
@@ -225,22 +229,31 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 	r.NoError(err)
 	c.Group = group
 
-	startOpts := &sequencer.StartOptions{
-		Bounds:   &c.Bounds,
-		Delegate: types.OrderedAcceptorFrom(c.Fixture.ApplyAcceptor, c.Fixture.Watchers),
-		Group:    group,
-	}
-	seqAcc, stats, err := c.Sequencer.Start(ctx, startOpts)
-	r.NoError(err)
-	c.Acceptor = seqAcc
-
-	now := time.Now()
 	testData := &types.MultiBatch{}
 	for i := 0; i < c.Transactions; i++ {
 		generator.GenerateInto(testData, hlc.New(int64(i+1), 0))
 	}
 
-	if c.Partitioned {
+	startOpts := &sequencer.StartOptions{
+		Bounds:   &c.Bounds,
+		Delegate: types.OrderedAcceptorFrom(c.Fixture.ApplyAcceptor, c.Fixture.Watchers),
+		Group:    group,
+	}
+	if cfg.DisableAcceptor {
+		startOpts.BatchReader = &dummyReader{
+			batch:      testData,
+			progressTo: generator.Range(),
+		}
+	}
+
+	seqAcc, stats, err := c.Sequencer.Start(ctx, startOpts)
+	r.NoError(err)
+
+	now := time.Now()
+
+	if cfg.DisableAcceptor {
+		// The sequencer should pull the data.
+	} else if c.Partitioned {
 		// Shuffle the test data into multiple source tables.
 		count := 0
 		partitionedBatch := &types.MultiBatch{}
@@ -261,11 +274,17 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 			}
 			r.NoError(err)
 		}
+
 	} else {
 		// We're going to fragment the batch to simulate data being
 		// received piecemeal by multiple instances of Replicator.
-		fragments, err := Fragment(testData, c.Transactions/10)
-		r.NoError(err)
+		var fragments []*types.MultiBatch
+		if c.Fragment {
+			fragments, err = Fragment(testData, c.Transactions/10)
+			r.NoError(err)
+		} else {
+			fragments = []*types.MultiBatch{testData}
+		}
 
 		for _, fragment := range fragments {
 			// We may write some fraction of the data directly to the
@@ -285,7 +304,8 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 			}
 
 		retryFragment:
-			if err := seqAcc.AcceptMultiBatch(ctx, fragment, &types.AcceptOptions{}); err != nil {
+			if err := seqAcc.AcceptMultiBatch(ctx, fragment,
+				&types.AcceptOptions{}); err != nil {
 				if errors.Is(err, chaos.ErrChaos) {
 					goto retryFragment
 				}
@@ -332,4 +352,43 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 		r.NoError(err, table)
 		r.Zero(ct, table)
 	}
+}
+
+// This is a trivial implementation of [types.BatchReader] over canned
+// data.
+type dummyReader struct {
+	batch      *types.MultiBatch
+	progressTo hlc.Range
+}
+
+var _ types.BatchReader = (*dummyReader)(nil)
+
+func (m *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+	ch := make(chan *types.BatchCursor)
+	ctx.Go(func(ctx *stopper.Context) error {
+		defer close(ch)
+		for _, temp := range m.batch.Data {
+			cur := &types.BatchCursor{
+				Batch:    temp,
+				Progress: hlc.RangeIncluding(hlc.Zero(), temp.Time),
+			}
+			select {
+			case ch <- cur:
+			case <-ctx.Stopping():
+				return nil
+			}
+		}
+		// Send progress update.
+		cur := &types.BatchCursor{Progress: m.progressTo}
+		select {
+		case ch <- cur:
+		case <-ctx.Stopping():
+			return nil
+		}
+		// Became idle until shutdown, which is how a real
+		// implementation would behave when no more data is available.
+		<-ctx.Stopping()
+		return nil
+	})
+	return ch, nil
 }

@@ -69,10 +69,8 @@ func (f *factory) getUnlocked(table ident.Table) *stage {
 	return f.mu.instances.GetZero(table)
 }
 
-// Read implements types.Stagers.
-func (f *factory) Read(
-	ctx *stopper.Context, q *types.StagingQuery,
-) (<-chan *types.StagingCursor, error) {
+// Query implements types.Stagers.
+func (f *factory) Query(ctx context.Context, q *types.StagingQuery) (types.BatchReader, error) {
 	if q.Bounds == nil {
 		return nil, errors.New("Bounds unset")
 	}
@@ -82,32 +80,39 @@ func (f *factory) Read(
 	if len(q.Group.Tables) == 0 {
 		return nil, errors.New("Targets is empty")
 	}
+	return &stagingReader{f, q}, nil
+}
 
+type stagingReader struct {
+	*factory
+	*types.StagingQuery
+}
+
+var _ types.BatchReader = (*stagingReader)(nil)
+
+func (r *stagingReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 	// Ensure all staging tables exist.
-	for _, table := range q.Group.Tables {
-		if _, err := f.Get(ctx, table); err != nil {
+	for _, table := range r.Group.Tables {
+		if _, err := r.Get(ctx, table); err != nil {
 			return nil, err
 		}
 	}
 
-	// Create a nested context to allow cleanup.
-	ctx = stopper.WithContext(ctx)
-
 	// Set up a task to read data from each table.
-	tableChans := make([]<-chan *tableCursor, len(q.Group.Tables))
-	for idx, target := range q.Group.Tables {
+	tableChans := make([]<-chan *tableCursor, len(r.Group.Tables))
+	for idx, target := range r.Group.Tables {
 		ch := make(chan *tableCursor, 2)
 		tableChans[idx] = ch
 		tableReader := newTableReader(
-			q.Bounds, f.db, q.FragmentSize, ch, f.stagingDB, target)
+			r.Bounds, r.db, r.FragmentSize, ch, r.stagingDB, target)
 		ctx.Go(func(ctx *stopper.Context) error {
 			tableReader.run(ctx)
 			return nil
 		})
 	}
 
-	mergeChan := make(chan *types.StagingCursor, 2)
-	merger := newTableMerger(q.Group, tableChans, mergeChan)
+	mergeChan := make(chan *types.BatchCursor, 2)
+	merger := newTableMerger(r.Group, tableChans, mergeChan)
 	ctx.Go(func(ctx *stopper.Context) error {
 		defer ctx.Stop(time.Second)
 		merger.run(ctx)
