@@ -20,66 +20,32 @@ import (
 	"context"
 
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/cockroachdb/replicator/internal/util/retry"
+	"github.com/pkg/errors"
 )
 
-// An acceptor writes incoming data to staging.
-type acceptor struct {
-	*Core
-}
+// acceptor rejects all incoming data since core only operates from a
+// BatchReader source.
+type acceptor struct{}
 
 var _ types.MultiAcceptor = (*acceptor)(nil)
 
-// AcceptMultiBatch implements [types.MultiAcceptor] and processes the
-// batch in time order.
+// AcceptMultiBatch returns an error.
 func (a *acceptor) AcceptMultiBatch(
-	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
+	context.Context, *types.MultiBatch, *types.AcceptOptions,
 ) error {
-	// Coalesce for better database interaction.
-	var mutsByTable ident.TableMap[[]types.Mutation]
-	for _, sub := range batch.Data {
-		// No error returned in callback.
-		_ = sub.Data.Range(func(tbl ident.Table, tblBatch *types.TableBatch) error {
-			mutsByTable.Put(tbl, append(mutsByTable.GetZero(tbl), tblBatch.Data...))
-			return nil
-		})
-	}
-
-	return mutsByTable.Range(func(tbl ident.Table, muts []types.Mutation) error {
-		stager, err := a.stagers.Get(ctx, tbl)
-		if err != nil {
-			return err
-		}
-		return retry.Retry(ctx, a.stagingPool, func(ctx context.Context) error {
-			return stager.Stage(ctx, a.stagingPool, muts)
-		})
-	})
+	return errors.New("use BatchReader instead")
 }
 
-// AcceptTableBatch implements [types.TableAcceptor].
+// AcceptTableBatch returns an error.
 func (a *acceptor) AcceptTableBatch(
-	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
+	context.Context, *types.TableBatch, *types.AcceptOptions,
 ) error {
-	stager, err := a.stagers.Get(ctx, batch.Table)
-	if err != nil {
-		return err
-	}
-	return retry.Retry(ctx, a.stagingPool, func(ctx context.Context) error {
-		return stager.Stage(ctx, a.stagingPool, batch.Data)
-	})
+	return errors.New("use BatchReader instead")
 }
 
-// AcceptTemporalBatch implements [types.MultiAcceptor]. This does not
-// impose any per-table ordering, since the staging tables have no order
-// requirements.
+// AcceptTemporalBatch returns an error.
 func (a *acceptor) AcceptTemporalBatch(
-	ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions,
+	context.Context, *types.TemporalBatch, *types.AcceptOptions,
 ) error {
-	multi := &types.MultiBatch{
-		Data:   []*types.TemporalBatch{batch},
-		ByTime: map[hlc.Time]*types.TemporalBatch{batch.Time: batch},
-	}
-	return a.AcceptMultiBatch(ctx, multi, opts)
+	return errors.New("use BatchReader instead")
 }

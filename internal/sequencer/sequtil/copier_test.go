@@ -52,7 +52,7 @@ func TestCopier(t *testing.T) {
 	table := ident.NewTable(ident.MustSchema(ident.New("schema")), ident.New("fake"))
 
 	bounds := notify.VarOf(hlc.RangeEmpty())
-	stagingReader, err := fixture.Stagers.Read(ctx, &types.StagingQuery{
+	stagingQuery, err := fixture.Stagers.Query(ctx, &types.StagingQuery{
 		Bounds:       bounds,
 		FragmentSize: fragmentSize,
 		Group: &types.TableGroup{
@@ -61,6 +61,9 @@ func TestCopier(t *testing.T) {
 			Tables:    []ident.Table{table},
 		},
 	})
+	r.NoError(err)
+
+	stagingBatches, err := stagingQuery.Read(ctx)
 	r.NoError(err)
 
 	now := time.Now()
@@ -94,7 +97,7 @@ func TestCopier(t *testing.T) {
 		Config: &sequencer.Config{
 			FlushSize: flushSize,
 		},
-		Source: stagingReader,
+		Source: stagingBatches,
 		Each: func(ctx *stopper.Context, batch *types.TemporalBatch, segment bool) error {
 			a.LessOrEqual(batch.Count(), fragmentSize)
 			return nil

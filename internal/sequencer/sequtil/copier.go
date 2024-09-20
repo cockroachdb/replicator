@@ -43,15 +43,15 @@ type FlushFn func(ctx *stopper.Context, batch *types.MultiBatch, fragment bool) 
 // ProgressFn is a callback from a [Copier].
 type ProgressFn func(ctx *stopper.Context, progress hlc.Range) error
 
-// A Copier consumes a channel of [types.StagingCursor], assembles the
+// A Copier consumes a channel of [types.BatchCursor], assembles the
 // individual temporal batches into large batches, and invokes event
 // callbacks to process the larger batches.
 type Copier struct {
-	Config   *sequencer.Config           // Controls for flush behavior.
-	Each     EachFn                      // Optional callback to receive each batch.
-	Flush    FlushFn                     // Optional callback to receive aggregated data.
-	Progress ProgressFn                  // Optional callback when the source has become idle.
-	Source   <-chan *types.StagingCursor // Input data.
+	Config   *sequencer.Config         // Controls for flush behavior.
+	Each     EachFn                    // Optional callback to receive each batch.
+	Flush    FlushFn                   // Optional callback to receive aggregated data.
+	Progress ProgressFn                // Optional callback when the source has become idle.
+	Source   <-chan *types.BatchCursor // Input data.
 }
 
 // Run copies data from the source to the target. It is a blocking call

@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 )
@@ -43,7 +44,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 		return nil, err
 	}
 	targetPool := baseFixture.TargetPool
-	coreCore := core.ProvideCore(config, leases, schedulerScheduler, stagers, stagingPool, targetPool)
+	coreCore := core.ProvideCore(config, leases, schedulerScheduler, targetPool)
 	marker := decorators.ProvideMarker(stagingPool, stagers)
 	once := decorators.ProvideOnce(stagingPool, stagers)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
@@ -56,7 +57,8 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 		return nil, err
 	}
 	scriptSequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)
+	stagingStaging := staging.ProvideStaging(config, marker, stagers, stagingPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingStaging, stagingPool, targetPool)
 	seqtestFixture := &Fixture{
 		Fixture:    fixture,
 		BestEffort: bestEffort,
@@ -65,6 +67,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 		Immediate:  immediateImmediate,
 		Retire:     retireRetire,
 		Script:     scriptSequencer,
+		Staging:    stagingStaging,
 		Switcher:   switcherSwitcher,
 	}
 	return seqtestFixture, nil

@@ -127,13 +127,20 @@ func (g *groupSequencer) switchModeLocked(
 	var nextSeq sequencer.Sequencer
 	switch next {
 	case ModeBestEffort:
-		nextSeq, err = g.bestEffort.Wrap(ctx, g.core)
+		nextSeq, err = g.staging.Wrap(ctx, g.core)
+		if err != nil {
+			return err
+		}
+		nextSeq, err = g.bestEffort.Wrap(ctx, nextSeq)
 	case ModeImmediate:
 		nextSeq = g.immediate
+		// Immediate doesn't progess staged data.
+		opts = opts.Copy()
+		opts.BatchReader = nil
 	case ModeConsistent:
-		nextSeq = g.core
+		nextSeq, err = g.staging.Wrap(ctx, g.core)
 	default:
-		err = errors.Errorf("unimplemented: %v", next)
+		return errors.Errorf("unimplemented: %v", next)
 	}
 	if err != nil {
 		return err

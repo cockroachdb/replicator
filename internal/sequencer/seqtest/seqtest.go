@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/staging/leases"
@@ -47,6 +48,7 @@ type Fixture struct {
 	Immediate  *immediate.Immediate
 	Retire     *retire.Retire
 	Script     *script.Sequencer
+	Staging    *staging.Staging
 	Switcher   *switcher.Switcher
 }
 
@@ -57,9 +59,13 @@ func (f *Fixture) SequencerFor(
 ) (sequencer.Sequencer, error) {
 	switch mode {
 	case switcher.ModeBestEffort:
-		return f.BestEffort.Wrap(ctx, f.Core)
+		stg, err := f.Staging.Wrap(ctx, f.Core)
+		if err != nil {
+			return nil, err
+		}
+		return f.BestEffort.Wrap(ctx, stg)
 	case switcher.ModeConsistent:
-		return f.Core, nil
+		return f.Staging.Wrap(ctx, f.Core)
 	case switcher.ModeImmediate:
 		return f.Immediate, nil
 	default:

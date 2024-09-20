@@ -47,7 +47,9 @@ func TestBestEffort(t *testing.T) {
 					// We only want BestEffort to do work when told; the test
 					// rig uses a counter to generate timestamps.
 					seqFixture.BestEffort.SetTimeSource(hlc.Zero)
-					next, err := seqFixture.BestEffort.Wrap(fixture.Context, seqFixture.Core)
+					next, err := seqFixture.Staging.Wrap(fixture.Context, seqFixture.Core)
+					require.NoError(t, err)
+					next, err = seqFixture.BestEffort.Wrap(fixture.Context, next)
 					require.NoError(t, err)
 					return next
 				},

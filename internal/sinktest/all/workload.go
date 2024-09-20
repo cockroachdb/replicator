@@ -43,8 +43,10 @@ type Workload struct {
 // WorkloadConfig provides additional parameters to
 // [Fixture.NewWorkload].
 type WorkloadConfig struct {
-	DisableFK      bool // Don't create FK references from child to parent.
-	DisableStaging bool // Don't run any tests that involve the staging tables.
+	DisableAcceptor bool // Use BatchReader only.
+	DisableFK       bool // Don't create FK references from child to parent.
+	DisableFragment bool // Don't break transactions across multiple messages.
+	DisableStaging  bool // Don't run any tests that involve the staging tables.
 }
 
 // NewWorkload constructs a parent/child workload test rig attached to

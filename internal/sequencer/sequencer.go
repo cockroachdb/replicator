@@ -59,6 +59,7 @@ type Shim interface {
 
 // StartOptions is passed to [Sequencer.Start].
 type StartOptions struct {
+	BatchReader types.BatchReader      // An asynchronous source of transactional data.
 	Bounds      *notify.Var[hlc.Range] // Control the range of eligible timestamps.
 	Delegate    types.MultiAcceptor    // The acceptor to use when continuing to process mutations.
 	Group       *types.TableGroup      // The tables that should be operated on.

@@ -17,10 +17,11 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
-	"github.com/cockroachdb/replicator/internal/staging"
+	staging2 "github.com/cockroachdb/replicator/internal/staging"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/staging/leases"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
@@ -122,12 +123,13 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
+	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, targetPool)
 	marker := decorators.ProvideMarker(stagingPool, stagers)
 	once := decorators.ProvideOnce(stagingPool, stagers)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)
+	stagingStaging := staging.ProvideStaging(sequencerConfig, marker, stagers, stagingPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingStaging, stagingPool, targetPool)
 	conveyors, err := conveyor.ProvideConveyors(ctx, acceptor, conveyorConfig, checkpoints, sequencer, retireRetire, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err
@@ -232,12 +234,13 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
+	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, targetPool)
 	marker := decorators.ProvideMarker(stagingPool, stagers)
 	once := decorators.ProvideOnce(stagingPool, stagers)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)
+	stagingStaging := staging.ProvideStaging(sequencerConfig, marker, stagers, stagingPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingStaging, stagingPool, targetPool)
 	conveyors, err := conveyor.ProvideConveyors(context, acceptor, conveyorConfig, checkpoints, sequencer, retireRetire, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, nil, err
@@ -271,7 +274,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 // injector.go:
 
 var completeSet = wire.NewSet(
-	Set, cdc.Set, diag.New, retire.Set, script.Set, sinkprod.Set, staging.Set, switcher.Set, target.Set,
+	Set, cdc.Set, diag.New, retire.Set, script.Set, sinkprod.Set, staging2.Set, switcher.Set, target.Set,
 )
 
 // test_fixture.go:

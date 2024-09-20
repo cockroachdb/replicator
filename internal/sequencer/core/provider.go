@@ -31,16 +31,12 @@ func ProvideCore(
 	cfg *sequencer.Config,
 	leases types.Leases,
 	scheduler *scheduler.Scheduler,
-	stagers types.Stagers,
-	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
 ) *Core {
 	return &Core{
-		cfg:         cfg,
-		leases:      leases,
-		scheduler:   scheduler,
-		stagers:     stagers,
-		stagingPool: stagingPool,
-		targetPool:  targetPool,
+		cfg:        cfg,
+		leases:     leases,
+		scheduler:  scheduler,
+		targetPool: targetPool,
 	}
 }

@@ -127,7 +127,11 @@ func (f *Fixture) ReadStagingQuery(
 	stop := stopper.WithContext(ctx)
 	defer stop.Stop(0)
 
-	ch, err := f.Stagers.Read(stop, q)
+	reader, err := f.Stagers.Query(stop, q)
+	if err != nil {
+		return nil, err
+	}
+	ch, err := reader.Read(stop)
 	if err != nil {
 		return nil, err
 	}

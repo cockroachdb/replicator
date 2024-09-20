@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package core_test
+package staging_test
 
 import (
 	"testing"
@@ -22,16 +22,15 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/seqtest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/stretchr/testify/require"
 )
 
-func TestCore(t *testing.T) {
-	seqtest.CheckSequencer(t,
-		&all.WorkloadConfig{
-			DisableAcceptor: true,
-			DisableStaging:  true,
-		},
+func TestStaging(t *testing.T) {
+	seqtest.CheckSequencer(t, &all.WorkloadConfig{},
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
-			return seqFixture.Core
+			seq, err := seqFixture.Staging.Wrap(fixture.Context, seqFixture.Core)
+			require.NoError(t, err)
+			return seq
 		},
 		func(t *testing.T, check *seqtest.Check) {})
 }

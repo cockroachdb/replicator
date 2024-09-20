@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	"github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/google/wire"
@@ -38,6 +39,7 @@ var Set = wire.NewSet(
 	decorators.Set,
 	script.Set,
 	scheduler.Set,
+	staging.Set,
 
 	ProvideSequencer,
 )
@@ -48,6 +50,7 @@ func ProvideSequencer(
 	core *core.Core,
 	diags *diag.Diagnostics,
 	imm *immediate.Immediate,
+	stg *staging.Staging,
 	stagingPool *types.StagingPool,
 	targetPool *types.TargetPool,
 ) *Switcher {
@@ -56,6 +59,7 @@ func ProvideSequencer(
 		core:        core,
 		diags:       diags,
 		immediate:   imm,
+		staging:     stg,
 		stagingPool: stagingPool,
 		targetPool:  targetPool,
 	}
