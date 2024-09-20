@@ -62,6 +62,7 @@ func (r *Checkpoints) Start(
 	}
 	ret.refreshJob(ctx)
 	ret.reportMetrics(ctx)
+	ret.streamJob(ctx)
 
 	return ret, nil
 }
@@ -93,6 +94,7 @@ func (r *Checkpoints) newGroup(
 	}
 	// This query may indeed require a full table scan.
 	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable, limit)
+	ret.sql.stream = fmt.Sprintf(streamTemplate, r.metaTable)
 
 	hinted := r.pool.HintNoFTS(r.metaTable)
 	ret.sql.advance = fmt.Sprintf(advanceTemplate, hinted)

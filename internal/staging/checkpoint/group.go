@@ -34,7 +34,7 @@ import (
 )
 
 // The secondary index allows us to find the last-known checkpoint
-// timestamp for a target schema.
+// timestamp for a target schema. Keep in sync with stream.go.
 const schema = `
 CREATE TABLE IF NOT EXISTS %[1]s (
   group_name        STRING      NOT NULL,
@@ -88,6 +88,7 @@ type Group struct {
 		commit  string
 		ensure  string
 		refresh string
+		stream  string
 	}
 }
 
