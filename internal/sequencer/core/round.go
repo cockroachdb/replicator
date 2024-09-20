@@ -23,14 +23,11 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
 	"github.com/cockroachdb/replicator/internal/util/retry"
-	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 )
 
 // A round contains the workflow necessary to commit a batch of
@@ -59,7 +56,6 @@ type round struct {
 	duration    prometheus.Observer
 	lastAttempt prometheus.Gauge
 	lastSuccess prometheus.Gauge
-	skew        prometheus.Counter
 }
 
 func (r *round) accumulate(segment *types.MultiBatch) error {
@@ -153,59 +149,18 @@ func (r *round) tryCommit(ctx *stopper.Context) error {
 	log.Tracef("round.tryCommit: beginning for %s to %s", r.group, r.advanceTo)
 	r.lastAttempt.SetToCurrentTime()
 
-	// Passed to staging.
-	toMark := ident.TableMap[[]types.Mutation]{}
-	_ = r.batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
-		toMark.Put(table, append(toMark.GetZero(table), mut))
-		return nil
-	}))
-
-	// We're going to manage the target and the staging transaction
-	// concurrently. The target transaction must commit before the
-	// staging transaction.
-	stagingTx, err := r.stagingPool.BeginTx(ctx, pgx.TxOptions{})
+	targetTx, err := r.targetPool.BeginTx(ctx, nil)
 	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer func() { _ = targetTx.Rollback() }()
+	if err := r.delegate.AcceptMultiBatch(ctx, r.batch, &types.AcceptOptions{
+		TargetQuerier: targetTx,
+	}); err != nil {
 		return err
 	}
-	defer func() { _ = stagingTx.Rollback(context.Background()) }()
-
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
-		targetTx, err := r.targetPool.BeginTx(egCtx, nil)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		defer func() { _ = targetTx.Rollback() }()
-		if err := r.delegate.AcceptMultiBatch(egCtx, r.batch, &types.AcceptOptions{
-			TargetQuerier: targetTx,
-		}); err != nil {
-			return err
-		}
-		return errors.WithStack(targetTx.Commit())
-	})
-	eg.Go(func() error {
-		return toMark.Range(func(table ident.Table, muts []types.Mutation) error {
-			stager, err := r.stagers.Get(egCtx, table)
-			if err != nil {
-				return err
-			}
-			return stager.MarkApplied(egCtx, stagingTx, muts)
-		})
-	})
-
-	if err := eg.Wait(); err != nil {
-		return err
+	if err := targetTx.Commit(); err != nil {
+		return errors.WithStack(err)
 	}
-
-	// Without X/A transactions, we are in a vulnerable
-	// state here. If the staging transaction fails to
-	// commit, however, we'd re-apply the work that was just
-	// performed. This should wind up being a no-op in the
-	// general case.
-	if err := stagingTx.Commit(ctx); err != nil {
-		r.skew.Inc()
-		return errors.Wrap(err, "round.tryCommit: skew condition")
-	}
-
 	return nil
 }

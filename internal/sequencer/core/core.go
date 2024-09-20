@@ -37,25 +37,24 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// The Core sequencer accepts batches by writing them to a staging
-// table. It will then apply the data in a transactionally-consistent
-// and possibly concurrent fashion.
+// The Core sequencer applies transactional data read from a
+// [types.BatchReader] in a possibly-concurrent manner.
 type Core struct {
-	cfg         *sequencer.Config
-	leases      types.Leases
-	scheduler   *scheduler.Scheduler
-	stagers     types.Stagers
-	stagingPool *types.StagingPool
-	targetPool  *types.TargetPool
+	cfg        *sequencer.Config
+	leases     types.Leases
+	scheduler  *scheduler.Scheduler
+	targetPool *types.TargetPool
 }
 
 var _ sequencer.Sequencer = (*Core)(nil)
 
-// Start implements [sequencer.Sequencer]. It will incrementally unstage
-// and apply batches of mutations within the given bounds.
+// Start implements [sequencer.Sequencer].
 func (s *Core) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+	if opts.BatchReader == nil {
+		return nil, nil, errors.New("no BatchReader provided")
+	}
 	progress := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
 	grace := s.cfg.TaskGracePeriod
 	// Acquire a lease on the group name to prevent multiple sweepers
@@ -112,8 +111,17 @@ func (s *Core) Start(
 						}
 						_, _, _ = progress.Update(func(stat sequencer.Stat) (sequencer.Stat, error) {
 							stat = stat.Copy()
-							for _, table := range group.Tables {
-								stat.Progress().Put(table, advanceTo)
+							if len(group.Tables) == 0 {
+								// If the group defined no tables, we
+								// don't want to lose this update.
+								// Synthesize a fake table name from the
+								// group.
+								stat.Progress().Put(ident.NewTable(
+									group.Enclosing, group.Name), advanceTo)
+							} else {
+								for _, table := range group.Tables {
+									stat.Progress().Put(table, advanceTo)
+								}
 							}
 							return stat, nil
 						})
@@ -124,18 +132,12 @@ func (s *Core) Start(
 			}
 		})
 
-		// Open a reader over the staging tables. It will respond to
-		// updates in the timestamp bounds and provide a sequence of
-		// event notifications that are interpreted by a Copier below.
-		stagingReader, err := s.stagers.Read(ctx, &types.StagingQuery{
-			Bounds:       opts.Bounds,
-			FragmentSize: s.cfg.ScanSize,
-			Group:        group,
-		})
+		// Open a reader over async data.
+		batchCursors, err := opts.BatchReader.Read(ctx)
 		if err != nil {
 			log.WithError(err).Warnf(
-				"could not open staging table reader for %s; will retry",
-				group)
+				"could not open async reader for %s; will retry", group)
+			return
 		}
 
 		// We'll set up a template instance of round and then stamp out
@@ -153,7 +155,6 @@ func (s *Core) Start(
 			duration:    sweepDuration.WithLabelValues(metricLabels...),
 			lastAttempt: sweepLastAttempt.WithLabelValues(metricLabels...),
 			lastSuccess: sweepLastSuccess.WithLabelValues(metricLabels...),
-			skew:        sweepSkewCount.WithLabelValues(metricLabels...),
 		}
 		nextRound := func() *round {
 			cpy := *template
@@ -195,7 +196,7 @@ func (s *Core) Start(
 		// target.
 		copier := &sequtil.Copier{
 			Config: s.cfg,
-			Source: stagingReader,
+			Source: batchCursors,
 			// We'll get this callback when the copier does not expect
 			// any more data to arrive until the bounds are updated.
 			Progress: func(ctx *stopper.Context, progress hlc.Range) error {
@@ -312,5 +313,5 @@ func (s *Core) Start(
 			}
 		}
 	})
-	return &acceptor{s}, progress, nil
+	return &acceptor{}, progress, nil
 }

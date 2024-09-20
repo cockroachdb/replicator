@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
@@ -104,12 +105,13 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	if err != nil {
 		return nil, err
 	}
-	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, stagers, stagingPool, targetPool)
+	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, targetPool)
 	marker := decorators.ProvideMarker(stagingPool, stagers)
 	once := decorators.ProvideOnce(stagingPool, stagers)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
-	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingPool, targetPool)
+	stagingStaging := staging.ProvideStaging(sequencerConfig, marker, stagers, stagingPool)
+	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingStaging, stagingPool, targetPool)
 	conveyors, err := conveyor.ProvideConveyors(ctx, acceptor, conveyorConfig, checkpoints, sequencer, retireRetire, switcherSwitcher, watchers)
 	if err != nil {
 		return nil, err

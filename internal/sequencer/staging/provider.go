@@ -14,24 +14,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-package core_test
+package staging
 
 import (
-	"testing"
-
 	"github.com/cockroachdb/replicator/internal/sequencer"
-	"github.com/cockroachdb/replicator/internal/sequencer/seqtest"
-	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/google/wire"
 )
 
-func TestCore(t *testing.T) {
-	seqtest.CheckSequencer(t,
-		&all.WorkloadConfig{
-			DisableAcceptor: true,
-			DisableStaging:  true,
-		},
-		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
-			return seqFixture.Core
-		},
-		func(t *testing.T, check *seqtest.Check) {})
+// Set is used by Wire.
+var Set = wire.NewSet(ProvideStaging)
+
+// ProvideStaging is called by Wire.
+func ProvideStaging(
+	cfg *sequencer.Config,
+	markers *decorators.Marker,
+	stagers types.Stagers,
+	stagingPool *types.StagingPool,
+) *Staging {
+	return &Staging{
+		cfg:         cfg,
+		markers:     markers,
+		stagers:     stagers,
+		stagingPool: stagingPool,
+	}
 }

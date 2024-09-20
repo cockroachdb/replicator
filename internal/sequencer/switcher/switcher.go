@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/pkg/errors"
@@ -55,6 +56,7 @@ type Switcher struct {
 	core        *core.Core
 	diags       *diag.Diagnostics
 	immediate   *immediate.Immediate
+	staging     *staging.Staging
 	stagingPool *types.StagingPool
 	targetPool  *types.TargetPool
 
