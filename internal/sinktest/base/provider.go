@@ -255,6 +255,22 @@ func ProvideStagingPool(ctx *stopper.Context) (*types.StagingPool, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Ensure that core changefeeds are enabled on staging. We don't
+	// need enterprise changefeeds here.
+	var enabled bool
+	if err := retry.Retry(ctx, pool, func(ctx context.Context) error {
+		return pool.QueryRow(ctx, "SHOW CLUSTER SETTING kv.rangefeed.enabled").Scan(&enabled)
+	}); err != nil {
+		return nil, errors.Wrap(err, "could not check cluster setting")
+	}
+	if !enabled {
+		if err := retry.Execute(ctx, pool,
+			"SET CLUSTER SETTING kv.rangefeed.enabled = true"); err != nil {
+			return nil, errors.Wrap(err, "could not enable rangefeeds")
+		}
+	}
+
 	return pool, nil
 }
 
