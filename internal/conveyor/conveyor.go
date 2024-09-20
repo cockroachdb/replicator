@@ -97,6 +97,9 @@ func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
 	}
 
 	var opts []checkpoint.Option
+	if c.cfg.DisableCheckpointStream {
+		opts = append(opts, checkpoint.DisableStream())
+	}
 	if l := c.cfg.LimitLookahead; l > 0 {
 		opts = append(opts, checkpoint.LimitLookahead(l))
 	}

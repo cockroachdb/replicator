@@ -46,8 +46,11 @@ func (r *Checkpoints) Start(
 	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range], options ...Option,
 ) (*Group, error) {
 	var lookahead int
+	useStream := true
 	for _, opt := range options {
 		switch t := opt.(type) {
+		case disableStream:
+			useStream = false
 		case limitLookahead:
 			lookahead = int(t)
 			if lookahead <= 0 {
@@ -62,6 +65,9 @@ func (r *Checkpoints) Start(
 	}
 	ret.refreshJob(ctx)
 	ret.reportMetrics(ctx)
+	if useStream {
+		ret.streamJob(ctx)
+	}
 
 	return ret, nil
 }
@@ -93,6 +99,7 @@ func (r *Checkpoints) newGroup(
 	}
 	// This query may indeed require a full table scan.
 	ret.sql.refresh = fmt.Sprintf(refreshTemplate, r.metaTable, limit)
+	ret.sql.stream = fmt.Sprintf(streamTemplate, r.metaTable)
 
 	hinted := r.pool.HintNoFTS(r.metaTable)
 	ret.sql.advance = fmt.Sprintf(advanceTemplate, hinted)

@@ -27,6 +27,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/jackc/pgx/v5"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
@@ -211,6 +212,65 @@ func TestLimitLookahead(t *testing.T) {
 
 	// Verify all resolved.
 	r.Equal(hlc.RangeIncluding(hlc.New(maxNanos, 0), hlc.New(maxNanos, 0)), rng)
+}
+
+// This test validates that an update to one group wakes another.
+func TestStreamNotification(t *testing.T) {
+	r := require.New(t)
+
+	fixture, err := base.NewFixture(t)
+	r.NoError(err)
+
+	ctx := fixture.Context
+
+	chk, err := ProvideCheckpoints(ctx, fixture.StagingPool, fixture.StagingDB)
+	r.NoError(err)
+
+	// Construct a partial group that only runs the stream.
+	receiver := chk.newGroup(
+		&types.TableGroup{Name: ident.New("fake")},
+		&notify.Var[hlc.Range]{},
+		0,
+	)
+	receiver.streamConn = notify.VarOf[*pgx.Conn](nil)
+	_, woken := receiver.fastWakeup.Get()
+	receiver.streamJob(ctx)
+
+	sender := chk.newGroup(
+		&types.TableGroup{Name: ident.New("fake")},
+		&notify.Var[hlc.Range]{},
+		0,
+	)
+
+	select {
+	case <-woken:
+		r.Fail("no notification expected here")
+	default:
+	}
+
+	// We want to run this in a loop. It's possible that the receiver's
+	// changefeed might start up after the next update arrives.
+	for i := 100; true; i++ {
+		r.NoError(sender.Advance(ctx, ident.New("part"), hlc.New(int64(i), i)))
+		select {
+		case <-woken:
+			return
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			r.NoError(ctx.Err())
+		}
+	}
+
+	// Kill the receiver's network connection for the stream and wait
+	// for it to be replaced.
+	sqlConn, connChanged := receiver.streamConn.Get()
+	_ = sqlConn.Close(ctx)
+	select {
+	case <-connChanged:
+	// Success.
+	case <-ctx.Done():
+		r.NoError(ctx.Err())
+	}
 }
 
 func TestTransitionsInSinglePartition(t *testing.T) {
