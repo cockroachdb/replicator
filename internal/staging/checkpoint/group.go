@@ -28,13 +28,14 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
+	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
 // The secondary index allows us to find the last-known checkpoint
-// timestamp for a target schema.
+// timestamp for a target schema. Keep in sync with stream.go.
 const schema = `
 CREATE TABLE IF NOT EXISTS %[1]s (
   group_name        STRING      NOT NULL,
@@ -68,9 +69,10 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 //	to all partitions.
 type Group struct {
 	bounds     *notify.Var[hlc.Range]
-	pool       *types.StagingPool
-	target     *types.TableGroup
 	fastWakeup notify.Var[struct{}]
+	pool       *types.StagingPool
+	streamConn *notify.Var[*pgx.Conn] // Used for testing.
+	target     *types.TableGroup
 
 	metrics struct {
 		advanceDuration prometheus.Observer
@@ -88,6 +90,7 @@ type Group struct {
 		commit  string
 		ensure  string
 		refresh string
+		stream  string
 	}
 }
 

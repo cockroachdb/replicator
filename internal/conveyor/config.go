@@ -36,6 +36,11 @@ type Config struct {
 	// Force the use of BestEffort mode.
 	BestEffortOnly bool
 
+	// Don't use a core changefeed for cross-Replicator notifications
+	// and only use a polling strategy for detecting changes to the
+	// timestamp bounds.
+	DisableCheckpointStream bool
+
 	// Write directly to staging tables. May limit compatibility with
 	// schemas that contain foreign keys.
 	Immediate bool
@@ -55,6 +60,8 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 			"is behind; 0 to disable")
 	f.BoolVar(&c.BestEffortOnly, "bestEffortOnly", false,
 		"eventually-consistent mode; useful for high throughput, skew-tolerant schemas with FKs")
+	f.BoolVar(&c.DisableCheckpointStream, "disableCheckpointStream", false,
+		"disable cross-Replicator checkpoint notifications and rely only on polling")
 	f.BoolVar(&c.Immediate, "immediate", false,
 		"bypass staging tables and write directly to target; "+
 			"recommended only for KV-style workloads with no FKs")

@@ -21,6 +21,16 @@ type Option interface {
 	isOption()
 }
 
+type disableStream struct{}
+
+func (disableStream) isOption() {}
+
+// DisableStream prevents the checkpointer from using a changefeed to
+// receive change notifications from other instances of Replicator.
+func DisableStream() Option {
+	return disableStream{}
+}
+
 type limitLookahead int
 
 // LimitLookahead limits the number of resolved timestamps that are used
