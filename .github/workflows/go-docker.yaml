@@ -102,6 +102,9 @@ jobs:
     runs-on: ubuntu-latest
     needs:
      - docker
+    # This step can experience a query vs delete race if multiple builds
+    # run concurrently.
+    continue-on-error: true
     steps:
       - name: Prune untagged GHCR images
         uses: vlaurin/action-ghcr-prune@v0.6.0
