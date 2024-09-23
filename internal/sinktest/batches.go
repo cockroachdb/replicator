@@ -17,6 +17,7 @@
 package sinktest
 
 import (
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -35,4 +36,19 @@ func TableBatchOf(table ident.Table, time hlc.Time, data []types.Mutation) *type
 		ret.Data[idx].Time = time
 	}
 	return ret
+}
+
+// An EmptyBatchReader never emits any data.
+type EmptyBatchReader struct{}
+
+var _ types.BatchReader = (*EmptyBatchReader)(nil)
+
+// Read emits no data. The channel will be closed when the context is
+// stopped.
+func (r *EmptyBatchReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+	ret := make(chan *types.BatchCursor)
+	ctx.Defer(func() {
+		close(ret)
+	})
+	return ret, nil
 }

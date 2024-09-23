@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
+	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
@@ -43,6 +44,7 @@ type Fixture struct {
 	*all.Fixture
 
 	BestEffort *besteffort.BestEffort
+	Buffer     *buffer.Buffer
 	Chaos      *chaos.Chaos
 	Core       *core.Core
 	Immediate  *immediate.Immediate

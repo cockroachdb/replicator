@@ -20,7 +20,6 @@ package pglogical
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -69,8 +68,6 @@ type Conn struct {
 	stat *notify.Var[sequencer.Stat]
 	// The destination for writes.
 	target ident.Schema
-	// Access to the target database.
-	targetDB *types.TargetPool
 	// Holds the guaranteed-committed LSN.
 	walOffset notify.Var[pglogrepl.LSN]
 }
@@ -149,33 +146,9 @@ func (c *Conn) accumulateBatch(
 			emptyTransactionCount.Inc()
 			log.Trace("skipping empty transaction")
 		} else {
-			tx, err := c.targetDB.BeginTx(ctx, &sql.TxOptions{})
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			defer tx.Rollback()
-
-			if err := c.acceptor.AcceptTemporalBatch(ctx, batch, &types.AcceptOptions{
-				TargetQuerier: tx,
-			}); err != nil {
+			if err := c.acceptor.AcceptTemporalBatch(ctx, batch, &types.AcceptOptions{}); err != nil {
 				return nil, err
 			}
-
-			if err := tx.Commit(); err != nil {
-				return nil, errors.WithStack(err)
-			}
-			// TODO(bob): This is a temporary hack until this frontend
-			// is switched to using the core sequencer. Very shortly,
-			// the sequencer stat will reflect the progress of
-			// transactions that have been committed to the target. In
-			// the meantime, we're in immediate operation, so we'll fake
-			// one up.
-			fakeProgress := &ident.TableMap[hlc.Range]{}
-			fakeTable := ident.NewTable(c.target, ident.New("fake"))
-			fakeProgress.Put(fakeTable, hlc.RangeIncluding(hlc.Zero(), batch.Time))
-			c.stat.Set(sequencer.NewStat(&types.TableGroup{
-				Tables: []ident.Table{fakeTable},
-			}, fakeProgress))
 		}
 		return nil, nil
 
@@ -461,6 +434,7 @@ func (c *Conn) persistWALOffset(ctx *stopper.Context) error {
 		c.monotonic.External(lsn)
 		c.walOffset.Set(lsn)
 	}
+
 	store := func(ctx context.Context, lsn pglogrepl.LSN) {
 		if err := c.memo.Put(ctx, c.stagingDB, key, []byte(lsn.String())); err == nil {
 			log.Tracef("stored WAL offset %s: %s", key, lsn)
@@ -468,6 +442,7 @@ func (c *Conn) persistWALOffset(ctx *stopper.Context) error {
 			log.WithError(err).Warn("could not persist LSN offset")
 		}
 	}
+	// Keep the memo table up to date.
 	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, lsn, &c.walOffset,
 			func(ctx *stopper.Context, _, lsn pglogrepl.LSN) error {

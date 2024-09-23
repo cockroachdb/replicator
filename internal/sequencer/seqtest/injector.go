@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	userScript "github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/retire"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
@@ -39,6 +40,7 @@ func NewSequencerFixture(*all.Fixture, *sequencer.Config, *userScript.Config) (*
 		wire.FieldsOf(new(*all.Fixture),
 			"Configs", "Diagnostics", "Fixture", "Stagers", "Watchers"),
 
+		buffer.Set,
 		retire.Set,
 		switcher.Set,
 		userScript.Set,

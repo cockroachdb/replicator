@@ -31,15 +31,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/sinktest/scripttest"
-	"github.com/cockroachdb/replicator/internal/util/batches"
+	"github.com/cockroachdb/replicator/internal/types"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/cockroachdb/replicator/internal/util/workload"
 	"github.com/google/uuid"
+	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -47,7 +52,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -68,10 +72,8 @@ type fixtureConfig struct {
 	script    bool
 }
 
-// This is a general smoke-test of the logical replication feed.
-//
-// The probabilities are chosen to make the tests pass within a
-// reasonable timeframe, given the large number of rows that we insert.
+// This is a general smoke-test of the logical replication feed that
+// uses the workload checker to validate the replicated data.
 func TestPGLogical(t *testing.T) {
 	t.Run("consistent", func(t *testing.T) {
 		testPGLogical(t, &fixtureConfig{})
@@ -97,115 +99,100 @@ func TestPGLogical(t *testing.T) {
 }
 
 func testPGLogical(t *testing.T, fc *fixtureConfig) {
+	const transactionCount = 1024
 	a := assert.New(t)
 	r := require.New(t)
-	// Create a basic test fixture.
-	fixture, err := base.NewFixture(t)
+
+	partitionCount := 1
+	if fc.partition {
+		partitionCount = 10
+	}
+
+	// This fixture points at the target. It will, eventually, be used
+	// to validate that the target contains the data expected by the
+	// workload checker.
+	crdbFixture, err := all.NewFixture(t)
 	if !a.NoError(err) {
 		return
 	}
+	ctx := crdbFixture.Context
 
-	ctx := fixture.Context
-	dbSchema := fixture.TargetSchema.Schema()
+	// These generators will act as sources of mutations to apply later
+	// on and will then be used to validate the information in the
+	// target.
+	targetChecker, _, err := crdbFixture.NewWorkload(ctx, &all.WorkloadConfig{})
+	r.NoError(err)
+	sourceGenerators := make([]*workload.GeneratorBase, partitionCount)
+	for i := range sourceGenerators {
+		parent := targetChecker.Parent.Name()
+		child := targetChecker.Child.Name()
+		if fc.partition {
+			part := i % partitionCount
+			parent = ident.NewTable(parent.Schema(),
+				ident.New(fmt.Sprintf("%s_P_%d", parent.Table().Raw(), part)))
+			child = ident.NewTable(child.Schema(),
+				ident.New(fmt.Sprintf("%s_P_%d", child.Table().Raw(), part)))
+		}
+		sourceGenerators[i] = workload.NewGeneratorBase(parent, child)
+	}
+
+	// Set up the source database with a replication publication and
+	// create the table schema.
+	dbSchema := crdbFixture.TargetSchema.Schema()
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
-	crdbPool := fixture.TargetPool
-
-	pgPool, cancel, err := setupPGPool(dbName)
+	pgPool, err := setupPGPool(ctx, dbName)
 	r.NoError(err)
 
-	defer cancel()
-	cancel, err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
+	err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
 	r.NoError(err)
-	defer cancel()
-	// Create the schema in both locations.
-	tgts := []ident.Table{
-		ident.NewTable(dbSchema, ident.New("t1")),
-		ident.NewTable(dbSchema, ident.New("t2")),
-	}
-	srcs := tgts
-	if fc.partition {
-		srcs = []ident.Table{
-			ident.NewTable(dbSchema, ident.New("t1_P_0")),
-			ident.NewTable(dbSchema, ident.New("t2_P_0")),
-		}
-	}
 
-	var crdbCol string
-	for _, src := range srcs {
-		pgSchema := fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v TEXT)`, src)
-		if _, err := pgPool.Exec(ctx, pgSchema); !a.NoError(err) {
-			return
-		}
+	// Create the tables in the source database. We may simulate the
+	// case where there are multiple partitioned source tables that fan
+	// into a single target table. There's an extra test case here for
+	// REPLICA IDENTITY FULL, which makes the source behave as though
+	// all columns in the table are the primary key.
+	for _, generator := range sourceGenerators {
+		parent := generator.Parent
+		child := generator.Child
+
+		parentSQL, childSQL := all.WorkloadSchema(
+			&all.WorkloadConfig{}, types.ProductPostgreSQL,
+			parent, child)
+		_, err = pgPool.Exec(ctx, parentSQL)
+		r.NoError(err)
+		_, err = pgPool.Exec(ctx, childSQL)
+		r.NoError(err)
 		if fc.rif {
-			if _, err := pgPool.Exec(ctx, fmt.Sprintf(
-				`ALTER TABLE %s REPLICA IDENTITY FULL`, src)); !a.NoError(err) {
-				return
-			}
-		}
-	}
-	for _, tgt := range tgts {
-		crdbSchema := fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v TEXT)`, tgt)
-		crdbCol = "v"
-		if fc.script {
-			// Ensure that script is wired up by renaming a column.
-			crdbSchema = fmt.Sprintf(`CREATE TABLE %s (pk INT PRIMARY KEY, v_mapped TEXT)`, tgt)
-			crdbCol = "v_mapped"
-		}
-		if _, err := crdbPool.ExecContext(ctx, crdbSchema); !a.NoError(err) {
-			return
+			_, err := pgPool.Exec(ctx, fmt.Sprintf(
+				`ALTER TABLE %s REPLICA IDENTITY FULL`, parent))
+			r.NoError(err)
+			_, err = pgPool.Exec(ctx, fmt.Sprintf(
+				`ALTER TABLE %s REPLICA IDENTITY FULL`, child))
+			r.NoError(err)
 		}
 	}
 
-	// We want enough rows here to make sure that the batching and
-	// coalescing logic gets exercised.
-	rowCount := 10 * batches.Size()
-	keys := make([]int, rowCount)
-	vals := make([]string, rowCount)
-
-	// Insert data into source tables with overlapping transactions.
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(128)
-	for _, src := range srcs {
-		for i := 0; i < len(vals); i += 2 {
-			eg.Go(func() error {
-				keys[i] = i
-				keys[i+1] = i + 1
-				vals[i] = fmt.Sprintf("v=%d", i)
-				vals[i+1] = fmt.Sprintf("v=%d", i+1)
-
-				tx, err := pgPool.Begin(egCtx)
-				if err != nil {
-					return err
-				}
-				_, err = tx.Exec(egCtx,
-					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", src),
-					keys[i], vals[i],
-				)
-				if err != nil {
-					return err
-				}
-				_, err = tx.Exec(egCtx,
-					fmt.Sprintf("INSERT INTO %s VALUES ($1, $2)", src),
-					keys[i+1], vals[i+1],
-				)
-				if err != nil {
-					return err
-				}
-				return tx.Commit(egCtx)
-			})
-		}
-	}
+	// Create a new test fixture using the source database as the
+	// target. This will allow us to use the apply package to insert the
+	// generated workload data into the source tables.
+	pgFixture, err := all.NewFixtureFromBase(crdbFixture.Swapped())
 	r.NoError(err)
+	acc := types.OrderedAcceptorFrom(pgFixture.ApplyAcceptor, pgFixture.Watchers)
 
+	// Build the runtime configuration for the replication loop, which
+	// we'll run as though it were being started from the command line
+	// (i.e. it's going to dial the source and target itself, etc).
 	pubNameRaw := publicationName(dbName).Raw()
-	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
+		Sequencer: sequencer.Config{
+			QuiescentPeriod: 100 * time.Millisecond,
+		},
 		Staging: sinkprod.StagingConfig{
-			Schema: fixture.StagingDB.Schema(),
+			Schema: crdbFixture.StagingDB.Schema(),
 		},
 		Target: sinkprod.TargetConfig{
 			CommonConfig: sinkprod.CommonConfig{
-				Conn: crdbPool.ConnectionString,
+				Conn: crdbFixture.TargetPool.ConnectionString,
 			},
 			ApplyTimeout: 2 * time.Minute, // Increase to make using the debugger easier.
 		},
@@ -218,94 +205,78 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	if fc.chaos {
 		cfg.Sequencer.Chaos = 2
 	}
-	if fc.script {
+	if fc.partition || fc.script {
 		cfg.Script = script.Config{
-			FS:       scripttest.ScriptFSFor(tgts[0]),
-			MainPath: "/testdata/logical_test.ts",
+			FS: scripttest.ScriptFSParentChild(
+				targetChecker.Parent.Name(), targetChecker.Child.Name()),
+			MainPath: "/testdata/logical_test_parent_child.ts",
 		}
 	}
 	r.NoError(cfg.Preflight())
-	repl, err := Start(ctx, cfg)
+
+	// We control the lifecycle of the replication loop.
+	connCtx := stopper.WithContext(ctx)
+	repl, err := Start(connCtx, cfg)
 	r.NoError(err)
+	log.Info("started pglogical conn")
 
-	// Wait for backfill.
-	for _, tgt := range tgts {
-		for {
-			var count int
-			if err := crdbPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
-				return
-			}
-			log.Trace("backfill count", count)
-			if count == rowCount {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
+	// This will be filled in on the last insert transaction below, so
+	// that we can monitor the replication loop until it proceeds to
+	// this point in the WAL.
+	var expectLSN pglogrepl.LSN
+
+	// At this point, the source database has been configured with a
+	// publication, replication slot and table schema. The replication
+	// loop has started and established connections to the source and
+	// the target. We can finally start generating data to apply.
+	log.Info("starting to insert data into source")
+	for i := range transactionCount {
+		batch := &types.MultiBatch{}
+		sourceGenerator := sourceGenerators[i%partitionCount]
+		sourceGenerator.GenerateInto(batch, hlc.New(int64(i+1), i))
+
+		tx, err := pgFixture.TargetPool.BeginTx(ctx, &sql.TxOptions{})
+		r.NoError(err)
+		r.NoError(acc.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{TargetQuerier: tx}))
+		if i == transactionCount-1 {
+			// On our final transaction, capture the LSN that
+			// replication should advance to.
+			r.NoError(tx.QueryRowContext(ctx,
+				"SELECT pg_current_wal_insert_lsn()").Scan(&expectLSN))
+		}
+		r.NoError(tx.Commit())
+	}
+	log.Info("finished inserting data into source")
+
+	// Merge source generators into the target checker.
+	for _, gen := range sourceGenerators {
+		targetChecker.CopyFrom(gen)
+	}
+
+	// Monitor the connection's committed walOffset. It should advance
+	// beyond the insert point that was captured in the loop above.
+	for {
+		pos, posChanged := repl.Conn.walOffset.Get()
+		if pos >= expectLSN {
+			break
+		}
+		log.Infof("waiting for lsn: %s vs %s", pos, expectLSN)
+		select {
+		case <-posChanged:
+		case <-ctx.Done():
+			log.Errorf("timed out waiting for lsn: %s vs %s", pos, expectLSN)
+			r.NoError(ctx.Err())
 		}
 	}
 
-	// Let's perform an update in a single transaction.
-	tx, err := pgPool.Begin(ctx)
-	r.NoError(err)
-	for _, src := range srcs {
-		if _, err := tx.Exec(ctx, fmt.Sprintf("UPDATE %s SET v = 'updated'", src)); !a.NoError(err) {
-			return
-		}
-	}
-	r.NoError(tx.Commit(ctx))
+	// Validate the data in the target tables.
+	r.True(targetChecker.CheckConsistent(ctx, t))
 
-	// Wait for the update to propagate.
-	for _, tgt := range tgts {
-		for {
-			var count int
-			if err := crdbPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
-				return
-			}
-			log.Trace("update count", count)
-			if count == rowCount {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	// Delete some rows.
-	tx, err = pgPool.Begin(ctx)
-	r.NoError(err)
-	for _, src := range srcs {
-		if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE pk < 50", src)); !a.NoError(err) {
-			return
-		}
-	}
-	r.NoError(tx.Commit(ctx))
-
-	// Wait for the deletes to propagate.
-	for _, tgt := range tgts {
-		for {
-			var count int
-			if err := crdbPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
-				return
-			}
-			log.Trace("delete count", count)
-			if count == rowCount-50 {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	sinktest.CheckDiagnostics(ctx, t, repl.Diagnostics)
-
-	// Verify that a WAL offset was indeed recorded.
-	key := fmt.Sprintf("pglogical-wal-offset-%s", fixture.TargetSchema.Raw())
-	if off, err := repl.Memo.Get(ctx, fixture.StagingPool, key); a.NoError(err) {
-		a.NotEmpty(off)
-	}
-
-	ctx.Stop(time.Second)
-	a.NoError(ctx.Wait())
+	// We need to wait for the connection to shut down, otherwise the
+	// database cleanup callbacks (to drop the publication, etc.) from
+	// the test code above can't succeed.
+	connCtx.Stop(time.Minute)
+	<-connCtx.Done()
 }
 
 // https://www.postgresql.org/docs/current/datatype.html
@@ -374,13 +345,11 @@ func TestDataTypes(t *testing.T) {
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
 
-	pgPool, cancel, err := setupPGPool(dbName)
+	pgPool, err := setupPGPool(ctx, dbName)
 	r.NoError(err)
-	defer cancel()
 
-	cancel, err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
+	err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
 	r.NoError(err)
-	defer cancel()
 
 	enumQ := fmt.Sprintf(`CREATE TYPE %s."Simple-Enum" AS ENUM ('foo', 'bar')`, dbSchema)
 	_, err = crdbPool.ExecContext(ctx, enumQ)
@@ -444,6 +413,9 @@ func TestDataTypes(t *testing.T) {
 	pubNameRaw := publicationName(dbName).Raw()
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
+		Sequencer: sequencer.Config{
+			QuiescentPeriod: 100 * time.Millisecond,
+		},
 		Staging: sinkprod.StagingConfig{
 			Schema: fixture.StagingDB.Schema(),
 		},
@@ -515,9 +487,8 @@ func TestEmptyTransactions(t *testing.T) {
 	dbSchema := fixture.TargetSchema.Schema()
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 
-	pgPool, cancel, err := setupPGPool(dbName)
+	pgPool, err := setupPGPool(ctx, dbName)
 	r.NoError(err)
-	defer cancel()
 
 	rows, err := pgPool.Query(ctx, "select version()")
 	r.NoError(err)
@@ -550,14 +521,16 @@ func TestEmptyTransactions(t *testing.T) {
 		return
 	}
 	// setup replication for only the replTable
-	cancel, err = setupPublication(ctx, pgPool, dbName, fmt.Sprintf(`TABLE %s`, replTable))
+	err = setupPublication(ctx, pgPool, dbName, fmt.Sprintf(`TABLE %s`, replTable))
 	r.NoError(err)
-	defer cancel()
 
 	pubNameRaw := publicationName(dbName).Raw()
 
 	// Start the connection, to demonstrate that we can backfill pending mutations.
 	cfg := &Config{
+		Sequencer: sequencer.Config{
+			QuiescentPeriod: 100 * time.Millisecond,
+		},
 		Staging: sinkprod.StagingConfig{
 			Schema: fixture.StagingDB.Schema(),
 		},
@@ -640,13 +613,11 @@ func TestToast(t *testing.T) {
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
 
-	pgPool, cancel, err := setupPGPool(dbName)
+	pgPool, err := setupPGPool(ctx, dbName)
 	r.NoError(err)
-	defer cancel()
 
-	cancel, err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
+	err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
 	r.NoError(err)
-	defer cancel()
 
 	name := ident.NewTable(dbSchema, ident.New("toast"))
 	// Create the schema in both locations.
@@ -691,6 +662,9 @@ func TestToast(t *testing.T) {
 	pubNameRaw := publicationName(dbName).Raw()
 
 	cfg := &Config{
+		Sequencer: sequencer.Config{
+			QuiescentPeriod: 100 * time.Millisecond,
+		},
 		Staging: sinkprod.StagingConfig{
 			Schema: fixture.StagingDB.Schema(),
 		},
@@ -755,19 +729,16 @@ func publicationName(database ident.Ident) ident.Ident {
 	return ident.New(strings.ReplaceAll(database.Raw(), "-", "_"))
 }
 
-func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
+func setupPGPool(ctx *stopper.Context, database ident.Ident) (*pgxpool.Pool, error) {
 	baseConn, err := pgxpool.New(ctx, *pgConnString)
 	if err != nil {
-		return nil, func() {}, err
+		return nil, err
 	}
 
 	if _, err := baseConn.Exec(ctx,
 		fmt.Sprintf("CREATE DATABASE %s", database),
 	); err != nil {
-		return nil, func() {}, err
+		return nil, err
 	}
 
 	// Open the pool, using the newly-created database.
@@ -775,10 +746,9 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 	next.ConnConfig.Database = database.Raw()
 	retConn, err := pgxpool.NewWithConfig(ctx, next)
 	if err != nil {
-		return nil, func() {}, err
+		return nil, err
 	}
-
-	return retConn, func() {
+	ctx.Defer(func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		// Can't drop the default database from its own connection.
@@ -788,38 +758,40 @@ func setupPGPool(database ident.Ident) (*pgxpool.Pool, func(), error) {
 		}
 		baseConn.Close()
 		log.Trace("finished pg pool cleanup")
-	}, nil
+	})
+	return retConn, nil
 }
 
 func setupPublication(
-	ctx context.Context, retConn *pgxpool.Pool, database ident.Ident, scope string,
-) (func(), error) {
+	ctx *stopper.Context, pool *pgxpool.Pool, database ident.Ident, scope string,
+) error {
 	pubName := publicationName(database)
-	if _, err := retConn.Exec(ctx,
+	if _, err := pool.Exec(ctx,
 		fmt.Sprintf("CREATE PUBLICATION %s FOR %s", pubName, scope),
 	); err != nil {
-		return func() {}, err
+		return err
 	}
 
-	if _, err := retConn.Exec(ctx,
+	if _, err := pool.Exec(ctx,
 		"SELECT pg_create_logical_replication_slot($1, 'pgoutput')",
 		pubName.Raw(),
 	); err != nil {
-		return func() {}, err
+		return err
 	}
-	return func() {
+	ctx.Defer(func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := retConn.Exec(ctx, "SELECT pg_drop_replication_slot($1)", pubName.Raw())
+		_, err := pool.Exec(ctx, "SELECT pg_drop_replication_slot($1)", pubName.Raw())
 		if err != nil {
 			log.WithError(err).Error("could not drop replication slot")
 		}
-		_, err = retConn.Exec(ctx, fmt.Sprintf("DROP PUBLICATION %s", pubName))
+		_, err = pool.Exec(ctx, fmt.Sprintf("DROP PUBLICATION %s", pubName))
 		if err != nil {
 			log.WithError(err).Error("could not drop publication")
 		}
-		retConn.Close()
+		pool.Close()
 
 		log.Trace("finished pg pool cleanup")
-	}, nil
+	})
+	return nil
 }

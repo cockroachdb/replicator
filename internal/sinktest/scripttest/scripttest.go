@@ -43,3 +43,16 @@ func ScriptFSFor(tbl ident.Table) fs.FS {
 		),
 	}
 }
+
+// ScriptFSParentChild returns a wrapped version of ScriptFS that will
+// substitute the table and its schema into the returned files.
+func ScriptFSParentChild(parent, child ident.Table) fs.FS {
+	return &subfs.SubstitutingFS{
+		FS: ScriptFS,
+		Replacer: strings.NewReplacer(
+			"{{ SCHEMA }}", parent.Schema().Raw(),
+			"{{ PARENT }}", parent.Raw(),
+			"{{ CHILD }}", child.Raw(),
+		),
+	}
+}

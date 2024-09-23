@@ -21,8 +21,10 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	scriptRT "github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
-	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	"github.com/cockroachdb/replicator/internal/sequencer/core"
+	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
 	"github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -48,13 +50,14 @@ var Set = wire.NewSet(
 func ProvideConn(
 	ctx *stopper.Context,
 	acc *apply.Acceptor,
+	buffer *buffer.Buffer,
 	chaos *chaos.Chaos,
 	config *Config,
-	imm *immediate.Immediate,
+	core *core.Core,
 	memo types.Memo,
+	rekey *decorators.Rekey,
 	scriptSeq *script.Sequencer,
 	stagingPool *types.StagingPool,
-	targetPool *types.TargetPool,
 	watchers types.Watchers,
 ) (*Conn, error) {
 	if err := config.Preflight(); err != nil {
@@ -103,7 +106,20 @@ func ProvideConn(
 	sourceConfig := source.Config().Config.Copy()
 	sourceConfig.RuntimeParams["replication"] = "database"
 
-	seq, err := scriptSeq.Wrap(ctx, imm)
+	seq := sequencer.Sequencer(core)
+	// Use an in-memory buffer for staging.
+	seq, err = buffer.Wrap(ctx, seq)
+	if err != nil {
+		return nil, err
+	}
+	// Handle REPLICA IDENTITY FULL by rekeying the mutations based on
+	// destination table before they hit the buffer. This ensures the
+	// transaction scheduler is able to guarantee ordering invariants.
+	seq, err = rekey.Wrap(ctx, seq)
+	if err != nil {
+		return nil, err
+	}
+	seq, err = scriptSeq.Wrap(ctx, seq)
 	if err != nil {
 		return nil, err
 	}
@@ -112,11 +128,14 @@ func ProvideConn(
 		return nil, err
 	}
 	connAcceptor, statVar, err := seq.Start(ctx, &sequencer.StartOptions{
+		Bounds:   notify.VarOf(hlc.RangeEmpty()), // Gating by checkpoint not required.
 		Delegate: types.OrderedAcceptorFrom(acc, watchers),
-		Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
 		Group: &types.TableGroup{
 			Name:      ident.New(config.TargetSchema.Raw()),
 			Enclosing: config.TargetSchema,
+			Tables: []ident.Table{
+				ident.NewTable(config.TargetSchema, ident.New("pglogical")),
+			},
 		},
 	})
 	if err != nil {
@@ -135,7 +154,6 @@ func ProvideConn(
 		stagingDB:       stagingPool,
 		stat:            statVar,
 		target:          config.TargetSchema,
-		targetDB:        targetPool,
 	}
 	return conn, conn.Start(ctx)
 }

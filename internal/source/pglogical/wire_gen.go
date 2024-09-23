@@ -9,13 +9,15 @@ package pglogical
 import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
+	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
-	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	"github.com/cockroachdb/replicator/internal/sequencer/scheduler"
 	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/staging/leases"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
-	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
@@ -83,16 +85,22 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	sequencerConfig := &eagerConfig.Sequencer
+	bufferBuffer := buffer.ProvideBuffer(sequencerConfig)
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
-	marker := decorators.ProvideMarker(stagingPool, stagers)
-	once := decorators.ProvideOnce(stagingPool, stagers)
-	retryTarget := decorators.ProvideRetryTarget(targetPool)
-	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	schedulerScheduler, err := scheduler.ProvideScheduler(context, sequencerConfig)
+	if err != nil {
+		return nil, err
+	}
+	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, targetPool)
+	rekey := decorators.ProvideRekey(watchers)
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	conn, err := ProvideConn(context, acceptor, chaosChaos, config, immediateImmediate, memoMemo, sequencer, stagingPool, targetPool, watchers)
+	conn, err := ProvideConn(context, acceptor, bufferBuffer, chaosChaos, config, coreCore, memoMemo, rekey, sequencer, stagingPool, watchers)
 	if err != nil {
 		return nil, err
 	}

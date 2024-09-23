@@ -25,6 +25,7 @@ import (
 var Set = wire.NewSet(
 	ProvideMarker,
 	ProvideOnce,
+	ProvideRekey,
 	ProvideRetryTarget,
 )
 
@@ -42,6 +43,11 @@ func ProvideOnce(pool *types.StagingPool, stagers types.Stagers) *Once {
 		pool:    pool,
 		stagers: stagers,
 	}
+}
+
+// ProvideRekey is called by Wire.
+func ProvideRekey(watchers types.Watchers) *Rekey {
+	return &Rekey{watchers: watchers}
 }
 
 // ProvideRetryTarget is called by Wire.

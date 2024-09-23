@@ -10,6 +10,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/besteffort"
+	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
@@ -35,6 +36,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	stagingPool := baseFixture.StagingPool
 	watchers := fixture.Watchers
 	bestEffort := besteffort.ProvideBestEffort(config, schedulerScheduler, stagers, stagingPool, watchers)
+	bufferBuffer := buffer.ProvideBuffer(config)
 	chaosChaos := &chaos.Chaos{
 		Config: config,
 	}
@@ -62,6 +64,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	seqtestFixture := &Fixture{
 		Fixture:    fixture,
 		BestEffort: bestEffort,
+		Buffer:     bufferBuffer,
 		Chaos:      chaosChaos,
 		Core:       coreCore,
 		Immediate:  immediateImmediate,

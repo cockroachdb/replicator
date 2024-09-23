@@ -19,6 +19,8 @@
 package immediate
 
 import (
+	"errors"
+
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/field-eng-powertools/stopvar"
@@ -48,6 +50,10 @@ var _ sequencer.Sequencer = (*Immediate)(nil)
 func (i *Immediate) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+	if opts.BatchReader != nil {
+		return nil, nil, errors.New("immediate mode does not process async data")
+	}
+
 	ret := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
 
 	// Set each table's progress to the end of the bounds. This

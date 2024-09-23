@@ -140,14 +140,28 @@ api.configureTable("t_2", {
 	bounds := &notify.Var[hlc.Range]{}
 	wrapped, err := seqFixture.Script.Wrap(ctx, base)
 	r.NoError(err)
+
+	group := &types.TableGroup{
+		Enclosing: fixture.TargetSchema.Schema(),
+		Name:      ident.New("src1"), // Aligns with configureSource() call.
+		Tables:    tgts,
+	}
+
+	var reader types.BatchReader
+	if baseMode != switcher.ModeImmediate {
+		reader, err = fixture.Stagers.Query(ctx, &types.StagingQuery{
+			Bounds:       bounds,
+			FragmentSize: 10_000,
+			Group:        group,
+		})
+		r.NoError(err)
+	}
+
 	acc, stats, err := wrapped.Start(ctx, &sequencer.StartOptions{
-		Bounds:   bounds,
-		Delegate: types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
-		Group: &types.TableGroup{
-			Enclosing: fixture.TargetSchema.Schema(),
-			Name:      ident.New("src1"), // Aligns with configureSource() call.
-			Tables:    tgts,
-		},
+		BatchReader: reader,
+		Bounds:      bounds,
+		Delegate:    types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
+		Group:       group,
 	})
 	r.NoError(err)
 

@@ -20,10 +20,10 @@ import (
 	"context"
 
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/jackc/pgx/v5"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 // Marker adds a decorator which will marks all mutations as having been
@@ -73,57 +73,82 @@ type marker struct {
 
 var _ types.MultiAcceptor = (*marker)(nil)
 
-// AcceptMultiBatch marks values concurrently with calling the
-// underlying decorator.
 func (s *marker) AcceptMultiBatch(
 	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
 ) error {
-	if err := s.multiAcceptor.AcceptMultiBatch(ctx, batch, opts); err != nil {
-		return err
-	}
-
-	return s.mark(ctx, types.FlattenByTable(batch))
+	return acceptMark(ctx, s.stagingPool, s.stagers, batch, opts, s.multiAcceptor.AcceptMultiBatch)
 }
 
 func (s *marker) AcceptTableBatch(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
-	if err := s.tableAcceptor.AcceptTableBatch(ctx, batch, opts); err != nil {
-		return err
-	}
-
-	return s.mark(ctx, types.FlattenByTable(batch))
+	return acceptMark(ctx, s.stagingPool, s.stagers, batch, opts, s.tableAcceptor.AcceptTableBatch)
 }
 
 func (s *marker) AcceptTemporalBatch(
 	ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions,
 ) error {
-	if err := s.temporalAcceptor.AcceptTemporalBatch(ctx, batch, opts); err != nil {
+	return acceptMark(ctx, s.stagingPool, s.stagers, batch, opts, s.temporalAcceptor.AcceptTemporalBatch)
+}
+
+// acceptMark will execute the callback concurrently with marking the
+// batch's mutations as applied. The callback must complete successfully
+// before the marking transaction is committed.
+func acceptMark[B types.Batch[B]](
+	ctx context.Context,
+	pool *types.StagingPool,
+	stagers types.Stagers,
+	batch B,
+	opts *types.AcceptOptions,
+	fn func(ctx context.Context, batch B, opts *types.AcceptOptions) error,
+) error {
+	eg, egCtx := errgroup.WithContext(ctx)
+
+	// Pass work up the chain.
+	eg.Go(func() error { return fn(egCtx, batch, opts) })
+
+	// Prepare a transaction to mark the mutations.
+	var stagingTx pgx.Tx
+	defer func() {
+		if stagingTx != nil {
+			_ = stagingTx.Rollback(context.Background())
+		}
+	}()
+
+	// Pre-stage the mutations.
+	eg.Go(func() error {
+		flattened := types.FlattenByTable(batch)
+
+		return retry.Retry(egCtx, pool, func(retryCtx context.Context) error {
+			var err error
+			stagingTx, err = pool.BeginTx(retryCtx, pgx.TxOptions{})
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			for table, muts := range flattened.All() {
+				stager, err := stagers.Get(retryCtx, table)
+				if err != nil {
+					return err
+				}
+
+				if err := stager.MarkApplied(retryCtx, stagingTx, muts); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+	})
+
+	// Ensure the delegate committed and the staging transaction is ready.
+	if err := eg.Wait(); err != nil {
 		return err
 	}
 
-	return s.mark(ctx, types.FlattenByTable(batch))
-}
-
-func (s *marker) mark(ctx context.Context, flattened *ident.TableMap[[]types.Mutation]) error {
-	return retry.Retry(ctx, s.stagingPool, func(ctx context.Context) error {
-		tx, err := s.stagingPool.BeginTx(ctx, pgx.TxOptions{})
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		defer func() { _ = tx.Rollback(context.Background()) }()
-
-		for table, muts := range flattened.All() {
-			stager, err := s.stagers.Get(ctx, table)
-			if err != nil {
-				return err
-			}
-
-			if err := stager.MarkApplied(ctx, s.stagingPool, muts); err != nil {
-				return err
-			}
-		}
-
-		return errors.WithStack(tx.Commit(ctx))
-	})
+	if err := stagingTx.Commit(ctx); err != nil {
+		stagingSkewCount.Inc()
+		return errors.WithStack(err)
+	}
+	return nil
 }
