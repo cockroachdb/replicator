@@ -36,7 +36,7 @@ var (
 	}, []string{"kind", "target"})
 	sourceLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "source_lag_seconds",
-		Help: "the age of the data received from the source changefeed",
+		Help: "the age of the most recently received checkpoint",
 	}, []string{"kind", "target"})
 	targetLagDuration = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "target_lag_seconds",
