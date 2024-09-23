@@ -11,7 +11,7 @@ require (
 	github.com/cockroachdb/datadriven v1.0.2
 	github.com/cockroachdb/field-eng-powertools v0.0.0-20240829142217-c680a7021280
 	github.com/dop251/goja v0.0.0-20230919151941-fc55792775de
-	github.com/evanw/esbuild v0.23.1
+	github.com/evanw/esbuild v0.24.0
 	github.com/go-mysql-org/go-mysql v1.9.0
 	github.com/godror/godror v0.44.7
 	github.com/gofrs/uuid v4.4.0+incompatible
