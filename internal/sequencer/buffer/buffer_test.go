@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAsync(t *testing.T) {
+func TestBuffer(t *testing.T) {
 	seqtest.CheckSequencer(t,
 		&all.WorkloadConfig{
 			DisableFragment: true, // Buffer requires whole transactions.

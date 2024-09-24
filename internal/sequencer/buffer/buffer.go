@@ -14,43 +14,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package buffer contains a [sequencer.Shim] that present its data to
-// the underlying sequencer as a stream of [types.BatchCursor] updates.
+// Package buffer contains an in-memory implementation of
+// [types.BatchReader] and a [sequencer.Shim] to install it in the
+// stack.
 package buffer
 
 import (
+	"context"
+
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 )
 
-// Buffer is a [sequencer.Shim] whose acceptor will present its data to
-// the underlying sequencer as a stream of [types.BatchCursor] updates.
-// This shim will handle buffering and replay of transaction data to
-// accommodate transient errors when writing to the target database.
+// Shim handles buffering and replay of in-memory transaction data.
 //
-// This shim should be used when writing frontends that wish to take
-// advantage of the core sequencer and which can assemble entire
-// transactions (e.g. single-stream replication protocols). The frontend
-// must ensure that the timestamps on the provided batches are strictly
+// This shim should be used when writing push-type, single-stream
+// frontends that can assemble entire transactions . The frontend must
+// ensure that the timestamps on the provided batches are strictly
 // monotonic, since this implementation will debounce duplicates based
 // on a high-water mark.
-type Buffer struct {
+//
+// See [hlc.Clock].
+type Shim struct {
 	cfg *sequencer.Config
 }
 
-var _ sequencer.Shim = (*Buffer)(nil)
+var _ sequencer.Shim = (*Shim)(nil)
 
 // Wrap implements [sequencer.Shim].
-func (b *Buffer) Wrap(
+func (b *Shim) Wrap(
 	_ *stopper.Context, delegate sequencer.Sequencer,
 ) (sequencer.Sequencer, error) {
 	return &buffer{b, delegate}, nil
 }
 
 type buffer struct {
-	*Buffer
+	*Shim
 	delegate sequencer.Sequencer
 }
 
@@ -60,26 +61,58 @@ var _ sequencer.Sequencer = (*buffer)(nil)
 func (b *buffer) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
-	acc := &acceptor{
-		bounds: opts.Bounds,
-		state:  notify.VarOf(&state{}),
-	}
+	buf := New(b.cfg.TimestampLimit, opts.Bounds)
+
 	opts = opts.Copy()
-	opts.BatchReader = acc
+	opts.BatchReader = buf
+	opts.Delegate = &cleaner{buf, opts.Delegate}
 
 	_, stats, err := b.delegate.Start(ctx, opts)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Retire old data as the delegate makes partial progress.
-	ctx.Go(func(ctx *stopper.Context) error {
-		acc.cleaner(ctx, stats)
-		return nil
+	buf.Retire(ctx, stats)
+	return buf, stats, nil
+}
+
+type cleaner struct {
+	buf      *Buffer
+	delegate types.MultiAcceptor
+}
+
+var _ types.MultiAcceptor = (*cleaner)(nil)
+
+func (c *cleaner) AcceptTableBatch(ctx context.Context, batch *types.TableBatch, options *types.AcceptOptions) error {
+	if err := c.delegate.AcceptTableBatch(ctx, batch, options); err != nil {
+		return err
+	}
+	_, _, err := c.buf.state.Update(func(s *state) (*state, error) {
+		s.Mark(batch.Time)
+		return s, nil
 	})
-	// Fast-forward progress when there is no buffered data.
-	ctx.Go(func(ctx *stopper.Context) error {
-		acc.fastForward(ctx, stats)
-		return nil
+	return err
+}
+
+func (c *cleaner) AcceptTemporalBatch(ctx context.Context, batch *types.TemporalBatch, options *types.AcceptOptions) error {
+	if err := c.delegate.AcceptTemporalBatch(ctx, batch, options); err != nil {
+		return err
+	}
+	_, _, err := c.buf.state.Update(func(s *state) (*state, error) {
+		s.Mark(batch.Time)
+		return s, nil
 	})
-	return acc, stats, nil
+	return err
+}
+
+func (c *cleaner) AcceptMultiBatch(ctx context.Context, batch *types.MultiBatch, options *types.AcceptOptions) error {
+	if err := c.delegate.AcceptMultiBatch(ctx, batch, options); err != nil {
+		return err
+	}
+	_, _, err := c.buf.state.Update(func(s *state) (*state, error) {
+		for _, temp := range batch.Data {
+			s.Mark(temp.Time)
+		}
+		return s, nil
+	})
+	return err
 }

@@ -36,8 +36,9 @@ import (
 
 func TestBestEffort(t *testing.T) {
 	tcs := []*all.WorkloadConfig{
-		{},                // Verify grouped-table behaviors.
-		{DisableFK: true}, // Verify single-table behaviors.
+		{},                     // Verify grouped-table behaviors.
+		{DisableFK: true},      // Verify single-table behaviors.
+		{DisableStaging: true}, // Verify with in-memory buffer.
 	}
 
 	for idx, cfg := range tcs {
@@ -47,11 +48,18 @@ func TestBestEffort(t *testing.T) {
 					// We only want BestEffort to do work when told; the test
 					// rig uses a counter to generate timestamps.
 					seqFixture.BestEffort.SetTimeSource(hlc.Zero)
-					next, err := seqFixture.Staging.Wrap(fixture.Context, seqFixture.Core)
+
+					var err error
+					var seq sequencer.Sequencer = seqFixture.Core
+					if cfg.DisableStaging {
+						seq, err = seqFixture.Buffer.Wrap(fixture.Context, seq)
+					} else {
+						seq, err = seqFixture.Staging.Wrap(fixture.Context, seq)
+					}
 					require.NoError(t, err)
-					next, err = seqFixture.BestEffort.Wrap(fixture.Context, next)
+					seq, err = seqFixture.BestEffort.Wrap(fixture.Context, seq)
 					require.NoError(t, err)
-					return next
+					return seq
 				},
 				func(t *testing.T, check *seqtest.Check) {})
 		})

@@ -50,7 +50,7 @@ var Set = wire.NewSet(
 func ProvideConn(
 	ctx *stopper.Context,
 	acc *apply.Acceptor,
-	buffer *buffer.Buffer,
+	buffer *buffer.Shim,
 	chaos *chaos.Chaos,
 	config *Config,
 	core *core.Core,

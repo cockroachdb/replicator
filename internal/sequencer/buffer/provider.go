@@ -25,6 +25,6 @@ import (
 var Set = wire.NewSet(ProvideBuffer)
 
 // ProvideBuffer is called by Wire.
-func ProvideBuffer(cfg *sequencer.Config) *Buffer {
-	return &Buffer{cfg: cfg}
+func ProvideBuffer(cfg *sequencer.Config) *Shim {
+	return &Shim{cfg: cfg}
 }

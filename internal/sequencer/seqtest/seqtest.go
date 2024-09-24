@@ -44,7 +44,7 @@ type Fixture struct {
 	*all.Fixture
 
 	BestEffort *besteffort.BestEffort
-	Buffer     *buffer.Buffer
+	Buffer     *buffer.Shim
 	Chaos      *chaos.Chaos
 	Core       *core.Core
 	Immediate  *immediate.Immediate
