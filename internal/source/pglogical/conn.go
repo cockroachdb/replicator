@@ -44,8 +44,6 @@ import (
 // responsible for receiving replication messages and replying with
 // status updates.
 type Conn struct {
-	// The destination for writes.
-	acceptor types.TemporalAcceptor
 	// Columns, as ordered by the source database.
 	columns *ident.TableMap[[]types.ColData]
 	// Persistent storage for WAL data.
@@ -64,49 +62,69 @@ type Conn struct {
 	standbyTimeout time.Duration
 	// Access to the staging cluster.
 	stagingDB *types.StagingPool
-	// Progress reports from the underlying sequencer.
-	stat *notify.Var[sequencer.Stat]
 	// The destination for writes.
 	target ident.Schema
+	// The memo key that holds the WAL offset.
+	walMemoKey string
 	// Holds the guaranteed-committed LSN.
 	walOffset notify.Var[pglogrepl.LSN]
 }
 
 // Start launches goroutines into the context.
-func (c *Conn) Start(ctx *stopper.Context) error {
+func (c *Conn) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 	// Call this first to load the previous offset. We want to reset our
 	// state before starting the main copier routine.
-	if err := c.persistWALOffset(ctx); err != nil {
-		return err
+	if err := c.loadWALOffset(ctx); err != nil {
+		return nil, err
 	}
+
+	// Small channel for backpressure.
+	ret := make(chan *types.BatchCursor, 2)
 
 	// Start a process to copy data to the target.
 	ctx.Go(func(ctx *stopper.Context) error {
+		defer close(ret)
 		for !ctx.IsStopping() {
-			if err := c.copyMessages(ctx); err != nil {
-				log.WithError(err).Warn("error while copying messages; will retry")
+			if err := c.copyMessages(ctx, ret); err != nil {
+				cursor := &types.BatchCursor{Error: err}
 				select {
+				case ret <- cursor:
 				case <-ctx.Stopping():
-				case <-time.After(100 * time.Millisecond):
 				}
+				return nil
 			}
 		}
 		return nil
 	})
-	// Sync the sequencer's progress back to our LSN value.
+
+	return ret, nil
+}
+
+// ReportProgress reports the sequencer's progress
+func (c *Conn) ReportProgress(ctx *stopper.Context, stat *notify.Var[sequencer.Stat]) error {
+	// Sync the sequencer's progress back to our LSN value and keep the
+	// memo table up to date.
 	ctx.Go(func(ctx *stopper.Context) error {
 		// Inner callback returns nil.
-		_, _ = stopvar.DoWhenChanged(ctx, nil, c.stat,
+		_, _ = stopvar.DoWhenChanged(ctx, nil, stat,
 			func(ctx *stopper.Context, old, next sequencer.Stat) error {
 				oldProgress := sequencer.CommonProgress(old).Max()
 				progress := sequencer.CommonProgress(next).Max()
 				// Debounce intermediate progress updates (e.g. partial
 				// table progress).
-				if hlc.Compare(progress, oldProgress) > 0 {
-					lsn := progress.External().(pglogrepl.LSN)
-					log.Debugf("progressed to LSN: %s", lsn)
-					c.walOffset.Set(lsn)
+				if hlc.Compare(progress, oldProgress) <= 0 {
+					return nil
 				}
+				lsn := progress.External().(pglogrepl.LSN)
+				log.Debugf("progressed to LSN: %s", lsn)
+				c.walOffset.Set(lsn)
+
+				if err := c.memo.Put(ctx, c.stagingDB, c.walMemoKey, []byte(lsn.String())); err == nil {
+					log.Tracef("stored WAL offset %s: %s", c.walMemoKey, lsn)
+				} else {
+					log.WithError(err).Warn("could not persist LSN offset")
+				}
+
 				return nil
 			})
 		return nil
@@ -115,11 +133,12 @@ func (c *Conn) Start(ctx *stopper.Context) error {
 	return nil
 }
 
-// accumulateBatch folds replication messages into the batch and sends it to
-// the acceptor when a complete transaction has been read. The returned
-// batch should be passed to the next invocation of accumulateBatch.
+// accumulateBatch folds replication messages into the batch and sends
+// it to the channel when a complete transaction has been read. Any
+// returned batch should be passed to the next invocation of
+// accumulateBatch.
 func (c *Conn) accumulateBatch(
-	ctx *stopper.Context, msg pglogrepl.Message, batch *types.TemporalBatch,
+	ctx *stopper.Context, msg pglogrepl.Message, batch *types.TemporalBatch, out chan<- *types.BatchCursor,
 ) (*types.TemporalBatch, error) {
 	log.Tracef("message %T", msg)
 	switch msg := msg.(type) {
@@ -146,8 +165,14 @@ func (c *Conn) accumulateBatch(
 			emptyTransactionCount.Inc()
 			log.Trace("skipping empty transaction")
 		} else {
-			if err := c.acceptor.AcceptTemporalBatch(ctx, batch, &types.AcceptOptions{}); err != nil {
-				return nil, err
+			cursor := &types.BatchCursor{
+				Batch:    batch,
+				Progress: hlc.RangeIncluding(hlc.Zero(), batch.Time),
+			}
+			select {
+			case out <- cursor:
+			case <-ctx.Stopping():
+				return nil, nil
 			}
 		}
 		return nil, nil
@@ -177,7 +202,7 @@ func (c *Conn) accumulateBatch(
 
 // copyMessages is the main replication loop. It will open a connection
 // to the source, accumulate messages, and commit data to the target.
-func (c *Conn) copyMessages(ctx *stopper.Context) error {
+func (c *Conn) copyMessages(ctx *stopper.Context, out chan<- *types.BatchCursor) error {
 	replConn, err := pgconn.ConnectConfig(ctx, c.sourceConfig)
 	if err != nil {
 		return errors.WithStack(err)
@@ -279,7 +304,7 @@ func (c *Conn) copyMessages(ctx *stopper.Context) error {
 				}).Debug("xlog data")
 
 				// Update our accumulator with the received message.
-				batch, err = c.accumulateBatch(ctx, logicalMsg, batch)
+				batch, err = c.accumulateBatch(ctx, logicalMsg, batch, out)
 				if err != nil {
 					return err
 				}
@@ -417,12 +442,9 @@ func (c *Conn) onRelation(msg *pglogrepl.RelationMessage) {
 	}).Trace("learned relation")
 }
 
-// persistWALOffset loads an existing value from memo into walOffset. It
-// will also start a goroutine in the stopper to occasionally write an
-// updated value back to the memo.
-func (c *Conn) persistWALOffset(ctx *stopper.Context) error {
-	key := fmt.Sprintf("pglogical-wal-offset-%s", c.target.Raw())
-	found, err := c.memo.Get(ctx, c.stagingDB, key)
+// loadWALOffset loads an existing value from memo into walOffset and initializes the local clock.
+func (c *Conn) loadWALOffset(ctx *stopper.Context) error {
+	found, err := c.memo.Get(ctx, c.stagingDB, c.walMemoKey)
 	if err != nil {
 		return err
 	}
@@ -435,28 +457,6 @@ func (c *Conn) persistWALOffset(ctx *stopper.Context) error {
 		c.walOffset.Set(lsn)
 	}
 
-	store := func(ctx context.Context, lsn pglogrepl.LSN) {
-		if err := c.memo.Put(ctx, c.stagingDB, key, []byte(lsn.String())); err == nil {
-			log.Tracef("stored WAL offset %s: %s", key, lsn)
-		} else {
-			log.WithError(err).Warn("could not persist LSN offset")
-		}
-	}
-	// Keep the memo table up to date.
-	ctx.Go(func(ctx *stopper.Context) error {
-		_, err := stopvar.DoWhenChanged(ctx, lsn, &c.walOffset,
-			func(ctx *stopper.Context, _, lsn pglogrepl.LSN) error {
-				store(ctx, lsn)
-				return nil
-			})
-		return err
-	})
-	// Make a final update on the way out.
-	ctx.Defer(func() {
-		last, _ := c.walOffset.Get()
-		// Use background because the stopper has stopped.
-		store(context.Background(), last)
-	})
 	return nil
 }
 

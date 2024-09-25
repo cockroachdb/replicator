@@ -24,7 +24,6 @@ import (
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	scriptRuntime "github.com/cockroachdb/replicator/internal/script"
-	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
@@ -46,7 +45,6 @@ func Start(*stopper.Context, *Config) (*PGLogical, error) {
 		wire.FieldsOf(new(*Config), "Script"),
 		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Staging", "Target"),
 		Set,
-		buffer.Set,
 		chaos.Set,
 		core.Set,
 		diag.New,

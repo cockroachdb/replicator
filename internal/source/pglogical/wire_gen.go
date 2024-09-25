@@ -9,7 +9,6 @@ package pglogical
 import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
-	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
@@ -85,7 +84,6 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	sequencerConfig := &eagerConfig.Sequencer
-	bufferBuffer := buffer.ProvideBuffer(sequencerConfig)
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
@@ -100,7 +98,7 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	coreCore := core.ProvideCore(sequencerConfig, typesLeases, schedulerScheduler, targetPool)
 	rekey := decorators.ProvideRekey(watchers)
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	conn, err := ProvideConn(context, acceptor, bufferBuffer, chaosChaos, config, coreCore, memoMemo, rekey, sequencer, stagingPool, watchers)
+	conn, err := ProvideConn(context, acceptor, chaosChaos, config, coreCore, memoMemo, rekey, sequencer, stagingPool, watchers)
 	if err != nil {
 		return nil, err
 	}

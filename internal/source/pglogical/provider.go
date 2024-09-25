@@ -17,11 +17,12 @@
 package pglogical
 
 import (
+	"fmt"
+
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	scriptRT "github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
-	"github.com/cockroachdb/replicator/internal/sequencer/buffer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/decorators"
@@ -50,7 +51,6 @@ var Set = wire.NewSet(
 func ProvideConn(
 	ctx *stopper.Context,
 	acc *apply.Acceptor,
-	buffer *buffer.Shim,
 	chaos *chaos.Chaos,
 	config *Config,
 	core *core.Core,
@@ -106,12 +106,20 @@ func ProvideConn(
 	sourceConfig := source.Config().Config.Copy()
 	sourceConfig.RuntimeParams["replication"] = "database"
 
-	seq := sequencer.Sequencer(core)
-	// Use an in-memory buffer for staging.
-	seq, err = buffer.Wrap(ctx, seq)
-	if err != nil {
-		return nil, err
+	conn := &Conn{
+		columns:         &ident.TableMap[[]types.ColData]{},
+		memo:            memo,
+		publicationName: config.Publication,
+		relations:       make(map[uint32]ident.Table),
+		slotName:        config.Slot,
+		sourceConfig:    sourceConfig,
+		standbyTimeout:  config.StandbyTimeout,
+		stagingDB:       stagingPool,
+		target:          config.TargetSchema,
+		walMemoKey:      fmt.Sprintf("pglogical-wal-offset-%s", config.TargetSchema.Raw()),
 	}
+
+	seq := sequencer.Sequencer(core)
 	// Handle REPLICA IDENTITY FULL by rekeying the mutations based on
 	// destination table before they hit the buffer. This ensures the
 	// transaction scheduler is able to guarantee ordering invariants.
@@ -127,9 +135,10 @@ func ProvideConn(
 	if err != nil {
 		return nil, err
 	}
-	connAcceptor, statVar, err := seq.Start(ctx, &sequencer.StartOptions{
-		Bounds:   notify.VarOf(hlc.RangeEmpty()), // Gating by checkpoint not required.
-		Delegate: types.OrderedAcceptorFrom(acc, watchers),
+	_, statVar, err := seq.Start(ctx, &sequencer.StartOptions{
+		BatchReader: conn,
+		Bounds:      notify.VarOf(hlc.RangeEmpty()), // Gating by checkpoint not required.
+		Delegate:    types.OrderedAcceptorFrom(acc, watchers),
 		Group: &types.TableGroup{
 			Name:      ident.New(config.TargetSchema.Raw()),
 			Enclosing: config.TargetSchema,
@@ -142,20 +151,11 @@ func ProvideConn(
 		return nil, err
 	}
 
-	conn := &Conn{
-		acceptor:        connAcceptor,
-		columns:         &ident.TableMap[[]types.ColData]{},
-		memo:            memo,
-		publicationName: config.Publication,
-		relations:       make(map[uint32]ident.Table),
-		slotName:        config.Slot,
-		sourceConfig:    sourceConfig,
-		standbyTimeout:  config.StandbyTimeout,
-		stagingDB:       stagingPool,
-		stat:            statVar,
-		target:          config.TargetSchema,
+	if err := conn.ReportProgress(ctx, statVar); err != nil {
+		return nil, err
 	}
-	return conn, conn.Start(ctx)
+
+	return conn, nil
 }
 
 // ProvideEagerConfig is a hack to move up the evaluation of the user

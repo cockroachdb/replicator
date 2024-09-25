@@ -21,7 +21,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	sourceSchema, err := ProvideSourceSchema(context, sourcePool)
+	sourceSchema, err := ProvideSourceSchema(context, diagnostics, sourcePool)
 	if err != nil {
 		return nil, err
 	}

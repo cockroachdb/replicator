@@ -45,7 +45,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/workload"
 	"github.com/google/uuid"
 	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -62,6 +61,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	base.XXXSetSourceConn(*pgConnString)
 	all.IntegrationMain(m, all.PostgreSQLName)
 }
 
@@ -117,6 +117,9 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	}
 	ctx := crdbFixture.Context
 
+	sourceSchema := crdbFixture.SourceSchema.Schema()
+	sourceDB := sourceSchema.Idents(nil)[0] // Extract first name part.
+
 	// These generators will act as sources of mutations to apply later
 	// on and will then be used to validate the information in the
 	// target.
@@ -124,8 +127,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	r.NoError(err)
 	sourceGenerators := make([]*workload.GeneratorBase, partitionCount)
 	for i := range sourceGenerators {
-		parent := targetChecker.Parent.Name()
-		child := targetChecker.Child.Name()
+		parent := ident.NewTable(sourceSchema, targetChecker.Parent.Name().Table())
+		child := ident.NewTable(sourceSchema, targetChecker.Child.Name().Table())
 		if fc.partition {
 			part := i % partitionCount
 			parent = ident.NewTable(parent.Schema(),
@@ -137,13 +140,9 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	}
 
 	// Set up the source database with a replication publication and
-	// create the table schema.
-	dbSchema := crdbFixture.TargetSchema.Schema()
-	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
-	pgPool, err := setupPGPool(ctx, dbName)
-	r.NoError(err)
-
-	err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
+	// create the workload table schema.
+	pgPool := crdbFixture.SourcePool
+	err = setupPublication(ctx, pgPool, sourceDB, "ALL TABLES")
 	r.NoError(err)
 
 	// Create the tables in the source database. We may simulate the
@@ -158,15 +157,15 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 		parentSQL, childSQL := all.WorkloadSchema(
 			&all.WorkloadConfig{}, types.ProductPostgreSQL,
 			parent, child)
-		_, err = pgPool.Exec(ctx, parentSQL)
+		_, err = pgPool.ExecContext(ctx, parentSQL)
 		r.NoError(err)
-		_, err = pgPool.Exec(ctx, childSQL)
+		_, err = pgPool.ExecContext(ctx, childSQL)
 		r.NoError(err)
 		if fc.rif {
-			_, err := pgPool.Exec(ctx, fmt.Sprintf(
+			_, err := pgPool.ExecContext(ctx, fmt.Sprintf(
 				`ALTER TABLE %s REPLICA IDENTITY FULL`, parent))
 			r.NoError(err)
-			_, err = pgPool.Exec(ctx, fmt.Sprintf(
+			_, err = pgPool.ExecContext(ctx, fmt.Sprintf(
 				`ALTER TABLE %s REPLICA IDENTITY FULL`, child))
 			r.NoError(err)
 		}
@@ -182,7 +181,7 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	// Build the runtime configuration for the replication loop, which
 	// we'll run as though it were being started from the command line
 	// (i.e. it's going to dial the source and target itself, etc).
-	pubNameRaw := publicationName(dbName).Raw()
+	pubNameRaw := publicationName(sourceDB).Raw()
 	cfg := &Config{
 		Sequencer: sequencer.Config{
 			QuiescentPeriod: 100 * time.Millisecond,
@@ -198,9 +197,9 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 		},
 		Publication:    pubNameRaw,
 		Slot:           pubNameRaw,
-		SourceConn:     *pgConnString + dbName.Raw(),
+		SourceConn:     *pgConnString + sourceDB.Raw(),
 		StandbyTimeout: 100 * time.Millisecond,
-		TargetSchema:   dbSchema,
+		TargetSchema:   crdbFixture.TargetSchema.Schema(),
 	}
 	if fc.chaos {
 		cfg.Sequencer.Chaos = 2
@@ -344,9 +343,7 @@ func TestDataTypes(t *testing.T) {
 	dbSchema := fixture.TargetSchema.Schema()
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
-
-	pgPool, err := setupPGPool(ctx, dbName)
-	r.NoError(err)
+	pgPool := fixture.SourcePool
 
 	err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
 	r.NoError(err)
@@ -354,7 +351,7 @@ func TestDataTypes(t *testing.T) {
 	enumQ := fmt.Sprintf(`CREATE TYPE %s."Simple-Enum" AS ENUM ('foo', 'bar')`, dbSchema)
 	_, err = crdbPool.ExecContext(ctx, enumQ)
 	r.NoError(err, enumQ)
-	_, err = pgPool.Exec(ctx, enumQ)
+	_, err = pgPool.ExecContext(ctx, enumQ)
 	r.NoError(err, enumQ)
 	tcs = append(tcs,
 		tc{
@@ -382,18 +379,18 @@ func TestDataTypes(t *testing.T) {
 
 		// Substitute the created table name to send to postgres.
 		schema = fmt.Sprintf(schema, tgt)
-		if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", tc.name) {
+		if _, err := pgPool.ExecContext(ctx, schema); !a.NoErrorf(err, "PG %s", tc.name) {
 			return
 		}
 
 		// Insert dummy data into the source in a single transaction.
-		tx, err := pgPool.Begin(ctx)
+		tx, err := pgPool.BeginTx(ctx, &sql.TxOptions{})
 		if !a.NoError(err) {
 			return
 		}
 
 		for valIdx, value := range tc.values {
-			if _, err := tx.Exec(ctx,
+			if _, err := tx.ExecContext(ctx,
 				fmt.Sprintf(`INSERT INTO %s VALUES ($1, $2::%s)`, tgt, tc.name), valIdx, value,
 			); !a.NoErrorf(err, "%s %d %s", tc.name, valIdx, value) {
 				return
@@ -401,13 +398,13 @@ func TestDataTypes(t *testing.T) {
 		}
 
 		// Also insert a null value.
-		if _, err := tx.Exec(ctx,
+		if _, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s VALUES ($1, NULL::%s)`, tgt, tc.name), -1,
 		); !a.NoError(err) {
 			return
 		}
 
-		a.NoError(tx.Commit(ctx))
+		a.NoError(tx.Commit())
 	}
 	log.Info(tgts)
 	pubNameRaw := publicationName(dbName).Raw()
@@ -486,11 +483,9 @@ func TestEmptyTransactions(t *testing.T) {
 	ctx := fixture.Context
 	dbSchema := fixture.TargetSchema.Schema()
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
+	pgPool := fixture.SourcePool
 
-	pgPool, err := setupPGPool(ctx, dbName)
-	r.NoError(err)
-
-	rows, err := pgPool.Query(ctx, "select version()")
+	rows, err := pgPool.QueryContext(ctx, "select version()")
 	r.NoError(err)
 	defer rows.Close()
 	var pgVersion string
@@ -513,11 +508,11 @@ func TestEmptyTransactions(t *testing.T) {
 		return
 	}
 
-	if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
+	if _, err := pgPool.ExecContext(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
 		return
 	}
 	var localSchema = fmt.Sprintf("CREATE TABLE %s (k INT PRIMARY KEY, v int)", localTable.Table())
-	if _, err := pgPool.Exec(ctx, localSchema); !a.NoErrorf(err, "PG %s", localTable) {
+	if _, err := pgPool.ExecContext(ctx, localSchema); !a.NoErrorf(err, "PG %s", localTable) {
 		return
 	}
 	// setup replication for only the replTable
@@ -551,18 +546,18 @@ func TestEmptyTransactions(t *testing.T) {
 	r.NoError(err)
 
 	// Insert a value in the replTable
-	if _, err := pgPool.Exec(ctx,
+	if _, err := pgPool.ExecContext(ctx,
 		fmt.Sprintf(`INSERT INTO %s VALUES (1,1)`, replTable)); !a.NoErrorf(err, "%s", replTable) {
 		return
 	}
 
 	// Insert a value in the localTable
-	if _, err := pgPool.Exec(ctx,
+	if _, err := pgPool.ExecContext(ctx,
 		fmt.Sprintf(`INSERT INTO %s VALUES (1,1)`, localTable)); !a.NoErrorf(err, "%s", replTable) {
 		return
 	}
 	// Insert a value in the replTable
-	if _, err := pgPool.Exec(ctx,
+	if _, err := pgPool.ExecContext(ctx,
 		fmt.Sprintf(`INSERT INTO %s VALUES (2,2)`, replTable)); !a.NoErrorf(err, "%s", replTable) {
 		return
 	}
@@ -612,9 +607,7 @@ func TestToast(t *testing.T) {
 	dbSchema := fixture.TargetSchema.Schema()
 	dbName := dbSchema.Idents(nil)[0] // Extract first name part.
 	crdbPool := fixture.TargetPool
-
-	pgPool, err := setupPGPool(ctx, dbName)
-	r.NoError(err)
+	pgPool := fixture.SourcePool
 
 	err = setupPublication(ctx, pgPool, dbName, "ALL TABLES")
 	r.NoError(err)
@@ -640,19 +633,19 @@ func TestToast(t *testing.T) {
 	   s text,
 	   t text,
 	   deleted bool not null default false)`, name)
-	if _, err := pgPool.Exec(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
+	if _, err := pgPool.ExecContext(ctx, schema); !a.NoErrorf(err, "PG %s", schema) {
 		return
 	}
 	// Inserting an initial value. The t,s,j columns contains a large object that
 	// will be toast-ed in the Postgres side.
-	_, err = pgPool.Exec(ctx,
+	_, err = pgPool.ExecContext(ctx,
 		fmt.Sprintf(`INSERT INTO %s VALUES ($1, $2, $3, $4, $5)`, name),
 		1, 0, longObj, longString, longString)
 	r.NoError(err)
 	// We update the "i" column few times without changing the j column.
 	updates := 10
 	for i := 1; i <= updates; i++ {
-		if _, err := pgPool.Exec(ctx,
+		if _, err := pgPool.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET i = $2 WHERE k = $1`, name), 1, i,
 		); !a.NoErrorf(err, "%s", name) {
 			return
@@ -729,50 +722,17 @@ func publicationName(database ident.Ident) ident.Ident {
 	return ident.New(strings.ReplaceAll(database.Raw(), "-", "_"))
 }
 
-func setupPGPool(ctx *stopper.Context, database ident.Ident) (*pgxpool.Pool, error) {
-	baseConn, err := pgxpool.New(ctx, *pgConnString)
-	if err != nil {
-		return nil, err
-	}
-
-	if _, err := baseConn.Exec(ctx,
-		fmt.Sprintf("CREATE DATABASE %s", database),
-	); err != nil {
-		return nil, err
-	}
-
-	// Open the pool, using the newly-created database.
-	next := baseConn.Config().Copy()
-	next.ConnConfig.Database = database.Raw()
-	retConn, err := pgxpool.NewWithConfig(ctx, next)
-	if err != nil {
-		return nil, err
-	}
-	ctx.Defer(func() {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		// Can't drop the default database from its own connection.
-		_, err = baseConn.Exec(ctx, fmt.Sprintf("DROP DATABASE %s", database))
-		if err != nil {
-			log.WithError(err).Error("could not drop database")
-		}
-		baseConn.Close()
-		log.Trace("finished pg pool cleanup")
-	})
-	return retConn, nil
-}
-
 func setupPublication(
-	ctx *stopper.Context, pool *pgxpool.Pool, database ident.Ident, scope string,
+	ctx *stopper.Context, pool *types.SourcePool, database ident.Ident, scope string,
 ) error {
 	pubName := publicationName(database)
-	if _, err := pool.Exec(ctx,
+	if _, err := pool.ExecContext(ctx,
 		fmt.Sprintf("CREATE PUBLICATION %s FOR %s", pubName, scope),
 	); err != nil {
 		return err
 	}
 
-	if _, err := pool.Exec(ctx,
+	if _, err := pool.ExecContext(ctx,
 		"SELECT pg_create_logical_replication_slot($1, 'pgoutput')",
 		pubName.Raw(),
 	); err != nil {
@@ -781,16 +741,14 @@ func setupPublication(
 	ctx.Defer(func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := pool.Exec(ctx, "SELECT pg_drop_replication_slot($1)", pubName.Raw())
+		_, err := pool.ExecContext(ctx, "SELECT pg_drop_replication_slot($1)", pubName.Raw())
 		if err != nil {
 			log.WithError(err).Error("could not drop replication slot")
 		}
-		_, err = pool.Exec(ctx, fmt.Sprintf("DROP PUBLICATION %s", pubName))
+		_, err = pool.ExecContext(ctx, fmt.Sprintf("DROP PUBLICATION %s", pubName))
 		if err != nil {
 			log.WithError(err).Error("could not drop publication")
 		}
-		pool.Close()
-
 		log.Trace("finished pg pool cleanup")
 	})
 	return nil

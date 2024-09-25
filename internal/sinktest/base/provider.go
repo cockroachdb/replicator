@@ -90,6 +90,10 @@ func init() {
 		"the connection string to use for the target db")
 }
 
+func XXXSetSourceConn(conn string) {
+	sourceConn = &conn
+}
+
 // TestSet is used by wire.
 var TestSet = wire.NewSet(
 	ProvideContext,
@@ -303,11 +307,17 @@ func ProvideTargetPool(
 // ProvideSourceSchema create a globally-unique container for tables in
 // the source database.
 func ProvideSourceSchema(
-	ctx *stopper.Context, pool *types.SourcePool,
+	ctx *stopper.Context, diags *diag.Diagnostics, pool *types.SourcePool,
 ) (sinktest.SourceSchema, error) {
 	sch, err := provideSchema(ctx, pool, "src")
+	if err != nil {
+		return sinktest.SourceSchema{}, err
+	}
 	log.Infof("source schema: %s", sch)
-	return sinktest.SourceSchema(sch), err
+	if err := maybeReconnect(ctx, diags, (*types.TargetPool)(pool), sch, nil); err != nil {
+		return sinktest.SourceSchema{}, err
+	}
+	return sinktest.SourceSchema(sch), nil
 }
 
 // ProvideTargetSchema create a globally-unique container for tables in
@@ -319,11 +329,21 @@ func ProvideTargetSchema(
 	stmts *types.TargetStatements,
 ) (sinktest.TargetSchema, error) {
 	sch, err := provideSchema(ctx, pool, "tgt")
-	ret := sinktest.TargetSchema(sch)
 	if err != nil {
-		return ret, err
+		return sinktest.TargetSchema{}, err
 	}
 	log.Infof("target schema: %s", sch)
+	if err := maybeReconnect(ctx, diags, pool, sch, stmts); err != nil {
+		return sinktest.TargetSchema{}, err
+	}
+	return sinktest.TargetSchema(sch), nil
+}
+
+func maybeReconnect(ctx *stopper.Context,
+	diags *diag.Diagnostics,
+	pool *types.TargetPool,
+	schema ident.Schema,
+	stmts *types.TargetStatements) error {
 
 	// In PostgresSQL, connections are tightly coupled to the target
 	// database.  Cross-database queries are generally unsupported, as
@@ -336,39 +356,43 @@ func ProvideTargetSchema(
 	// that it's associated with the newly-constructed database
 	// connection.
 	if pool.Info().Product == types.ProductPostgreSQL {
-		db, _ := sch.Split()
+		db, _ := schema.Split()
 		conn := fmt.Sprintf("%s/%s", pool.ConnectionString, db.Raw())
 		next, err := stdpool.OpenPgxAsTarget(ctx, conn,
 			stdpool.WithDiagnostics(diags, "target_reopened"))
 		if err != nil {
-			return sinktest.TargetSchema{}, err
+			return err
 		}
 
-		nextCache := ProvideTargetStatements(ctx, next)
 		pool.ConnectionString = conn
 		pool.DB = next.DB
-		stmts.Cache = nextCache.Cache
+		if stmts != nil {
+			nextCache := ProvideTargetStatements(ctx, next)
+			stmts.Cache = nextCache.Cache
+		}
 	} else if pool.Info().Product == types.ProductOracle {
 		// Similar to the above, we want to reconnect as something other
 		// than the system user the test stack is initialized with.
 		u, err := url.Parse(pool.ConnectionString)
 		if err != nil {
-			return sinktest.TargetSchema{}, errors.Wrap(err, pool.ConnectionString)
+			return errors.Wrap(err, pool.ConnectionString)
 		}
-		u.User = url.UserPassword(sch.Raw(), DummyPassword)
+		u.User = url.UserPassword(schema.Raw(), DummyPassword)
 		conn := u.String()
 
 		next, err := stdpool.OpenOracleAsTarget(ctx, conn,
 			stdpool.WithDiagnostics(diags, "target_reopened"))
 		if err != nil {
-			return sinktest.TargetSchema{}, err
+			return err
 		}
-		nextCache := ProvideTargetStatements(ctx, next)
 		pool.ConnectionString = conn
 		pool.DB = next.DB
-		stmts.Cache = nextCache.Cache
+		if stmts != nil {
+			nextCache := ProvideTargetStatements(ctx, next)
+			stmts.Cache = nextCache.Cache
+		}
 	}
-	return ret, nil
+	return nil
 }
 
 // ProvideTargetStatements is called by Wire to construct a

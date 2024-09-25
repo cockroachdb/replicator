@@ -36,7 +36,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	stagingPool := baseFixture.StagingPool
 	watchers := fixture.Watchers
 	bestEffort := besteffort.ProvideBestEffort(config, schedulerScheduler, stagers, stagingPool, watchers)
-	bufferBuffer := buffer.ProvideBuffer(config)
+	shim := buffer.ProvideBuffer(config)
 	chaosChaos := &chaos.Chaos{
 		Config: config,
 	}
@@ -64,7 +64,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 	seqtestFixture := &Fixture{
 		Fixture:    fixture,
 		BestEffort: bestEffort,
-		Buffer:     bufferBuffer,
+		Buffer:     shim,
 		Chaos:      chaosChaos,
 		Core:       coreCore,
 		Immediate:  immediateImmediate,
