@@ -1,76 +1,35 @@
-// Copyright 2024 The Cockroach Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-//
-// SPDX-License-Identifier: Apache-2.0
-
 package oraclelogminer
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"time"
 
-	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
-	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/source/oraclelogminer/scn"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
-// DB wraps the connection pool to the oracle source with applicator-related structs to the target.
-type DB struct {
-	*types.SourcePool
+var _ types.BatchReader = (*logMinerReader)(nil)
 
-	// Progress reports from the underlying sequencer.
-	stat *notify.Var[sequencer.Stat]
-
+// TODO(janexing): should I directly have DB implement the Read() method?
+type logMinerReader struct {
+	sourcePool   *types.SourcePool
+	initialSCN   scn.SCN
+	sourceSchema ident.Schema
+	targetSchema ident.Schema
+	pullInterval time.Duration
 	// Ensure the timestamps we generate always march forward.
 	monotonic hlc.Clock
-
-	logReader *logMinerReader
-	// The destination for writes.
-	acceptor types.TemporalAcceptor
-	// The connector configuration.
-	config *Config
-	// Access to the target database.
-	targetDB *types.TargetPool
-
-	// Holds the guaranteed-committed SCN.
-	walOffset notify.Var[*scn.SCN]
 }
 
-var _ diag.Diagnostic = (*DB)(nil)
-
-// Diagnostic implements [diag.Diagnostic].
-// TODO(janexing): figure out the fields to fill in here.
-func (db *DB) Diagnostic(_ context.Context) any {
-	return map[string]any{}
-}
-
-// outputMessage periodically pulls from the logMiner, parses the logs
-// into mutations and batches the mutations based on their transaction
-// ID, and push it to the out channel. All mutations that belong to the
-// same source transaction will be grouped into the same temporal batch.
-func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor) {
-	// Create a ticker that triggers every interval.
-	ticker := time.NewTicker(db.config.LogMinerPullInterval)
+func (l *logMinerReader) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor) {
+	// Create a ticker that triggers every second
+	ticker := time.NewTicker(l.pullInterval)
 	defer ticker.Stop()
 
 	startSCN := scn.SCN{}
@@ -80,10 +39,10 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 		select {
 		case <-ticker.C:
 			if startSCN.IsEmpty() {
-				startSCN = db.config.SCN
+				startSCN = l.initialSCN
 			}
 			// TODO(janexing): make the changefeed acquiring executed IN PARALLEL TO the applying logic.
-			logs, nextStartSCN, err := readLogsOnce(ctx, db.SourcePool, startSCN, db.config.SourceSchema.Raw())
+			logs, nextStartSCN, err := readLogsOnce(ctx, l.sourcePool, startSCN, l.sourceSchema.Raw())
 			if err != nil {
 				out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to obtain changefeed logs")}
 				return
@@ -93,6 +52,8 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 			// Logs with the same XID (transaction ID) will be put into the same temporalBatch.
 			// TODO(janexing): set the commit SCN as the ext time for this temporal batch.
 			temporalBatch := &types.TemporalBatch{}
+			// Once all logs are processed, the batches are sent to conn acceptor one by one.
+			temporalBatches := make([]*types.TemporalBatch, 0)
 
 			var prevXID, currXID []byte
 			for _, lg := range logs {
@@ -111,6 +72,7 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 				// If the transaction ID changed, push the current temporal batch to the collection,
 				// and create a new batch for the new transaction ID.
 				if !bytes.Equal(currXID, prevXID) {
+					temporalBatches = append(temporalBatches, temporalBatch)
 					temporalBatch = &types.TemporalBatch{}
 				}
 
@@ -120,7 +82,7 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 				// delete stmt that logminer provides there might not explicitly contains the pk
 				// values, but just the rowid.
 				if lg.Operation != OperationInsert {
-					pkNames, err := GetPKNames(ctx, db.SourcePool, lg.SegOwner, lg.TableName)
+					pkNames, err := GetPKNames(ctx, l.sourcePool, lg.SegOwner, lg.TableName)
 					if err != nil {
 						out <- &types.BatchCursor{Error: err}
 						return
@@ -154,39 +116,35 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 				}
 				mut.Key = rowIDRaw
 
-				// TODO(janexing): we only set the external of time for
-				// mutation and temporal batch, without taking care of
-				// nano and logical. Is this sufficient?
-				if temporalBatch.Time.External() == nil {
-					temporalBatch.Time = db.monotonic.External(lg.CommitSCN)
+				if temporalBatch.Time.External() == 0 {
+					temporalBatch.Time = l.monotonic.External(lg.CommitSCN)
 				}
 				mut.Time = temporalBatch.Time
 
-				targetTbl := ident.NewTable(db.config.TargetSchema, ident.New(lg.TableName))
+				targetTbl := ident.NewTable(l.targetSchema, ident.New(lg.TableName))
 				if err := temporalBatch.Accumulate(targetTbl, mut); err != nil {
-					out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to accumulate mutation to batch")}
+					out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to accumulate mut to batch")}
 					return
 				}
 			}
 
-			// TODO(janexing): figure out what else to include in the batch cursor.
-			out <- &types.BatchCursor{
-				Batch:    temporalBatch,
-				Progress: hlc.RangeIncluding(hlc.Zero(), temporalBatch.Time),
+			if temporalBatch.Time.External() != 0 {
+				temporalBatches = append(temporalBatches, temporalBatch)
 			}
+
+			// TODO(janexing): figure out what else to include in the batch cursor.
+			out <- &types.BatchCursor{Batch: temporalBatch}
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-var _ types.BatchReader = (*DB)(nil)
-
-func (db *DB) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+func (l *logMinerReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 	readChan := make(chan *types.BatchCursor, 2)
 
 	ctx.Go(func(ctx *stopper.Context) error {
-		db.outputMessage(ctx, readChan)
+		l.outputMessage(ctx, readChan)
 		return nil
 	})
 	return readChan, nil

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/source/oraclelogminer/scn"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -140,12 +141,12 @@ const (
 // LogMiner session, and returns it. This returned SCN will serve as the
 // starting SCN for the subsequent readLogsOnce call.
 func readLogsOnce(
-	ctx *stopper.Context, db *types.SourcePool, currSCN SCN, sourceSchema string,
-) ([]RedoLog, SCN, error) {
+	ctx *stopper.Context, db *types.SourcePool, currSCN scn.SCN, sourceSchema string,
+) ([]RedoLog, scn.SCN, error) {
 	res := make([]RedoLog, 0)
 	logFileGroups := make([]LogFileGroup, 0)
 
-	endSCNLogMinerExec := SCN{}
+	endSCNLogMinerExec := scn.SCN{}
 
 	rows, err := db.QueryContext(ctx, getAllLogFilesStmt)
 	if err != nil {
@@ -204,7 +205,7 @@ func readLogsOnce(
 
 	// Have the logminer start analyze the uploaded logs.
 	if _, err := db.ExecContext(ctx, startLogMiner, currSCN.Val, endSCNLogMinerExecStr.String); err != nil {
-		return nil, endSCNLogMinerExec, errors.Wrapf(err, "failed to start the logminer for starting scn %s", currSCN.Val)
+		return nil, endSCNLogMinerExec, errors.Wrapf(err, "failed to start the logminer for starting scn %s", currSCN)
 	}
 
 	q := fmt.Sprintf(queryRedoLogs, sourceSchema)
@@ -212,7 +213,7 @@ func readLogsOnce(
 	redoLogRows, err := db.QueryContext(ctx, q)
 	log.Debugf("getting redo log rows: %s", q)
 	if err != nil {
-		return nil, endSCNLogMinerExec, errors.Wrapf(err, "failed to read from V$LOGMNR_CONTENTS for log content with start scn %s", currSCN.Val)
+		return nil, endSCNLogMinerExec, errors.Wrapf(err, "failed to read from V$LOGMNR_CONTENTS for log content with start scn %s", currSCN)
 	}
 
 	defer redoLogRows.Close()
@@ -306,6 +307,9 @@ func readLogsOnce(
 	}
 
 	log.Infof("redo logs read until SCN %s", endSCNLogMinerExecStr.String)
-	endSCNLogMinerExec.Val = endSCNLogMinerExecStr.String
+	endSCNLogMinerExec, err = scn.ParseStringToSCN(endSCNLogMinerExecStr.String)
+	if err != nil {
+		return nil, scn.SCN{}, err
+	}
 	return res, endSCNLogMinerExec, nil
 }

@@ -57,7 +57,37 @@ func Compare(a, b Time) int {
 	if c := a.nanos - b.nanos; c != 0 {
 		return int(c)
 	}
+
 	return a.logical - b.logical
+	//if c := a.logical - b.logical; c != 0 {
+	//	return c
+	//}
+	//
+	//// TODO(janexing): figure out a more general comparison.
+	//if a.External() != nil && b.External() != nil {
+	//	switch t := a.External().(type) {
+	//	case scn.SCN:
+	//		bSCN, ok := b.External().(scn.SCN)
+	//		if !ok {
+	//			panic(fmt.Sprintf("unknown external type for time comparison %T", t))
+	//		}
+	//		aSCN := t
+	//		return aSCN.Compare(bSCN)
+	//	default:
+	//		panic(fmt.Sprintf("unknown external type for time comparison %T", t))
+	//	}
+	//}
+	//
+	//if a.External() != nil {
+	//	return 1
+	//}
+	//
+	//if b.External() != nil {
+	//	return -1
+	//}
+	//
+	//return 0
+
 }
 
 // From constructs an HLC time from a wall time.

@@ -20,17 +20,20 @@ package oraclelogminer
 import (
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
-	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
+	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	scriptSeq "github.com/cockroachdb/replicator/internal/sequencer/script"
+	"github.com/cockroachdb/replicator/internal/source/oraclelogminer/scn"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/google/wire"
+	log "github.com/sirupsen/logrus"
 )
 
 // Set is used by Wire.
@@ -43,12 +46,13 @@ var Set = wire.NewSet(
 // database. This provider will perform some pre-flight tests on the
 // source database to ensure that replication has been configured.
 // There's a fake dependency on the script loader so that flags can be
+// evaluated first.
 func ProvideDB(
 	ctx *stopper.Context,
 	acc *apply.Acceptor,
 	chaos *chaos.Chaos,
 	config *Config,
-	imm *immediate.Immediate,
+	coreSequencer *core.Core,
 	scriptSeq *scriptSeq.Sequencer,
 	targetPool *types.TargetPool,
 	watchers types.Watchers,
@@ -67,7 +71,7 @@ func ProvideDB(
 	// more robust, enhance the efficiency of apply, because it write to target async.
 	// This allows reading from logminer while the core sequencer is applying mutations async.
 	// Change core seq to accept chan of mut, rather than chan of batch
-	seq, err := scriptSeq.Wrap(ctx, imm)
+	seq, err := scriptSeq.Wrap(ctx, coreSequencer)
 	if err != nil {
 		return nil, err
 	}
@@ -77,9 +81,18 @@ func ProvideDB(
 	}
 
 	// TODO(janexing): take the notify Stats and push the progress of tables into memo.
-	connAcceptor, _, err := seq.Start(ctx, &sequencer.StartOptions{
-		Delegate: types.OrderedAcceptorFrom(acc, watchers),
-		Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
+
+	db := &DB{
+		SourcePool: sourcePool,
+		targetDB:   targetPool,
+		config:     config,
+		walOffset:  notify.Var[*scn.SCN]{},
+	}
+
+	_, stat, err := seq.Start(ctx, &sequencer.StartOptions{
+		BatchReader: db,
+		Delegate:    types.OrderedAcceptorFrom(acc, watchers),
+		Bounds:      &notify.Var[hlc.Range]{}, // Not currently used.
 		Group: &types.TableGroup{
 			Name:      ident.New(config.TargetSchema.Raw()),
 			Enclosing: config.TargetSchema,
@@ -90,14 +103,23 @@ func ProvideDB(
 		return nil, err
 	}
 
-	db := &DB{
-		SourcePool: sourcePool,
-		acceptor:   connAcceptor,
-		targetDB:   targetPool,
-		config:     config,
-	}
+	// Sync the sequencer's progress back to walOff value for SCN.
+	ctx.Go(func(ctx *stopper.Context) error {
+		_, _ = stopvar.DoWhenChanged(ctx, nil, stat, func(ctx *stopper.Context, old, next sequencer.Stat) error {
+			oldProgress := sequencer.CommonProgress(old).Max()
+			progress := sequencer.CommonProgress(next).Max()
+			if hlc.Compare(progress, oldProgress) > 0 {
+				cp := progress.External().(*scn.SCN)
+				log.Infof("progressed to consistent point: %s", cp)
+				db.walOffset.Set(cp)
+			}
 
-	return db, db.Start(ctx)
+			return nil
+		})
+		return nil
+	})
+
+	return db, err
 }
 
 // ProvideEagerConfig is a hack to move up the evaluation of the user
