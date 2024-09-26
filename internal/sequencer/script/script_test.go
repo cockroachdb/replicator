@@ -29,7 +29,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/seqtest"
-	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -40,14 +39,6 @@ import (
 )
 
 func TestUserScriptSequencer(t *testing.T) {
-	for mode := switcher.MinMode; mode <= switcher.MaxMode; mode++ {
-		t.Run(mode.String(), func(t *testing.T) {
-			testUserScriptSequencer(t, mode)
-		})
-	}
-}
-
-func testUserScriptSequencer(t *testing.T, baseMode switcher.Mode) {
 	r := require.New(t)
 
 	// Create a basic test fixture.
@@ -131,18 +122,35 @@ api.configureTable("t_2", {
 		seqCfg,
 		scriptCfg)
 	r.NoError(err)
-	// Fake timestamps in use.
-	seqFixture.BestEffort.SetTimeSource(hlc.Zero)
 
-	base, err := seqFixture.SequencerFor(ctx, baseMode)
-	r.NoError(err)
+	const numEmits = 100
+	endTime := hlc.New(numEmits+1, 0)
+	canned := &sinktest.CannedReader{}
+	_, _, _ = canned.Data.Update(func([]*types.TemporalBatch) ([]*types.TemporalBatch, error) {
+		cannedData := make([]*types.TemporalBatch, numEmits)
+		for i := range cannedData {
+			cannedData[i] = &types.TemporalBatch{
+				Time: hlc.New(int64(i+1), 0), // +1 since zero time is rejected.
+			}
+			r.NoError(cannedData[i].Accumulate(tgts[0],
+				types.Mutation{
+					Data: json.RawMessage(fmt.Sprintf(`{ "k": %d }`, i)),
+					Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, i)),
+					Time: cannedData[i].Time,
+				},
+			))
+		}
+		return cannedData, nil
+	})
+	canned.ProgressTo.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
 
 	bounds := &notify.Var[hlc.Range]{}
-	wrapped, err := seqFixture.Script.Wrap(ctx, base)
+	wrapped, err := seqFixture.Script.Wrap(ctx, seqFixture.Core)
 	r.NoError(err)
-	acc, stats, err := wrapped.Start(ctx, &sequencer.StartOptions{
-		Bounds:   bounds,
-		Delegate: types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
+	stats, err := wrapped.Start(ctx, &sequencer.StartOptions{
+		BatchReader: canned,
+		Bounds:      bounds,
+		Delegate:    types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers),
 		Group: &types.TableGroup{
 			Enclosing: fixture.TargetSchema.Schema(),
 			Name:      ident.New("src1"), // Aligns with configureSource() call.
@@ -150,23 +158,6 @@ api.configureTable("t_2", {
 		},
 	})
 	r.NoError(err)
-
-	const numEmits = 100
-	endTime := hlc.New(numEmits+1, 0)
-	for i := 0; i < numEmits; i++ {
-		r.NoError(acc.AcceptTableBatch(ctx,
-			sinktest.TableBatchOf(
-				tgts[0],
-				hlc.New(int64(i+1), 0), // +1 since zero time is rejected.
-				[]types.Mutation{
-					{
-						Data: json.RawMessage(fmt.Sprintf(`{ "k": %d }`, i)),
-						Key:  json.RawMessage(fmt.Sprintf(`[ %d ]`, i)),
-					},
-				},
-			),
-			&types.AcceptOptions{}))
-	}
 
 	// Make staged mutations eligible for processing.
 	bounds.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
@@ -217,19 +208,24 @@ api.configureTable("t_2", {
 
 	// Verify that deletes are routed to the correct table.
 	endTime = hlc.New(1000*(numEmits+1), 0)
-	for i := 0; i < numEmits; i++ {
-		r.NoError(acc.AcceptTableBatch(ctx,
-			sinktest.TableBatchOf(
-				tgts[0],
-				hlc.New(1000*int64(i+1), 0), // +1 since zero time is rejected.
-				[]types.Mutation{
-					{
-						Key: json.RawMessage(fmt.Sprintf(`[ %d ]`, i)),
-					},
+	_, _, _ = canned.Data.Update(func(data []*types.TemporalBatch) ([]*types.TemporalBatch, error) {
+		for i := range data {
+			data[i] = &types.TemporalBatch{
+				Time: hlc.New(1000*int64(i+1), 0), // +1 since zero time is rejected.
+			}
+			r.NoError(data[i].Accumulate(tgts[0],
+				types.Mutation{
+					Data:     json.RawMessage(fmt.Sprintf(`{ "k": %d }`, i)),
+					Deletion: true,
+					Key:      json.RawMessage(fmt.Sprintf(`[ %d ]`, i)),
+					Time:     data[i].Time,
 				},
-			),
-			&types.AcceptOptions{}))
-	}
+			))
+		}
+		return data, nil
+	})
+	canned.ProgressTo.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
+
 	// Make next batch of mutations eligible for processing.
 	bounds.Set(hlc.RangeIncluding(hlc.Zero(), endTime))
 

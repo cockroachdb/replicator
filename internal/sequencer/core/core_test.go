@@ -27,8 +27,8 @@ import (
 func TestCore(t *testing.T) {
 	seqtest.CheckSequencer(t,
 		&all.WorkloadConfig{
-			DisableAcceptor: true,
-			DisableStaging:  true,
+			DisableFragment:   true, // Delivery whole transactions.
+			DisableRedelivery: true, // Reading should be a one-shot.
 		},
 		func(t *testing.T, fixture *all.Fixture, seqFixture *seqtest.Fixture) sequencer.Sequencer {
 			return seqFixture.Core

@@ -32,11 +32,13 @@ func ProvideStaging(
 	markers *decorators.Marker,
 	stagers types.Stagers,
 	stagingPool *types.StagingPool,
+	watchers types.Watchers,
 ) *Staging {
 	return &Staging{
 		cfg:         cfg,
 		markers:     markers,
 		stagers:     stagers,
 		stagingPool: stagingPool,
+		watchers:    watchers,
 	}
 }

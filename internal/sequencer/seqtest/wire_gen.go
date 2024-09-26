@@ -57,7 +57,7 @@ func NewSequencerFixture(fixture *all.Fixture, config *sequencer.Config, scriptC
 		return nil, err
 	}
 	scriptSequencer := script2.ProvideSequencer(loader, targetPool, watchers)
-	stagingStaging := staging.ProvideStaging(config, marker, stagers, stagingPool)
+	stagingStaging := staging.ProvideStaging(config, marker, stagers, stagingPool, watchers)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingStaging, stagingPool, targetPool)
 	seqtestFixture := &Fixture{
 		Fixture:    fixture,

@@ -53,7 +53,7 @@ var _ sequencer.Sequencer = (*wrapper)(nil)
 // Start injects a userscript shim into the Sequencer stack.
 func (w *wrapper) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
-) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+) (*notify.Var[sequencer.Stat], error) {
 	// Loader is nil if no userscript has been configured.
 	if w.loader == nil {
 		return w.delegate.Start(ctx, opts)
@@ -61,12 +61,12 @@ func (w *wrapper) Start(
 
 	schema, err := opts.Group.Schema()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	scr, err := w.loader.Bind(ctx, schema, opts.Delegate, w.watchers)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Only inject if the source or any tables have a configuration.
@@ -85,7 +85,7 @@ func (w *wrapper) Start(
 
 	watcher, err := w.watchers.Get(opts.Group.Enclosing)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// If the userscript has defined any apply functions, we will
@@ -101,10 +101,16 @@ func (w *wrapper) Start(
 		}
 	}
 
-	// Install the target-phase acceptor into the options chain. This
-	// will be invoked for mutations which have passed through the
-	// sequencer stack.
+	// Install the source reader and target-phase acceptor into the
+	// options chain. This will be invoked for mutations which have
+	// passed through the sequencer stack.
 	opts = opts.Copy()
+	opts.BatchReader = &sourceReader{
+		delegate:       opts.BatchReader,
+		group:          opts.Group,
+		sourceBindings: sourceBindings,
+		watcher:        watcher,
+	}
 	opts.Delegate = types.OrderedAcceptorFrom(&targetAcceptor{
 		delegate:   opts.Delegate,
 		ensureTX:   ensureTX,
@@ -114,21 +120,7 @@ func (w *wrapper) Start(
 	}, w.watchers)
 
 	// Initialize downstream sequencer.
-	acc, stat, err := w.delegate.Start(ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Install the source-phase acceptor. This provides the user with
-	// the opportunity to rewrite mutations before they are presented to
-	// the upstream sequencer.
-	acc = &sourceAcceptor{
-		delegate:       acc,
-		group:          opts.Group,
-		sourceBindings: sourceBindings,
-		watcher:        watcher,
-	}
-	return acc, stat, nil
+	return w.delegate.Start(ctx, opts)
 }
 
 // Unwrap is an informal protocol to return the delegate.

@@ -69,16 +69,16 @@ var _ sequencer.Sequencer = (*Switcher)(nil)
 // Callers must call [Switcher.WithMode] before calling this method.
 func (s *Switcher) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
-) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+) (*notify.Var[sequencer.Stat], error) {
 	mode := s.mode
 	if mode == nil {
-		return nil, nil, errors.New("call WithMode() first")
+		return nil, errors.New("call WithMode() first")
 	}
 	// Ensure the group is ready to go before returning. Otherwise,
 	// the accept methods wouldn't have anywhere to send mutations to.
 	initialMode, _ := mode.Get()
 	if initialMode == ModeUnknown {
-		return nil, nil, errors.New("the mode variable must be set before calling Start")
+		return nil, errors.New("the mode variable must be set before calling Start")
 	}
 
 	g := &groupSequencer{
@@ -89,7 +89,7 @@ func (s *Switcher) Start(
 
 	diagName := fmt.Sprintf("switcher-%s", g.group.Name.Raw())
 	if err := s.diags.Register(diagName, g); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	ctx.Defer(func() {
 		s.diags.Unregister(diagName)

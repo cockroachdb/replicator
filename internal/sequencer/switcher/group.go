@@ -71,7 +71,7 @@ func (g *groupSequencer) Diagnostic(context.Context) any {
 // Start implements [sequencer.Sequencer].
 func (g *groupSequencer) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
-) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+) (*notify.Var[sequencer.Stat], error) {
 	// There's a sanity check in the main Sequencer type to ensure that
 	// a mode has already been set. This ensures that we can return a
 	// ready-to-run instance of the groupSequencer.
@@ -81,7 +81,7 @@ func (g *groupSequencer) Start(
 	err := g.switchModeLocked(ctx, opts, initialMode)
 	g.mu.Unlock()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	ctx.Go(func(ctx *stopper.Context) error {
@@ -103,7 +103,7 @@ func (g *groupSequencer) Start(
 
 		return err
 	})
-	return &acceptor{g}, &g.status, nil
+	return &g.status, nil
 }
 
 func (g *groupSequencer) switchModeLocked(
@@ -145,11 +145,12 @@ func (g *groupSequencer) switchModeLocked(
 	if err != nil {
 		return err
 	}
-	nextAcc, nextStatus, err := nextSeq.Start(g.mu.stopper, opts)
+	nextStatus, err := nextSeq.Start(g.mu.stopper, opts)
 	if err != nil {
 		return err
 	}
-	g.mu.acceptor = nextAcc
+	// XXX reader that switches.
+	// g.mu.acceptor = nextAcc
 
 	// Copy the status out to the persistent notification variable.
 	g.mu.stopper.Go(func(ctx *stopper.Context) error {

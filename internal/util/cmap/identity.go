@@ -34,6 +34,10 @@ func (m identity[K, V]) All() iter.Seq2[K, V] {
 	return maps.All(m)
 }
 
+func (m identity[K, V]) Clear() {
+	clear(m)
+}
+
 func (m identity[K, V]) CopyInto(dest Map[K, V]) {
 	for k, v := range m {
 		dest.Put(k, v)

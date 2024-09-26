@@ -122,6 +122,12 @@ func (b *Bag) All() iter.Seq2[ident.Ident, any] {
 	}
 }
 
+// Clear implements cmap.Map.
+func (b *Bag) Clear() {
+	b.Mapped.Clear()
+	b.Unmapped.Clear()
+}
+
 // CopyInto implements cmap.Map.
 func (b *Bag) CopyInto(dest cmap.Map[ident.Ident, any]) {
 	for k, v := range b.Mapped.All() {

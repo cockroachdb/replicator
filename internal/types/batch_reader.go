@@ -59,6 +59,15 @@ type BatchCursor struct {
 	Progress hlc.Range
 }
 
+// Copy returns a deep copy of the cursor.
+func (c *BatchCursor) Copy() *BatchCursor {
+	cpy := *c
+	if c.Batch != nil {
+		c.Batch = c.Batch.Copy()
+	}
+	return &cpy
+}
+
 // String is for debugging use only.
 func (c *BatchCursor) String() string {
 	var buf strings.Builder

@@ -18,7 +18,7 @@ package seqtest
 
 import (
 	"fmt"
-	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -26,14 +26,13 @@ import (
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
-	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
@@ -43,8 +42,7 @@ import (
 type CheckFlag int
 
 const (
-	checkStage CheckFlag = 1 << iota
-	checkIdempotent
+	checkIdempotent CheckFlag = 1 << iota
 	checkPartitioned
 	checkChaos
 
@@ -56,11 +54,6 @@ const (
 func CheckFlags() []CheckFlag {
 	var ret []CheckFlag
 	for i := checkMin; i < checkMax; i++ {
-		if i.Partitioned() && i.Stage() {
-			// Not a useful combination since remapping would have to
-			// occur before writing data to staging.
-			continue
-		}
 		ret = append(ret, i)
 	}
 	return ret
@@ -76,17 +69,9 @@ func (f CheckFlag) Idempotent() bool { return f&checkIdempotent == checkIdempote
 // do not exist in the target schema.
 func (f CheckFlag) Partitioned() bool { return f&checkPartitioned == checkPartitioned }
 
-// Stage returns true if mutations should be pre-staged before starting
-// the sequencer.
-func (f CheckFlag) Stage() bool { return f&checkStage == checkStage }
-
 func (f CheckFlag) String() string {
 	var sb strings.Builder
-	if f.Stage() {
-		sb.WriteString("stage")
-	} else {
-		sb.WriteString("direct")
-	}
+	sb.WriteString("check")
 	if f.Idempotent() {
 		sb.WriteString("-idempotent")
 	} else {
@@ -112,8 +97,8 @@ func CheckSequencer(
 ) {
 	const transactions = 1_000
 	check := func(t *testing.T, flags CheckFlag) {
-		if workloadCfg.DisableStaging && flags.Stage() {
-			t.Log("staging disabled by WorkloadConfig")
+		if workloadCfg.DisableRedelivery && !flags.Idempotent() {
+			t.Log("must be idempotent")
 			return
 		}
 		r := require.New(t)
@@ -174,12 +159,6 @@ api.configureSource("%[1]s", {
 			Sequencer:    seq,
 			Transactions: transactions,
 		}
-		if flags.Stage() {
-			basic.Stage = 0.5
-		}
-		if workloadCfg.DisableAcceptor {
-			basic.Stage = 1
-		}
 		basic.Check(ctx, t, workloadCfg)
 		if post != nil {
 			post(t, basic)
@@ -213,9 +192,6 @@ type Check struct {
 	Partitioned bool
 	// The Sequencer under test.
 	Sequencer sequencer.Sequencer
-	// A percentage of data to write to staging instead of to the
-	// sequencer's acceptor.
-	Stage float32
 	// The total number of transactions to apply.
 	Transactions int
 }
@@ -234,27 +210,8 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 		generator.GenerateInto(testData, hlc.New(int64(i+1), 0))
 	}
 
-	startOpts := &sequencer.StartOptions{
-		Bounds:   &c.Bounds,
-		Delegate: types.OrderedAcceptorFrom(c.Fixture.ApplyAcceptor, c.Fixture.Watchers),
-		Group:    group,
-	}
-	if cfg.DisableAcceptor {
-		startOpts.BatchReader = &dummyReader{
-			batch:      testData,
-			progressTo: generator.Range(),
-		}
-	}
-
-	seqAcc, stats, err := c.Sequencer.Start(ctx, startOpts)
-	r.NoError(err)
-
-	now := time.Now()
-
-	if cfg.DisableAcceptor {
-		// The sequencer should pull the data.
-	} else if c.Partitioned {
-		// Shuffle the test data into multiple source tables.
+	// Shuffle the test data into multiple source tables.
+	if c.Partitioned {
 		count := 0
 		partitionedBatch := &types.MultiBatch{}
 		r.NoError(testData.CopyInto(types.AccumulatorFunc(
@@ -266,71 +223,67 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 				return partitionedBatch.Accumulate(partition, mut)
 			})))
 		testData = partitionedBatch
+	}
 
-	retryPartitioned:
-		if err := seqAcc.AcceptMultiBatch(ctx, testData, &types.AcceptOptions{}); err != nil {
-			if errors.Is(err, chaos.ErrChaos) {
-				goto retryPartitioned
-			}
-			r.NoError(err)
+	// We're going to fragment the batch to simulate data being received
+	// piecemeal by multiple instances of Replicator.
+	if c.Fragment {
+		fragments, err := Fragment(testData, c.Transactions/10)
+		r.NoError(err)
+
+		testData = &types.MultiBatch{
+			ByTime: make(map[hlc.Time]*types.TemporalBatch, c.Transactions),
 		}
-
-	} else {
-		// We're going to fragment the batch to simulate data being
-		// received piecemeal by multiple instances of Replicator.
-		var fragments []*types.MultiBatch
-		if c.Fragment {
-			fragments, err = Fragment(testData, c.Transactions/10)
-			r.NoError(err)
-		} else {
-			fragments = []*types.MultiBatch{testData}
-		}
-
 		for _, fragment := range fragments {
-			// We may write some fraction of the data directly to the
-			// staging tables. This simulates having another Replicator
-			// instance receiving data behind our backs.
-			if c.Stage > 0 && rand.Float32() < c.Stage {
-				for _, temp := range fragment.Data {
-					for table, batch := range temp.Data.All() {
-						stager, err := c.Fixture.Stagers.Get(ctx, table)
-						r.NoError(err)
-						r.NoError(stager.Stage(ctx, c.Fixture.StagingPool, batch.Data))
-					}
-				}
+			testData.Data = append(testData.Data, fragment.Data...)
+		}
+		slices.SortFunc(testData.Data, func(a, b *types.TemporalBatch) int {
+			return hlc.Compare(a.Time, b.Time)
+		})
+		for _, temp := range testData.Data {
+			testData.ByTime[temp.Time] = temp
+		}
+	}
+
+	// We're also going to send a subset of stale data to simulate
+	// non-idempotent replay from a changefeed.
+	if !c.Idempotent {
+		for idx, temporal := range testData.Data {
+			if idx%10 != 1 {
 				continue
 			}
 
-		retryFragment:
-			if err := seqAcc.AcceptMultiBatch(ctx, fragment,
-				&types.AcceptOptions{}); err != nil {
-				if errors.Is(err, chaos.ErrChaos) {
-					goto retryFragment
-				}
-				r.NoError(err)
-			}
-		}
-
-		// We're also going to send a subset of stale data to simulate
-		// non-idempotent replay from a changefeed.
-		if !c.Idempotent {
-			for idx, temporal := range testData.Data {
-				if idx%10 != 1 {
-					continue
-				}
-			retryRedeliver:
-				if err := seqAcc.AcceptTemporalBatch(
-					ctx, temporal, &types.AcceptOptions{},
-				); err != nil {
-					if errors.Is(err, chaos.ErrChaos) {
-						goto retryRedeliver
-					}
-					r.NoError(err)
-				}
-			}
+			testData.Data = append(testData.Data, temporal.Copy())
 		}
 	}
-	log.Infof("accepted data in %s", time.Since(now))
+
+	sink := &dummyReader{
+		batch:      testData,
+		progressTo: generator.Range(),
+	}
+	sink.terminal.Set(make(map[*types.TemporalBatch]error, c.Transactions))
+
+	startOpts := &sequencer.StartOptions{
+		BatchReader: sink,
+		Bounds:      &c.Bounds,
+		Delegate:    types.OrderedAcceptorFrom(c.Fixture.ApplyAcceptor, c.Fixture.Watchers),
+		Group:       group,
+		Terminal: func(_ *stopper.Context, batch *types.TemporalBatch, err error) error {
+			_, _, _ = sink.terminal.Update(func(m map[*types.TemporalBatch]error) (map[*types.TemporalBatch]error, error) {
+				m[batch] = err
+				return m, nil
+			})
+			return nil
+		},
+	}
+
+	now := time.Now()
+	stats, err := c.Sequencer.Start(ctx, startOpts)
+	r.NoError(err)
+
+	// Wait for all data to have been read out of the sink at least once.
+	r.NoError(stopvar.WaitForValue(ctx, true, &sink.empty))
+	log.Infof("source data consumed in %s", time.Since(now))
 
 	// Set desired range.
 	c.Bounds.Set(generator.Range())
@@ -340,8 +293,22 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 	now = time.Now()
 	r.NoError(generator.WaitForCatchUp(ctx, stats))
 	log.Infof("caught up in an additional %s", time.Since(now))
+
+	// Ensure all generated batches eventually reached a successful
+	// terminal state.
+	_, err = sink.terminal.Peek(func(m map[*types.TemporalBatch]error) error {
+		r.Len(m, len(testData.Data))
+		for _, err := range m {
+			r.NoError(err)
+		}
+		return nil
+	})
+	r.NoError(err)
+
+	// Verify target contents.
 	generator.CheckConsistent(ctx, t)
 
+	// Ensure staging tables make sense.
 	for _, table := range []ident.Table{generator.Parent.Name(), generator.Child.Name()} {
 		stager, err := c.Fixture.Stagers.Get(ctx, table)
 		r.NoError(err)
@@ -350,22 +317,34 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 		r.NoError(err, table)
 		r.Zero(ct, table)
 	}
+
 }
 
 // This is a trivial implementation of [types.BatchReader] over canned
 // data.
 type dummyReader struct {
 	batch      *types.MultiBatch
+	empty      notify.Var[bool]
 	progressTo hlc.Range
+	terminal   notify.Var[map[*types.TemporalBatch]error]
 }
 
 var _ types.BatchReader = (*dummyReader)(nil)
 
-func (m *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+func (r *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 	ch := make(chan *types.BatchCursor)
 	ctx.Go(func(ctx *stopper.Context) error {
 		defer close(ch)
-		for _, temp := range m.batch.Data {
+		for _, temp := range r.batch.Data {
+			var send bool
+			_, _ = r.terminal.Peek(func(m map[*types.TemporalBatch]error) error {
+				err, ok := m[temp]
+				send = err != nil || !ok
+				return nil
+			})
+			if !send {
+				continue
+			}
 			cur := &types.BatchCursor{
 				Batch:    temp,
 				Progress: hlc.RangeIncluding(hlc.Zero(), temp.Time),
@@ -377,13 +356,14 @@ func (m *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, err
 			}
 		}
 		// Send progress update.
-		cur := &types.BatchCursor{Progress: m.progressTo}
+		cur := &types.BatchCursor{Progress: r.progressTo}
 		select {
 		case ch <- cur:
 		case <-ctx.Stopping():
 			return nil
 		}
-		// Became idle until shutdown, which is how a real
+		r.empty.Set(true)
+		// Become idle until shutdown, which is how a real
 		// implementation would behave when no more data is available.
 		<-ctx.Stopping()
 		return nil

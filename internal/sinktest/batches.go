@@ -17,6 +17,8 @@
 package sinktest
 
 import (
+	"github.com/cockroachdb/field-eng-powertools/notify"
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -35,4 +37,57 @@ func TableBatchOf(table ident.Table, time hlc.Time, data []types.Mutation) *type
 		ret.Data[idx].Time = time
 	}
 	return ret
+}
+
+// A CannedReader always replays the same mutations.
+type CannedReader struct {
+	Data       notify.Var[[]*types.TemporalBatch] // The data to emit.
+	Idle       notify.Var[struct{}]               // Notified when all cursors have been sent.
+	ProgressTo notify.Var[hlc.Range]              // Emitted when idle.
+}
+
+var _ types.BatchReader = (*CannedReader)(nil)
+
+// Read implements [types.BatchReader].
+func (r *CannedReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+	out := make(chan *types.BatchCursor, 2)
+	ctx.Go(func(ctx *stopper.Context) error {
+		defer close(out)
+		for {
+			dataChanged, _ := r.Data.Peek(func(data []*types.TemporalBatch) error {
+				for _, batch := range data {
+					cur := &types.BatchCursor{
+						Batch:    batch,
+						Progress: hlc.RangeIncluding(hlc.Zero(), batch.Time),
+					}
+					select {
+					case out <- cur:
+					case <-ctx.Stopping():
+						return nil
+					}
+				}
+				return nil
+			})
+
+			progress, progressChanged := r.ProgressTo.Get()
+			cur := &types.BatchCursor{
+				Progress: progress,
+			}
+			select {
+			case out <- cur:
+			case <-ctx.Stopping():
+				return nil
+			}
+
+			r.Idle.Notify()
+
+			select {
+			case <-dataChanged:
+			case <-progressChanged:
+			case <-ctx.Stopping():
+				return nil
+			}
+		}
+	})
+	return out, nil
 }

@@ -28,6 +28,11 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
+// A TerminalFunc is an optional callback which will be invoked when the
+// sequencer has finished processing a batch. This function may choose
+// to consume the reported error.
+type TerminalFunc func(ctx *stopper.Context, batch *types.TemporalBatch, err error) error
+
 // A Sequencer implements a lifecycle strategy for mutations. The
 // various strategies may include immediate, best-effort, or
 // fully-transactional behaviors.
@@ -46,7 +51,7 @@ type Sequencer interface {
 	// switching between different Sequencers at runtime, callers should
 	// discontinue updates to the bounds and ideally wait for the Stat
 	// variable to catch up.
-	Start(ctx *stopper.Context, opts *StartOptions) (types.MultiAcceptor, *notify.Var[Stat], error)
+	Start(ctx *stopper.Context, opts *StartOptions) (*notify.Var[Stat], error)
 }
 
 // A Shim allows the behaviors of another Sequencer to be modified.
@@ -64,6 +69,7 @@ type StartOptions struct {
 	Delegate    types.MultiAcceptor    // The acceptor to use when continuing to process mutations.
 	Group       *types.TableGroup      // The tables that should be operated on.
 	MaxDeferred int                    // Back off after deferring this many mutations.
+	Terminal    TerminalFunc           // Callback when a batch has reached a terminal state.
 }
 
 // Copy returns a deep copy of the options.

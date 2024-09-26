@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -86,10 +87,10 @@ func (s *bestEffort) SchemaChanged() *notify.Var[struct{}] {
 // referentially-connected group of tables.
 func (s *bestEffort) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
-) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+) (*notify.Var[sequencer.Stat], error) {
 	watcher, err := s.watchers.Get(opts.Group.Enclosing)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Generate a synthetic maximum checkpoint bound in the absence
@@ -134,39 +135,39 @@ func (s *bestEffort) Start(
 
 	// Create an initial generation of sub-sequencers.
 	schemaData := watcher.Get()
-	cfg, err := s.startGeneration(ctx, opts, schemaData, stats)
+	genCtx, err := s.startGeneration(ctx, opts, schemaData, stats)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	// Start a process to keep the router's configuration updated
-	// whenever there's a schema change. When the schema changes, we
-	// want to start a new collection of sub-sequencers, swap the router
-	// configuration, and then put the old generation into shutdown.
-	ret := &router{config: notify.VarOf(cfg)}
+	// Start a process to keep the configuration updated whenever
+	// there's a schema change. When the schema changes, we want to
+	// start a new collection of sub-sequencers and then the old
+	// generation into shutdown.
 	ctx.Go(func(ctx *stopper.Context) error {
 		_, err := stopvar.DoWhenChanged(ctx, schemaData, watcher.GetNotify(),
 			func(ctx *stopper.Context, _, schemaData *types.SchemaData) error {
-				cfg, err := s.startGeneration(ctx, opts, schemaData, stats)
-				if err != nil {
-					log.WithError(err).Warn("could not create new BestEffort sequencers")
-					return nil
+				log.Trace("stopping old generation")
+				genCtx.Stop(time.Minute)
+				if err := genCtx.Wait(); err != nil {
+					return errors.Wrap(err, "could not stop old generation")
 				}
-				oldCfg, _ := ret.config.Swap(cfg)
+				var err error
+				genCtx, err = s.startGeneration(ctx, opts, schemaData, stats)
+				if err != nil {
+					return errors.Wrap(err, "could not create new BestEffort sequencers")
+				}
 				// Notify test code.
 				if s.schemaChanged != nil {
 					s.schemaChanged.Notify()
 				}
 				log.Debug("reconfigured BestEffort due to schema change")
-				if err := oldCfg.shutdown(); err != nil {
-					log.WithError(err).Warn("error while shutting down previous BestEffort")
-				}
 				return nil
 			})
 		return err
 	})
 
-	return ret, stats, nil
+	return stats, nil
 }
 
 // startGeneration creates the delegate sequences and returns a routing
@@ -177,48 +178,30 @@ func (s *bestEffort) startGeneration(
 	opts *sequencer.StartOptions,
 	schemaData *types.SchemaData,
 	stats *notify.Var[sequencer.Stat],
-) (*routerConfig, error) {
+) (*stopper.Context, error) {
 	// Create a nested context.
 	ctx = stopper.WithContext(ctx)
-
-	cfg := &routerConfig{
-		routes:     make(map[*types.SchemaComponent]types.MultiAcceptor),
-		schemaData: schemaData,
-		shutdown: func() error {
-			ctx.Stop(s.cfg.TaskGracePeriod)
-			return ctx.Wait()
-		},
-	}
 
 	// Start a delegate sequencer for each non-overlapping subgroup of
 	// tables in the target schema. This ensures that tables with FK
 	// relationships can be swept in a coordinated fashion.
 	for _, comp := range schemaData.Components {
+		f := &filter{delegate: opts.BatchReader}
+		for _, table := range comp.Order {
+			f.accept.Put(table, struct{}{})
+		}
+
 		subOpts := opts.Copy()
+		subOpts.BatchReader = f
 		subOpts.Group.Tables = comp.Order
 		subOpts.MaxDeferred = s.cfg.TimestampLimit
 
-		subAcc, subStats, err := s.delegate.Start(ctx, subOpts)
+		subStats, err := s.delegate.Start(ctx, subOpts)
 		if err != nil {
 			log.WithError(err).Warnf(
 				"BestEffort.Start: could not start nested Sequencer for %s", comp.Order)
 			return nil, err
 		}
-
-		// This is a special case for single-table groups, where
-		// we'll try to write directly to the target table, rather
-		// than wait for an entire stage-apply cycle.
-		if len(comp.Order) == 1 {
-			log.Tracef("enabling direct path for %s", comp.Order[0])
-			subAcc = &directAcceptor{
-				BestEffort: s.BestEffort,
-				apply:      subOpts.Delegate,
-				fallback:   subAcc,
-			}
-		}
-
-		// Route incoming mutations to the component's sequencer.
-		cfg.routes[comp] = subAcc
 
 		// Start a helper to aggregate the progress values together.
 		ctx.Go(func(ctx *stopper.Context) error {
@@ -240,5 +223,5 @@ func (s *bestEffort) startGeneration(
 		})
 	}
 
-	return cfg, nil
+	return ctx, nil
 }

@@ -64,16 +64,17 @@ var _ sequencer.Sequencer = (*chaos)(nil)
 // Start implements [sequencer.Sequencer].
 func (c *chaos) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
-) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+) (*notify.Var[sequencer.Stat], error) {
 	if c.count == 0 {
 		return c.delegate.Start(ctx, opts)
 	}
-	// Inject errors deeper into the stack.
+	t := &tracker{count: c.count}
+	// Inject errors on the input and output side.
 	opts = opts.Copy()
-	opts.Delegate = &acceptor{count: c.count, delegate: opts.Delegate}
-	acc, stat, err := c.delegate.Start(ctx, opts)
-	// Inject errors at periphery of stack.
-	return &acceptor{count: c.count, delegate: acc}, stat, err
+	opts.BatchReader = &reader{delegate: opts.BatchReader, tracker: t}
+	opts.Delegate = &acceptor{delegate: opts.Delegate, tracker: t}
+	stat, err := c.delegate.Start(ctx, opts)
+	return stat, err
 }
 
 // Unwrap is an informal protocol to access the delegate.
@@ -85,12 +86,8 @@ func (c *chaos) Unwrap() sequencer.Sequencer {
 // If the method call should result in a chaos error, the error may be
 // returned after calling the delegate method.
 type acceptor struct {
-	count    int
 	delegate types.MultiAcceptor
-	mu       struct {
-		sync.Mutex
-		seen map[[maxFrames]uintptr]int
-	}
+	tracker  *tracker
 }
 
 var _ types.MultiAcceptor = (*acceptor)(nil)
@@ -99,7 +96,7 @@ var _ types.MultiAcceptor = (*acceptor)(nil)
 func (a *acceptor) AcceptTableBatch(
 	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
 ) error {
-	if chaos := a.chaos(); chaos != nil {
+	if chaos := a.tracker.chaos(); chaos != nil {
 		if rand.Intn(2) == 0 {
 			return chaos
 		}
@@ -116,7 +113,7 @@ func (a *acceptor) AcceptTableBatch(
 func (a *acceptor) AcceptTemporalBatch(
 	ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions,
 ) error {
-	if chaos := a.chaos(); chaos != nil {
+	if chaos := a.tracker.chaos(); chaos != nil {
 		if rand.Intn(2) == 0 {
 			return chaos
 		}
@@ -133,7 +130,7 @@ func (a *acceptor) AcceptTemporalBatch(
 func (a *acceptor) AcceptMultiBatch(
 	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
 ) error {
-	if chaos := a.chaos(); chaos != nil {
+	if chaos := a.tracker.chaos(); chaos != nil {
 		if rand.Intn(2) == 0 {
 			return chaos
 		}
@@ -151,8 +148,81 @@ func (a *acceptor) Unwrap() types.MultiAcceptor {
 	return a.delegate
 }
 
-// chaos exists to have an easy place to set a breakpoint.
-func (a *acceptor) chaos() error {
+// delay exists to add jitter within the system. It can help shake loose
+// race conditions.
+func (a *acceptor) delay() {
+	time.Sleep(time.Duration(rand.Int63n(time.Millisecond.Nanoseconds())))
+}
+
+// reader injects [ErrChaos] into the [types.BatchReader] stream.
+type reader struct {
+	delegate types.BatchReader
+	tracker  *tracker
+}
+
+var _ types.BatchReader = (*reader)(nil)
+
+func (r *reader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+	// Simulate startup errors.
+	if err := r.tracker.chaos(); err != nil {
+		return nil, err
+	}
+
+	// Open channel from delegate.
+	src, err := r.delegate.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Copy cursors downstream, injecting errors.
+	out := make(chan *types.BatchCursor, 2)
+	ctx.Go(func(ctx *stopper.Context) error {
+		defer close(out)
+		for {
+			select {
+			case cur, open := <-src:
+				if !open {
+					return nil
+				}
+				switch {
+				case cur.Error != nil:
+					// Let underlying error percolate.
+				case cur.Batch == nil:
+					// Progress-only update
+					if err := r.tracker.chaos(); err != nil {
+						cur.Error = err
+					}
+				default:
+					// Data update.
+					if err := r.tracker.chaos(); err != nil {
+						cur.Error = err
+					}
+				}
+				select {
+				case out <- cur:
+				case <-ctx.Stopping():
+					return nil
+				}
+
+			case <-ctx.Stopping():
+				return nil
+			}
+		}
+	})
+
+	return out, nil
+}
+
+// tracker limits the number of times chaos will be injected.
+type tracker struct {
+	count int
+	mu    struct {
+		sync.Mutex
+		seen map[[maxFrames]uintptr]int
+	}
+}
+
+func (a *tracker) chaos() error {
 	// We ignore Callers(), chaos(), and acceptor method.
 	var stack [maxFrames]uintptr
 	runtime.Callers(3, stack[:])
@@ -170,10 +240,4 @@ func (a *acceptor) chaos() error {
 	}
 	a.mu.seen[stack] = count + 1
 	return ErrChaos
-}
-
-// delay exists to add jitter within the system. It can help shake loose
-// race conditions.
-func (a *acceptor) delay() {
-	time.Sleep(time.Duration(rand.Int63n(time.Millisecond.Nanoseconds())))
 }

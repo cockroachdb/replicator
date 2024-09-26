@@ -39,6 +39,9 @@ type Map[K any, V any] interface {
 	// All returns an iterator over all map entries.
 	All() iter.Seq2[K, V]
 
+	// Clear remove all entries from the map.
+	Clear()
+
 	// CopyInto populates the destination with the contents of the map.
 	CopyInto(dest Map[K, V])
 
@@ -109,6 +112,10 @@ func (m *impl[K, C, V]) All() iter.Seq2[K, V] {
 			}
 		}
 	}
+}
+
+func (m *impl[K, C, V]) Clear() {
+	clear(m.data)
 }
 
 func (m *impl[K, C, V]) CopyInto(dest Map[K, V]) {

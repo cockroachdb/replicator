@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
@@ -39,6 +40,7 @@ type round struct {
 	delegate types.MultiAcceptor
 	group    *types.TableGroup
 	poisoned *poisonSet
+	terminal sequencer.TerminalFunc
 
 	// The last time within the accumulated data. This is used for
 	// partial progress reporting.
@@ -161,6 +163,11 @@ func (r *round) tryCommit(ctx *stopper.Context) error {
 	}
 	if err := targetTx.Commit(); err != nil {
 		return errors.WithStack(err)
+	}
+	if fn := r.terminal; fn != nil {
+		for _, temp := range r.batch.Data {
+			fn(ctx, temp, err)
+		}
 	}
 	return nil
 }

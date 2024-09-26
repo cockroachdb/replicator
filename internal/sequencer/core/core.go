@@ -62,9 +62,9 @@ var _ sequencer.Sequencer = (*Core)(nil)
 // Start implements [sequencer.Sequencer].
 func (s *Core) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
-) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+) (*notify.Var[sequencer.Stat], error) {
 	if opts.BatchReader == nil {
-		return nil, nil, errors.New("no BatchReader provided")
+		return nil, errors.New("no BatchReader provided")
 	}
 	progress := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
 	grace := s.cfg.TaskGracePeriod
@@ -160,6 +160,7 @@ func (s *Core) Start(
 			delegate: opts.Delegate,
 			group:    group,
 			poisoned: poisoned,
+			terminal: opts.Terminal,
 
 			// Metrics.
 			applied:     sweepAppliedCount.WithLabelValues(metricLabels...),
@@ -324,5 +325,5 @@ func (s *Core) Start(
 			}
 		}
 	})
-	return &acceptor{}, progress, nil
+	return progress, nil
 }

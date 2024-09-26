@@ -135,6 +135,13 @@ func (m *IdentifierMap[I, V]) All() iter.Seq2[I, V] {
 	return func(yield func(I, V) bool) {}
 }
 
+// Clear implements cmap.Map.
+func (m *IdentifierMap[I, V]) Clear() {
+	if m.data != nil {
+		m.data.Clear()
+	}
+}
+
 // CopyInto implements cmap.Map.
 func (m *IdentifierMap[I, V]) CopyInto(dest cmap.Map[I, V]) {
 	if m.data != nil {

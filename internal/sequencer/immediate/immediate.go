@@ -47,7 +47,7 @@ var _ sequencer.Sequencer = (*Immediate)(nil)
 // all tables in the group to the ends of the resolving bounds.
 func (i *Immediate) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
-) (types.MultiAcceptor, *notify.Var[sequencer.Stat], error) {
+) (*notify.Var[sequencer.Stat], error) {
 	ret := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
 
 	// Set each table's progress to the end of the bounds. This
@@ -78,5 +78,6 @@ func (i *Immediate) Start(
 		acc = i.marker.MultiAcceptor(acc)
 		acc = i.once.MultiAcceptor(acc)
 	}
-	return acc, ret, nil
+	// XXX
+	return ret, nil
 }

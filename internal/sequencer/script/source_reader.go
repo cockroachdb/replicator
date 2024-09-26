@@ -19,66 +19,82 @@ package script
 import (
 	"context"
 
+	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 )
 
-// A sourceAcceptor is responsible for the actions wired up to a
-// configureSource() api call. Specifically, the sourceAcceptor is
-// concerned with routing incoming mutations to the correct
-// staging and/or target table.
-type sourceAcceptor struct {
-	delegate       types.MultiAcceptor
+// A sourceReader is responsible for the actions wired up to a
+// configureSource() api call. Specifically, the sourceReader is
+// concerned with routing incoming mutations to the correct staging
+// and/or target table(s).
+type sourceReader struct {
+	delegate       types.BatchReader
 	group          *types.TableGroup
 	sourceBindings *script.Source
 	watcher        types.Watcher
 }
 
-var _ types.MultiAcceptor = (*sourceAcceptor)(nil)
+var _ types.BatchReader = (*sourceReader)(nil)
 
-func (a *sourceAcceptor) AcceptMultiBatch(
-	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
-) error {
-	return acceptBatch(ctx, a, batch, opts)
-}
-
-func (a *sourceAcceptor) AcceptTableBatch(
-	ctx context.Context, batch *types.TableBatch, opts *types.AcceptOptions,
-) error {
-	return acceptBatch(ctx, a, batch, opts)
-}
-
-func (a *sourceAcceptor) AcceptTemporalBatch(
-	ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions,
-) error {
-	return acceptBatch(ctx, a, batch, opts)
-}
-
-// acceptBatch wants to be a generic method.
-func acceptBatch[B types.Batch[B]](
-	ctx context.Context, a *sourceAcceptor, batch B, opts *types.AcceptOptions,
-) error {
-	nextBatch := &types.MultiBatch{}
-
-	if err := batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
-		return a.acceptOne(ctx, nextBatch, table, mut)
-	})); err != nil {
-		return err
+// Read implements [types.BatchReader].
+func (a *sourceReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+	source, err := a.delegate.Read(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	// Calls to source.Dispatch may remove mutations.
-	// If the replacement batch is empty, we are done.
-	if nextBatch.Count() == 0 {
-		return nil
-	}
+	out := make(chan *types.BatchCursor, 2)
+	ctx.Go(func(ctx *stopper.Context) error {
+		defer close(out)
+		for {
+			var cur *types.BatchCursor
+			select {
+			case cur = <-source:
+			case <-ctx.Stopping():
+				return nil
+			}
 
-	return a.delegate.AcceptMultiBatch(ctx, nextBatch, opts)
+			// Upstream closed due to stopping.
+			if cur == nil {
+				return nil
+			}
+
+			// Only process non-error data payloads.
+			if cur.Batch != nil && cur.Error == nil {
+				nextBatch := &types.TemporalBatch{
+					// Preserve original timestamp.
+					Time: cur.Batch.Time,
+				}
+
+				if err := cur.Batch.CopyInto(types.AccumulatorFunc(
+					func(table ident.Table, mut types.Mutation) error {
+						return a.acceptOne(ctx, nextBatch, table, mut)
+					})); err != nil {
+					return err
+				}
+
+				// Preserve batch identity.
+				cur.Batch.Data.Clear()
+				nextBatch.Data.CopyInto(&cur.Batch.Data)
+			}
+
+			// Send downstream.
+			select {
+			case out <- cur:
+			case <-ctx.Stopping():
+				return nil
+			}
+		}
+	})
+
+	return out, nil
 }
 
-func (a *sourceAcceptor) acceptOne(
-	ctx context.Context, acc *types.MultiBatch, table ident.Table, mutToDispatch types.Mutation,
+func (a *sourceReader) acceptOne(
+	ctx context.Context, acc *types.TemporalBatch, table ident.Table, mutToDispatch types.Mutation,
 ) error {
 	script.AddMeta(a.group.Name.Raw(), table, &mutToDispatch)
 
@@ -109,8 +125,7 @@ func (a *sourceAcceptor) acceptOne(
 		}
 		for _, dispatchedMut := range muts {
 			dispatchedMut.Deletion = isDelete
-			// Preserve incoming timestamp.
-			dispatchedMut.Time = mutToDispatch.Time
+			dispatchedMut.Time = acc.Time
 			if err := acc.Accumulate(table, dispatchedMut); err != nil {
 				return errors.Wrap(err, a.group.Name.Raw())
 			}
