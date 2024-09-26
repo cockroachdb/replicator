@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/source/oraclelogminer/scn"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
@@ -45,7 +46,7 @@ type Config struct {
 	LogMinerPullInterval time.Duration
 	// SCN is System Change Number in Oracle, which serves as a system time
 	// for the logMiner.
-	SCN SCN
+	SCN scn.SCN
 	// Connection string for the source Oracle Database.
 	SourceConn string
 	// SourceSchema marks the schema of the table. In oracle, it is the
@@ -71,11 +72,11 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Sequencer.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
-	c.SCN = SCN{}
+	c.SCN = scn.SCN{}
 
 	f.DurationVar(&c.LogMinerPullInterval, "pullInterval", defaultLogMinerPullInterval,
 		"interval duration for pulling from logMiner (source) for changefeed")
-	f.StringVar(&c.SCN.Val, "scn", "", "starting SCN for logMiner")
+	f.IntVar(&c.SCN.Val, "scn", 0, "starting SCN for logMiner")
 
 	f.StringVar(&c.SourceConn, "sourceConn", "",
 		"the source database's connection string")
@@ -119,27 +120,4 @@ func (c *Config) Preflight() error {
 		return errors.New("no target schema specified")
 	}
 	return nil
-}
-
-// SCN stands for System Change Number to start listening. Per oracle doc, A
-// system change number (SCN) is a logical, internal time stamp used
-// by Oracle Database. SCNs order events that occur within the
-// database, which is necessary to satisfy the ACID properties of a
-// transaction. Oracle Database uses SCNs to mark the SCN before
-// which all changes are known to be on disk so that recovery avoids
-// applying unnecessary redo. The database also uses SCNs to mark
-// the point at which no redo exists for a set of data so that
-// recovery can stop. See also https://docs.oracle.com/cd/E11882_01/server.112/e40540/transact.htm#CNCPT039
-type SCN struct {
-	Val string
-}
-
-// IsEmpty returns true if the SCN is unset with valid value.
-func (s *SCN) IsEmpty() bool {
-	return s.Val == ""
-}
-
-// String returns the string representation of an SCN.
-func (s *SCN) String() string {
-	return s.Val
 }
