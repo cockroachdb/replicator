@@ -114,7 +114,7 @@ func (f *Fixture) PeekStaged(
 	if err != nil {
 		return nil, err
 	}
-	return types.Flatten[*types.MultiBatch](batch), nil
+	return types.Flatten(batch), nil
 }
 
 // ReadStagingQuery executes the staging query, returning the complete

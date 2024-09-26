@@ -36,7 +36,7 @@ This is basically a SELECT * FROM data WHERE ts_col > (computed
 deadline). The computed deadline is the current time minus our
 time.Duration converted to some (fractional) seconds.
 */ -}}
-{{- $deadlineEntries := .Deadlines.Entries -}}
+{{- $deadlineEntries := deadlineEntries .Deadlines -}}
 {{- if $deadlineEntries -}}
     , {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
     deadlined AS (SELECT * FROM {{ $dataSource }} WHERE

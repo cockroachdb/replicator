@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"iter"
 
 	"github.com/cockroachdb/replicator/internal/util/cmap"
 	"github.com/pkg/errors"
@@ -127,6 +127,14 @@ func (m *IdentifierMap[I, V]) newMap() cmap.Map[I, V] {
 	})
 }
 
+// All implements cmap.Map.
+func (m *IdentifierMap[I, V]) All() iter.Seq2[I, V] {
+	if m.data != nil {
+		return m.data.All()
+	}
+	return func(yield func(I, V) bool) {}
+}
+
 // CopyInto implements cmap.Map.
 func (m *IdentifierMap[I, V]) CopyInto(dest cmap.Map[I, V]) {
 	if m.data != nil {
@@ -139,19 +147,6 @@ func (m *IdentifierMap[I, V]) Delete(key I) {
 	if m.data != nil {
 		m.data.Delete(key)
 	}
-}
-
-// Entries implements cmap.Map. This will sort the returned slice
-// to ensure stable iteration order.
-func (m *IdentifierMap[I, V]) Entries() []cmap.Entry[I, V] {
-	if m.data != nil {
-		ret := m.data.Entries()
-		sort.Slice(ret, func(i, j int) bool {
-			return Compare(ret[i].Key, ret[j].Key) < 0
-		})
-		return ret
-	}
-	return nil
 }
 
 // Get implements cmap.Map.
@@ -168,6 +163,13 @@ func (m *IdentifierMap[I, V]) GetZero(key I) V {
 		return m.data.GetZero(key)
 	}
 	return *new(V)
+}
+
+func (m *IdentifierMap[I, V]) Keys() iter.Seq[I] {
+	if m.data != nil {
+		return m.data.Keys()
+	}
+	return func(yield func(I) bool) {}
 }
 
 // Len implements cmap.Map.
@@ -194,22 +196,11 @@ func (m *IdentifierMap[I, V]) Put(key I, value V) {
 	m.data.Put(key, value)
 }
 
-// Range implements cmap.Map.
-func (m *IdentifierMap[I, V]) Range(fn func(k I, v V) error) error {
-	if m.data != nil {
-		return m.data.Range(fn)
-	}
-	return nil
-}
-
 // MarshalJSON implements json.Marshaler.
 func (m *IdentifierMap[I, V]) MarshalJSON() ([]byte, error) {
 	temp := make(map[string]V)
-	if err := m.Range(func(k I, v V) error {
+	for k, v := range m.All() {
 		temp[k.Raw()] = v
-		return nil
-	}); err != nil {
-		return nil, err
 	}
 	return json.Marshal(temp)
 }
@@ -253,4 +244,12 @@ func (m *IdentifierMap[I, V]) UnmarshalJSON(data []byte) error {
 	}
 	m.data = next
 	return nil
+}
+
+// Values returns an iterator over the map values.
+func (m *IdentifierMap[I, V]) Values() iter.Seq[V] {
+	if m.data != nil {
+		return m.data.Values()
+	}
+	return func(yield func(V) bool) {}
 }

@@ -71,10 +71,9 @@ func TestIdentity(t *testing.T) {
 	r.False(ok)
 
 	count := 0
-	r.NoError(m.Range(func(s string, r rune) error {
+	for range m.All() {
 		count++
-		return nil
-	}))
+	}
 	r.Equal(3, count)
 
 	cpy := NewIdentity[string, rune]()

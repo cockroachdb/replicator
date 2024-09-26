@@ -17,6 +17,8 @@
 // Package cmap contains an implementation of a canonicalizing map.
 package cmap
 
+import "iter"
+
 // An Entry in a Map. Note that the Key type is not necessarily
 // comparable.
 type Entry[K, V any] struct {
@@ -34,15 +36,14 @@ type Mapper[K, C any] func(K) C
 //
 // A Map is not internally synchronized.
 type Map[K any, V any] interface {
+	// All returns an iterator over all map entries.
+	All() iter.Seq2[K, V]
+
 	// CopyInto populates the destination with the contents of the map.
 	CopyInto(dest Map[K, V])
 
 	// Delete removes a key from the map.
 	Delete(key K)
-
-	// Entries returns the entries of the map as a slice. Note that
-	// the iteration order is not stable.
-	Entries() []Entry[K, V]
 
 	// Get returns the value associated with the canonical form of the
 	// key.
@@ -51,6 +52,9 @@ type Map[K any, V any] interface {
 	// GetZero returns the value associated with the canonical form of
 	// the key or returns a zero value.
 	GetZero(key K) V
+
+	// Keys returns an iterator over the map keys.
+	Keys() iter.Seq[K]
 
 	// Len returns the number of entries in the Map.
 	Len() int
@@ -64,10 +68,8 @@ type Map[K any, V any] interface {
 	// returned.
 	Put(key K, value V)
 
-	// Range invokes the callback for each entry in the Map. Range will
-	// stop at the first error returned by the callback. If the callback
-	// never returns an error, neither will Range.
-	Range(func(k K, v V) error) error
+	// Values returns an iterator over all map values.
+	Values() iter.Seq[V]
 }
 
 // New constructs a canonicalizing Map. The K type must implement
@@ -99,6 +101,16 @@ type impl[K any, C comparable, V any] struct {
 	mapper Mapper[K, C]
 }
 
+func (m *impl[K, C, V]) All() iter.Seq2[K, V] {
+	return func(yield func(K, V) bool) {
+		for _, entry := range m.data {
+			if !yield(entry.Key, entry.Value) {
+				return
+			}
+		}
+	}
+}
+
 func (m *impl[K, C, V]) CopyInto(dest Map[K, V]) {
 	_ = m.Range(func(k K, v V) error {
 		dest.Put(k, v)
@@ -111,14 +123,6 @@ func (m *impl[K, C, V]) Delete(key K) {
 	delete(m.data, c)
 }
 
-func (m *impl[K, C, V]) Entries() []Entry[K, V] {
-	ret := make([]Entry[K, V], 0, len(m.data))
-	for _, entry := range m.data {
-		ret = append(ret, *entry)
-	}
-	return ret
-}
-
 func (m *impl[K, C, V]) Get(key K) (_ V, ok bool) {
 	_, v, ok := m.Match(key)
 	return v, ok
@@ -127,6 +131,16 @@ func (m *impl[K, C, V]) Get(key K) (_ V, ok bool) {
 func (m *impl[K, C, V]) GetZero(key K) V {
 	v, _ := m.Get(key)
 	return v
+}
+
+func (m *impl[K, C, V]) Keys() iter.Seq[K] {
+	return func(yield func(K) bool) {
+		for _, entry := range m.data {
+			if !yield(entry.Key) {
+				return
+			}
+		}
+	}
 }
 
 func (m *impl[K, C, V]) Match(key K) (_ K, _ V, ok bool) {
@@ -151,10 +165,20 @@ func (m *impl[K, C, V]) Put(key K, value V) {
 }
 
 func (m *impl[K, C, V]) Range(fn func(K, V) error) error {
-	for _, entry := range m.data {
-		if err := fn(entry.Key, entry.Value); err != nil {
+	for k, v := range m.All() {
+		if err := fn(k, v); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (m *impl[K, C, V]) Values() iter.Seq[V] {
+	return func(yield func(V) bool) {
+		for _, entry := range m.data {
+			if !yield(entry.Value) {
+				return
+			}
+		}
+	}
 }

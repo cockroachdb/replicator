@@ -189,7 +189,7 @@ func newColumnMapping(
 
 	// We also allow the user to force non-existent columns to be
 	// ignored (e.g. to drop a column).
-	_ = cfg.Ignore.Range(func(tgt ident.Ident, _ bool) error {
+	for tgt := range cfg.Ignore.Keys() {
 		if _, alreadyIgnored := ret.Positions.Get(tgt); !alreadyIgnored {
 			ret.Ignore = append(ret.Ignore, tgt)
 			ret.Positions.Put(tgt, positionalColumn{
@@ -203,18 +203,14 @@ func newColumnMapping(
 				ValidityIndex: -1,
 			})
 		}
-		return nil
-	})
+	}
 
 	// Add redundant mappings for renamed columns.
-	if err := cfg.SourceNames.Range(func(tgt ident.Ident, src applycfg.SourceColumn) error {
+	for tgt, src := range cfg.SourceNames.All() {
 		ret.Renames.Put(src, tgt)
 		if found, ok := ret.Positions.Get(tgt); ok {
 			ret.Positions.Put(src, found)
 		}
-		return nil
-	}); err != nil {
-		return nil, err
 	}
 
 	return ret, nil

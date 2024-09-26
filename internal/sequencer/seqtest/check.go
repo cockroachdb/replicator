@@ -292,13 +292,11 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 			// instance receiving data behind our backs.
 			if c.Stage > 0 && rand.Float32() < c.Stage {
 				for _, temp := range fragment.Data {
-					r.NoError(temp.Data.Range(func(table ident.Table, batch *types.TableBatch) error {
+					for table, batch := range temp.Data.All() {
 						stager, err := c.Fixture.Stagers.Get(ctx, table)
-						if err != nil {
-							return err
-						}
-						return stager.Stage(ctx, c.Fixture.StagingPool, batch.Data)
-					}))
+						r.NoError(err)
+						r.NoError(stager.Stage(ctx, c.Fixture.StagingPool, batch.Data))
+					}
 				}
 				continue
 			}

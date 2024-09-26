@@ -139,8 +139,7 @@ func (s *SchemaData) SetDependencies(parentsToChildren *ident.TableMap[[]ident.T
 
 	allTables := &ident.TableMap[struct{}]{}
 	isChild := &ident.TableMap[bool]{}
-	// Callback returns nil.
-	_ = parentsToChildren.Range(func(table ident.Table, children []ident.Table) error {
+	for table, children := range parentsToChildren.All() {
 		// Create a stable, shallow copy.
 		children = slices.Clone(children)
 		slices.SortFunc(children, func(a, b ident.Table) int { return ident.Compare(a, b) })
@@ -155,21 +154,18 @@ func (s *SchemaData) SetDependencies(parentsToChildren *ident.TableMap[[]ident.T
 				isChild.Put(child, true)
 			}
 		}
-		return nil
-	})
+	}
 
 	// Recursively assign tables into groups and levels, starting with
 	// root tables.
 	assigned := &ident.TableMap[bool]{}
 	assignments := &ident.TableMap[*SchemaComponent]{}
 	levels := &ident.TableMap[int]{}
-	// Callback returns nil.
-	_ = parentsToChildren.Range(func(table ident.Table, _ []ident.Table) error {
+	for table := range parentsToChildren.Keys() {
 		if !isChild.GetZero(table) {
 			assign(table, table, parentsToChildren, assigned, assignments, levels, 0)
 		}
-		return nil
-	})
+	}
 
 	s.Components = make([]*SchemaComponent, 0, assignments.Len())
 	s.Entire = &SchemaComponent{}
@@ -177,30 +173,29 @@ func (s *SchemaData) SetDependencies(parentsToChildren *ident.TableMap[[]ident.T
 
 	// Unpack the assigned groups, sorting the tables by dependency
 	// order.
-	if err := assignments.Range(func(_ ident.Table, comp *SchemaComponent) error {
+	for comp := range assignments.Values() {
 		s.Components = append(s.Components, comp)
 		s.Entire.Order = append(s.Entire.Order, comp.Order...)
 		for _, table := range comp.Order {
 			s.TableComponents.Put(table, comp)
 		}
-		return comp.sort(levels)
-	}); err != nil {
-		return err
+		if err := comp.sort(levels); err != nil {
+			return err
+		}
 	}
 
 	// Ensure that all input tables have been assigned to a component.
 	// Tables involved in a reference cycle will
 	if s.TableComponents.Len() != allTables.Len() {
 		var sb strings.Builder
-		_ = allTables.Range(func(table ident.Table, _ struct{}) error {
+		for table := range allTables.Keys() {
 			if _, found := s.TableComponents.Get(table); !found {
 				if sb.Len() > 0 {
 					sb.WriteString(", ")
 				}
 				sb.WriteString(table.String())
 			}
-			return nil
-		})
+		}
 		return errors.Errorf("cycle detected in tables: %s", sb.String())
 	}
 	if err := s.Entire.sort(levels); err != nil {

@@ -142,7 +142,7 @@ func TestTableMerger(t *testing.T) {
 				batch := cursor.Batch
 
 				if batch != nil {
-					seen = append(seen, types.Flatten[*types.TemporalBatch](batch)...)
+					seen = append(seen, types.Flatten(batch)...)
 
 					// The fragment bit will be set on boundary-aligned reads.
 					if batch.Time.Nanos()%fragmentSize == 0 {
@@ -186,7 +186,7 @@ func TestTableMerger(t *testing.T) {
 				batch := cursor.Batch
 				if batch != nil {
 
-					seen = append(seen, types.Flatten[*types.TemporalBatch](cursor.Batch)...)
+					seen = append(seen, types.Flatten(cursor.Batch)...)
 				}
 
 				// Ensure that time doesn't go backwards.

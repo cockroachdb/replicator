@@ -17,7 +17,8 @@
 package cmap
 
 import (
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -91,28 +92,13 @@ func TestMap(t *testing.T) {
 	r.True(ok)
 	r.Equal('R', found)
 
-	count := 0
-	r.NoError(m.Range(func(s string, r rune) error {
-		count++
-		return nil
-	}))
-	r.Equal(3, count)
+	r.Len(maps.Collect(m.All()), 3)
+	r.Len(slices.Collect(m.Keys()), 3)
+	r.Len(slices.Collect(m.Values()), 3)
 
 	cpy := New[string, int, rune](mapper)
 	m.CopyInto(cpy)
 	r.Equal(m.Len(), cpy.Len())
-
-	// Entries is not stable, since we don't require the C type to be
-	// ordered.
-	entries := m.Entries()
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Key < entries[j].Key
-	})
-	r.Equal([]Entry[string, rune]{
-		{"001", 'R'},
-		{"2", '2'},
-		{"3", '3'},
-	}, entries)
 
 	// Verify delete.
 	m.Delete("00000001")

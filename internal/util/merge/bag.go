@@ -19,6 +19,7 @@ package merge
 import (
 	"bytes"
 	"encoding/json"
+	"iter"
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/cmap"
@@ -102,15 +103,32 @@ func NewBagFrom(b *Bag) *Bag {
 	return NewBag(b.BagSpec)
 }
 
+// All returns an iterator over all mapped and unmapped properties in
+// the Bag.
+func (b *Bag) All() iter.Seq2[ident.Ident, any] {
+	return func(yield func(ident.Ident, any) bool) {
+		for k, v := range b.Mapped.All() {
+			if v.Valid {
+				if !yield(k, v.Value) {
+					return
+				}
+			}
+		}
+		for k, v := range b.Unmapped.All() {
+			if !yield(k, v) {
+				return
+			}
+		}
+	}
+}
+
 // CopyInto implements cmap.Map.
 func (b *Bag) CopyInto(dest cmap.Map[ident.Ident, any]) {
-	// Ignoring error since callback returns nil.
-	_ = b.Mapped.Range(func(k ident.Ident, v *Entry) error {
+	for k, v := range b.Mapped.All() {
 		if v.Valid {
 			dest.Put(k, v.Value)
 		}
-		return nil
-	})
+	}
 	b.Unmapped.CopyInto(dest)
 }
 
@@ -123,23 +141,6 @@ func (b *Bag) Delete(key ident.Ident) {
 		return
 	}
 	b.Unmapped.Delete(key)
-}
-
-// Entries implements cmap.Map.
-func (b *Bag) Entries() []cmap.Entry[ident.Ident, any] {
-	ret := make([]cmap.Entry[ident.Ident, any], 0, b.Len())
-	// Ignoring error since callback returns nil.
-	_ = b.Mapped.Range(func(k ident.Ident, v *Entry) error {
-		if v.Valid {
-			ret = append(ret, cmap.Entry[ident.Ident, any]{Key: k, Value: v.Value})
-		}
-		return nil
-	})
-	_ = b.Unmapped.Range(func(k ident.Ident, v any) error {
-		ret = append(ret, cmap.Entry[ident.Ident, any]{Key: k, Value: v})
-		return nil
-	})
-	return ret
 }
 
 // Entry returns the mapped Entry, or returns false.
@@ -165,17 +166,33 @@ func (b *Bag) GetZero(key ident.Ident) any {
 	return ret
 }
 
+// Keys returns an iterator over all mapped and unmapped property keys.
+func (b *Bag) Keys() iter.Seq[ident.Ident] {
+	return func(yield func(ident.Ident) bool) {
+		for k, v := range b.Mapped.All() {
+			if v.Valid {
+				if !yield(k) {
+					return
+				}
+			}
+		}
+		for k := range b.Unmapped.Keys() {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
 // Len implements cmap.Map and reports the number of properties with
 // valid values.
 func (b *Bag) Len() int {
 	ct := 0
-	// Ignoring error since callback returns nil.
-	_ = b.Mapped.Range(func(_ ident.Ident, entry *Entry) error {
+	for entry := range b.Mapped.Values() {
 		if entry.Valid {
 			ct++
 		}
-		return nil
-	})
+	}
 	return ct + b.Unmapped.Len()
 }
 
@@ -212,20 +229,6 @@ func (b *Bag) Put(key ident.Ident, value any) {
 	b.Unmapped.Put(key, value)
 }
 
-// Range implements cmap.Map. It will emit the values of all valid
-// properties, which could be nil.
-func (b *Bag) Range(fn func(k ident.Ident, v any) error) error {
-	if err := b.Mapped.Range(func(k ident.Ident, v *Entry) error {
-		if v.Valid {
-			return fn(k, v.Value)
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	return b.Unmapped.Range(fn)
-}
-
 // UnmarshalJSON appends a JSON object to the contents of the Bag.
 func (b *Bag) UnmarshalJSON(data []byte) error {
 	var temp ident.Map[any]
@@ -248,4 +251,23 @@ func (b *Bag) renamed(key ident.Ident) ident.Ident {
 		return found
 	}
 	return key
+}
+
+// Values returns an iterator over all mapped and unmapped property
+// values.
+func (b *Bag) Values() iter.Seq[any] {
+	return func(yield func(any) bool) {
+		for v := range b.Mapped.Values() {
+			if v.Valid {
+				if !yield(v.Value) {
+					return
+				}
+			}
+		}
+		for v := range b.Unmapped.Values() {
+			if !yield(v) {
+				return
+			}
+		}
+	}
 }

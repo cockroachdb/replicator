@@ -52,12 +52,11 @@ func (f *factory) Diagnostic(_ context.Context) any {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	_ = f.mu.instances.Range(func(tbl ident.Table, impl *apply) error {
+	for tbl, impl := range f.mu.instances.All() {
 		impl.mu.RLock()
-		defer impl.mu.RUnlock()
 		ret.Put(tbl, impl.mu.templates.columnMapping)
-		return nil
-	})
+		impl.mu.RUnlock()
+	}
 
 	return ret
 }

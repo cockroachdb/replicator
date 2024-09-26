@@ -82,7 +82,7 @@ func (s *marker) AcceptMultiBatch(
 		return err
 	}
 
-	return s.mark(ctx, types.FlattenByTable[*types.MultiBatch](batch))
+	return s.mark(ctx, types.FlattenByTable(batch))
 }
 
 func (s *marker) AcceptTableBatch(
@@ -92,7 +92,7 @@ func (s *marker) AcceptTableBatch(
 		return err
 	}
 
-	return s.mark(ctx, types.FlattenByTable[*types.TableBatch](batch))
+	return s.mark(ctx, types.FlattenByTable(batch))
 }
 
 func (s *marker) AcceptTemporalBatch(
@@ -102,7 +102,7 @@ func (s *marker) AcceptTemporalBatch(
 		return err
 	}
 
-	return s.mark(ctx, types.FlattenByTable[*types.TemporalBatch](batch))
+	return s.mark(ctx, types.FlattenByTable(batch))
 }
 
 func (s *marker) mark(ctx context.Context, flattened *ident.TableMap[[]types.Mutation]) error {
@@ -113,15 +113,15 @@ func (s *marker) mark(ctx context.Context, flattened *ident.TableMap[[]types.Mut
 		}
 		defer func() { _ = tx.Rollback(context.Background()) }()
 
-		if err := flattened.Range(func(table ident.Table, muts []types.Mutation) error {
+		for table, muts := range flattened.All() {
 			stager, err := s.stagers.Get(ctx, table)
 			if err != nil {
 				return err
 			}
 
-			return stager.MarkApplied(ctx, s.stagingPool, muts)
-		}); err != nil {
-			return err
+			if err := stager.MarkApplied(ctx, s.stagingPool, muts); err != nil {
+				return err
+			}
 		}
 
 		return errors.WithStack(tx.Commit(ctx))

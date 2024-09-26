@@ -32,7 +32,7 @@ deadlined: filters the incoming data by the deadline columns
 
 deadlined AS (SELECT * from data WHERE ts > now() - '1m'::INTERVAL)
 */ -}}
-{{- $deadlineEntries := .Deadlines.Entries -}}
+{{- $deadlineEntries := deadlineEntries .Deadlines -}}
 {{- if $deadlineEntries -}}
 , {{- nl -}} {{- /* comma to terminate previous CTE clause. */ -}}
 deadlined AS (SELECT * FROM {{ $dataSource }} WHERE

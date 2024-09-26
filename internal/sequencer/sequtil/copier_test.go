@@ -78,13 +78,11 @@ func TestCopier(t *testing.T) {
 
 	// Apply data to the staging table.
 	for _, temporal := range testData.Data {
-		r.NoError(temporal.Data.Range(func(table ident.Table, batch *types.TableBatch) error {
+		for table, batch := range temporal.Data.All() {
 			stager, err := fixture.Stagers.Get(ctx, table)
-			if err != nil {
-				return err
-			}
-			return stager.Stage(ctx, fixture.StagingPool, batch.Data)
-		}))
+			r.NoError(err)
+			r.NoError(stager.Stage(ctx, fixture.StagingPool, batch.Data))
+		}
 	}
 	log.Infof("staged data in %s", time.Since(now))
 	now = time.Now()
@@ -113,7 +111,7 @@ func TestCopier(t *testing.T) {
 		},
 	}
 	r.NoError(copier.Run(ctx))
-	a.Equal(types.Flatten[*types.MultiBatch](testData), types.Flatten[*types.MultiBatch](seen))
+	a.Equal(types.Flatten(testData), types.Flatten(seen))
 
 	log.Infof("read data in %s", time.Since(now))
 }

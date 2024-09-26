@@ -91,7 +91,7 @@ func merge(con *Conflict) error {
 
 	// We want to iterate over all mapped and unmapped properties
 	// that are defined within the Conflict.
-	return allProperties(con).Range(func(prop ident.Ident, _ struct{}) error {
+	for prop := range allProperties(con).Keys() {
 		// We want to be able to distinguish the tri-state of unset
 		// versus set-to-null.
 		before, beforeExists := con.Before.Get(prop)
@@ -120,7 +120,7 @@ func merge(con *Conflict) error {
 		// If the before and proposed values are the same, then we don't
 		// need to do anything else with this property.
 		if isUnchanged {
-			return nil
+			continue
 		}
 
 		// If the proposed value already exists within the target, then
@@ -130,7 +130,7 @@ func merge(con *Conflict) error {
 			return errors.Wrapf(err, "property: %s", prop)
 		}
 		if isIdempotent {
-			return nil
+			continue
 		}
 
 		// Now we need to determine if the proposed value is "safe" to
@@ -151,7 +151,7 @@ func merge(con *Conflict) error {
 		// property name for later and keep processing.
 		if !isSafe {
 			con.Unmerged = append(con.Unmerged, prop)
-			return nil
+			continue
 		}
 
 		// We have a change that's safe to make.
@@ -160,8 +160,8 @@ func merge(con *Conflict) error {
 		} else {
 			con.Target.Delete(prop)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // allProperties accumulates a set of all actionable properties
@@ -182,12 +182,14 @@ func allProperties(con *Conflict) *ident.Map[struct{}] {
 		ret.Put(col.Name, struct{}{})
 	}
 
-	add := func(prop ident.Ident, _ any) error {
+	for prop := range con.Proposed.Unmapped.Keys() {
 		ret.Put(prop, struct{}{})
-		return nil
 	}
-	_ = con.Proposed.Unmapped.Range(add)
-	_ = con.Before.Unmapped.Range(add)
-	_ = con.Target.Unmapped.Range(add)
+	for prop := range con.Before.Unmapped.Keys() {
+		ret.Put(prop, struct{}{})
+	}
+	for prop := range con.Target.Unmapped.Keys() {
+		ret.Put(prop, struct{}{})
+	}
 	return ret
 }

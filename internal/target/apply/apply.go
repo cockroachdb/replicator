@@ -409,14 +409,14 @@ func (a *apply) upsertArgsLocked(bags []*merge.Bag) ([]any, error) {
 
 		// Assign each mapped value to the argument slice we're going to
 		// send to the database.
-		if err := rowData.Mapped.Range(func(colName ident.Ident, entry *merge.Entry) error {
+		for colName, entry := range rowData.Mapped.All() {
 			// This is where we perform any last-minute, target-specific
 			// fixes to reified values. That is, if the target database
 			// requires special formatting or other data encapsulation,
 			// this is the place to do it.
 			value, err := toDBType(entry.Column, entry.Value)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			// Now that we know what value we're inserting, we need to
@@ -425,7 +425,7 @@ func (a *apply) upsertArgsLocked(bags []*merge.Bag) ([]any, error) {
 			if !ok {
 				// This would represent a coding error, not an
 				// input-validation problem.
-				return errors.Errorf("mapped column %s in property bag "+
+				return nil, errors.Errorf("mapped column %s in property bag "+
 					"could not be found in template positions map", colName)
 			}
 
@@ -434,7 +434,7 @@ func (a *apply) upsertArgsLocked(bags []*merge.Bag) ([]any, error) {
 			// make use of the provided value. For example, generated PK
 			// columns or ignored columns.
 			if targetColumn.UpsertIndex < 0 {
-				return nil
+				continue
 			}
 
 			// This loop is driven by the fields in the incoming
@@ -446,10 +446,6 @@ func (a *apply) upsertArgsLocked(bags []*merge.Bag) ([]any, error) {
 
 			// Assign the value to the relevant offset in the args.
 			allArgs[argIdx+targetColumn.UpsertIndex] = value
-
-			return nil
-		}); err != nil {
-			return nil, err
 		}
 
 		// Drop any ignored columns.
@@ -739,21 +735,15 @@ func (a *apply) validate(configData *applycfg.Config, schemaData []types.ColData
 			return errors.Errorf("cas column name %s not found in table %s", col, a.target)
 		}
 	}
-	if err := configData.Deadlines.Range(func(col ident.Ident, _ time.Duration) error {
+	for col := range configData.Deadlines.Keys() {
 		if _, found := allColNames.Get(col); !found {
 			return errors.Errorf("deadline column name %s not found in table %s", col, a.target)
 		}
-		return nil
-	}); err != nil {
-		return err
 	}
-	if err := configData.Exprs.Range(func(col ident.Ident, _ string) error {
+	for col := range configData.Exprs.Keys() {
 		if _, found := allColNames.Get(col); !found {
 			return errors.Errorf("expression column name %s not found in table %s", col, a.target)
 		}
-		return nil
-	}); err != nil {
-		return err
 	}
 	if !configData.Extras.Empty() {
 		if _, found := allColNames.Get(configData.Extras); !found {
@@ -771,14 +761,10 @@ func (a *apply) validate(configData *applycfg.Config, schemaData []types.ColData
 	// The Ignores field doesn't need validation, since you might want
 	// to mark a column as ignored in order to (eventually) drop it from
 	// the destination database.
-
-	if err := configData.SourceNames.Range(func(col ident.Ident, _ applycfg.SourceColumn) error {
+	for col := range configData.SourceNames.Keys() {
 		if _, found := allColNames.Get(col); !found {
 			return errors.Errorf("renamed column name %s not found in table %s", col, a.target)
 		}
-		return nil
-	}); err != nil {
-		return err
 	}
 	return nil
 }

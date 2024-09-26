@@ -79,10 +79,9 @@ func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
 		return nil, err
 	}
 	var tables []ident.Table
-	_ = w.Get().Columns.Range(func(tbl ident.Table, _ []types.ColData) error {
+	for tbl := range w.Get().Columns.Keys() {
 		tables = append(tables, tbl)
-		return nil
-	})
+	}
 
 	tableGroup := &types.TableGroup{
 		Enclosing: schema,

@@ -19,14 +19,11 @@
 package script
 
 import (
-	"context"
-
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
 // Sequencer injects the userscript shim into a [sequencer.Sequencer]
@@ -97,14 +94,12 @@ func (w *wrapper) Start(
 	// to immediate mode, in which the sequencer caller won't
 	// necessarily have created a transaction.
 	ensureTX := false
-	// No interesting error returned from Range.
-	_ = scr.Targets.Range(func(_ ident.Table, target *script.Target) error {
+	for target := range scr.Targets.Values() {
 		if target.UserAcceptor != nil {
 			ensureTX = true
-			return context.Canceled // Arbitrary error to stop early.
+			break
 		}
-		return nil
-	})
+	}
 
 	// Install the target-phase acceptor into the options chain. This
 	// will be invoked for mutations which have passed through the

@@ -21,7 +21,6 @@ import (
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
 )
 
@@ -38,17 +37,19 @@ func (a *acceptor) AcceptMultiBatch(
 	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
 ) error {
 	// Coalesce for better database interaction.
-	mutsByTable := types.FlattenByTable[*types.MultiBatch](batch)
-
-	return mutsByTable.Range(func(tbl ident.Table, muts []types.Mutation) error {
+	mutsByTable := types.FlattenByTable(batch)
+	for tbl, muts := range mutsByTable.All() {
 		stager, err := a.stagers.Get(ctx, tbl)
 		if err != nil {
 			return err
 		}
-		return retry.Retry(ctx, a.stagingPool, func(ctx context.Context) error {
+		if err := retry.Retry(ctx, a.stagingPool, func(ctx context.Context) error {
 			return stager.Stage(ctx, a.stagingPool, muts)
-		})
-	})
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AcceptTableBatch implements [types.TableAcceptor].

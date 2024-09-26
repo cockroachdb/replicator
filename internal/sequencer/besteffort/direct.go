@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/lockset"
 	"github.com/cockroachdb/replicator/internal/util/metrics"
 	"github.com/jackc/pgx/v5"
@@ -43,13 +42,16 @@ var _ types.TableAcceptor = (*directAcceptor)(nil)
 func (a *directAcceptor) AcceptMultiBatch(
 	ctx context.Context, batch *types.MultiBatch, opts *types.AcceptOptions,
 ) error {
-	byTable := types.FlattenByTable[*types.MultiBatch](batch)
-	return byTable.Range(func(table ident.Table, muts []types.Mutation) error {
-		return a.AcceptTableBatch(ctx, &types.TableBatch{
+	byTable := types.FlattenByTable(batch)
+	for table, muts := range byTable.All() {
+		if err := a.AcceptTableBatch(ctx, &types.TableBatch{
 			Data:  muts,
 			Table: table,
-		}, opts)
-	})
+		}, opts); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AcceptTableBatch implements [types.TableAcceptor].
@@ -146,11 +148,14 @@ func (a *directAcceptor) AcceptTableBatch(
 func (a *directAcceptor) AcceptTemporalBatch(
 	ctx context.Context, batch *types.TemporalBatch, opts *types.AcceptOptions,
 ) error {
-	byTable := types.FlattenByTable[*types.TemporalBatch](batch)
-	return byTable.Range(func(table ident.Table, muts []types.Mutation) error {
-		return a.AcceptTableBatch(ctx, &types.TableBatch{
+	byTable := types.FlattenByTable(batch)
+	for table, muts := range byTable.All() {
+		if err := a.AcceptTableBatch(ctx, &types.TableBatch{
 			Data:  muts,
 			Table: table,
-		}, opts)
-	})
+		}, opts); err != nil {
+			return err
+		}
+	}
+	return nil
 }

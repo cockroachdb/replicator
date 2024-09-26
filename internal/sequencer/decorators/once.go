@@ -20,7 +20,6 @@ import (
 	"context"
 
 	"github.com/cockroachdb/replicator/internal/types"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 )
 
@@ -117,29 +116,26 @@ func (o *once) filterMultiBatch(
 	// Since a MultiBatch will likely refer to the same table multiple
 	// times, we'll flatten the batch to reduce the total number of
 	// database queries performed.
-	flattened := types.FlattenByTable[*types.MultiBatch](batch)
+	flattened := types.FlattenByTable(batch)
 	thinned := batch.Empty()
-	if err := flattened.Range(func(table ident.Table, muts []types.Mutation) error {
+	for table, muts := range flattened.All() {
 		stager, err := o.stagers.Get(ctx, table)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		filtered, err := stager.FilterApplied(ctx, o.pool, muts)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		// If all mutations have been filtered out, do nothing.
 		if len(filtered) == 0 {
-			return nil
+			continue
 		}
 		for _, mut := range filtered {
 			if err := thinned.Accumulate(table, mut); err != nil {
-				return err
+				return nil, err
 			}
 		}
-		return nil
-	}); err != nil {
-		return nil, err
 	}
 
 	return thinned, nil
@@ -166,15 +162,12 @@ func (o *once) filterTemporalBatch(
 	ctx context.Context, batch *types.TemporalBatch,
 ) (*types.TemporalBatch, error) {
 	next := batch.Empty()
-	if err := batch.Data.Range(func(table ident.Table, tableBatch *types.TableBatch) error {
+	for table, tableBatch := range batch.Data.All() {
 		nextTableBatch, err := o.filterTableBatch(ctx, tableBatch)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		next.Data.Put(table, nextTableBatch)
-		return nil
-	}); err != nil {
-		return nil, err
 	}
 	return next, nil
 }

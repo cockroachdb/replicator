@@ -211,9 +211,11 @@ func (l *Loader) Bind(
 		l.diags.Unregister(diagName)
 	})
 
-	err = ret.Targets.Range(func(tbl ident.Table, tblCfg *Target) error {
-		return errors.Wrap(l.applyConfigs.Set(tbl, &tblCfg.Config), tbl.Raw())
-	})
+	for tbl, tblCfg := range ret.Targets.All() {
+		if err := l.applyConfigs.Set(tbl, &tblCfg.Config); err != nil {
+			return nil, errors.Wrap(err, tbl.Raw())
+		}
+	}
 
 	return ret, err
 }
