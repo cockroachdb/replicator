@@ -312,8 +312,8 @@ func (b *sourceBucket) writeBatch(ctx context.Context, batch *types.MultiBatch) 
 	var buffers ident.TableMap[*strings.Builder]
 	var timestamps ident.TableMap[hlc.Time]
 	for _, b := range batch.Data {
-		for _, t := range b.Data.Entries() {
-			for _, v := range t.Value.Data {
+		for t := range b.Data.Values() {
+			for _, v := range t.Data {
 				p := &payload{
 					After:   v.Data,
 					Before:  v.Before,
@@ -329,11 +329,11 @@ func (b *sourceBucket) writeBatch(ctx context.Context, batch *types.MultiBatch) 
 				if err != nil {
 					return err
 				}
-				buff, ok := buffers.Get(t.Value.Table)
+				buff, ok := buffers.Get(t.Table)
 				if !ok {
 					buff = &strings.Builder{}
-					buffers.Put(t.Value.Table, buff)
-					timestamps.Put(t.Value.Table, t.Value.Time)
+					buffers.Put(t.Table, buff)
+					timestamps.Put(t.Table, t.Time)
 				}
 				if _, err = buff.Write(out); err != nil {
 					return err
@@ -344,7 +344,7 @@ func (b *sourceBucket) writeBatch(ctx context.Context, batch *types.MultiBatch) 
 			}
 		}
 	}
-	return buffers.Range(func(k ident.Table, v *strings.Builder) error {
+	for k, v := range buffers.All() {
 		timestamp, _ := timestamps.Get(k)
 		tm := time.Unix(0, timestamp.Nanos())
 		date := tm.Format("20060102150405")
@@ -354,12 +354,14 @@ func (b *sourceBucket) writeBatch(ctx context.Context, batch *types.MultiBatch) 
 			uniquer,
 			k.Table().Raw(), 1,
 		)
-		_, err := b.client.PutObject(ctx, b.bucketName, objectName,
+		if _, err := b.client.PutObject(ctx, b.bucketName, objectName,
 			strings.NewReader(v.String()), int64(v.Len()),
 			minio.PutObjectOptions{},
-		)
-		return err
-	})
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *sourceBucket) writeResolved(ctx context.Context, resolved hlc.Time) error {

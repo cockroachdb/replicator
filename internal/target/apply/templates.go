@@ -22,11 +22,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
+	"github.com/cockroachdb/replicator/internal/util/cmap"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -49,6 +52,20 @@ var (
 	EmbeddedTemplates embed.FS
 
 	tmplFuncs = template.FuncMap{
+		// deadlineEntries generates a sorted slice of deadlined column
+		// names to the configured duration.
+		"deadlineEntries": func(
+			m *ident.Map[time.Duration],
+		) []cmap.Entry[ident.Ident, time.Duration] {
+			var ret []cmap.Entry[ident.Ident, time.Duration]
+			for k, v := range m.All() {
+				ret = append(ret, cmap.Entry[ident.Ident, time.Duration]{Key: k, Value: v})
+			}
+			sort.Slice(ret, func(i, j int) bool {
+				return ident.Compare(ret[i].Key, ret[j].Key) < 0
+			})
+			return ret
+		},
 		// The pgx driver has trouble converting from the []any it gets
 		// when the mutation payload is unpacked, since it doesn't
 		// necessarily know the type details of an enum array. This hack

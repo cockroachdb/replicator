@@ -67,7 +67,7 @@ type Batch[B any] interface {
 }
 
 // Flatten copies all mutations in a batch into a slice.
-func Flatten[B any](batch Batch[B]) []Mutation {
+func Flatten[B Batch[B]](batch B) []Mutation {
 	var ret []Mutation
 	// Ignoring error since callback returns nil.
 	_ = batch.CopyInto(AccumulatorFunc(func(_ ident.Table, mut Mutation) error {
@@ -78,7 +78,7 @@ func Flatten[B any](batch Batch[B]) []Mutation {
 }
 
 // FlattenByTable copies the mutations into an [ident.TableMap].
-func FlattenByTable[B any](batch Batch[B]) *ident.TableMap[[]Mutation] {
+func FlattenByTable[B Batch[B]](batch B) *ident.TableMap[[]Mutation] {
 	ret := &ident.TableMap[[]Mutation]{}
 	// Ignoring error since callback returns nil.
 	_ = batch.CopyInto(AccumulatorFunc(func(table ident.Table, mut Mutation) error {
@@ -284,10 +284,9 @@ func (b *TemporalBatch) Copy() *TemporalBatch {
 	ret := &TemporalBatch{
 		Time: b.Time,
 	}
-	_ = b.Data.Range(func(tbl ident.Table, b *TableBatch) error {
+	for tbl, b := range b.Data.All() {
 		ret.Data.Put(tbl, b.Copy())
-		return nil
-	})
+	}
 	return ret
 }
 
@@ -295,10 +294,9 @@ func (b *TemporalBatch) Copy() *TemporalBatch {
 // sorted by table name and then by key.
 func (b *TemporalBatch) CopyInto(acc Accumulator) error {
 	var tables []ident.Table
-	_ = b.Data.Range(func(table ident.Table, _ *TableBatch) error {
+	for table := range b.Data.Keys() {
 		tables = append(tables, table)
-		return nil
-	})
+	}
 	sort.Slice(tables, func(i, j int) bool {
 		return strings.Compare(tables[i].Raw(), tables[j].Raw()) < 0
 	})
@@ -313,10 +311,9 @@ func (b *TemporalBatch) CopyInto(acc Accumulator) error {
 // Count returns the number of enclosed mutations.
 func (b *TemporalBatch) Count() int {
 	ret := 0
-	_ = b.Data.Range(func(_ ident.Table, tbl *TableBatch) error {
+	for tbl := range b.Data.Values() {
 		ret += tbl.Count()
-		return nil
-	})
+	}
 	return ret
 }
 

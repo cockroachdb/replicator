@@ -98,7 +98,7 @@ func (a *sourceAcceptor) acceptOne(
 		return err
 	}
 	// Push the mutations into the replacement batch.
-	if err := dispatched.Range(func(table ident.Table, muts []types.Mutation) error {
+	for table, muts := range dispatched.All() {
 		if table.Empty() {
 			return errors.Errorf("%s returned an empty table name", fnName)
 		}
@@ -112,12 +112,9 @@ func (a *sourceAcceptor) acceptOne(
 			// Preserve incoming timestamp.
 			dispatchedMut.Time = mutToDispatch.Time
 			if err := acc.Accumulate(table, dispatchedMut); err != nil {
-				return err
+				return errors.Wrap(err, a.group.Name.Raw())
 			}
 		}
-		return err
-	}); err != nil {
-		return errors.Wrap(err, a.group.Name.Raw())
 	}
 	return nil
 }

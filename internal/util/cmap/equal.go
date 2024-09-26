@@ -16,10 +16,6 @@
 
 package cmap
 
-import "github.com/pkg/errors"
-
-var errStop = errors.New("sentinel")
-
 // Comparator returns a comparator for comparable types.
 func Comparator[C comparable]() func(C, C) bool {
 	return func(a C, b C) bool {
@@ -43,19 +39,15 @@ func Equal[K, V any](a, b Map[K, V], comparator func(V, V) bool) bool {
 		return false
 	}
 
-	ret := true
-	_ = a.Range(func(aK K, aV V) error {
+	for aK, aV := range a.All() {
 		bV, ok := b.Get(aK)
 		if !ok {
-			ret = false
-			return errStop
+			return false
 		}
 		if !comparator(aV, bV) {
-			ret = false
-			return errStop
+			return false
 		}
-		return nil
-	})
+	}
 
-	return ret
+	return true
 }

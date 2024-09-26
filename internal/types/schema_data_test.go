@@ -200,23 +200,21 @@ func TestSetComponents(t *testing.T) {
 		r.NoError(next.UnmarshalJSON(data))
 
 		r.Equal(sd.Columns.Len(), next.Columns.Len())
-		_ = sd.Columns.Range(func(table ident.Table, cols []ColData) error {
+		for table, cols := range sd.Columns.All() {
 			found := next.Columns.GetZero(table)
 			r.Len(found, len(cols))
 			for i := range cols {
 				r.True(cols[i].Equal(found[i]))
 			}
-			return nil
-		})
+		}
 		r.Equal(sd.Dependencies.Len(), next.Dependencies.Len())
-		_ = sd.Dependencies.Range(func(table ident.Table, deps []ident.Table) error {
+		for table, deps := range sd.Dependencies.All() {
 			found := next.Dependencies.GetZero(table)
 			r.Len(found, len(deps))
 			for i := range deps {
 				r.True(ident.Equal(deps[i], found[i]))
 			}
-			return nil
-		})
+		}
 	})
 
 	t.Run("check_cycle", func(t *testing.T) {

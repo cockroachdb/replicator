@@ -419,8 +419,8 @@ func (p *kafkaProducer) writeBatch(batch *types.MultiBatch) error {
 		Updated string          `json:"updated"`
 	}
 	for _, b := range batch.Data {
-		for _, t := range b.Data.Entries() {
-			for _, v := range t.Value.Data {
+		for t := range b.Data.Values() {
+			for _, v := range t.Data {
 				msg := &payload{
 					After:   v.Data,
 					Before:  v.Before,
@@ -431,7 +431,7 @@ func (p *kafkaProducer) writeBatch(batch *types.MultiBatch) error {
 				if v.IsDelete() {
 					msg.After = nil
 				}
-				err := p.sendMessage(t.Value.Table.Raw(), -1, v.Key, msg)
+				err := p.sendMessage(t.Table.Raw(), -1, v.Key, msg)
 				if err != nil {
 					return err
 				}

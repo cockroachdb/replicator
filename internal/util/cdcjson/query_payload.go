@@ -128,12 +128,12 @@ func (q *queryPayload) UnmarshalJSON(data []byte) error {
 	}
 	// Extract PK values.
 	q.keyValues = make([]json.RawMessage, q.keys.Len())
-	return q.keys.Range(func(k ident.Ident, pos int) error {
+	for k, pos := range q.keys.All() {
 		v, ok := msg.Get(k)
 		if !ok {
 			return errors.Errorf("missing primary key: %s", k)
 		}
 		q.keyValues[pos] = v
-		return nil
-	})
+	}
+	return nil
 }

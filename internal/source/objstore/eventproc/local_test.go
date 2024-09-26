@@ -198,11 +198,9 @@ func TestLocalProcess(t *testing.T) {
 			// Make sure all the data in the batch has the correct table
 			for _, call := range tt.acceptor.Calls() {
 				for _, data := range call.Multi.Data {
-					data.Data.Range(
-						func(k ident.Table, v *types.TableBatch) error {
-							a.Equal(tt.wantTable, k)
-							return nil
-						})
+					for k := range data.Data.Keys() {
+						a.Equal(tt.wantTable, k)
+					}
 				}
 			}
 			// Verify timestamps.

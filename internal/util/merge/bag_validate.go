@@ -31,13 +31,12 @@ func ValidateNoUnmappedColumns(bag *Bag) error {
 	}
 
 	var unexpectedCols strings.Builder
-	_ = bag.Unmapped.Range(func(name ident.Ident, _ any) error {
+	for name := range bag.Unmapped.Keys() {
 		if unexpectedCols.Len() > 0 {
 			unexpectedCols.WriteString(", ")
 		}
 		unexpectedCols.WriteString(name.Raw())
-		return nil
-	})
+	}
 	return errors.Errorf("unexpected columns: %s", unexpectedCols.String())
 }
 
@@ -63,12 +62,11 @@ func ValidatePK(bag *Bag) error {
 	}
 
 	var missingCols strings.Builder
-	_ = missingPKs.Range(func(name ident.Ident, _ struct{}) error {
+	for name := range missingPKs.Keys() {
 		if missingCols.Len() > 0 {
 			missingCols.WriteString(", ")
 		}
 		missingCols.WriteString(name.Raw())
-		return nil
-	})
+	}
 	return errors.Errorf("missing PK columns: %s", missingCols.String())
 }

@@ -42,12 +42,10 @@ func (c *Configs) Diagnostic(_ context.Context) any {
 	defer c.mu.RUnlock()
 
 	ret := &ident.TableMap[*Config]{}
-	// No error returned from callback.
-	_ = c.mu.data.Range(func(tbl ident.Table, v *notify.Var[*Config]) error {
+	for tbl, v := range c.mu.data.All() {
 		cfg, _ := v.Get()
 		ret.Put(tbl, cfg)
-		return nil
-	})
+	}
 
 	return ret
 }

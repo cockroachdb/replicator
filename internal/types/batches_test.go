@@ -91,6 +91,6 @@ func testBatchInterface[B types.Batch[B]](t *testing.T, batch B) {
 	r.NoError(batch.CopyInto(acc))
 	r.Equal(batch.Count(), acc.Count())
 
-	flattened := types.Flatten[B](batch)
+	flattened := types.Flatten(batch)
 	r.Equal(expected, flattened)
 }

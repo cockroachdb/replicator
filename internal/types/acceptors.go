@@ -144,7 +144,7 @@ func (t *orderedAdapter) AcceptMultiBatch(
 		var currentDeletes, currentUpdates ident.TableMap[[]Mutation]
 		// Segment mutations by type and table. Ignoring return since no
 		// error is returned from the callback.
-		_ = temporal.Data.Range(func(table ident.Table, tableBatch *TableBatch) error {
+		for table, tableBatch := range temporal.Data.All() {
 			for _, mut := range tableBatch.Data {
 				if mut.IsDelete() {
 					currentDeletes.Put(table, append(currentDeletes.GetZero(table), mut))
@@ -152,8 +152,7 @@ func (t *orderedAdapter) AcceptMultiBatch(
 					currentUpdates.Put(table, append(currentUpdates.GetZero(table), mut))
 				}
 			}
-			return nil
-		})
+		}
 
 		// If we have any deletes in this batch, we want to flush
 		// all preceding updates, then the deletions.
@@ -167,10 +166,9 @@ func (t *orderedAdapter) AcceptMultiBatch(
 		}
 
 		// Continue accumulating updates.
-		_ = currentUpdates.Range(func(table ident.Table, muts []Mutation) error {
+		for table, muts := range currentUpdates.All() {
 			pendingUpdates.Put(table, append(pendingUpdates.GetZero(table), muts...))
-			return nil
-		})
+		}
 	}
 
 	// Final flush. In cases where there are no deletions, this should
@@ -204,13 +202,12 @@ func (t *orderedAdapter) flush(
 	// There are leftover tables in the batch for which we do not
 	// have a defined order.
 	var sb strings.Builder
-	_ = acc.Range(func(table ident.Table, _ []Mutation) error {
+	for table := range acc.Keys() {
 		if sb.Len() > 0 {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(table.Canonical().Raw())
-		return nil
-	})
+	}
 	return errors.Errorf("%s sent to unknown tables: %s", kind, sb.String())
 }
 
@@ -249,11 +246,10 @@ func (u *unorderedAdapter) AcceptMultiBatch(
 func (u *unorderedAdapter) AcceptTemporalBatch(
 	ctx context.Context, batch *TemporalBatch, opts *AcceptOptions,
 ) error {
-	if err := batch.Data.Range(func(table ident.Table, tableBatch *TableBatch) error {
-		err := u.AcceptTableBatch(ctx, tableBatch, opts)
-		return errors.Wrapf(err, "%s @ %s", table.Raw(), batch.Time)
-	}); err != nil {
-		return err
+	for table, tableBatch := range batch.Data.All() {
+		if err := u.AcceptTableBatch(ctx, tableBatch, opts); err != nil {
+			return errors.Wrapf(err, "%s @ %s", table.Raw(), batch.Time)
+		}
 	}
 	return nil
 }

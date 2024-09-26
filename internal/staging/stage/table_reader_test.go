@@ -122,7 +122,7 @@ func TestTableReader(t *testing.T) {
 					r.False(cursor.Fragment)
 				}
 
-				seen = append(seen, types.Flatten[*types.MultiBatch](cursor.Batch)...)
+				seen = append(seen, types.Flatten(cursor.Batch)...)
 				times = append(times, cursor.Progress.Min())
 
 				log.Infof("position %s vs %s", cursor.Progress, smallBatchEnd.Next())
@@ -189,7 +189,7 @@ func TestTableReader(t *testing.T) {
 				r.Len(cursor.Batch.Data, 1)
 				times[cursor.Batch.Data[0].Time] = struct{}{}
 
-				seen = append(seen, types.Flatten[*types.MultiBatch](cursor.Batch)...)
+				seen = append(seen, types.Flatten(cursor.Batch)...)
 
 				log.Infof("Progress %s", cursor.Progress)
 				if cursor.Progress.MaxInclusive() == bigTime {

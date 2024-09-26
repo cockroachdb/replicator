@@ -16,7 +16,11 @@
 
 package cmap
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"iter"
+	"maps"
+)
 
 // NewIdentity returns a Map for comparable keys. A basic map type is
 // recommended unless compatibility with the Map interface is necessary.
@@ -25,6 +29,10 @@ func NewIdentity[K comparable, V any]() Map[K, V] {
 }
 
 type identity[K comparable, V any] map[K]V
+
+func (m identity[K, V]) All() iter.Seq2[K, V] {
+	return maps.All(m)
+}
 
 func (m identity[K, V]) CopyInto(dest Map[K, V]) {
 	for k, v := range m {
@@ -36,14 +44,6 @@ func (m identity[K, V]) Delete(key K) {
 	delete(m, key)
 }
 
-func (m identity[K, V]) Entries() []Entry[K, V] {
-	ret := make([]Entry[K, V], 0, len(m))
-	for k, v := range m {
-		ret = append(ret, Entry[K, V]{k, v})
-	}
-	return ret
-}
-
 func (m identity[K, V]) Get(key K) (_ V, ok bool) {
 	ret, ok := m[key]
 	return ret, ok
@@ -51,6 +51,10 @@ func (m identity[K, V]) Get(key K) (_ V, ok bool) {
 
 func (m identity[K, V]) GetZero(key K) V {
 	return m[key]
+}
+
+func (m identity[K, V]) Keys() iter.Seq[K] {
+	return maps.Keys(m)
 }
 
 func (m identity[K, V]) Len() int {
@@ -84,4 +88,8 @@ func (m identity[K, V]) MarshalJSON() ([]byte, error) {
 
 func (m identity[K, V]) UnmarshalJSON(buf []byte) error {
 	return json.Unmarshal(buf, &m)
+}
+
+func (m identity[K, V]) Values() iter.Seq[V] {
+	return maps.Values(m)
 }

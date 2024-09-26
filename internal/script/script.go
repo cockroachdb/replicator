@@ -442,12 +442,11 @@ func (s *UserScript) bindDeletesToFunction(fnName string, deletesTo deletesToJS)
 		}
 
 		// Ensure that any emitted mutation will be a deletion.
-		_ = dispatched.Range(func(_ ident.Table, muts []types.Mutation) error {
+		for muts := range dispatched.Values() {
 			for idx := range muts {
 				muts[idx].Deletion = true
 			}
-			return nil
-		})
+		}
 
 		return dispatched, nil
 	}

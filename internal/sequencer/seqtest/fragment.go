@@ -19,7 +19,6 @@ package seqtest
 import (
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/batches"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
 // Fragment breaks a batch up into a number of minimum-sized batches
@@ -29,9 +28,9 @@ import (
 func Fragment(batch *types.MultiBatch, windowSize int) ([]*types.MultiBatch, error) {
 	var ret []*types.MultiBatch
 
-	byTable := types.FlattenByTable[*types.MultiBatch](batch)
-	if err := byTable.Range(func(table ident.Table, muts []types.Mutation) error {
-		return batches.Window(windowSize, len(muts), func(begin, end int) error {
+	byTable := types.FlattenByTable(batch)
+	for table, muts := range byTable.All() {
+		if err := batches.Window(windowSize, len(muts), func(begin, end int) error {
 			next := &types.MultiBatch{}
 			ret = append(ret, next)
 			for _, mut := range muts[begin:end] {
@@ -40,9 +39,9 @@ func Fragment(batch *types.MultiBatch, windowSize int) ([]*types.MultiBatch, err
 				}
 			}
 			return nil
-		})
-	}); err != nil {
-		return nil, err
+		}); err != nil {
+			return nil, err
+		}
 	}
 	return ret, nil
 }

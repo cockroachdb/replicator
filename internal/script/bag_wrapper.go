@@ -60,11 +60,9 @@ func (m *bagWrapper) Has(key string) bool {
 // Keys implements goja.DynamicObject.
 func (m *bagWrapper) Keys() []string {
 	ret := make([]string, 0, m.data.Len())
-	// Ignoring error since callback returns nil.
-	_ = m.data.Range(func(k ident.Ident, v any) error {
+	for k := range m.data.Keys() {
 		ret = append(ret, k.Raw())
-		return nil
-	})
+	}
 	return ret
 }
 

@@ -17,11 +17,11 @@
 package merge
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,14 +41,11 @@ func TestEmpty(t *testing.T) {
 	// Expect entries to be pre-created.
 	a.Equal(len(colData), b.Mapped.Len())
 	// Those entries should not have their valid flag set.
-	a.NoError(b.Mapped.Range(func(_ ident.Ident, entry *Entry) error {
+	for entry := range b.Mapped.Values() {
 		a.False(entry.Valid)
-		return nil
-	}))
+	}
 	a.Equal(0, b.Len())
 
-	// Nothing has been set, so entries should be empty.
-	a.Empty(b.Entries())
 	for _, col := range colData {
 		a.Zero(b.GetZero(col.Name))
 
@@ -69,9 +66,8 @@ func TestEmpty(t *testing.T) {
 	if data, err := b.MarshalJSON(); a.NoError(err) {
 		a.Equal([]byte("{}"), data)
 	}
-	a.NoError(b.Range(func(_ ident.Ident, _ any) error {
-		return errors.New("should be empty")
-	}))
+	a.Empty(slices.Collect(b.Keys()))
+	a.Empty(slices.Collect(b.Values()))
 
 	a.NoError(ValidateNoUnmappedColumns(b))
 	a.ErrorContains(ValidatePK(b), "col0")
@@ -104,7 +100,7 @@ func TestBag(t *testing.T) {
 
 	// Len() and Entries()
 	a.Equal(len(expected), b.Len())
-	a.Len(b.Entries(), len(expected))
+	a.Len(slices.Collect(b.Values()), len(expected))
 
 	// Check internal state.
 	a.Equal(len(colData), b.Mapped.Len())
@@ -115,16 +111,12 @@ func TestBag(t *testing.T) {
 	b.CopyInto(&temp)
 	a.Equal(len(expected), temp.Len())
 
-	// Range()
-	ct := 0
-	a.NoError(b.Range(func(ident.Ident, any) error {
-		ct++
-		return nil
-	}))
-	a.Equal(len(expected), ct)
+	// Iterators.
+	a.Len(slices.Collect(b.Keys()), len(expected))
+	a.Len(slices.Collect(b.Values()), len(expected))
 
 	// Getters and Match()
-	a.NoError(b.Range(func(k ident.Ident, v any) error {
+	for k, v := range b.All() {
 		a.Equal(v, b.GetZero(k))
 
 		found, ok := b.Get(k)
@@ -135,8 +127,7 @@ func TestBag(t *testing.T) {
 		a.Equal(k, original)
 		a.Equal(v, found)
 		a.True(ok)
-		return nil
-	}))
+	}
 
 	data, err := b.MarshalJSON()
 	if a.NoError(err) {
@@ -150,9 +141,8 @@ func TestBag(t *testing.T) {
 	a.ErrorContains(ValidateNoUnmappedColumns(b), "unmapped")
 	a.NoError(ValidatePK(b))
 
-	a.NoError(b.Range(func(k ident.Ident, _ any) error {
+	for k := range b.Keys() {
 		b.Delete(k)
-		return nil
-	}))
+	}
 	a.Equal(0, b.Len())
 }

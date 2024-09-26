@@ -49,10 +49,9 @@ func (f *factory) Diagnostic(_ context.Context) any {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	_ = f.mu.data.Range(func(sch ident.Schema, w *watcher) error {
+	for sch, w := range f.mu.data.All() {
 		ret[sch.Raw()] = w.Get()
-		return nil
-	})
+	}
 
 	return ret
 }
