@@ -53,6 +53,12 @@ func LeaseGroup(
 			names[idx] = fmt.Sprintf("sequtil.Lease.%s", table.Canonical().Raw())
 		}
 
+		// If no table is specified via group.Tables, use the whole
+		// group name as the lease name.
+		if len(names) == 0 {
+			names = append(names, fmt.Sprintf("sequtil.Lease.%s", group.Name.Raw()))
+		}
+
 		// Run this in a loop in case of non-renewal. This is likely
 		// caused by database overload or any other case where we can't
 		// run SQL in a timely fashion.

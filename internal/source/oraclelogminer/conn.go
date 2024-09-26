@@ -19,13 +19,15 @@ package oraclelogminer
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/source/oraclelogminer/scn"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -35,12 +37,17 @@ import (
 type DB struct {
 	*types.SourcePool
 
-	// The destination for writes.
-	acceptor types.TemporalAcceptor
 	// The connector configuration.
 	config *Config
+
+	// Ensure the timestamps we generate always march forward.
+	monotonic hlc.Clock
+
 	// Access to the target database.
 	targetDB *types.TargetPool
+
+	// Holds the guaranteed-committed SCN.
+	walOffset notify.Var[*scn.SCN]
 }
 
 var _ diag.Diagnostic = (*DB)(nil)
@@ -51,31 +58,16 @@ func (db *DB) Diagnostic(_ context.Context) any {
 	return map[string]any{}
 }
 
-// Start the replication loop in a go routine.
-func (db *DB) Start(ctx *stopper.Context) error {
-	ctx.Go(func(ctx *stopper.Context) error {
-		for !ctx.IsStopping() {
-			if err := db.copyMessages(ctx); err != nil {
-				log.WithError(err).Warn("error while copying messages; will retry")
-				select {
-				case <-ctx.Stopping():
-				case <-time.After(time.Second):
-				}
-			}
-		}
-		return nil
-	})
-	return nil
-}
-
-// copyMessages periodically pulls from the logMiner, parses the logs into mutations and apply
-// the mutations on the target database.
-func (db *DB) copyMessages(ctx *stopper.Context) error {
-	// Create a ticker that triggers every second
+// outputMessage periodically pulls from the logMiner, parses the logs
+// into mutations and batches the mutations based on their transaction
+// ID, and push it to the out channel. All mutations that belong to the
+// same source transaction will be grouped into the same temporal batch.
+func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor) {
+	// Create a ticker that triggers every interval.
 	ticker := time.NewTicker(db.config.LogMinerPullInterval)
 	defer ticker.Stop()
 
-	startSCN := SCN{}
+	startSCN := scn.SCN{}
 
 	// Pull based model for acquiring the changefeed logs and convert them into mutations.
 	for {
@@ -87,22 +79,22 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 			// TODO(janexing): make the changefeed acquiring executed IN PARALLEL TO the applying logic.
 			logs, nextStartSCN, err := readLogsOnce(ctx, db.SourcePool, startSCN, db.config.SourceSchema.Raw())
 			if err != nil {
-				return errors.Wrapf(err, "failed to obtain changefeed logs")
+				out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to obtain changefeed logs")}
+				return
 			}
 			startSCN = nextStartSCN
 			log.Infof("received %d logs", len(logs))
 			// Logs with the same XID (transaction ID) will be put into the same temporalBatch.
 			// TODO(janexing): set the commit SCN as the ext time for this temporal batch.
 			temporalBatch := &types.TemporalBatch{}
-			// Once all logs are processed, the batches are sent to conn acceptor one by one.
-			temporalBatches := make([]*types.TemporalBatch, 0)
 
 			var prevXID, currXID []byte
 			for _, lg := range logs {
 				// Parse the redo sql stt to a kv struct.
 				kv, err := LogToKV(lg.SQLRedo)
 				if err != nil {
-					return err
+					out <- &types.BatchCursor{Error: err}
+					return
 				}
 
 				currXID = lg.TxnID
@@ -113,7 +105,6 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 				// If the transaction ID changed, push the current temporal batch to the collection,
 				// and create a new batch for the new transaction ID.
 				if !bytes.Equal(currXID, prevXID) {
-					temporalBatches = append(temporalBatches, temporalBatch)
 					temporalBatch = &types.TemporalBatch{}
 				}
 
@@ -125,13 +116,15 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 				if lg.Operation != OperationInsert {
 					pkNames, err := GetPKNames(ctx, db.SourcePool, lg.SegOwner, lg.TableName)
 					if err != nil {
-						return err
+						out <- &types.BatchCursor{Error: err}
+						return
 					}
 					// TODO(janexing): consider changefeed log where the PK is updated.
 					for _, pkName := range pkNames {
 						pkVal, ok := kv.WhereKV[pkName]
 						if !ok {
-							return errors.Errorf("value not found for primary key %s in the changefeed log", pkName)
+							out <- &types.BatchCursor{Error: errors.Errorf("value not found for primary key %s in the changefeed log", pkName)}
+							return
 						}
 						kv.ValKV[pkName] = pkVal
 					}
@@ -140,7 +133,8 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 				// Convert the kv struct into a mutation obj.
 				byteRes, err := json.Marshal(kv.ValKV)
 				if err != nil {
-					return errors.Wrapf(err, "failed to marshal kv")
+					out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to marshal kv")}
+					return
 				}
 				mut := types.Mutation{
 					Data:     byteRes,
@@ -149,62 +143,49 @@ func (db *DB) copyMessages(ctx *stopper.Context) error {
 
 				rowIDRaw, err := json.Marshal(lg.RowID)
 				if err != nil {
-					return errors.Wrapf(err, "failed to marshal rowID")
+					out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to marshal rowID")}
+					return
 				}
 				mut.Key = rowIDRaw
 
-				// Set the timestamp of mutation.
-				// THE CURRENT IMPLEMENTATION HERE IS WRONG, as we don't have convenient way to
-				// convert a SCN to a timestamp with sufficiently precision at this moment,
-				// so we use this function as a placeholder for now.
-				// TODO(janexing): use the commit SCN for ext for time.
-				hlcTime, err := scnToHLCTime(lg.CommitSCN)
-				if err != nil {
-					return err
+				// TODO(janexing): we only set the external of time for
+				// mutation and temporal batch, without taking care of
+				// nano and logical. Is this sufficient?
+				if temporalBatch.Time.External() == nil {
+					commitSCN, err := scn.ParseStringToSCN(lg.CommitSCN)
+					if err != nil {
+						out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to parse commit SCN for log")}
+					}
+					temporalBatch.Time = db.monotonic.External(commitSCN)
 				}
-				mut.Time = hlcTime
-
-				if temporalBatch.Time.Nanos() == 0 {
-					temporalBatch.Time = hlcTime
-				}
-				mut.SCN = lg.CommitSCN
+				mut.Time = temporalBatch.Time
 
 				targetTbl := ident.NewTable(db.config.TargetSchema, ident.New(lg.TableName))
 				if err := temporalBatch.Accumulate(targetTbl, mut); err != nil {
-					return errors.Wrapf(err, "failed to accumulate mut to batch")
+					out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to accumulate mutation to batch")}
+					return
 				}
 			}
 
-			if temporalBatch.Time.Nanos() != 0 {
-				temporalBatches = append(temporalBatches, temporalBatch)
-			}
-
-			if len(temporalBatches) > 0 {
-				log.Debug("started txn to apply temporal batches on target")
-
-				tx, err := db.targetDB.BeginTx(ctx, &sql.TxOptions{})
-				if err != nil {
-					return errors.Wrapf(err, "failed to begin a txn on the target db")
-				}
-
-				log.Debug("start accepting temporal batches")
-
-				for _, tmpBatch := range temporalBatches {
-					if err := db.acceptor.AcceptTemporalBatch(ctx, tmpBatch, &types.AcceptOptions{
-						TargetQuerier: tx,
-					}); err != nil {
-						return errors.Wrapf(err, "failed to accept temporal batch")
-					}
-				}
-
-				log.Debug("finished accepting temporal batches")
-				if err := tx.Commit(); err != nil {
-					return err
-				}
-				log.Debug("txn committed")
+			// TODO(janexing): figure out what else to include in the batch cursor.
+			out <- &types.BatchCursor{
+				Batch:    temporalBatch,
+				Progress: hlc.RangeIncluding(hlc.Zero(), temporalBatch.Time),
 			}
 		case <-ctx.Done():
-			return nil
+			return
 		}
 	}
+}
+
+var _ types.BatchReader = (*DB)(nil)
+
+func (db *DB) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+	readChan := make(chan *types.BatchCursor, 2)
+
+	ctx.Go(func(ctx *stopper.Context) error {
+		db.outputMessage(ctx, readChan)
+		return nil
+	})
+	return readChan, nil
 }
