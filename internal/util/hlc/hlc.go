@@ -57,6 +57,7 @@ func Compare(a, b Time) int {
 	if c := a.nanos - b.nanos; c != 0 {
 		return int(c)
 	}
+
 	return a.logical - b.logical
 }
 

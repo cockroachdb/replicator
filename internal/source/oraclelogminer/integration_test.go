@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
+	"github.com/cockroachdb/replicator/internal/source/oraclelogminer/scn"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/pkg/errors"
@@ -158,9 +159,11 @@ func TestStart(t *testing.T) {
 			time.Sleep(4 * time.Second)
 
 			// Acquire the SCN to start.
-			var startSCN string
-			r.NoError(oraclePool.QueryRowContext(ctx, `SELECT CURRENT_SCN FROM V$DATABASE`).Scan(&startSCN))
-			t.Logf("starting SCN: %s", startSCN)
+			var startSCNStr string
+			r.NoError(oraclePool.QueryRowContext(ctx, `SELECT CURRENT_SCN FROM V$DATABASE`).Scan(&startSCNStr))
+			t.Logf("starting SCN: %s", startSCNStr)
+			startSCN, err := scn.ParseStringToSCN(startSCNStr)
+			r.NoError(err)
 
 			t.Logf("oraclepool conn str: %s", oraclePool.ConnectionString)
 
@@ -176,7 +179,7 @@ func TestStart(t *testing.T) {
 				},
 				SourceConn:           oraclePool.ConnectionString,
 				TargetSchema:         fixture.TargetSchema.Schema(),
-				SCN:                  SCN{Val: startSCN},
+				SCN:                  startSCN,
 				SourceSchema:         fixture.SourceSchema.Schema(),
 				LogMinerPullInterval: 300 * time.Millisecond,
 			}
