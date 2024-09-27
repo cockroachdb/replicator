@@ -50,16 +50,16 @@ type BatchCursor struct {
 	// Jump indicates that the scanning bounds changed such that the
 	// data in the stream may be disjoint.
 	Jump bool
-
-	// Marker is a caller-specific value associated with the cursor.
-	Marker any
-
+	
 	// Progress indicates the range of data which has been successfully
 	// scanned so far. Receivers may encounter progress-only updates
 	// which happen when the end of the scanned bounds have been reached
 	// or if there is a "pipeline bubble" when reading data from the
 	// staging tables.
 	Progress hlc.Range
+
+	// Tag is a caller-specific value associated with the cursor.
+	Tag any
 }
 
 // Copy returns a deep copy of the cursor.

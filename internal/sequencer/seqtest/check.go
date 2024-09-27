@@ -26,7 +26,6 @@ import (
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
-	"github.com/cockroachdb/field-eng-powertools/stopvar"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
@@ -260,19 +259,21 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 		batch:      testData,
 		progressTo: generator.Range(),
 	}
-	sink.terminal.Set(make(map[*types.TemporalBatch]error, c.Transactions))
+	sink.terminal.Set(make(map[hlc.Time]error, c.Transactions))
 
 	startOpts := &sequencer.StartOptions{
 		BatchReader: sink,
 		Bounds:      &c.Bounds,
 		Delegate:    types.OrderedAcceptorFrom(c.Fixture.ApplyAcceptor, c.Fixture.Watchers),
 		Group:       group,
-		Terminal: func(_ *stopper.Context, batch *types.TemporalBatch, err error) error {
-			_, _, _ = sink.terminal.Update(func(m map[*types.TemporalBatch]error) (map[*types.TemporalBatch]error, error) {
-				m[batch] = err
-				return m, nil
-			})
-			return nil
+		Terminal: func(_ *stopper.Context, mark any, err error) error {
+			_, _, _ = sink.terminal.Update(
+				func(m map[hlc.Time]error) (map[hlc.Time]error, error) {
+					m[mark.(hlc.Time)] = err
+					return m, nil
+				})
+			// Return the original error to force a retry.
+			return err
 		},
 	}
 
@@ -281,7 +282,23 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 	r.NoError(err)
 
 	// Wait for all data to have been read out of the sink at least once.
-	r.NoError(stopvar.WaitForValue(ctx, true, &sink.empty))
+	for {
+		var readAll bool
+		updated, err := sink.terminal.Peek(func(value map[hlc.Time]error) error {
+			readAll = len(value) >= len(testData.Data)
+			log.Infof("waiting for all data to be read %d of %d", len(value), len(testData.Data))
+			return nil
+		})
+		r.NoError(err)
+		if readAll {
+			break
+		}
+		select {
+		case <-updated:
+		case <-ctx.Done():
+			r.NoError(ctx.Err())
+		}
+	}
 	log.Infof("source data consumed in %s", time.Since(now))
 
 	// Set desired range.
@@ -291,21 +308,29 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 	// Wait to catch up.
 	now = time.Now()
 	r.NoError(generator.WaitForCatchUp(ctx, stats))
-	log.Infof("caught up in an additional %s", time.Since(now))
+	log.Infof("caught up in an additional %s; %d parents %d children",
+		time.Since(now), len(generator.Parents), len(generator.Children))
+
+	// Verify target contents.
+	generator.CheckConsistent(ctx, t)
 
 	// Ensure all generated batches eventually reached a successful
-	// terminal state.
-	_, err = sink.terminal.Peek(func(m map[*types.TemporalBatch]error) error {
-		r.Len(m, len(testData.Data))
+	// terminal state. This only indicates that the batch was written
+	// some durable storage. This does not necessarily mean the target
+	// table, but it could be staging.
+	_, _ = sink.terminal.Peek(func(m map[hlc.Time]error) error {
+		if cfg.DisableFK && len(m) == 2*len(testData.Data) {
+			// In best-effort mode, we'll expect to see twice the number
+			// of callbacks. The two tables are running independently,
+			// so the cursors get split up, one for each table.
+		} else {
+			r.Len(m, len(testData.Data))
+		}
 		for _, err := range m {
 			r.NoError(err)
 		}
 		return nil
 	})
-	r.NoError(err)
-
-	// Verify target contents.
-	generator.CheckConsistent(ctx, t)
 
 	// Ensure staging tables make sense.
 	for _, table := range []ident.Table{generator.Parent.Name(), generator.Child.Name()} {
@@ -323,29 +348,32 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 // data.
 type dummyReader struct {
 	batch      *types.MultiBatch
-	empty      notify.Var[bool]
 	progressTo hlc.Range
-	terminal   notify.Var[map[*types.TemporalBatch]error]
+	terminal   notify.Var[map[hlc.Time]error]
+	unique     hlc.Clock
 }
 
 var _ types.BatchReader = (*dummyReader)(nil)
 
 func (r *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
-	ch := make(chan *types.BatchCursor)
+	ch := make(chan *types.BatchCursor, 2)
 	ctx.Go(func(ctx *stopper.Context) error {
 		defer close(ch)
 		for _, temp := range r.batch.Data {
 			var send bool
-			_, _ = r.terminal.Peek(func(m map[*types.TemporalBatch]error) error {
-				err, ok := m[temp]
+			_, _ = r.terminal.Peek(func(m map[hlc.Time]error) error {
+				err, ok := m[temp.Time]
 				send = err != nil || !ok
 				return nil
 			})
 			if !send {
 				continue
 			}
+			log.Infof("sending %s", temp.Time)
+			temp = temp.Copy()
 			cur := &types.BatchCursor{
 				Batch:    temp,
+				Tag:      r.unique.Now(), // Tag the cursor to verify wiring.
 				Progress: hlc.RangeIncluding(hlc.Zero(), temp.Time),
 			}
 			select {
@@ -361,7 +389,7 @@ func (r *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, err
 		case <-ctx.Stopping():
 			return nil
 		}
-		r.empty.Set(true)
+		log.Infof("sent final progress %s", r.progressTo)
 		// Become idle until shutdown, which is how a real
 		// implementation would behave when no more data is available.
 		<-ctx.Stopping()

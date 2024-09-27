@@ -148,10 +148,9 @@ func (s *staging) stageCursor(ctx *stopper.Context, cur *types.BatchCursor, term
 	// installed. If we can report errors out-of-band, we'll let the
 	// hook replace the error.
 	defer func() {
-		if terminal == nil || cur.Batch == nil {
-			return
+		if terminal != nil && cur.Tag != nil {
+			err = terminal(ctx, cur.Tag, err)
 		}
-		err = terminal(ctx, cur.Batch, err)
 	}()
 
 	// Progress-only update.

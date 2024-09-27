@@ -62,6 +62,9 @@ type round struct {
 }
 
 func (r *round) accumulate(cursors []*types.BatchCursor) error {
+	if r.batch == nil {
+		r.batch = &types.MultiBatch{}
+	}
 	for _, cur := range cursors {
 		batch := cur.Batch
 		r.mutationCount += batch.Count()
@@ -70,12 +73,12 @@ func (r *round) accumulate(cursors []*types.BatchCursor) error {
 			if hlc.Compare(temp.Time, r.advanceTo.MaxInclusive()) > 0 {
 				r.advanceTo = hlc.RangeExcluding(hlc.Zero(), temp.Time)
 			}
+			if err := types.Apply(temp.Mutations(), r.batch.Accumulate); err != nil {
+				return err
+			}
 		}
-		if err := types.Apply(cur.Batch.Mutations(), r.batch.Accumulate); err != nil {
-			return err
-		}
-		if cur.Marker != nil {
-			r.markers = append(r.markers, cur.Marker)
+		if cur.Tag != nil {
+			r.markers = append(r.markers, cur.Tag)
 		}
 	}
 	return nil
@@ -154,6 +157,7 @@ func (r *round) tryCommit(ctx *stopper.Context) (err error) {
 		return stopper.ErrStopped
 	}
 	log.Tracef("round.tryCommit: beginning for %s to %s", r.group, r.advanceTo)
+	r.lastAttempt.SetToCurrentTime()
 
 	if fn := r.terminal; fn != nil {
 		defer func() {
@@ -164,8 +168,6 @@ func (r *round) tryCommit(ctx *stopper.Context) (err error) {
 			err = nextErr
 		}()
 	}
-
-	r.lastAttempt.SetToCurrentTime()
 
 	targetTx, err := r.targetPool.BeginTx(ctx, nil)
 	if err != nil {

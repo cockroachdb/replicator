@@ -109,6 +109,10 @@ func (s *bestEffort) Start(
 				// checkpoint, it should be in the relative future
 				// from the synthetic ones.
 				proposed := s.timeSource()
+				if proposed == hlc.Zero() {
+					// XXX
+					return hlc.Range{}, notify.ErrNoUpdate
+				}
 				if hlc.Compare(proposed, old.MaxInclusive()) > 0 {
 					return hlc.RangeIncluding(old.Min(), proposed), nil
 				}

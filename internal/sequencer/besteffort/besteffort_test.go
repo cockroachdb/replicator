@@ -24,12 +24,14 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/seqtest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBestEffort(t *testing.T) {
+	log.SetLevel(log.TraceLevel)
 	tcs := []*all.WorkloadConfig{
-		// XXX {},                // Verify grouped-table behaviors.
+		{},                // Verify grouped-table behaviors.
 		{DisableFK: true}, // Verify single-table behaviors.
 	}
 

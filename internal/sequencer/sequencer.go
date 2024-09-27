@@ -29,8 +29,9 @@ import (
 )
 
 // A TerminalFunc is an optional callback which will be invoked when the
-// sequencer has finished processing a cursor.
-type TerminalFunc func(ctx *stopper.Context, marker any, err error) error
+// sequencer has finished processing a cursor and the
+// [types.BatchCursor.Tag] field is non-nil.
+type TerminalFunc func(ctx *stopper.Context, tag any, err error) error
 
 // A Sequencer implements a lifecycle strategy for mutations. The
 // various strategies may include immediate, best-effort, or

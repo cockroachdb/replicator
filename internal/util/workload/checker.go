@@ -45,13 +45,13 @@ func (c *Checker) CheckConsistent() (failures []string, _ error) {
 		if count, err := counter(c.Parent, c.Range()); err != nil {
 			return nil, errors.Wrap(err, "parent staged count")
 		} else if count != 0 {
-			failf("unapplied mutations in parent table %s", c.Parent)
+			failf("%d unapplied mutations in parent table %s", count, c.Parent)
 		}
 
 		if count, err := counter(c.Child, c.Range()); err != nil {
 			return nil, errors.Wrap(err, "child staged count")
 		} else if count != 0 {
-			failf("unapplied mutations in child table %s", c.Child)
+			failf("%d unapplied mutations in child table %s", count, c.Child)
 		}
 	}
 

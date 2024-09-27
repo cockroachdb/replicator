@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	log "github.com/sirupsen/logrus"
 )
 
 type router struct {
@@ -51,7 +52,6 @@ func (f *router) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 			}
 
 			if cur.Batch != nil {
-				cur = cur.Copy()
 				for table := range cur.Batch.Data.Keys() {
 					if _, ok := f.accept.Get(table); !ok {
 						cur.Batch.Data.Delete(table)
@@ -66,6 +66,7 @@ func (f *router) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 			case <-ctx.Stopping():
 				return nil
 			}
+			log.Infof("passed through %s", cur.Progress)
 		}
 	})
 	return out, nil

@@ -273,8 +273,11 @@ func (s *Core) Start(
 			},
 		}
 		if log.IsLevelEnabled(log.TraceLevel) {
-			copier.Each = func(ctx *stopper.Context, batch *types.TemporalBatch, segment bool) error {
-				log.Tracef("scanned batch for %s, count=%d, time=%s", group, batch.Count(), batch.Time)
+			copier.Each = func(ctx *stopper.Context, cur *types.BatchCursor) error {
+				if cur.Batch != nil {
+					log.Tracef("scanned batch for %s, count=%d, time=%s",
+						group, cur.Batch.Count(), cur.Batch.Time)
+				}
 				return nil
 			}
 		}

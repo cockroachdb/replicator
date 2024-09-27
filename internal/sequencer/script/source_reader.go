@@ -65,16 +65,12 @@ func (a *sourceReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, er
 			// Only process non-error data payloads.
 			if cur.Batch != nil && cur.Error == nil {
 				nextBatch := cur.Batch.Empty()
-
 				for table, mut := range cur.Batch.Mutations() {
 					if err := a.acceptOne(ctx, nextBatch, table, mut); err != nil {
 						return err
 					}
 				}
-
-				// Preserve batch identity.
-				cur.Batch.Data.Clear()
-				nextBatch.Data.CopyInto(&cur.Batch.Data)
+				cur.Batch = nextBatch
 			}
 
 			// Send downstream.
