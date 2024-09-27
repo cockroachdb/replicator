@@ -116,11 +116,10 @@ func (t *orderedAdapter) AcceptMultiBatch(
 ) error {
 	// Peek to find the current schema.
 	var commonSchema ident.Schema
-	_ = batch.CopyInto(AccumulatorFunc(func(table ident.Table, _ Mutation) error {
+	for table := range batch.Mutations() {
 		commonSchema = table.Schema()
-		// Just break the loop.
-		return context.Canceled
-	}))
+		break
+	}
 
 	// No mutations.
 	if commonSchema.Empty() {

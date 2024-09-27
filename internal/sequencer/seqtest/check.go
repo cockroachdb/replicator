@@ -257,14 +257,13 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 		// Shuffle the test data into multiple source tables.
 		count := 0
 		partitionedBatch := &types.MultiBatch{}
-		r.NoError(testData.CopyInto(types.AccumulatorFunc(
-			func(table ident.Table, mut types.Mutation) error {
-				partition := ident.NewTable(
-					table.Schema(),
-					ident.New(fmt.Sprintf("%s_%d", table.Table().Raw(), count%10)))
-				count++
-				return partitionedBatch.Accumulate(partition, mut)
-			})))
+		for table, mut := range testData.Mutations() {
+			partition := ident.NewTable(
+				table.Schema(),
+				ident.New(fmt.Sprintf("%s_%d", table.Table().Raw(), count%10)))
+			count++
+			r.NoError(partitionedBatch.Accumulate(partition, mut))
+		}
 		testData = partitionedBatch
 
 	retryPartitioned:

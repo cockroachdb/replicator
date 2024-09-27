@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
-	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 )
 
@@ -48,21 +47,20 @@ func (r *router) AcceptMultiBatch(
 	componentBatches := make(map[*types.SchemaComponent]*types.MultiBatch, len(cfg.routes))
 
 	// Aggregate sub-batches by destination table group.
-	if err := batch.CopyInto(types.AccumulatorFunc(
-		func(table ident.Table, mut types.Mutation) error {
-			comp, ok := cfg.schemaData.TableComponents.Get(table)
-			if !ok {
-				return errors.Errorf("unknown table %s", table)
-			}
+	for table, mut := range batch.Mutations() {
+		comp, ok := cfg.schemaData.TableComponents.Get(table)
+		if !ok {
+			return errors.Errorf("unknown table %s", table)
+		}
 
-			acc, ok := componentBatches[comp]
-			if !ok {
-				acc = &types.MultiBatch{}
-				componentBatches[comp] = acc
-			}
-			return acc.Accumulate(table, mut)
-		})); err != nil {
-		return err
+		acc, ok := componentBatches[comp]
+		if !ok {
+			acc = &types.MultiBatch{}
+			componentBatches[comp] = acc
+		}
+		if err := acc.Accumulate(table, mut); err != nil {
+			return err
+		}
 	}
 
 	for comp, acc := range componentBatches {

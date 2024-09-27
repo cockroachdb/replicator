@@ -23,33 +23,31 @@ package types
 
 import (
 	"bytes"
+	"iter"
+	"slices"
 	"sort"
-	"strings"
 
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 )
 
-// Accumulator contains the Accumulate method.
-type Accumulator interface {
-	// Accumulate the mutation and ensure that batch invariants are
-	// maintained.
-	Accumulate(table ident.Table, mut Mutation) error
-}
-
-// AccumulatorFunc adapts a function to the [Accumulator] interface.
-type AccumulatorFunc func(ident.Table, Mutation) error
-
-// Accumulate implements [Accumulator].
-func (f AccumulatorFunc) Accumulate(table ident.Table, mut Mutation) error {
-	return f(table, mut)
+// Apply the function to the given iterator.
+func Apply[K any, V any](it iter.Seq2[K, V], fn func(K, V) error) error {
+	for k, v := range it {
+		if err := fn(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // The Batch interface is implemented by the various Batch types in this
 // package.
 type Batch[B any] interface {
-	Accumulator
+	// Accumulate the mutation and ensure that batch invariants are
+	// maintained.
+	Accumulate(table ident.Table, mut Mutation) error
 
 	// Count returns the number of mutations contained in the Batch.
 	Count() int
@@ -57,34 +55,31 @@ type Batch[B any] interface {
 	// Copy returns a deep copy of the Batch.
 	Copy() B
 
-	// CopyInto copies the contents of the batch into accumulator.
-	CopyInto(acc Accumulator) error
-
 	// Empty returns a copy of the Batch, but with no enclosed
 	// mutations. This is useful when wanting to transform or filter a
 	// batch.
 	Empty() B
+
+	// Mutations returns an iterator over all mutations in the Batch. No
+	// specific iteration order is defined.
+	Mutations() iter.Seq2[ident.Table, Mutation]
 }
 
 // Flatten copies all mutations in a batch into a slice.
 func Flatten[B Batch[B]](batch B) []Mutation {
 	var ret []Mutation
-	// Ignoring error since callback returns nil.
-	_ = batch.CopyInto(AccumulatorFunc(func(_ ident.Table, mut Mutation) error {
+	for _, mut := range batch.Mutations() {
 		ret = append(ret, mut)
-		return nil
-	}))
+	}
 	return ret
 }
 
 // FlattenByTable copies the mutations into an [ident.TableMap].
 func FlattenByTable[B Batch[B]](batch B) *ident.TableMap[[]Mutation] {
 	ret := &ident.TableMap[[]Mutation]{}
-	// Ignoring error since callback returns nil.
-	_ = batch.CopyInto(AccumulatorFunc(func(table ident.Table, mut Mutation) error {
+	for table, mut := range batch.Mutations() {
 		ret.Put(table, append(ret.GetZero(table), mut))
-		return nil
-	}))
+	}
 	return ret
 }
 
@@ -152,17 +147,6 @@ func (b *MultiBatch) Copy() *MultiBatch {
 	return ret
 }
 
-// CopyInto copies the batch into the Accumulator. The data will
-// be ordered by time, table, and key.
-func (b *MultiBatch) CopyInto(acc Accumulator) error {
-	for _, sub := range b.Data {
-		if err := sub.CopyInto(acc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Count returns the number of enclosed mutations.
 func (b *MultiBatch) Count() int {
 	ret := 0
@@ -185,6 +169,20 @@ func (b *MultiBatch) Len() int {
 // Less implements [sort.Interface].
 func (b *MultiBatch) Less(i, j int) bool {
 	return hlc.Compare(b.Data[i].Time, b.Data[j].Time) < 0
+}
+
+// Mutations returns an iterator over all mutations in the Batch.
+// Mutations will be presented in time, table, and key order.
+func (b *MultiBatch) Mutations() iter.Seq2[ident.Table, Mutation] {
+	return func(yield func(ident.Table, Mutation) bool) {
+		for _, temp := range b.Data {
+			for table, mut := range temp.Mutations() {
+				if !yield(table, mut) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // Swap implements [sort.Interface].
@@ -225,20 +223,6 @@ func (b *TableBatch) Copy() *TableBatch {
 	}
 }
 
-// CopyInto copies the batch into the Accumulator ordered by key.
-func (b *TableBatch) CopyInto(acc Accumulator) error {
-	sorted := append([]Mutation(nil), b.Data...)
-	sort.Slice(sorted, func(i, j int) bool {
-		return bytes.Compare(sorted[i].Key, sorted[j].Key) < 0
-	})
-	for _, mut := range sorted {
-		if err := acc.Accumulate(b.Table, mut); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Count returns the number of enclosed mutations.
 func (b *TableBatch) Count() int {
 	return len(b.Data)
@@ -249,6 +233,22 @@ func (b *TableBatch) Empty() *TableBatch {
 	return &TableBatch{
 		Table: b.Table,
 		Time:  b.Time,
+	}
+}
+
+// Mutations returns an iterator over all mutations in the Batch.
+// Mutations will be sorted by key.
+func (b *TableBatch) Mutations() iter.Seq2[ident.Table, Mutation] {
+	return func(yield func(ident.Table, Mutation) bool) {
+		sorted := slices.Clone(b.Data)
+		slices.SortFunc(sorted, func(a, b Mutation) int {
+			return bytes.Compare(a.Key, b.Key)
+		})
+		for _, mut := range sorted {
+			if !yield(b.Table, mut) {
+				return
+			}
+		}
 	}
 }
 
@@ -290,24 +290,6 @@ func (b *TemporalBatch) Copy() *TemporalBatch {
 	return ret
 }
 
-// CopyInto copies the batch into the Accumulator. The data will be
-// sorted by table name and then by key.
-func (b *TemporalBatch) CopyInto(acc Accumulator) error {
-	var tables []ident.Table
-	for table := range b.Data.Keys() {
-		tables = append(tables, table)
-	}
-	sort.Slice(tables, func(i, j int) bool {
-		return strings.Compare(tables[i].Raw(), tables[j].Raw()) < 0
-	})
-	for _, table := range tables {
-		if err := b.Data.GetZero(table).CopyInto(acc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Count returns the number of enclosed mutations.
 func (b *TemporalBatch) Count() int {
 	ret := 0
@@ -321,5 +303,23 @@ func (b *TemporalBatch) Count() int {
 func (b *TemporalBatch) Empty() *TemporalBatch {
 	return &TemporalBatch{
 		Time: b.Time,
+	}
+}
+
+// Mutations returns an iterator over all mutations in the Batch.
+// Mutations will be sorted by table and by key.
+func (b *TemporalBatch) Mutations() iter.Seq2[ident.Table, Mutation] {
+	return func(yield func(ident.Table, Mutation) bool) {
+		sorted := slices.Collect(b.Data.Keys())
+		slices.SortFunc(sorted, func(a, b ident.Table) int {
+			return ident.Compare(a, b)
+		})
+		for _, table := range sorted {
+			for _, mut := range b.Data.GetZero(table).Mutations() {
+				if !yield(table, mut) {
+					return
+				}
+			}
+		}
 	}
 }

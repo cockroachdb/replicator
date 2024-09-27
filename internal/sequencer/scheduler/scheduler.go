@@ -111,11 +111,10 @@ func keyForSingleton(table ident.Table, mut types.Mutation) []string {
 }
 
 // keyForBatch creates a locking set for all rows within the batch.
-func keyForBatch[B any](batch types.Batch[B]) []string {
+func keyForBatch[B types.Batch[B]](batch B) []string {
 	var ret []string
-	_ = batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+	for table, mut := range batch.Mutations() {
 		ret = append(ret, keyForSingleton(table, mut)...)
-		return nil
-	}))
+	}
 	return ret
 }
