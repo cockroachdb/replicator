@@ -66,11 +66,10 @@ func (a *sourceReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, er
 			if cur.Batch != nil && cur.Error == nil {
 				nextBatch := cur.Batch.Empty()
 
-				if err := cur.Batch.CopyInto(types.AccumulatorFunc(
-					func(table ident.Table, mut types.Mutation) error {
-						return a.acceptOne(ctx, nextBatch, table, mut)
-					})); err != nil {
-					return err
+				for table, mut := range cur.Batch.Mutations() {
+					if err := a.acceptOne(ctx, nextBatch, table, mut); err != nil {
+						return err
+					}
 				}
 
 				// Preserve batch identity.

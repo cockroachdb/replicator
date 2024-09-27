@@ -158,10 +158,9 @@ func (p *poisonSet) MarkPoisoned(batch *types.MultiBatch) {
 		return
 	}
 
-	_ = batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+	for table, mut := range batch.Mutations() {
 		p.mu.data[poisonKey(table, mut)] = struct{}{}
-		return nil
-	}))
+	}
 	p.mu.full = len(p.mu.data) >= p.maxCount
 	if p.mu.full {
 		p.mu.data = nil

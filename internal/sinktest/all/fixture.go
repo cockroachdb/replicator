@@ -148,7 +148,7 @@ func (f *Fixture) ReadStagingQuery(
 			// Copy the data into our accumulator. The batch will be
 			// nil if there's a progress-only update.
 			if cursor.Batch != nil {
-				if err := cursor.Batch.CopyInto(ret); err != nil {
+				if err := types.Apply(cursor.Batch.Mutations(), ret.Accumulate); err != nil {
 					return nil, err
 				}
 			}

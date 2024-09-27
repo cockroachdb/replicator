@@ -71,7 +71,7 @@ func (r *round) accumulate(cursors []*types.BatchCursor) error {
 				r.advanceTo = hlc.RangeExcluding(hlc.Zero(), temp.Time)
 			}
 		}
-		if err := batch.CopyInto(r.batch); err != nil {
+		if err := types.Apply(cur.Batch.Mutations(), r.batch.Accumulate); err != nil {
 			return err
 		}
 		if cur.Marker != nil {

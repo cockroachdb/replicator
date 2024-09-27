@@ -102,7 +102,7 @@ func TestCopier(t *testing.T) {
 		},
 		Flush: func(ctx *stopper.Context, cursors []*types.BatchCursor, fragment bool) error {
 			for _, cur := range cursors {
-				if err := cur.Batch.CopyInto(seen); err != nil {
+				if err := types.Apply(cur.Batch.Mutations(), seen.Accumulate); err != nil {
 					return err
 				}
 			}

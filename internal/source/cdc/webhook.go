@@ -51,8 +51,7 @@ type WebhookPayload struct {
 // NewWebhookPayload constructs a payload for the batch.
 func NewWebhookPayload(batch *types.MultiBatch) (*WebhookPayload, error) {
 	ret := &WebhookPayload{}
-	// Ignoring error since callback returns nil.
-	if err := batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+	for table, mut := range batch.Mutations() {
 		line := WebhookPayloadLine{
 			After:   mut.Data,
 			Before:  mut.Before,
@@ -66,9 +65,6 @@ func NewWebhookPayload(batch *types.MultiBatch) (*WebhookPayload, error) {
 		}
 		ret.Payload = append(ret.Payload, line)
 		ret.Range = ret.Range.Extend(mut.Time)
-		return nil
-	})); err != nil {
-		return nil, err
 	}
 	ret.Length = len(ret.Payload)
 	return ret, nil
