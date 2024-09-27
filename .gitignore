@@ -7,6 +7,10 @@
 cdc-sink
 replicator
 
+# Test data for local testing
+testdata/
+.vscode/
+
 # Test binary, built with `go test -c`
 *.test
 
