@@ -142,7 +142,7 @@ top:
 		}
 
 		// Accumulate data.
-		if err := batch.CopyInto(accumulator); err != nil {
+		if err := types.Apply(batch.Mutations(), accumulator.Accumulate); err != nil {
 			return nil, err
 		}
 		count += batch.Count()

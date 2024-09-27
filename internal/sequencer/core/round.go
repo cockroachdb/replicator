@@ -70,7 +70,7 @@ func (r *round) accumulate(segment *types.MultiBatch) error {
 		r.batch = segment
 		return nil
 	}
-	return segment.CopyInto(r.batch)
+	return types.Apply(segment.Mutations(), r.batch.Accumulate)
 }
 
 // scheduleCommit handles the error-retry logic around tryCommit.

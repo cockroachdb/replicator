@@ -62,10 +62,10 @@ func acceptBatch[B types.Batch[B]](
 ) error {
 	nextBatch := &types.MultiBatch{}
 
-	if err := batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
-		return a.acceptOne(ctx, nextBatch, table, mut)
-	})); err != nil {
-		return err
+	for table, mut := range batch.Mutations() {
+		if err := a.acceptOne(ctx, nextBatch, table, mut); err != nil {
+			return err
+		}
 	}
 
 	// Calls to source.Dispatch may remove mutations.

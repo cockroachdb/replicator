@@ -126,15 +126,14 @@ func (p *poisonSet) toPoison(
 	// Accumulate keys which may need to be poisoned.
 	toContaminate = make(map[poisonedKey]struct{})
 
-	_ = batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+	for table, mut := range batch.Mutations() {
 		key := poisonKey(table, mut)
 		if _, poisoned := p.mu.data[key]; poisoned {
 			isPoisoned = true
 		} else {
 			toContaminate[key] = struct{}{}
 		}
-		return nil
-	}))
+	}
 
 	// No keys within the batch intersect the already-poisoned keys.
 	if !isPoisoned {
@@ -154,10 +153,9 @@ func (p *poisonSet) MarkPoisoned(batch *types.MultiBatch) {
 		return
 	}
 
-	_ = batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+	for table, mut := range batch.Mutations() {
 		p.mu.data[poisonKey(table, mut)] = struct{}{}
-		return nil
-	}))
+	}
 	p.mu.full = len(p.mu.data) >= p.maxCount
 	if p.mu.full {
 		p.mu.data = nil

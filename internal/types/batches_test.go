@@ -88,7 +88,9 @@ func testBatchInterface[B types.Batch[B]](t *testing.T, batch B) {
 	r.Zero(batch.Empty().Count())
 
 	acc := &types.MultiBatch{}
-	r.NoError(batch.CopyInto(acc))
+	for table, mut := range batch.Mutations() {
+		r.NoError(acc.Accumulate(table, mut))
+	}
 	r.Equal(batch.Count(), acc.Count())
 
 	flattened := types.Flatten(batch)

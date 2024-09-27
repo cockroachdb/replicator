@@ -101,7 +101,7 @@ func TestCopier(t *testing.T) {
 			return nil
 		},
 		Flush: func(ctx *stopper.Context, batch *types.MultiBatch, segment bool) error {
-			return batch.CopyInto(seen)
+			return types.Apply(batch.Mutations(), seen.Accumulate)
 		},
 		Progress: func(ctx *stopper.Context, progress hlc.Range) error {
 			if progress.MaxInclusive() == endTime {
