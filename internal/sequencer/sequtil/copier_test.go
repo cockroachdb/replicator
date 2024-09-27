@@ -96,12 +96,17 @@ func TestCopier(t *testing.T) {
 			FlushSize: flushSize,
 		},
 		Source: stagingBatches,
-		Each: func(ctx *stopper.Context, batch *types.TemporalBatch, segment bool) error {
-			a.LessOrEqual(batch.Count(), fragmentSize)
+		Each: func(ctx *stopper.Context, cursor *types.BatchCursor) error {
+			a.LessOrEqual(cursor.Batch.Count(), fragmentSize)
 			return nil
 		},
-		Flush: func(ctx *stopper.Context, batch *types.MultiBatch, segment bool) error {
-			return batch.CopyInto(seen)
+		Flush: func(ctx *stopper.Context, cursors []*types.BatchCursor, fragment bool) error {
+			for _, cur := range cursors {
+				if err := cur.Batch.CopyInto(seen); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 		Progress: func(ctx *stopper.Context, progress hlc.Range) error {
 			if progress.MaxInclusive() == endTime {

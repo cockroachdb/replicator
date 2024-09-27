@@ -64,10 +64,7 @@ func (a *sourceReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, er
 
 			// Only process non-error data payloads.
 			if cur.Batch != nil && cur.Error == nil {
-				nextBatch := &types.TemporalBatch{
-					// Preserve original timestamp.
-					Time: cur.Batch.Time,
-				}
+				nextBatch := cur.Batch.Empty()
 
 				if err := cur.Batch.CopyInto(types.AccumulatorFunc(
 					func(table ident.Table, mut types.Mutation) error {

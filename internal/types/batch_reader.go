@@ -51,6 +51,9 @@ type BatchCursor struct {
 	// data in the stream may be disjoint.
 	Jump bool
 
+	// Marker is a caller-specific value associated with the cursor.
+	Marker any
+
 	// Progress indicates the range of data which has been successfully
 	// scanned so far. Receivers may encounter progress-only updates
 	// which happen when the end of the scanned bounds have been reached

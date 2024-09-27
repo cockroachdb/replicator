@@ -22,14 +22,14 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
-type filter struct {
+type router struct {
 	accept   ident.TableMap[struct{}]
 	delegate types.BatchReader
 }
 
-var _ types.BatchReader = (*filter)(nil)
+var _ types.BatchReader = (*router)(nil)
 
-func (f *filter) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+func (f *router) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 	source, err := f.delegate.Read(ctx)
 	if err != nil {
 		return nil, err

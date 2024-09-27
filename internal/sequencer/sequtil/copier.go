@@ -28,17 +28,17 @@ import (
 
 // A step represents a single iteration of the copy loop.
 type step struct {
-	batch          *types.MultiBatch // Data to send downstream. May be nil for progress-only update.
-	fragment       bool              // Indicates a non-terminal segment of a multipart payload.
-	progress       hlc.Range         // The range of data copied so far.
-	reportProgress bool              // Indicates that the progress callback is to be called.
+	cursors        []*types.BatchCursor // May be nil for progress-only update.
+	fragment       bool                 // Indicates a non-terminal segment of a multipart payload.
+	progress       hlc.Range            // The range of data copied so far.
+	reportProgress bool                 // Indicates that the progress callback is to be called.
 }
 
 // EachFn is a callback from a [Copier].
-type EachFn func(ctx *stopper.Context, batch *types.TemporalBatch, fragment bool) error
+type EachFn func(ctx *stopper.Context, cursor *types.BatchCursor) error
 
 // FlushFn is a callback from a [Copier].
-type FlushFn func(ctx *stopper.Context, batch *types.MultiBatch, fragment bool) error
+type FlushFn func(ctx *stopper.Context, cursors []*types.BatchCursor, fragment bool) error
 
 // ProgressFn is a callback from a [Copier].
 type ProgressFn func(ctx *stopper.Context, progress hlc.Range) error
@@ -68,9 +68,9 @@ func (c *Copier) Run(ctx *stopper.Context) error {
 			return nil
 		}
 		// Either or both fields may be set. The callbacks are optional.
-		if step.batch != nil && c.Flush != nil {
+		if len(step.cursors) > 0 && c.Flush != nil {
 			log.Tracef("copier at: %s", step.progress)
-			if err := c.Flush(ctx, step.batch, step.fragment); err != nil {
+			if err := c.Flush(ctx, step.cursors, step.fragment); err != nil {
 				return err
 			}
 		}
@@ -89,7 +89,7 @@ func (c *Copier) Run(ctx *stopper.Context) error {
 // stopped.
 func (c *Copier) nextStep(ctx *stopper.Context) (*step, error) {
 	// Ensure initial state, post-flush.
-	accumulator := &types.MultiBatch{}
+	var accumulator []*types.BatchCursor
 	count := 0
 
 	// Receiving from a nil channel blocks forever.
@@ -127,7 +127,7 @@ top:
 		batch := cursor.Batch
 		if batch == nil {
 			if count > 0 {
-				ret.batch = accumulator
+				ret.cursors = accumulator
 			}
 			// We want to provide data and call the report endpoint.
 			ret.reportProgress = true
@@ -136,29 +136,27 @@ top:
 
 		// Allow spying on data as it arrives.
 		if c.Each != nil {
-			if err := c.Each(ctx, batch, cursor.Fragment); err != nil {
+			if err := c.Each(ctx, cursor); err != nil {
 				return nil, err
 			}
 		}
 
 		// Accumulate data.
-		if err := batch.CopyInto(accumulator); err != nil {
-			return nil, err
-		}
+		accumulator = append(accumulator, cursor)
 		count += batch.Count()
 
 		// We have an over-large value. Flush immediately and let
 		// the caller decide if it's going to open a transaction or
 		// send as-is.
 		if cursor.Fragment {
-			ret.batch = accumulator
+			ret.cursors = accumulator
 			ret.fragment = true
 			return ret, nil
 		}
 
 		// Flush if we've hit the target size.
 		if count >= c.Config.FlushSize {
-			ret.batch = accumulator
+			ret.cursors = accumulator
 			return ret, nil
 		}
 
@@ -168,7 +166,7 @@ top:
 		goto top
 
 	case <-timerC:
-		return &step{batch: accumulator}, nil
+		return &step{cursors: accumulator}, nil
 
 	case <-ctx.Stopping():
 		// Just exit if being shut down.

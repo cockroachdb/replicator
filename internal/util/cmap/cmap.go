@@ -17,7 +17,10 @@
 // Package cmap contains an implementation of a canonicalizing map.
 package cmap
 
-import "iter"
+import (
+	"iter"
+	"runtime"
+)
 
 // An Entry in a Map. Note that the Key type is not necessarily
 // comparable.
@@ -106,6 +109,9 @@ type impl[K any, C comparable, V any] struct {
 
 func (m *impl[K, C, V]) All() iter.Seq2[K, V] {
 	return func(yield func(K, V) bool) {
+		if m.data == nil {
+			runtime.Breakpoint()
+		}
 		for _, entry := range m.data {
 			if !yield(entry.Key, entry.Value) {
 				return

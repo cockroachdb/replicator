@@ -235,7 +235,7 @@ func (s *Core) Start(
 				}
 				return nil
 			},
-			Flush: func(ctx *stopper.Context, batch *types.MultiBatch, fragment bool) error {
+			Flush: func(ctx *stopper.Context, cursors []*types.BatchCursor, fragment bool) error {
 				// Short-circuit if we've hit too many bad keys.
 				if poisoned.IsFull() {
 					return errPoisoned
@@ -244,9 +244,11 @@ func (s *Core) Start(
 				// Fail forward if we can't apply the batch. This call
 				// will also implicitly contaminate all keys in the
 				// batch.
-				if poisoned.IsPoisoned(batch) {
-					accumulator = nil
-					return nil
+				for _, cur := range cursors {
+					if poisoned.IsPoisoned(cur.Batch) {
+						accumulator = nil
+						return nil
+					}
 				}
 
 				// Initialize if not carrying over from a previous
@@ -255,7 +257,7 @@ func (s *Core) Start(
 					accumulator = nextRound()
 				}
 
-				if err := accumulator.accumulate(batch); err != nil {
+				if err := accumulator.accumulate(cursors); err != nil {
 					accumulator = nil
 					return err
 				}

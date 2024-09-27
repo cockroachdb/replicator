@@ -23,6 +23,7 @@ package types
 
 import (
 	"bytes"
+	"iter"
 	"sort"
 	"strings"
 
@@ -64,6 +65,10 @@ type Batch[B any] interface {
 	// mutations. This is useful when wanting to transform or filter a
 	// batch.
 	Empty() B
+
+	// Mutations returns an iterator over all mutations contained within
+	// the batch. No specific iteration order is guaranteed.
+	Mutations() iter.Seq2[ident.Table, Mutation]
 }
 
 // Flatten copies all mutations in a batch into a slice.
@@ -187,6 +192,19 @@ func (b *MultiBatch) Less(i, j int) bool {
 	return hlc.Compare(b.Data[i].Time, b.Data[j].Time) < 0
 }
 
+// Mutations returns an iterator over all mutations in the batch.
+func (b *MultiBatch) Mutations() iter.Seq2[ident.Table, Mutation] {
+	return func(yield func(ident.Table, Mutation) bool) {
+		for _, temp := range b.Data {
+			for table, mut := range temp.Mutations() {
+				if !yield(table, mut) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // Swap implements [sort.Interface].
 func (b *MultiBatch) Swap(i, j int) {
 	b.Data[i], b.Data[j] = b.Data[j], b.Data[i]
@@ -252,13 +270,24 @@ func (b *TableBatch) Empty() *TableBatch {
 	}
 }
 
+// Mutations returns an iterator over all mutations in the batch.
+func (b *TableBatch) Mutations() iter.Seq2[ident.Table, Mutation] {
+	return func(yield func(ident.Table, Mutation) bool) {
+		for _, mut := range b.Data {
+			if !yield(b.Table, mut) {
+				return
+			}
+		}
+	}
+}
+
 // A TemporalBatch holds mutations for some number of tables that all
 // occur at the same time. This likely corresponds to a single source
 // transaction.
 type TemporalBatch struct {
 	_    noCopy
-	Time hlc.Time
 	Data ident.TableMap[*TableBatch]
+	Time hlc.Time
 }
 
 var _ Batch[*TemporalBatch] = (*TemporalBatch)(nil)
@@ -321,5 +350,18 @@ func (b *TemporalBatch) Count() int {
 func (b *TemporalBatch) Empty() *TemporalBatch {
 	return &TemporalBatch{
 		Time: b.Time,
+	}
+}
+
+// Mutations returns an iterator over all mutations in the batch.
+func (b *TemporalBatch) Mutations() iter.Seq2[ident.Table, Mutation] {
+	return func(yield func(ident.Table, Mutation) bool) {
+		for tableBatch := range b.Data.Values() {
+			for table, mut := range tableBatch.Mutations() {
+				if !yield(table, mut) {
+					return
+				}
+			}
+		}
 	}
 }

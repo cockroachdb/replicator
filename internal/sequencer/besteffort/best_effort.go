@@ -186,7 +186,7 @@ func (s *bestEffort) startGeneration(
 	// tables in the target schema. This ensures that tables with FK
 	// relationships can be swept in a coordinated fashion.
 	for _, comp := range schemaData.Components {
-		f := &filter{delegate: opts.BatchReader}
+		f := &router{delegate: opts.BatchReader}
 		for _, table := range comp.Order {
 			f.accept.Put(table, struct{}{})
 		}

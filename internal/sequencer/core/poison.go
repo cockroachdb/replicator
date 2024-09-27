@@ -18,6 +18,7 @@ package core
 
 import (
 	"fmt"
+	"iter"
 	"sync"
 
 	"github.com/cockroachdb/replicator/internal/types"
@@ -32,6 +33,10 @@ type poisonedKey string
 
 func poisonKey(table ident.Table, mut types.Mutation) poisonedKey {
 	return poisonedKey(fmt.Sprintf("%s:%s", table.Raw(), mut.Key))
+}
+
+type hasMutations interface {
+	Mutations() iter.Seq2[ident.Table, types.Mutation]
 }
 
 // poisonSet is a concurrency-safe helper to manage poisoned keys.
@@ -83,7 +88,7 @@ func (p *poisonSet) IsFull() bool {
 // contagious. If the batch contains any keys that were not already
 // poisoned, they will be poisoned as well. This ensures that
 // temporal consistency dependencies are maintained.
-func (p *poisonSet) IsPoisoned(batch *types.MultiBatch) bool {
+func (p *poisonSet) IsPoisoned(batch hasMutations) bool {
 	// Read-locked check.
 	toContaminate, isPoisoned := p.toPoison(batch)
 	if !isPoisoned {
@@ -108,7 +113,7 @@ func (p *poisonSet) IsPoisoned(batch *types.MultiBatch) bool {
 // toPoison returns a set of keys to contaminate or false if there are
 // no poisoned keys.
 func (p *poisonSet) toPoison(
-	batch *types.MultiBatch,
+	batch hasMutations,
 ) (toContaminate map[poisonedKey]struct{}, isPoisoned bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -126,15 +131,14 @@ func (p *poisonSet) toPoison(
 	// Accumulate keys which may need to be poisoned.
 	toContaminate = make(map[poisonedKey]struct{})
 
-	_ = batch.CopyInto(types.AccumulatorFunc(func(table ident.Table, mut types.Mutation) error {
+	for table, mut := range batch.Mutations() {
 		key := poisonKey(table, mut)
 		if _, poisoned := p.mu.data[key]; poisoned {
 			isPoisoned = true
 		} else {
 			toContaminate[key] = struct{}{}
 		}
-		return nil
-	}))
+	}
 
 	// No keys within the batch intersect the already-poisoned keys.
 	if !isPoisoned {

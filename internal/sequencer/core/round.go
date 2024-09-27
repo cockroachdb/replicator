@@ -50,6 +50,7 @@ type round struct {
 	// to disk. We need to keep this information available in order to
 	// be able to retry in case of 40001, etc. errors.
 	batch          *types.MultiBatch
+	markers        []any
 	mutationCount  int
 	timestampCount int
 
@@ -60,19 +61,24 @@ type round struct {
 	lastSuccess prometheus.Gauge
 }
 
-func (r *round) accumulate(segment *types.MultiBatch) error {
-	r.mutationCount += segment.Count()
-	for _, temp := range segment.Data {
-		r.timestampCount++
-		if hlc.Compare(temp.Time, r.advanceTo.MaxInclusive()) > 0 {
-			r.advanceTo = hlc.RangeExcluding(hlc.Zero(), temp.Time)
+func (r *round) accumulate(cursors []*types.BatchCursor) error {
+	for _, cur := range cursors {
+		batch := cur.Batch
+		r.mutationCount += batch.Count()
+		for temp := range batch.Data.Values() {
+			r.timestampCount++
+			if hlc.Compare(temp.Time, r.advanceTo.MaxInclusive()) > 0 {
+				r.advanceTo = hlc.RangeExcluding(hlc.Zero(), temp.Time)
+			}
+		}
+		if err := batch.CopyInto(r.batch); err != nil {
+			return err
+		}
+		if cur.Marker != nil {
+			r.markers = append(r.markers, cur.Marker)
 		}
 	}
-	if r.batch == nil {
-		r.batch = segment
-		return nil
-	}
-	return segment.CopyInto(r.batch)
+	return nil
 }
 
 // scheduleCommit handles the error-retry logic around tryCommit.
@@ -142,13 +148,23 @@ func (r *round) scheduleCommit(
 
 // tryCommit attempts to commit the batch. It will send the data to the
 // target and mark the mutations as applied within staging.
-func (r *round) tryCommit(ctx *stopper.Context) error {
+func (r *round) tryCommit(ctx *stopper.Context) (err error) {
 	// We may have been delayed for an arbitrarily long period of time.
 	if ctx.IsStopping() {
 		return stopper.ErrStopped
 	}
-
 	log.Tracef("round.tryCommit: beginning for %s to %s", r.group, r.advanceTo)
+
+	if fn := r.terminal; fn != nil {
+		defer func() {
+			var nextErr error
+			for _, marker := range r.markers {
+				nextErr = fn(ctx, marker, err)
+			}
+			err = nextErr
+		}()
+	}
+
 	r.lastAttempt.SetToCurrentTime()
 
 	targetTx, err := r.targetPool.BeginTx(ctx, nil)
@@ -163,11 +179,6 @@ func (r *round) tryCommit(ctx *stopper.Context) error {
 	}
 	if err := targetTx.Commit(); err != nil {
 		return errors.WithStack(err)
-	}
-	if fn := r.terminal; fn != nil {
-		for _, temp := range r.batch.Data {
-			fn(ctx, temp, err)
-		}
 	}
 	return nil
 }
