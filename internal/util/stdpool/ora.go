@@ -21,6 +21,7 @@ package stdpool
 import (
 	"database/sql"
 	"os"
+	"path"
 	"strconv"
 	"time"
 
@@ -76,8 +77,13 @@ func oraErrorRetryable(err error) bool {
 	}
 }
 
-// OCIPathEnvVar is the path where the Oracle Instant Client library is stored.
-const OCIPathEnvVar = `OIC_LIBRARY_PATH`
+// OracleHomeEnvVar is the path where the Oracle SDK is stored. The
+// replicator use `${ORACLE_HOME}/lib` to find the Oracle Instant Client
+// library.
+const (
+	OracleHomeEnvVar = `ORACLE_HOME`
+	OCIFolderName    = `lib`
+)
 
 func openOracle(ctx *stopper.Context, connectString string, options ...Option) (*sql.DB, error) {
 	var tc TestControls
@@ -100,8 +106,8 @@ func openOracle(ctx *stopper.Context, connectString string, options ...Option) (
 		params.Timezone = time.UTC
 	}
 
-	if ociLibPath := os.Getenv(OCIPathEnvVar); ociLibPath != "" {
-		params.LibDir = ociLibPath
+	if oracleHomePath := os.Getenv(OracleHomeEnvVar); oracleHomePath != "" {
+		params.LibDir = path.Join(oracleHomePath, OCIFolderName)
 	}
 
 	db := sql.OpenDB(godror.NewConnector(params))

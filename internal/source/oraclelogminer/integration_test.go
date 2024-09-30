@@ -127,6 +127,7 @@ WHERE ID < 2
 // TEST_SOURCE_CONNECT=oracle://sys:password@127.0.0.1:1521/ORCLCDB?sysdba=true
 // TEST_TARGET_CONNECT=postgresql://root@localhost:26257/defaultdb?sslmode=disable
 // CDC_INTEGRATION=oracle
+// ORACLE_HOME={.. of where OCI lib is located}
 // -tags="cgo target_all"
 func TestStart(t *testing.T) {
 	r := require.New(t)
