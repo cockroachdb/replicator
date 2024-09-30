@@ -257,11 +257,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	// Wait for the update to propagate.
 	for _, tgt := range tgts {
 		for {
-			var count int
-			if err := crdbPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
-				return
-			}
+			count, err := base.GetRowCountWithPredicate(ctx, fixture.TargetPool, tgt, fmt.Sprintf("%s = 'updated'", crdbCol))
+			r.NoError(err)
 			log.Trace("update count", count)
 			if count == rowCount {
 				break
@@ -283,11 +280,8 @@ func testPGLogical(t *testing.T, fc *fixtureConfig) {
 	// Wait for the deletes to propagate.
 	for _, tgt := range tgts {
 		for {
-			var count int
-			if err := crdbPool.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
-				return
-			}
+			count, err := base.GetRowCountWithPredicate(ctx, fixture.TargetPool, tgt, fmt.Sprintf("%s = 'updated'", crdbCol))
+			r.NoError(err)
 			log.Trace("delete count", count)
 			if count == rowCount-50 {
 				break

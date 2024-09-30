@@ -25,6 +25,7 @@ import (
 
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
@@ -403,10 +404,8 @@ CREATE TABLE %s.skewed_merge_times(
 		// Fix case for e.g. Oracle.
 		table, _ = fixture.Watcher.Get().OriginalName(table)
 		// Verify execution.
-		var count int
-		r.NoError(fixture.TargetPool.QueryRow(
-			fmt.Sprintf("SELECT count(*) FROM %s WHERE is_deleted = 1", table),
-		).Scan(&count))
+		count, err := base.GetRowCountWithPredicate(ctx, fixture.TargetPool, table, "is_deleted = 1")
+		r.NoError(err)
 		r.Equal(2, count)
 	})
 
