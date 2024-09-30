@@ -81,3 +81,68 @@ func GetRowCount[P types.AnyPool](ctx context.Context, db P, name ident.Table) (
 	})
 	return count, err
 }
+
+// GetRowCountWithPredicate returns the number of rows in the table that match the predicate.
+// This method supports N predicates for filtering, passed through args. The first argument is the predicate string
+// (either a raw SQL string or a parameterized one), and the remaining are the arguments for the parameterized query.
+// The predicate can be defined in the following ways:
+// 1. By using a formatted string for the predicate:
+// fmt.Sprintf("foo = %d", someNumber)
+// 2. By using the SQL placeholder syntax: "foo = $1", value
+func GetRowCountWithPredicate[P types.AnyPool](
+	ctx context.Context, db P, name ident.Table, product types.Product, args ...any,
+) (int, error) {
+	if len(args) == 0 {
+		return 0, errors.New("missing predicate")
+	}
+
+	// The first argument is the predicate
+	predicate, ok := args[0].(string)
+	if !ok {
+		return 0, errors.New("first argument must be a predicate string")
+	}
+
+	// The remaining arguments (if any) are parameters for the query
+	queryArgs := args[1:]
+
+	// Handle the query string based on the product type
+	var q string
+	switch product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		q = "SELECT count(*) FROM %s WHERE %s"
+	case types.ProductMariaDB, types.ProductMySQL:
+		q = "SELECT count(*) FROM %s WHERE %s"
+	case types.ProductOracle:
+		q = "SELECT count(*) FROM %s WHERE %s"
+	default:
+		return 0, errors.New("unimplemented product")
+	}
+
+	// Construct the query by interpolating the table name and predicate
+	query := fmt.Sprintf(q, name, predicate)
+
+	// Handle the pool specifics and execute the query
+	var count int
+	err := retry.Retry(ctx, db, func(ctx context.Context) error {
+		switch t := any(db).(type) {
+		case *types.SourcePool:
+			if len(queryArgs) > 0 {
+				return t.QueryRowContext(ctx, query, queryArgs...).Scan(&count)
+			}
+			return t.QueryRowContext(ctx, query).Scan(&count)
+		case *types.StagingPool:
+			if len(queryArgs) > 0 {
+				return t.QueryRow(ctx, query, queryArgs...).Scan(&count)
+			}
+			return t.QueryRow(ctx, query).Scan(&count)
+		case *types.TargetPool:
+			if len(queryArgs) > 0 {
+				return t.QueryRowContext(ctx, query, queryArgs...).Scan(&count)
+			}
+			return t.QueryRowContext(ctx, query).Scan(&count)
+		default:
+			return errors.Errorf("unimplemented %T", t)
+		}
+	})
+	return count, err
+}

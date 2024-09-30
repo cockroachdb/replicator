@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	table_info "github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -197,21 +198,9 @@ api.configureTable("t_2", {
 			search = "llebwoc"
 		}
 
-		// https://github.com/cockroachdb/replicator/issues/689
-		var q string
-		switch fixture.TargetPool.Product {
-		case types.ProductCockroachDB, types.ProductPostgreSQL:
-			q = "SELECT count(*) FROM %s WHERE v = $1"
-		case types.ProductMariaDB, types.ProductMySQL:
-			q = "SELECT count(*) FROM %s WHERE v = ?"
-		case types.ProductOracle:
-			q = "SELECT count(*) FROM %s WHERE v = :v"
-		default:
-			r.Fail("unimplemented product")
-		}
-
-		var count int
-		r.NoError(pool.QueryRowContext(ctx, fmt.Sprintf(q, tgt), search).Scan(&count))
+		predicate := fmt.Sprintf("v = '%s'", search)
+		count, err := table_info.GetRowCountWithPredicate(ctx, pool, tgt, fixture.TargetPool.Product, predicate)
+		r.NoError(err)
 		r.Equalf(numEmits, count, "in table %s", tgt)
 	}
 

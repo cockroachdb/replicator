@@ -88,26 +88,9 @@ func TestApply(t *testing.T) {
 		return
 	}
 
-	// A helper to count the number of rows where has_default = lookFor.
-	// https://github.com/cockroachdb/replicator/issues/689
 	countHasDefault := func(lookFor string) (ct int, err error) {
-		var q string
-		switch fixture.TargetPool.Product {
-		case types.ProductCockroachDB, types.ProductPostgreSQL:
-			q = "SELECT count(*) FROM %s WHERE has_default=$1"
-		case types.ProductMariaDB, types.ProductMySQL:
-			q = "SELECT count(*) FROM %s WHERE has_default=?"
-		case types.ProductOracle:
-			q = "SELECT count(*) FROM %s WHERE has_default=:p1"
-		default:
-			panic("unimplemented")
-		}
-
-		err = fixture.TargetPool.QueryRowContext(ctx,
-			fmt.Sprintf(q, tbl.Name()),
-			lookFor,
-		).Scan(&ct)
-		return
+		count, err := base.GetRowCountWithPredicate(ctx, fixture.TargetPool, tbl.Name(), fixture.TargetPool.Product, fmt.Sprintf("has_default='%s'", lookFor))
+		return count, err
 	}
 
 	// Use this jumbled name when accessing the API.
