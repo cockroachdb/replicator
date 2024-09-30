@@ -82,6 +82,9 @@ func GetRowCount[P types.AnyPool](ctx context.Context, db P, name ident.Table) (
 	return count, err
 }
 
+// GetRowCountWithPredicate returns the number of rows in the table that match the predicate.
+// Technically this is not a predicate match but rather checking that V is equal to the search string.
+// The more I look at this solution I'm not that happy with it. The Flex option below is better.
 func GetRowCountWithPredicate[P types.AnyPool](ctx context.Context, db P, name ident.Table, product types.Product, predicate string) (int, error) {
 	// Handles the query strings for various product types.
 	var q string
@@ -113,6 +116,41 @@ func GetRowCountWithPredicate[P types.AnyPool](ctx context.Context, db P, name i
 			return t.QueryRow(ctx, query, predicate).Scan(&count)
 		case *types.TargetPool:
 			return t.QueryRowContext(ctx, query, predicate).Scan(&count)
+		default:
+			return errors.Errorf("unimplemented %T", t)
+		}
+	})
+	return count, err
+}
+
+// GetRowCountWithPredicateFlex returns the number of rows in the table that match the predicate.
+// This method supports N number of predicates for filtering the table.
+// The downside of this method is that escaping and sanitising the input is an exercise left to the caller.
+func GetRowCountWithPredicateFlex[P types.AnyPool](ctx context.Context, db P, name ident.Table, product types.Product, predicate string) (int, error) {
+	// Handles the query strings for various product types.
+	var q string
+	switch product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		q = "SELECT count(*) FROM %s WHERE %s"
+	case types.ProductMariaDB, types.ProductMySQL:
+		q = "SELECT count(*) FROM %s WHERE %s"
+	case types.ProductOracle:
+		q = "SELECT count(*) FROM %s WHERE %s"
+	default:
+		return 0, errors.New("unimplemented product")
+	}
+	query := fmt.Sprintf(q, name, predicate)
+
+	// Handles the per pool specifics.
+	var count int
+	err := retry.Retry(ctx, db, func(ctx context.Context) error {
+		switch t := any(db).(type) {
+		case *types.SourcePool:
+			return t.QueryRowContext(ctx, query).Scan(&count)
+		case *types.StagingPool:
+			return t.QueryRow(ctx, query).Scan(&count)
+		case *types.TargetPool:
+			return t.QueryRowContext(ctx, query).Scan(&count)
 		default:
 			return errors.Errorf("unimplemented %T", t)
 		}

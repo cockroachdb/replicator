@@ -198,7 +198,9 @@ api.configureTable("t_2", {
 			search = "llebwoc"
 		}
 
-		count, err := table_info.GetRowCountWithPredicate(ctx, pool, tgt, fixture.TargetPool.Product, search)
+		predicate := fmt.Sprintf("v = '%s'", search)
+		count, err := table_info.GetRowCountWithPredicateFlex(ctx, pool, tgt, fixture.TargetPool.Product, predicate)
+		//count, err := table_info.GetRowCountWithPredicate(ctx, pool, tgt, fixture.TargetPool.Product, search)
 		r.NoError(err)
 		r.Equalf(numEmits, count, "in table %s", tgt)
 	}
