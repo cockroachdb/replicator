@@ -31,6 +31,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
+	table_info "github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/sinktest/mutations"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
@@ -91,23 +92,9 @@ func TestApply(t *testing.T) {
 	// A helper to count the number of rows where has_default = lookFor.
 	// https://github.com/cockroachdb/replicator/issues/689
 	countHasDefault := func(lookFor string) (ct int, err error) {
-		var q string
-		switch fixture.TargetPool.Product {
-		case types.ProductCockroachDB, types.ProductPostgreSQL:
-			q = "SELECT count(*) FROM %s WHERE has_default=$1"
-		case types.ProductMariaDB, types.ProductMySQL:
-			q = "SELECT count(*) FROM %s WHERE has_default=?"
-		case types.ProductOracle:
-			q = "SELECT count(*) FROM %s WHERE has_default=:p1"
-		default:
-			panic("unimplemented")
-		}
-
-		err = fixture.TargetPool.QueryRowContext(ctx,
-			fmt.Sprintf(q, tbl.Name()),
-			lookFor,
-		).Scan(&ct)
-		return
+		predicate := fmt.Sprintf(`has_default='%s'`, lookFor)
+		count, err := table_info.GetRowCountWithPredicateFlex(ctx, fixture.TargetPool, tbl.Name(), fixture.TargetPool.Product, predicate)
+		return count, err
 	}
 
 	// Use this jumbled name when accessing the API.
