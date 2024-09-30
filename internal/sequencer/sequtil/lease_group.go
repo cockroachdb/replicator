@@ -53,8 +53,9 @@ func LeaseGroup(
 			names[idx] = fmt.Sprintf("sequtil.Lease.%s", table.Canonical().Raw())
 		}
 
-		// If no table is specified via group.Tables, use the whole
-		// group name as the lease name.
+		// If no table is specified via group.Tables, meaning we will
+		// track the whole group rather than for individual tables, so
+		// use the whole group name as the lease name.
 		if len(names) == 0 {
 			names = append(names, fmt.Sprintf("sequtil.Lease.%s", group.Name.Raw()))
 		}

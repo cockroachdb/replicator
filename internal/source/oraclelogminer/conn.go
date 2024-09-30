@@ -70,18 +70,19 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 	startSCN := db.config.SCN
 	var err error
 
+	if startSCN.IsEmpty() {
+		startSCN, err = getLatestSCN(ctx, db.SourcePool)
+		if err != nil {
+			out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to obtained latest SCN")}
+			return
+		}
+		log.Warnf("initial SCN not specified, using auto-queried SCN %s", startSCN)
+	}
+
 	// Pull based model for acquiring the changefeed logs and convert them into mutations.
 	for {
 		select {
 		case <-ticker.C:
-			if startSCN.IsEmpty() {
-				startSCN, err = getLatestSCN(ctx, db.SourcePool)
-				if err != nil {
-					out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to obtained latest SCN")}
-					return
-				}
-				log.Warnf("initial SCN not specified, using auto-queried SCN %s", startSCN)
-			}
 			// TODO(janexing): make the changefeed acquiring executed IN PARALLEL TO the applying logic.
 			logs, nextStartSCN, err := readLogsOnce(ctx, db.SourcePool, startSCN, db.config.SourceSchema.Raw())
 			if err != nil {
@@ -111,6 +112,11 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 				// If the transaction ID changed, push the current temporal batch to the collection,
 				// and create a new batch for the new transaction ID.
 				if !bytes.Equal(currXID, prevXID) {
+					// TODO(janexing): figure out what else to include in the batch cursor.
+					out <- &types.BatchCursor{
+						Batch:    temporalBatch,
+						Progress: hlc.RangeIncluding(hlc.Zero(), temporalBatch.Time),
+					}
 					temporalBatch = &types.TemporalBatch{}
 				}
 
@@ -174,10 +180,13 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 			}
 
 			// TODO(janexing): figure out what else to include in the batch cursor.
-			out <- &types.BatchCursor{
-				Batch:    temporalBatch,
-				Progress: hlc.RangeIncluding(hlc.Zero(), temporalBatch.Time),
+			if temporalBatch.Count() > 0 {
+				out <- &types.BatchCursor{
+					Batch:    temporalBatch,
+					Progress: hlc.RangeIncluding(hlc.Zero(), temporalBatch.Time),
+				}
 			}
+
 		case <-ctx.Done():
 			return
 		}

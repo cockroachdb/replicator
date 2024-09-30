@@ -210,8 +210,6 @@ services:
     ports:
       - "1521:1521"
       - "5500:5500"
-    volumes:
-      - ./oracle-init:/docker-entrypoint-initdb.d/startup
   oracle-v21.3:
     # Use a private mirror of the image to speed up CI tests. The original is at
     # container-registry.oracle.com/database/express:21.3.0-xe

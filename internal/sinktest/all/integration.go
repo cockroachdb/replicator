@@ -24,6 +24,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// The __Name const variables are to enable parallel test executions for
+// specific dialect.
 const (
 	// IntegrationEnvName is an environment variable that enables
 	// integration tests for some databases. We expect this to be of the

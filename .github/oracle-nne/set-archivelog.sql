@@ -13,6 +13,8 @@
 --
 -- SPDX-License-Identifier: Apache-2.0
 
+-- Reference: https://www.striim.com/docs/en/configuring-oracle-to-use-oracle-reader.html#enable-archivelog-156
+
 SELECT log_mode FROM v$database;
 SHUTDOWN IMMEDIATE;
 STARTUP MOUNT;
@@ -21,6 +23,5 @@ ALTER DATABASE OPEN;
 SELECT log_mode FROM v$database;
 
 
-ALTER DATABASE ADD SUPPLEMENTAL LOG DATA;
 ALTER DATABASE ADD SUPPLEMENTAL LOG DATA (PRIMARY KEY) COLUMNS;
 select supplemental_log_data_min, supplemental_log_data_pk from v$database;

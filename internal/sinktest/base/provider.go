@@ -59,6 +59,8 @@ const (
 	statementCacheSize = 128
 
 	oracleCDBUserNamePrefix = "C##"
+
+	sysDBAParamInConnStr = `sysdba=true`
 )
 
 var (
@@ -359,7 +361,12 @@ func ProvideTargetSchema(
 			return sinktest.TargetSchema{}, errors.Wrap(err, pool.ConnectionString)
 		}
 		u.User = url.UserPassword(sch.Raw(), DummyPassword)
-		u.RawQuery = strings.Replace(u.RawQuery, `sysdba=true`, "", -1)
+		// We now switch to a new schema, which correspond to a new user
+		// on the oracle source. The new user is not a sysdba, so
+		// removing this `sysdba=true` params to avoid connection error.
+		// For reason why the new user is not a sysdba, see comments in
+		// provideSchema().
+		u.RawQuery = strings.ReplaceAll(u.RawQuery, sysDBAParamInConnStr, "")
 		conn := u.String()
 
 		next, err := stdpool.OpenOracleAsTarget(ctx, conn,
@@ -434,6 +441,12 @@ func provideSchema[P types.AnyPool](
 		if err != nil {
 			return ident.Schema{}, errors.Wrapf(err, "could not grant permissions to %s", name)
 		}
+
+		// We don't GRANT sysdba privilege to the new user, as that
+		// would make the new user essentially an alias of the sys user.
+		// All logs related to this user's operation will have SEG_OWNER
+		// == sys, which means we won't able to isolate out the logs
+		// only related to this new user.
 
 		ctx.Defer(func() {
 			// Use background since stopper context has stopped.

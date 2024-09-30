@@ -238,7 +238,7 @@ jobs:
           CDC_INTEGRATION: ${{ matrix.integration }}
           TEST_SOURCE_CONNECT: ${{ matrix.sourceConn }}
           TEST_TARGET_CONNECT: ${{ matrix.targetConn }}
-          OIC_LIBRARY_PATH: /usr/lib
+          ORACLE_HOME: /usr
         run: >
           set -e -o pipefail;
           go test
