@@ -81,3 +81,41 @@ func GetRowCount[P types.AnyPool](ctx context.Context, db P, name ident.Table) (
 	})
 	return count, err
 }
+
+func GetRowCountWithPredicate[P types.AnyPool](ctx context.Context, db P, name ident.Table, product types.Product, predicate string) (int, error) {
+	// Handles the query strings for various product types.
+	var q string
+	switch product {
+	case types.ProductCockroachDB, types.ProductPostgreSQL:
+		// TODO: open question: should the "v" be another parameter that
+		// we fmt.Sprintf in? Technically we want this flexible so folks can
+		// use it for other values.
+		// Alternatively, we can consider just passing in the whole predicate:
+		// for example: "v = 'cowbell'". or num > 10.
+		// There will be work here to make more flexible.
+		q = "SELECT count(*) FROM %s WHERE v = $1"
+	case types.ProductMariaDB, types.ProductMySQL:
+		q = "SELECT count(*) FROM %s WHERE v = ?"
+	case types.ProductOracle:
+		q = "SELECT count(*) FROM %s WHERE v = :v"
+	default:
+		return 0, errors.New("unimplemented product")
+	}
+	query := fmt.Sprintf(q, name)
+
+	// Handles the per pool specifics.
+	var count int
+	err := retry.Retry(ctx, db, func(ctx context.Context) error {
+		switch t := any(db).(type) {
+		case *types.SourcePool:
+			return t.QueryRowContext(ctx, query, predicate).Scan(&count)
+		case *types.StagingPool:
+			return t.QueryRow(ctx, query, predicate).Scan(&count)
+		case *types.TargetPool:
+			return t.QueryRowContext(ctx, query, predicate).Scan(&count)
+		default:
+			return errors.Errorf("unimplemented %T", t)
+		}
+	})
+	return count, err
+}
