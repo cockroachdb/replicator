@@ -125,25 +125,28 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 				// We need to get the primary key values for the changefeed, as in the update or
 				// delete stmt that logminer provides there might not explicitly contains the pk
 				// values, but just the rowid.
+				actualKV := kv.SetKV
+
 				if lg.Operation != OperationInsert {
-					pkNames, err := GetPKNames(ctx, db.SourcePool, lg.SegOwner, lg.TableName)
-					if err != nil {
-						out <- &types.BatchCursor{Error: err}
-						return
-					}
-					// TODO(janexing): consider changefeed log where the PK is updated.
-					for _, pkName := range pkNames {
-						pkVal, ok := kv.WhereKV[pkName]
-						if !ok {
-							out <- &types.BatchCursor{Error: errors.Errorf("value not found for primary key %s in the changefeed log", pkName)}
-							return
-						}
-						kv.SetKV[pkName] = pkVal
-					}
+					//pkNames, err := GetPKNames(ctx, db.SourcePool, lg.SegOwner, lg.TableName)
+					//if err != nil {
+					//	out <- &types.BatchCursor{Error: err}
+					//	return
+					//}
+					//// TODO(janexing): consider changefeed log where the PK is updated.
+					//for _, pkName := range pkNames {
+					//	pkVal, ok := kv.WhereKV[pkName]
+					//	if !ok {
+					//		out <- &types.BatchCursor{Error: errors.Errorf("value not found for primary key %s in the changefeed log", pkName)}
+					//		return
+					//	}
+					//	kv.SetKV[pkName] = pkVal
+					//}
+					actualKV = kv.MergeSetAndWhere()
 				}
 
 				// Convert the kv struct into a mutation obj.
-				byteRes, err := json.Marshal(kv.SetKV)
+				byteRes, err := json.Marshal(actualKV)
 				if err != nil {
 					out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to marshal kv")}
 					return

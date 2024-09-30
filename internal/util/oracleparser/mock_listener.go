@@ -61,6 +61,18 @@ type SetAndWhereKVStructs struct {
 	WhereKV KVStruct
 }
 
+func (swkv *SetAndWhereKVStructs) MergeSetAndWhere() KVStruct {
+	res := swkv.WhereKV
+	// Override with the Set.
+	for k, v := range swkv.SetKV {
+		res[k] = v
+	}
+
+	delete(res, "ROWID")
+
+	return res
+}
+
 func (kv KVStruct) String() (string, error) {
 	byteRes, err := json.MarshalIndent(kv, "", "  ")
 	if err != nil {
