@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
+	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/sinktest/scripttest"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/stamp"
@@ -180,11 +181,8 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	r.NoError(err)
 	// Wait for the update to propagate.
 	for {
-		var count int
-		if err := crdbPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
-			return
-		}
+		count, err := base.GetRowCountWithPredicate(ctx, fixture.TargetPool, tgt, fmt.Sprintf("%s = 'updated'", crdbCol))
+		r.NoError(err)
 		log.Trace("update count", count)
 		if count == rowCount {
 			break
@@ -205,11 +203,8 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	r.NoError(err)
 	// Wait for the deletes to propagate.
 	for {
-		var count int
-		if err := crdbPool.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = 'updated'", tgt, crdbCol)).Scan(&count); !a.NoError(err) {
-			return
-		}
+		count, err := base.GetRowCountWithPredicate(ctx, fixture.TargetPool, tgt, fmt.Sprintf("%s = 'updated'", crdbCol))
+		r.NoError(err)
 		log.Trace("delete count", count)
 		if count == rowCount-50 {
 			break
