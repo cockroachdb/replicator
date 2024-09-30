@@ -154,6 +154,7 @@ api.configureSource("%[1]s", {
 			Fixture:      fixture,
 			Fragment:     !workloadCfg.DisableFragment,
 			Idempotent:   flags.Idempotent(),
+			IsChaos:      flags.Chaos(),
 			Partitioned:  flags.Partitioned(),
 			Sequencer:    seq,
 			Transactions: transactions,
@@ -186,6 +187,8 @@ type Check struct {
 	Group *types.TableGroup
 	// Suppress non-idempotent replay of previous data.
 	Idempotent bool
+	// Adjust checks if chaos mode is enabled.
+	IsChaos bool
 	// Simulate a fan-in case, where data from multiple source tables is
 	// aggregated into a single target table.
 	Partitioned bool
@@ -319,12 +322,20 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 	// some durable storage. This does not necessarily mean the target
 	// table, but it could be staging.
 	_, _ = sink.terminal.Peek(func(m map[hlc.Time]error) error {
-		if cfg.DisableFK && len(m) == 2*len(testData.Data) {
-			// In best-effort mode, we'll expect to see twice the number
-			// of callbacks. The two tables are running independently,
-			// so the cursors get split up, one for each table.
+		var expectCount int
+		// In best-effort mode, we'll expect to see twice the number of
+		// callbacks. The two tables are running independently, so the
+		// cursors get split up, one for each table.
+		if cfg.DisableFK {
+			expectCount = 2 * len(testData.Data)
 		} else {
-			r.Len(m, len(testData.Data))
+			expectCount = len(testData.Data)
+		}
+		// In Chaos mode, we allow for some amount of replay.
+		if c.IsChaos {
+			r.GreaterOrEqual(len(m), expectCount)
+		} else {
+			r.Equal(len(m), expectCount)
 		}
 		for _, err := range m {
 			r.NoError(err)

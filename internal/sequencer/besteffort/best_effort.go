@@ -216,8 +216,8 @@ func (s *bestEffort) startGeneration(
 					subStat.Progress().CopyInto(next.Progress())
 					if log.IsLevelEnabled(log.TraceLevel) {
 						buf, _ := next.Progress().MarshalJSON()
-						log.Tracef("aggregated progress for group %s: %s",
-							next.Group().Name, buf)
+						log.Tracef("aggregated progress for group %s: %s => %s",
+							next.Group().Name, buf, sequencer.CommonProgress(next))
 					}
 					return next, nil
 				})
