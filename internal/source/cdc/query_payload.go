@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cdc-sink/internal/util/hlc"
 	"github.com/cockroachdb/cdc-sink/internal/util/ident"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // labels
@@ -128,6 +129,7 @@ func (q *queryPayload) UnmarshalJSON(data []byte) error {
 	return q.keys.Range(func(k ident.Ident, pos int) error {
 		v, ok := msg.Get(k)
 		if !ok {
+			log.WithField("data", string(data)).Warnf("missing primary key: %s", k)
 			return errors.Errorf("missing primary key: %s", k)
 		}
 		q.keyValues[pos] = v
