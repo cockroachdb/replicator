@@ -388,6 +388,11 @@ func getColumns(
 			if err := rows.Scan(&name, &column.Primary, &column.Type, &defaultExpr, &column.Ignored); err != nil {
 				return err
 			}
+			// Hack to force hash-sharded index columns out of PKs.
+			if strings.HasPrefix(name, "crdb_internal_") {
+				column.Ignored = true
+				column.Primary = false
+			}
 			column.Name = ident.New(name)
 			if column.Primary {
 				foundPrimay = true
