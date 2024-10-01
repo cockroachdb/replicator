@@ -16,13 +16,15 @@
 
 # This compose file contains recipes that are called from the GitHub
 # Actions workflows. Host networking is used, because it simplifies
-# the connectivity from the cockroach process back to the cdc-sink
+# the connectivity from the cockroach process back to the Replicator
 # test rig.
 #
 # Note that the names of the services in this file must align with
 # the integration matrix variable in workflows/tests.yaml, as well
 # as the values passed to sinktest.IntegrationMain.
 version: "3.9"
+volumes:
+  minio_data:
 services:
   # These are older versions of CRDB that we want to support as sources,
   # but not as staging or as a target. The network_mode is host so that
@@ -67,6 +69,11 @@ services:
     network_mode: host
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
+  source-cockroachdb-v24.1:
+    image: cockroachdb/cockroach:latest-v24.1
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5400 --http-addr :8081
 
   # These versions of CRDB are supported for staging and target operations.
   cockroachdb-v23.1:
@@ -81,9 +88,21 @@ services:
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G
 
+  cockroachdb-v24.1:
+    image: cockroachdb/cockroach:latest-v24.1
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G
+
+  cockroachdb-unstable:
+    image: cockroachdb/cockroach-unstable:latest
+    network_mode: host
+    entrypoint: /cockroach/cockroach
+    command: start-single-node --insecure --store type=mem,size=2G
+
   # This target exists to verify split-mode operation, where staging is separate from the target.
-  target-cockroachdb-v23.2:
-    image: cockroachdb/cockroach:latest-v23.2
+  target-cockroachdb-v24.1:
+    image: cockroachdb/cockroach:latest-v24.1
     entrypoint: /cockroach/cockroach
     command: start-single-node --insecure --store type=mem,size=2G --listen-addr :5401 --http-addr :8082
     ports:
@@ -100,22 +119,34 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper-v7.6:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-v7.6:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-v7.6:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
   zookeeper-v7.6:
     image: confluentinc/cp-zookeeper:7.6.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+  objstore:
+    image: quay.io/minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=root
+      - MINIO_ROOT_PASSWORD=SoupOrSecret
+    volumes:
+      - minio_data:/data
+    ports:
+      - 9100:9000
+      - 9101:9001
 
   mysql-v5.7:
     image: mysql:5.7
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
-      MYSQL_DATABASE: _cdc_sink
+      MYSQL_DATABASE: _replicator
     command:
       --default-authentication-plugin=mysql_native_password
       --gtid-mode=on
@@ -130,7 +161,7 @@ services:
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
-      MYSQL_DATABASE: _cdc_sink
+      MYSQL_DATABASE: _replicator
     command:
       --default-authentication-plugin=mysql_native_password
       --gtid-mode=on
@@ -147,7 +178,7 @@ services:
     platform: linux/x86_64
     environment:
       MYSQL_ROOT_PASSWORD: SoupOrSecret
-      MYSQL_DATABASE: _cdc_sink
+      MYSQL_DATABASE: _replicator
     command:
       --default-authentication-plugin=mysql_native_password
       --gtid-mode=on
@@ -160,7 +191,7 @@ services:
     platform: linux/x86_64
     environment:
       MARIADB_ROOT_PASSWORD: SoupOrSecret
-      MARIADB_DATABASE: _cdc_sink
+      MARIADB_DATABASE: _replicator
     command:
       --log-bin
       --server_id=1

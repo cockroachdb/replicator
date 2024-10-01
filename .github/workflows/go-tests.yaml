@@ -37,25 +37,25 @@ jobs:
       - name: crlfmt returns no deltas
         if: ${{ !cancelled() }}
         run: |
-          DELTA=$(go run github.com/cockroachdb/crlfmt -ignore _gen.go .)
+          DELTA=$(find . -type f ! -name '*_gen.go' ! -path '*thirdparty*' ! -name '*.ddt' -print0 | xargs -0 go run github.com/cockroachdb/crlfmt)
           echo $DELTA
           test -z "$DELTA"
 
       - name: Copyright headers
         if: ${{ !cancelled() }}
-        run: go run github.com/google/addlicense -c "The Cockroach Authors" -l apache -s -v  -check  -ignore '**/testdata/**/*.sql' .
+        run: go run github.com/google/addlicense -c "The Cockroach Authors" -l apache -s -v -check -ignore '**/testdata/**/*.sql'  -ignore '**/thirdparty/**' -ignore '*.ddt' -ignore '*.md' -ignore '.idea/*' .
 
       - name: Lint
         if: ${{ !cancelled() }}
-        run: go run golang.org/x/lint/golint -set_exit_status ./...
+        run: go run golang.org/x/lint/golint -set_exit_status $(go list ./... | grep -v "/thirdparty" | grep -v "/oracleparser")
 
       - name: Static checks
         if: ${{ !cancelled() }}
-        run: go run honnef.co/go/tools/cmd/staticcheck -checks all ./...
+        run: go run honnef.co/go/tools/cmd/staticcheck -checks all $(go list ./... | grep -v "/thirdparty" | grep -v "/oracleparser")
 
       - name: Go Vet
         if: ${{ !cancelled() }}
-        run: go vet ./...
+        run: go vet $(go list ./... | grep -v "/thirdparty")
 
       # Check that all dependencies have licenses and that those
       # licenses are reasonably permissive. License files for modules
@@ -73,6 +73,7 @@ jobs:
   tests:
     name: Integration Tests
     runs-on: ${{ matrix.runs-on || 'ubuntu-latest-8-core' }}
+    continue-on-error: ${{ matrix.experimental || false }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -90,83 +91,92 @@ jobs:
       matrix:
         include:
           # These are our primary supported versions.
+          - cockroachdb: v24.1
           - cockroachdb: v23.2
           - cockroachdb: v23.1
+
+          # Builds that are allowed to fail.
+          - cockroachdb: unstable
+            experimental: true
 
           # Run a test with a separate CockroachDB source and target
           # instance to ensure there are no accidental dependencies
           # between the source, staging, and target schemas.
-          - cockroachdb: v23.2
-            source: source-cockroachdb-v23.2
+          - cockroachdb: v24.1
+            source: source-cockroachdb-v24.1
             sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-            target: target-cockroachdb-v23.2
+            target: target-cockroachdb-v24.1
             targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
 
           # Tests for older CockroachDB versions as a source.
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             source: source-cockroachdb-v20.1
             sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             source: source-cockroachdb-v20.2
             sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             source: source-cockroachdb-v21.1
             sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             source: source-cockroachdb-v21.2
             sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
 
           # Tests for non-CRDB sources.
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: mysql-v8
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: mysql-v5.6
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: mysql-v5.7
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: mysql-mariadb-v10
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: postgresql-v11
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: postgresql-v12
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: postgresql-v13
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: postgresql-v14
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: postgresql-v15
           # Test CRDB via a Kafka cluster
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             integration: kafka-v7.6
+            experimental: true # TODO: Investigate connection-refused errors
+          # Test CRDB via an object store
+          - cockroachdb: v24.1
+            integration: objstore
           # Test CRDB -> PostgreSQL for migration backfill use cases.
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: postgresql-v11
             targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: postgresql-v12
             targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: postgresql-v13
             targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: postgresql-v14
             targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: postgresql-v15
             targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
 
           # Test CRDB -> MySQL for migration backfill use cases.
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: mysql-v8
             targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql?sslmode=require"
 
           # Test CRDB -> MariaDB for migration backfill use cases.
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: mysql-mariadb-v10
             targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
 
           # Test CRDB -> OracleDB for migration backfill use case.
-          - cockroachdb: v23.2
+          - cockroachdb: v24.1
             target: oracle-v21.3
             targetConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
 
@@ -191,10 +201,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # This uses a copy of the libraries stashed in our bucket.
+      - name: Install Oracle Instant Client
+        if: ${{ startsWith(matrix.target, 'oracle') }}
+        run: |
+          set -e
+          sudo apt-get install -yqq --no-install-recommends libaio1
+          curl -o /tmp/ora-libs.zip https://replicator.cockroachdb.com/third_party/instantclient-basiclite-linux-amd64.zip
+          unzip -d /tmp /tmp/ora-libs.zip
+          sudo mv /tmp/instantclient_21_13/* /usr/lib
+
       - name: Start Containers
         working-directory: .github
         run: >
-          docker-compose up -d
+          docker compose up -d
           cockroachdb-${{ matrix.cockroachdb }}
           ${{ matrix.integration }}
           ${{ matrix.source }}
@@ -214,17 +234,16 @@ jobs:
           TEST_SOURCE_CONNECT: ${{ matrix.sourceConn }}
           TEST_TARGET_CONNECT: ${{ matrix.targetConn }}
         run: >
-          set -o pipefail;
-          RACE="-race";
-          if [[ "$TEST_TARGET_CONNECT" =~ "mysql" ]]; then RACE=""; fi;
+          set -e -o pipefail;
           go test
           -count 1
           -coverpkg=./internal/...
           -covermode=atomic
           -coverprofile=${{ env.COVER_OUT }}
-          $RACE
+          -race
+          -tags target_all
           -v
-          ./... 2>&1 |
+          ./internal/... 2>&1 |
           go run github.com/jstemmer/go-junit-report/v2
           -iocopy
           -out ${{ env.JUNIT_OUT }}
@@ -244,7 +263,7 @@ jobs:
       - name: Docker container logs
         if: always()
         working-directory: .github
-        run: docker-compose logs --no-color > ${{ env.DOCKER_LOGS_OUT }}
+        run: docker compose logs --no-color > ${{ env.DOCKER_LOGS_OUT }}
 
       # Upload all test reports to a common artifact name, to make them
       # available to the summarization step. The go test json is
