@@ -70,10 +70,17 @@ func Query[P types.AnyPool](ctx context.Context, db P, query string, args ...any
 	return res, err
 }
 
+// Row is the interface to accommodate different query drivers.
+type Row interface {
+	// Scan reads the values from the current row into dest values
+	// positionally.
+	Scan(dest ...any) error
+}
+
 // QueryRow executes a query that is expected to return at most one row.
-func QueryRow[P types.AnyPool](ctx context.Context, db P, query string, args ...any) (any, error) {
+func QueryRow[P types.AnyPool](ctx context.Context, db P, query string, args ...any) (Row, error) {
 	var err error
-	var res any
+	var res Row
 
 	switch t := any(db).(type) {
 	case *types.SourcePool:

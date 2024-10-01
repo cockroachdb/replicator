@@ -64,9 +64,11 @@ func Query[P types.AnyPool](ctx context.Context, db P, query string, args ...any
 
 // QueryRow is a wrapper around Retry that can be used for sql
 // queries that don't have any return at most 1 rows.
-func QueryRow[P types.AnyPool](ctx context.Context, db P, query string, args ...any) (any, error) {
+func QueryRow[P types.AnyPool](
+	ctx context.Context, db P, query string, args ...any,
+) (generic.Row, error) {
 	var err error
-	var res any
+	var res generic.Row
 
 	err = Retry(ctx, db, func(ctx context.Context) error {
 		res, err = generic.QueryRow(ctx, db, query, args...)

@@ -166,7 +166,7 @@ func (db *DB) outputMessage(ctx *stopper.Context, out chan<- *types.BatchCursor)
 				// TODO(janexing): we only set the external of time for
 				// mutation and temporal batch, without taking care of
 				// nano and logical. Is this sufficient?
-				if temporalBatch.Time.External() == nil {
+				if temporalBatch.Count() == 0 {
 					commitSCN, err := scn.ParseStringToSCN(lg.CommitSCN)
 					if err != nil {
 						out <- &types.BatchCursor{Error: errors.Wrapf(err, "failed to parse commit SCN for log")}

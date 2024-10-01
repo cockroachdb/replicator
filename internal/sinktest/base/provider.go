@@ -403,7 +403,7 @@ func provideSchema[P types.AnyPool](
 			return ident.Schema{}, errors.Wrapf(err, "failed to check if database is CDB")
 		}
 		var isCDB sql.NullString
-		if err := checkIfCDBRow.(*sql.Row).Scan(&isCDB); err != nil {
+		if err := checkIfCDBRow.Scan(&isCDB); err != nil {
 			return ident.Schema{}, errors.Wrapf(err, "failed to scan to confirm if database is CDB")
 		}
 		if !isCDB.Valid {
