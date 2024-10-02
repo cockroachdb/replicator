@@ -465,9 +465,10 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	connCtx := stopper.WithContext(timeoutCtx)
-	conn, err := Start(connCtx, serverCfg)
+	conn, cancel, err := newTestFixture(connCtx, serverCfg)
+	defer cancel()
 	r.NoError(err)
-	stats := conn.Conn.conveyor.(interface {
+	stats := test.conveyor.(interface {
 		Stat() *notify.Var[sequencer.Stat]
 	}).Stat()
 
