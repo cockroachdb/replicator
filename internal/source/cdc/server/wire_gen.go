@@ -174,15 +174,11 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
-	listener, err := ProvideListener(context, config, diagnostics)
-	if err != nil {
-		return nil, nil, err
-	}
+	cdcConfig := &config.CDC
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, nil, err
 	}
-	cdcConfig := &config.CDC
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics)
 	if err != nil {
@@ -249,6 +245,10 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	if err != nil {
 		return nil, nil, err
 	}
+	listener, err := ProvideListener(context, config, diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
 	serveMux := ProvideMux(handler, stagingPool, targetPool)
 	tlsConfig, err := ProvideTLSConfig(config)
 	if err != nil {
@@ -259,6 +259,7 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		Authenticator: authenticator,
 		Config:        config,
 		Diagnostics:   diagnostics,
+		Handler:       handler,
 		Listener:      listener,
 		Memo:          memoMemo,
 		StagingPool:   stagingPool,
@@ -283,6 +284,7 @@ type testFixture struct {
 	Authenticator types.Authenticator
 	Config        *Config
 	Diagnostics   *diag.Diagnostics
+	Handler       *cdc.Handler
 	Listener      net.Listener
 	Memo          types.Memo
 	StagingPool   *types.StagingPool
