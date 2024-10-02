@@ -83,6 +83,37 @@ func TestFilterStubs(t *testing.T) {
 
 // TestPutAndDrain will insert and mark a batch of Mutations.
 func TestPutAndDrain(t *testing.T) {
+	tc := []struct {
+		name           string
+		totalMutations int
+		batchSize      int
+	}{
+		{
+			name:           "batch is larger than total mutations",
+			totalMutations: 500,
+			batchSize:      1_000,
+		},
+		{
+			name:           "full batches only",
+			totalMutations: 1_000,
+			batchSize:      500,
+		},
+		{
+			name:           "full batches and partial batch",
+			totalMutations: 1_200,
+			batchSize:      500,
+		},
+	}
+
+	for _, tc := range tc {
+		t.Run(tc.name, func(t *testing.T) {
+			testPutAndDrain(t, tc.totalMutations, tc.batchSize)
+		})
+	}
+
+}
+
+func testPutAndDrain(t *testing.T, total int, testBatchSize int) {
 	a := assert.New(t)
 	r := require.New(t)
 
@@ -106,6 +137,12 @@ func TestPutAndDrain(t *testing.T) {
 			ctx context.Context, db types.StagingQuerier, before hlc.Time, aost bool,
 		) (int, error)
 	})
+	batcher := s.(interface {
+		SetMarkAppliedBatchSize(size int)
+		GetMarkAppliedBatchSize() int
+	})
+	// Set the batch size before staging.
+	batcher.SetMarkAppliedBatchSize(testBatchSize)
 
 	jumbledStager, err := fixture.Stagers.Get(ctx, sinktest.JumbleTable(dummyTarget))
 	r.NoError(err)
@@ -115,7 +152,6 @@ func TestPutAndDrain(t *testing.T) {
 	stagingTable := s.(interface{ GetTable() ident.Table }).GetTable()
 
 	// Cook test data.
-	const total = 10_000
 	muts := make([]types.Mutation, total)
 	for i := range muts {
 		muts[i] = types.Mutation{
