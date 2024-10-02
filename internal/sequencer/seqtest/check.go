@@ -28,10 +28,12 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
@@ -108,8 +110,9 @@ func CheckSequencer(
 
 		// Create sequencer test fixture.
 		cfg := &sequencer.Config{
-			FlushSize:        transactions/10 + 1,
 			IdempotentSource: flags.Idempotent(),
+			FlushPeriod:      10 * time.Millisecond,
+			FlushSize:        transactions/10 + 1,
 			Parallelism:      8,
 			QuiescentPeriod:  100 * time.Millisecond,
 			TimestampLimit:   transactions/10 + 1,
@@ -284,19 +287,28 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 	stats, err := c.Sequencer.Start(ctx, startOpts)
 	r.NoError(err)
 
-	// Wait for all data to have been read out of the sink at least once.
+	// Wait until there are no active readers and that all data has been
+	// read at least once.
 	for {
-		var readAll bool
+		readers, readersChanged := sink.reads.Get()
+		var allRead bool
 		updated, err := sink.terminal.Peek(func(value map[hlc.Time]error) error {
-			readAll = len(value) >= len(testData.Data)
-			log.Infof("waiting for all data to be read %d of %d", len(value), len(testData.Data))
+			var ct int
+			for _, err := range value {
+				if err == nil {
+					ct++
+				}
+			}
+			allRead = ct >= len(testData.Data)
+			log.Tracef("waiting for all data to be read %d of %d", len(value), len(testData.Data))
 			return nil
 		})
 		r.NoError(err)
-		if readAll {
+		if readers == 0 && allRead {
 			break
 		}
 		select {
+		case <-readersChanged:
 		case <-updated:
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
@@ -322,22 +334,11 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 	// some durable storage. This does not necessarily mean the target
 	// table, but it could be staging.
 	_, _ = sink.terminal.Peek(func(m map[hlc.Time]error) error {
-		var expectCount int
-		// In best-effort mode, we'll expect to see twice the number of
-		// callbacks. The two tables are running independently, so the
-		// cursors get split up, one for each table.
-		if cfg.DisableFK {
-			expectCount = 2 * len(testData.Data)
-		} else {
-			expectCount = len(testData.Data)
-		}
-		// In Chaos mode, we allow for some amount of replay.
-		if c.IsChaos {
-			r.GreaterOrEqual(len(m), expectCount)
-		} else {
-			r.Equal(len(m), expectCount)
-		}
+		r.GreaterOrEqual(len(m), len(testData.Data))
 		for _, err := range m {
+			if errors.Is(err, chaos.ErrChaos) {
+				continue
+			}
 			r.NoError(err)
 		}
 		return nil
@@ -355,11 +356,11 @@ func (c *Check) Check(ctx *stopper.Context, t testing.TB, cfg *all.WorkloadConfi
 
 }
 
-// This is a trivial implementation of [types.BatchReader] over canned
-// data.
+// This is an implementation of [types.BatchReader] over canned data.
 type dummyReader struct {
 	batch      *types.MultiBatch
 	progressTo hlc.Range
+	reads      notify.Var[int]
 	terminal   notify.Var[map[hlc.Time]error]
 	unique     hlc.Clock
 }
@@ -367,9 +368,23 @@ type dummyReader struct {
 var _ types.BatchReader = (*dummyReader)(nil)
 
 func (r *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
+	_, _, _ = r.reads.Update(func(old int) (int, error) {
+		return old + 1, nil
+	})
 	ch := make(chan *types.BatchCursor, 2)
 	ctx.Go(func(ctx *stopper.Context) error {
-		defer close(ch)
+		defer func() {
+			// Decrement the number of active reads here, since no more
+			// data can be introduced.
+			_, _, _ = r.reads.Update(func(old int) (int, error) {
+				return old - 1, nil
+			})
+			// Become idle until shutdown, which is how a real
+			// implementation would behave when no more data is
+			// available.
+			<-ctx.Stopping()
+			close(ch)
+		}()
 		for _, temp := range r.batch.Data {
 			var send bool
 			_, _ = r.terminal.Peek(func(m map[hlc.Time]error) error {
@@ -401,9 +416,6 @@ func (r *dummyReader) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, err
 			return nil
 		}
 		log.Infof("sent final progress %s", r.progressTo)
-		// Become idle until shutdown, which is how a real
-		// implementation would behave when no more data is available.
-		<-ctx.Stopping()
 		return nil
 	})
 	return ch, nil

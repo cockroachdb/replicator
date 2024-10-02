@@ -29,9 +29,8 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 )
 
-// Immediate is a trivial implementation of [sequencer.Sequencer] that
-// writes through to the underlying acceptor. If a non-idempotent source
-// is configured, staging tables will be used to debounce mutations.
+// Immediate is a [sequencer.Shim] that guards the output acceptor with
+// exactly-only behavior if a non-idempotent source is configured.
 type Immediate struct {
 	cfg         *sequencer.Config
 	marker      *decorators.Marker
@@ -41,13 +40,36 @@ type Immediate struct {
 	targetPool  *types.TargetPool
 }
 
-var _ sequencer.Sequencer = (*Immediate)(nil)
+var _ sequencer.Shim = (*Immediate)(nil)
 
-// Start implements [sequencer.Sequencer]. The emitted stat will advance
-// all tables in the group to the ends of the resolving bounds.
-func (i *Immediate) Start(
+// Wrap implements [sequencer.Shim].
+func (i *Immediate) Wrap(_ *stopper.Context, delegate sequencer.Sequencer) (sequencer.Sequencer, error) {
+	return &immediate{i, delegate}, nil
+}
+
+type immediate struct {
+	*Immediate
+	delegate sequencer.Sequencer
+}
+
+var _ sequencer.Sequencer = (*immediate)(nil)
+
+func (i *immediate) Start(
 	ctx *stopper.Context, opts *sequencer.StartOptions,
 ) (*notify.Var[sequencer.Stat], error) {
+	opts = opts.Copy()
+	acc := opts.Delegate
+	acc = i.retryTarget.MultiAcceptor(acc)
+	if !i.cfg.IdempotentSource {
+		acc = i.marker.MultiAcceptor(acc)
+		acc = i.once.MultiAcceptor(acc)
+	}
+	opts.Delegate = acc
+	_, err := i.delegate.Start(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	ret := notify.VarOf(sequencer.NewStat(opts.Group, &ident.TableMap[hlc.Range]{}))
 
 	// Set each table's progress to the end of the bounds. This
@@ -71,13 +93,5 @@ func (i *Immediate) Start(
 			})
 		return err
 	})
-
-	acc := opts.Delegate
-	acc = i.retryTarget.MultiAcceptor(acc)
-	if !i.cfg.IdempotentSource {
-		acc = i.marker.MultiAcceptor(acc)
-		acc = i.once.MultiAcceptor(acc)
-	}
-	// XXX
 	return ret, nil
 }

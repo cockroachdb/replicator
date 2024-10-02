@@ -133,10 +133,7 @@ func (g *groupSequencer) switchModeLocked(
 		}
 		nextSeq, err = g.bestEffort.Wrap(ctx, nextSeq)
 	case ModeImmediate:
-		nextSeq = g.immediate
-		// Immediate doesn't progess staged data.
-		opts = opts.Copy()
-		opts.BatchReader = nil
+		nextSeq, err = g.immediate.Wrap(ctx, g.core)
 	case ModeConsistent:
 		nextSeq, err = g.staging.Wrap(ctx, g.core)
 	default:

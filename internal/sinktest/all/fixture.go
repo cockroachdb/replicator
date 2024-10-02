@@ -35,7 +35,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 )
 
 // Fixture provides a complete set of database-backed services. One can
@@ -159,7 +158,6 @@ func (f *Fixture) ReadStagingQuery(
 			if hlc.Compare(cursor.Progress.Max(), expect.Max()) >= 0 {
 				return ret, nil
 			}
-			log.Tracef("waiting for staging query %s vs %s", cursor.Progress, expect)
 
 		case <-ctx.Done():
 			return nil, ctx.Err()

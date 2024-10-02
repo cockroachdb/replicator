@@ -50,6 +50,7 @@ func (f *router) Read(ctx *stopper.Context) (<-chan *types.BatchCursor, error) {
 			if cur == nil {
 				return nil
 			}
+			cur = cur.Copy()
 
 			if cur.Batch != nil {
 				for table := range cur.Batch.Data.Keys() {

@@ -67,7 +67,7 @@ func (f *Fixture) SequencerFor(
 	case switcher.ModeConsistent:
 		return f.Staging.Wrap(ctx, f.Core)
 	case switcher.ModeImmediate:
-		return f.Immediate, nil
+		return f.Immediate.Wrap(ctx, f.Core)
 	default:
 		return nil, errors.Errorf("unimplemented, %s", mode)
 	}

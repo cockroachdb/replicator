@@ -116,12 +116,18 @@ func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
 		return nil, err
 	}
 
-	ret.acceptor, ret.stat, err = seq.Start(
+	acc := &acceptReader{
+		ch: make(chan *types.BatchCursor, 1024),
+	}
+
+	ret.stat, err = seq.Start(
 		c.stopper,
 		&sequencer.StartOptions{
-			Bounds:   &ret.resolvingRange,
-			Delegate: types.OrderedAcceptorFrom(c.tableAcceptor, c.watchers),
-			Group:    tableGroup,
+			BatchReader: acc,
+			Bounds:      &ret.resolvingRange,
+			Delegate:    types.OrderedAcceptorFrom(c.tableAcceptor, c.watchers),
+			Group:       tableGroup,
+			Terminal:    acc.Terminal,
 		})
 	if err != nil {
 		return nil, err
@@ -129,7 +135,7 @@ func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
 
 	// Add top-of-funnel reporting.
 	labels := []string{c.kind, schema.Raw()}
-	ret.acceptor = types.CountingAcceptor(ret.acceptor,
+	ret.acceptor = types.CountingAcceptor(acc,
 		mutationsErrorCount.WithLabelValues(labels...),
 		mutationsReceivedCount.WithLabelValues(labels...),
 		mutationsSuccessCount.WithLabelValues(labels...),

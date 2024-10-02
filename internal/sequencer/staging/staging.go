@@ -20,6 +20,7 @@ package staging
 
 import (
 	"context"
+	"slices"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
@@ -190,6 +191,6 @@ func (s *staging) stageCursor(ctx *stopper.Context, cur *types.BatchCursor, term
 			ct += tableBatch.Count()
 		}
 	}
-	log.Tracef("staged %d mutations", ct)
+	log.Tracef("staged %d mutations to progress %s %s", ct, cur.Progress, slices.Collect(cur.Batch.Data.Keys()))
 	return nil
 }

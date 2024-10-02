@@ -84,7 +84,7 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	once := decorators.ProvideOnce(stagingPool, stagers)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)
 	immediateImmediate := immediate.ProvideImmediate(sequencerConfig, targetPool, marker, once, retryTarget, stagers)
-	stagingStaging := staging.ProvideStaging(sequencerConfig, marker, stagers, stagingPool)
+	stagingStaging := staging.ProvideStaging(sequencerConfig, marker, stagers, stagingPool, watchers)
 	switcherSwitcher := switcher.ProvideSequencer(bestEffort, coreCore, diagnostics, immediateImmediate, stagingStaging, stagingPool, targetPool)
 	conveyors, err := conveyor.ProvideConveyors(context, acceptor, conveyorConfig, checkpoints, sequencer, retireRetire, switcherSwitcher, watchers)
 	if err != nil {

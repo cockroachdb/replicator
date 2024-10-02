@@ -22,6 +22,7 @@ import (
 	scriptRT "github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sequencer/chaos"
+	"github.com/cockroachdb/replicator/internal/sequencer/core"
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	"github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/target/apply"
@@ -50,6 +51,7 @@ func ProvideConn(
 	acc *apply.Acceptor,
 	chaos *chaos.Chaos,
 	config *Config,
+	core *core.Core,
 	imm *immediate.Immediate,
 	memo types.Memo,
 	scriptSeq *script.Sequencer,
@@ -111,7 +113,7 @@ func ProvideConn(
 	if err != nil {
 		return nil, err
 	}
-	connAcceptor, statVar, err := seq.Start(ctx, &sequencer.StartOptions{
+	statVar, err := seq.Start(ctx, &sequencer.StartOptions{
 		Delegate: types.OrderedAcceptorFrom(acc, watchers),
 		Bounds:   &notify.Var[hlc.Range]{}, // Not currently used.
 		Group: &types.TableGroup{

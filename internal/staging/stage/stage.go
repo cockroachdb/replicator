@@ -564,6 +564,7 @@ DO UPDATE SET applied = true, applied_at = now()
 func (s *stage) MarkApplied(
 	ctx context.Context, db types.StagingQuerier, muts []types.Mutation,
 ) error {
+	muts = msort.UniqueByTimeKey(muts)
 	keys := make([]json.RawMessage, len(muts))
 	nanos := make([]int64, len(muts))
 	logical := make([]int, len(muts))
