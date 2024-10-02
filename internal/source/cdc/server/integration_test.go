@@ -17,24 +17,32 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	stagingProd "github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/sinktest"
+	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
+	"github.com/cockroachdb/replicator/internal/types"
 	jwtAuth "github.com/cockroachdb/replicator/internal/util/auth/jwt"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/stdlogical"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
@@ -44,6 +52,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/toolchain/src/math/rand/v2"
 )
 
 func TestMain(m *testing.M) {
@@ -394,4 +403,165 @@ func supportsQueries(version string) (bool, error) {
 // the webhook endpoint is available.
 func supportsWebhook(version string) (bool, error) {
 	return stdpool.CockroachMinVersion(version, "v21.2")
+}
+
+func getConfig(f *base.Fixture, fc *fixtureConfig, topics []string, table ident.Table) (*Config, error) {
+	return &Config{}, nil
+}
+
+func isPrime(i int) bool {
+	return big.NewInt(int64(i)).ProbablyPrime(0)
+}
+
+const (
+	maxBatchSize  = 10
+	maxIterations = 25
+	numPartitions = 5
+)
+
+type fixtureConfig struct {
+	chaos     bool
+	script    bool
+	immediate bool
+}
+
+// NB: so far I was able to copy and paste this over and replace the kafka specific aspects
+// with new types to do source writing, which is necessary for the data to make its way from
+// source to changefeed over to target.
+
+// There are still open questions around how I should write the data and to which table.
+// I also need to do the changefeed config and start and the server start here.
+// Once this is all set up then we can properly run the checks in an infinite loop.
+func testWorkload(t *testing.T, fc *fixtureConfig) {
+	log.SetLevel(log.DebugLevel)
+	r := require.New(t)
+
+	fixture, err := all.NewFixture(t)
+	r.NoError(err)
+	ctx := fixture.Context
+	workload, _, err := fixture.NewWorkload(ctx,
+		&all.WorkloadConfig{
+			// Don't create foreign keys references in immediate mode
+			DisableFK:      fc.immediate,
+			DisableStaging: true,
+		})
+	r.NoError(err)
+	topics := []string{
+		workload.Parent.Name().Raw(),
+		workload.Child.Name().Raw(),
+	}
+	serverCfg, err := getConfig(fixture.Fixture, fc, topics,
+		workload.Parent.Name())
+	r.NoError(err)
+
+	// TODO: fix this later.
+	producer, err := newSourceWriter(nil)
+	r.NoError(err)
+	defer func() {
+		if err := producer.cleanup(); err != nil {
+			log.Errorf("error closing producer %v", err)
+		}
+	}()
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	connCtx := stopper.WithContext(timeoutCtx)
+	conn, err := Start(connCtx, serverCfg)
+	r.NoError(err)
+	stats := conn.Conn.conveyor.(interface {
+		Stat() *notify.Var[sequencer.Stat]
+	}).Stat()
+
+	var clock hlc.Clock
+	r.NoError(producer.writeResolved(clock.Now()))
+	for iter := 1; iter <= maxIterations; iter++ {
+		batch := &types.MultiBatch{}
+		size := rand.IntN(maxBatchSize) + 1
+		for i := 0; i < size; i++ {
+			workload.GenerateInto(batch, clock.Now())
+		}
+		r.NoError(producer.writeBatch(batch))
+		// Write a resolved timestamp file once in a while.
+		// Ensure that we have resolved file at the end.
+		if isPrime(iter) || iter == maxIterations {
+			r.NoError(producer.writeResolved(clock.Now()))
+		}
+	}
+	log.Info("waiting for rows")
+	// Waiting for the rows to show in the target database.
+	r.NoError(workload.WaitForCatchUp(ctx, stats))
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		parent, err := workload.Checker.StageCounter(workload.Parent.Name(),
+			hlc.RangeIncluding(hlc.Zero(), clock.Last()))
+		r.NoError(err)
+		child, err := workload.Checker.StageCounter(workload.Child.Name(),
+			hlc.RangeIncluding(hlc.Zero(), clock.Last()))
+		r.NoError(err)
+		log.Infof("staging database content parent rows: %d, child rows: %d", parent, child)
+		if parent == 0 && child == 0 {
+			break
+		}
+		select {
+		case <-timeoutCtx.Done():
+			r.Fail("timed out waiting for staging to be empty")
+		case <-ticker.C:
+		}
+	}
+	// Verify that the target database has all the data.
+	workload.CheckConsistent(ctx, t)
+	connCtx.Stop(time.Second)
+	r.NoError(connCtx.Wait())
+}
+
+type sourceWriter struct {
+	sourceFixture *base.Fixture
+}
+
+func newSourceWriter(sourceFixture *base.Fixture) (*sourceWriter, error) {
+	return &sourceWriter{sourceFixture: sourceFixture}, nil
+}
+
+func (s *sourceWriter) writeBatch(batch *types.MultiBatch) error {
+	type payload struct {
+		After   json.RawMessage `json:"after"`
+		Before  json.RawMessage `json:"before"`
+		Key     json.RawMessage `json:"key"`
+		Updated string          `json:"updated"`
+	}
+	for _, b := range batch.Data {
+		for _, t := range b.Data.Entries() {
+			for _, v := range t.Value.Data {
+				msg := &payload{
+					After:   v.Data,
+					Before:  v.Before,
+					Key:     v.Key,
+					Updated: v.Time.String(),
+				}
+				// Changfeeds encode a deletion as an absence of an after block.
+				if v.IsDelete() {
+					msg.After = nil
+				}
+				err := s.sendMessage(t.Value.Table.Raw(), v.Key, msg)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *sourceWriter) writeResolved(resolved hlc.Time) error {
+	return nil
+}
+
+func (s *sourceWriter) sendMessage(
+	table string, key json.RawMessage, message any,
+) error {
+	return nil
+}
+
+func (s *sourceWriter) cleanup() error {
+	return nil
 }
