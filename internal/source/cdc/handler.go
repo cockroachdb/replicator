@@ -68,7 +68,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if thrown := recover(); thrown != nil {
 			err, ok := thrown.(error)
-			if !ok {
+			if ok {
+				err = errors.WithStack(err)
+			} else {
 				err = errors.Errorf("unexpected error: %v", thrown)
 			}
 			sendErr(err)
