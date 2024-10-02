@@ -42,7 +42,7 @@ func OpenTarget(
 
 	switch strings.ToLower(u.Scheme) {
 	case "mysql":
-		return OpenMySQLAsTarget(ctx, connectString, u, backup, breakers, options...)
+		return OpenMySQLAsTarget(ctx, connectString, backup, breakers, options...)
 	case "pg", "pgx", "postgres", "postgresql":
 		return OpenPgxAsTarget(ctx, connectString, backup, breakers, options...)
 	case "ora", "oracle":

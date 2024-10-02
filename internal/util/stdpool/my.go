@@ -18,6 +18,7 @@
 package stdpool
 
 import (
+	"context"
 	"crypto/tls"
 	"database/sql"
 	sqldriver "database/sql/driver"
@@ -91,7 +92,6 @@ func (o *onomastic) newName(prefix string) string {
 func OpenMySQLAsTarget(
 	ctx *stopper.Context,
 	connectString string,
-	url *url.URL,
 	backup *Backup,
 	breakers *sinktest.Breakers,
 	options ...Option,
@@ -100,19 +100,116 @@ func OpenMySQLAsTarget(
 	if err := attachOptions(ctx, &tc, options); err != nil {
 		return nil, err
 	}
-	// Use a unique name for each call of OpenMySQLAsTarget.
-	tlsConfigName := tlsConfigNames.newName("mysql_driver")
-	tlsConfigs, err := secure.ParseTLSOptions(url)
+
+	connector, err := newTlsFallbackConnector(connectString, &breakers.TargetConnectionFails)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	ret := &types.TargetPool{
+		DB: sql.OpenDB(connector),
+		PoolInfo: types.PoolInfo{
+			ConnectionString: connectString,
+			Product:          types.ProductMySQL,
+
+			ErrCode:      myErrCode,
+			IsDeferrable: myErrDeferrable,
+			ShouldRetry:  myErrRetryable,
+		},
+	}
+
+	if tc.WaitForStartup {
+		if err := awaitMySQLReady(ctx, ret); err != nil {
+			return nil, err
+		}
+		if ctx.IsStopping() {
+			return nil, ctx.Err()
+		}
+	}
+
+	// Testing that connection is usable.
+	if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
+		queryErr := errors.Wrap(err, "could not query version")
+		ver, err := backup.Load(ctx, connectString)
+		if err != nil {
+			return nil, errors2.Join(queryErr, errors.Wrap(err, "could not load version from staging"))
+		}
+		if ver == "" {
+			return nil, fmt.Errorf("empty version loaded from staging")
+		}
+		ret.Version = ver
+	} else if err := backup.Store(ctx, connectString, ret.Version); err != nil {
+		return nil, errors.Wrap(err, "could not store version to staging")
+	}
+	log.Infof("Version %s.", ret.Version)
+	if strings.Contains(ret.Version, "MariaDB") {
+		ret.PoolInfo.Product = types.ProductMariaDB
+	}
+	if err := setTableHint(ret.Info()); err != nil {
+		return nil, err
+	}
+	// If debug is enabled we print sql mode and ssl info.
+	if log.IsLevelEnabled(log.DebugLevel) {
+		var mode string
+		if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {
+			log.Errorf("could not query sql mode %s", err.Error())
+		}
+		var varName, cipher string
+		if err := ret.QueryRow("SHOW STATUS LIKE 'Ssl_cipher';").Scan(&varName, &cipher); err != nil {
+			log.Errorf("could not query ssl info %s", err.Error())
+		}
+		log.Debugf("Mode %s. %s %s", mode, varName, cipher)
+		ret.Version = fmt.Sprintf("%s cipher[%s]", ret.Version, cipher)
+	}
+	if err := attachOptions(ctx, ret.DB, options); err != nil {
+		return nil, err
+	}
+	if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
+		return nil, err
+	}
+
+	return ret, nil
+}
+
+type mySqlDriver struct{}
+
+func (m *mySqlDriver) Open(name string) (sqldriver.Conn, error) {
+	u, err := url.Parse(name)
 	if err != nil {
 		return nil, err
 	}
-	var ret *types.TargetPool
-	var transportError error
+	tlsConfigs, err := secure.ParseTLSOptions(u)
+	if err != nil {
+		return nil, err
+	}
+
+	ctor := tlsFallbackConnector{
+		tlsConfigs: tlsConfigs,
+	}
+	return ctor.Connect(context.Background())
+}
+
+type tlsFallbackConnector struct {
+	tlsConfigs      []*tls.Config
+	connectionUrl   *url.URL
+	delegate        sqldriver.Connector
+	failConnections *atomic.Bool
+}
+
+func (t *tlsFallbackConnector) findDelegate() (sqldriver.Connector, error) {
+	if t.delegate != nil {
+		return t.delegate, nil
+	}
+
+	// Use a unique name for each call of OpenMySQLAsTarget.
+	tlsConfigName := tlsConfigNames.newName("mysql_driver")
+
+	var lastErr error
 	// Try all possible transport options.
 	// The first one that works is the one we will use.
-	for _, tlsConfig := range tlsConfigs {
+	for _, tlsConfig := range t.tlsConfigs {
 		mysql.DeregisterTLSConfig(tlsConfigName)
-		mySQLString, err := getConnString(url, tlsConfigName, tlsConfig)
+		mySQLString, err := getConnString(t.connectionUrl, tlsConfigName, tlsConfig)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -124,6 +221,7 @@ func OpenMySQLAsTarget(
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
+
 		// This impacts the use of db.Query() and friends, but not
 		// prepared statements. We set this as a workaround for MariaDB
 		// queries where the parameter types in prepared statements
@@ -131,90 +229,79 @@ func OpenMySQLAsTarget(
 		// the ? markers with the literal values, rather than doing a
 		// prepare, bind, exec.
 		cfg.InterpolateParams = true
-		connector, err := mysql.NewConnector(cfg)
-		if err != nil {
-			log.WithError(err).Trace("failed to connect to database server")
-			transportError = err
-			// Try a different option.
-			continue
-		}
-		ret = &types.TargetPool{
-			DB: sql.OpenDB(connector),
-			PoolInfo: types.PoolInfo{
-				ConnectionString: connectString,
-				Product:          types.ProductMySQL,
+		mySqlConnector, err := mysql.NewConnector(cfg)
 
-				ErrCode:      myErrCode,
-				IsDeferrable: myErrDeferrable,
-				ShouldRetry:  myErrRetryable,
-			},
+		myDB := sql.OpenDB(mySqlConnector)
+		defer myDB.Close()
+		if err := myDB.Ping(); err != nil {
+			lastErr = err
+		} else {
+			return mySqlConnector, nil
 		}
-		ctx.Defer(func() { _ = ret.Close() })
-
-		// TODO: need to figure out a better way than ping, if we're going to memoize the version
-	ping:
-		if err := ret.Ping(); err != nil {
-			// For some errors, we retry.
-			if tc.WaitForStartup && isMySQLStartupError(err) {
-				log.WithError(err).Info("waiting for database to become ready")
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(10 * time.Second):
-					goto ping
-				}
-			}
-			transportError = err
-			_ = ret.Close()
-			// Try a different option.
-			continue
-		}
-		// Testing that connection is usable.
-		if err := ret.QueryRow("SELECT VERSION();").Scan(&ret.Version); err != nil {
-			queryErr := errors.Wrap(err, "could not query version")
-			ver, err := backup.Load(ctx, connectString)
-			if err != nil {
-				return nil, errors2.Join(queryErr, errors.Wrap(err, "could not load version from staging"))
-			}
-			if ver == "" {
-				return nil, fmt.Errorf("empty version loaded from staging")
-			}
-			ret.Version = ver
-		} else if err := backup.Store(ctx, connectString, ret.Version); err != nil {
-			return nil, errors.Wrap(err, "could not store version to staging")
-		}
-		log.Infof("Version %s.", ret.Version)
-		if strings.Contains(ret.Version, "MariaDB") {
-			ret.PoolInfo.Product = types.ProductMariaDB
-		}
-		if err := setTableHint(ret.Info()); err != nil {
-			return nil, err
-		}
-		// If debug is enabled we print sql mode and ssl info.
-		if log.IsLevelEnabled(log.DebugLevel) {
-			var mode string
-			if err := ret.QueryRow("SELECT @@sql_mode").Scan(&mode); err != nil {
-				log.Errorf("could not query sql mode %s", err.Error())
-			}
-			var varName, cipher string
-			if err := ret.QueryRow("SHOW STATUS LIKE 'Ssl_cipher';").Scan(&varName, &cipher); err != nil {
-				log.Errorf("could not query ssl info %s", err.Error())
-			}
-			log.Debugf("Mode %s. %s %s", mode, varName, cipher)
-			ret.Version = fmt.Sprintf("%s cipher[%s]", ret.Version, cipher)
-		}
-		if err := attachOptions(ctx, ret.DB, options); err != nil {
-			return nil, err
-		}
-		if err := attachOptions(ctx, &ret.PoolInfo, options); err != nil {
-			return nil, err
-		}
-		// The connection meets the client/server requirements,
-		// no need to try other transport options.
-		return ret, nil
 	}
-	// All the options have been exhausted, returning the last error.
-	return nil, transportError
+
+	// Nothing worked; return the last error
+	return nil, lastErr
+}
+
+func (t *tlsFallbackConnector) Connect(ctx context.Context) (sqldriver.Conn, error) {
+	if t.failConnections.Load() {
+		return nil, fmt.Errorf("testing connection failure")
+	}
+	if t.delegate == nil {
+		delegate, err := t.findDelegate()
+		if err != nil {
+			return nil, err
+		}
+		if delegate == nil {
+			// This shouldn't happen; we should either find a delegate, or error
+			return nil, fmt.Errorf("could not find MySQL connector delegate")
+		}
+		t.delegate = delegate
+	}
+	return t.delegate.Connect(ctx)
+}
+
+func (t *tlsFallbackConnector) Driver() sqldriver.Driver {
+	return &mySqlDriver{}
+}
+
+func newTlsFallbackConnector(
+	connStr string, failConnections *atomic.Bool,
+) (sqldriver.Connector, error) {
+	u, err := url.Parse(connStr)
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConfigs, err := secure.ParseTLSOptions(u)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tlsFallbackConnector{
+		tlsConfigs:      tlsConfigs,
+		connectionUrl:   u,
+		failConnections: failConnections,
+	}, nil
+}
+
+func awaitMySQLReady(ctx *stopper.Context, db *types.TargetPool) error {
+	for {
+		err := db.Ping()
+		if err == nil || !isMySQLStartupError(err) {
+			return err
+		}
+
+		// We have a startup error
+		log.WithError(err).Info("waiting for database to become ready")
+
+		select {
+		case <-ctx.Stopping():
+			return nil
+		case <-time.After(10 * time.Second):
+		}
+	}
 }
 
 // TODO (silvano): verify error codes.
