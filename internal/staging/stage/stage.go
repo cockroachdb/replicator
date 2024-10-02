@@ -551,6 +551,7 @@ func (s *stage) stageOneBatch(
 	return nil
 }
 
+const markAppliedBatchSize = 100_000
 const markAppliedTemplate = `
 WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
 INSERT INTO %s (key, nanos, logical, applied, applied_at, mut)
@@ -588,10 +589,29 @@ func (s *stage) MarkApplied(
 			}
 		}
 
-		tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
-		if err != nil {
-			return errors.Wrap(err, s.sql.markApplied)
+		// Applies the mutations in batches to avoid exceeding the `sql.conn.max_read_buffer_message_size`
+		// This also reduces the memory being used during this step in the case there are millions or more rows.
+		if err := batches.Window(markAppliedBatchSize, len(muts), func(begin, end int) error {
+			keys := make([]json.RawMessage, len(muts))
+			nanos := make([]int64, len(muts))
+			logical := make([]int, len(muts))
+			for idx, mut := range muts[begin:end] {
+				keys[idx] = mut.Key
+				nanos[idx] = mut.Time.Nanos()
+				logical[idx] = mut.Time.Logical()
+			}
+
+			tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
+			if err != nil {
+				return errors.Wrap(err, s.sql.markApplied)
+			}
+
+			log.Debugf("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
+			return nil
+		}); err != nil {
+			return err
 		}
+
 		if extraSanityChecks {
 			count, err := s.CheckConsistency(ctx, db, muts, false /* current-time read */)
 			if err != nil {
@@ -602,7 +622,6 @@ func (s *stage) MarkApplied(
 			}
 		}
 		s.markDuration.Observe(time.Since(start).Seconds())
-		log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
 		if tx != nil {
 			return errors.WithStack(tx.Commit(ctx))
 		}
