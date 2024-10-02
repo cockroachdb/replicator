@@ -65,6 +65,11 @@ func TestGetColumns(t *testing.T) {
 			primaryKeys: []string{"a"},
 		},
 		{
+			tableSchema: "a INT PRIMARY KEY USING HASH",
+			primaryKeys: []string{"a"},
+			dataCols:    []string{"ignored_crdb_internal_a_shard_16"},
+		},
+		{
 			tableSchema: "a INT, b INT",
 			primaryKeys: []string{"rowid"},
 			dataCols:    []string{"a", "b"},

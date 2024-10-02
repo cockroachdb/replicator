@@ -381,6 +381,7 @@ func getColumns(
 		// Clear from previous loop.
 		columns = columns[:0]
 		foundPrimay := false
+		var appendLater []types.ColData
 		for rows.Next() {
 			var column types.ColData
 			var defaultExpr sql.NullString
@@ -388,12 +389,14 @@ func getColumns(
 			if err := rows.Scan(&name, &column.Primary, &column.Type, &defaultExpr, &column.Ignored); err != nil {
 				return err
 			}
+			column.Name = ident.New(name)
+
 			// Hack to force hash-sharded index columns out of PKs.
-			if strings.HasPrefix(name, "crdb_internal_") {
+			primaryHack := strings.HasPrefix(name, "crdb_internal_")
+			if primaryHack {
 				column.Ignored = true
 				column.Primary = false
 			}
-			column.Name = ident.New(name)
 			if column.Primary {
 				foundPrimay = true
 			}
@@ -461,8 +464,14 @@ func getColumns(
 			}
 
 			column.Parse = parseHelper(tx.Product, column.Type)
-			columns = append(columns, column)
+			if primaryHack {
+				appendLater = append(appendLater, column)
+			} else {
+				columns = append(columns, column)
+			}
 		}
+
+		columns = append(columns, appendLater...)
 
 		// It's legal, if unusual, to create a table with no columns.
 		if len(columns) == 0 {
