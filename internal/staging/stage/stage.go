@@ -43,6 +43,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// defaultMarkApppliedBatchSize is the default number of mutations to mark
+// applied in the staging table at once.
+const defaultMarkAppliedBatchSize = 100_000
+
 // This mutation value will be stored when a mutation is marked as
 // having been applied without having been previously staged.
 var stubSentinel = json.RawMessage(`{"__stub__":true}`)
@@ -59,9 +63,10 @@ func stagingTable(stagingDB ident.Schema, target ident.Table) ident.Table {
 // Mutation instances.
 type stage struct {
 	// The staging table that holds the mutations.
-	stage      *ident.Hinted[ident.Table]
-	stagingDB  *types.StagingPool
-	retireFrom notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
+	stage                *ident.Hinted[ident.Table]
+	stagingDB            *types.StagingPool
+	retireFrom           notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
+	markAppliedBatchSize int
 
 	consistencyError prometheus.Gauge
 	filterApplied    prometheus.Observer
@@ -161,22 +166,23 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS deletion BOOL NULL
 
 	labels := metrics.TableValues(target)
 	s := &stage{
-		stage:            db.HintNoFTS(table),
-		stagingDB:        db,
-		consistencyError: stageConsistencyErrors.WithLabelValues(labels...),
-		filterApplied:    stageFilterAppliedDuration.WithLabelValues(labels...),
-		filterCount:      stageFilterCount.WithLabelValues(labels...),
-		markDuration:     stageMarkDuration.WithLabelValues(labels...),
-		retireDuration:   stageRetireDurations.WithLabelValues(labels...),
-		retireError:      stageRetireErrors.WithLabelValues(labels...),
-		selectCount:      stageSelectCount.WithLabelValues(labels...),
-		selectDuration:   stageSelectDurations.WithLabelValues(labels...),
-		selectError:      stageSelectErrors.WithLabelValues(labels...),
-		staleCount:       stageStaleMutations.WithLabelValues(labels...),
-		stageCount:       stageCount.WithLabelValues(labels...),
-		stageDupes:       stageDuplicateCount.WithLabelValues(labels...),
-		stageDuration:    stageDuration.WithLabelValues(labels...),
-		stageError:       stageErrors.WithLabelValues(labels...),
+		stage:                db.HintNoFTS(table),
+		stagingDB:            db,
+		markAppliedBatchSize: defaultMarkAppliedBatchSize,
+		consistencyError:     stageConsistencyErrors.WithLabelValues(labels...),
+		filterApplied:        stageFilterAppliedDuration.WithLabelValues(labels...),
+		filterCount:          stageFilterCount.WithLabelValues(labels...),
+		markDuration:         stageMarkDuration.WithLabelValues(labels...),
+		retireDuration:       stageRetireDurations.WithLabelValues(labels...),
+		retireError:          stageRetireErrors.WithLabelValues(labels...),
+		selectCount:          stageSelectCount.WithLabelValues(labels...),
+		selectDuration:       stageSelectDurations.WithLabelValues(labels...),
+		selectError:          stageSelectErrors.WithLabelValues(labels...),
+		staleCount:           stageStaleMutations.WithLabelValues(labels...),
+		stageCount:           stageCount.WithLabelValues(labels...),
+		stageDupes:           stageDuplicateCount.WithLabelValues(labels...),
+		stageDuration:        stageDuration.WithLabelValues(labels...),
+		stageError:           stageErrors.WithLabelValues(labels...),
 	}
 
 	// Prevent these hot-path queries from being planned with a full
@@ -551,6 +557,12 @@ func (s *stage) stageOneBatch(
 	return nil
 }
 
+// SetMarkAppliedBatchSize is used for testing and helps set the mark applied
+// batch size so we can verify the behavior of different batch sizes.
+func (s *stage) SetMarkAppliedBatchSize(size int) {
+	s.markAppliedBatchSize = size
+}
+
 const markAppliedTemplate = `
 WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
 INSERT INTO %s (key, nanos, logical, applied, applied_at, mut)
@@ -575,8 +587,15 @@ func (s *stage) MarkApplied(
 	return retry.Retry(ctx, s.stagingDB, func(ctx context.Context) error {
 		start := time.Now()
 
+		// 1) number of mutations larger than the `markAppliedBatchSize`: we
+		// want to introduce a transaction here to keep the updates for a
+		// batch's apply times atomic. However, we only want to do this if there
+		// is not already a transaction.
+		//
+		// 2) extraSanityChecks: we need a transaction in order to check if the
+		// data is consistent.
 		var tx pgx.Tx
-		if extraSanityChecks {
+		if extraSanityChecks || len(muts) > s.markAppliedBatchSize {
 			if _, isTx := db.(pgx.Tx); !isTx {
 				var err error
 				tx, err = s.stagingDB.Begin(ctx)
@@ -588,10 +607,32 @@ func (s *stage) MarkApplied(
 			}
 		}
 
-		tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
-		if err != nil {
-			return errors.Wrap(err, s.sql.markApplied)
+		// Applies the mutations in batches to avoid exceeding the
+		// `sql.conn.max_read_buffer_message_size` This also reduces
+		// the memory being used during this step in the case there
+		// are millions or more rows.
+		if err := batches.Window(s.markAppliedBatchSize, len(muts), func(begin, end int) error {
+			lenWindow := end - begin
+			keys := make([]json.RawMessage, lenWindow)
+			nanos := make([]int64, lenWindow)
+			logical := make([]int, lenWindow)
+			for idx, mut := range muts[begin:end] {
+				keys[idx] = mut.Key
+				nanos[idx] = mut.Time.Nanos()
+				logical[idx] = mut.Time.Logical()
+			}
+
+			tag, err := db.Exec(ctx, s.sql.markApplied, keys, nanos, logical)
+			if err != nil {
+				return errors.Wrap(err, s.sql.markApplied)
+			}
+
+			log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
+			return nil
+		}); err != nil {
+			return err
 		}
+
 		if extraSanityChecks {
 			count, err := s.CheckConsistency(ctx, db, muts, false /* current-time read */)
 			if err != nil {
@@ -602,7 +643,6 @@ func (s *stage) MarkApplied(
 			}
 		}
 		s.markDuration.Observe(time.Since(start).Seconds())
-		log.Tracef("MarkApplied: %s marked %d mutations", s.stage, tag.RowsAffected())
 		if tx != nil {
 			return errors.WithStack(tx.Commit(ctx))
 		}
