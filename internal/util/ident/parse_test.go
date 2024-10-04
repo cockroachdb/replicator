@@ -186,7 +186,7 @@ func TestParseTable(t *testing.T) {
 		},
 		{
 			input: "",
-			err:   "empty table name",
+			err:   "table name is empty, please ensure the table name is included in the path",
 		},
 		{
 			input: "this.is.too.long",

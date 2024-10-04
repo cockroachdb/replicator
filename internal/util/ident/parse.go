@@ -155,7 +155,7 @@ func ParseTableRelative(s string, relativeTo Schema) (Table, Qualification, erro
 	}
 
 	if len(parts) == 0 {
-		return Table{}, 0, errors.New("empty table name")
+		return Table{}, 0, errors.New("table name is empty, please ensure the table name is included in the path")
 	}
 
 	// Typical case, only a table name was specified.
