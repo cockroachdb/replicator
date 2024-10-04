@@ -118,6 +118,12 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			return err
 		}
 
+		// In the webhook case, if the payload topic is that means the table was
+		// not passed in properly.
+		if payload.Payload[i].Topic == "" {
+			return errors.New("table name is empty, please ensure the table name is included in the path")
+		}
+
 		table, qual, err := ident.ParseTableRelative(payload.Payload[i].Topic, req.target.Schema())
 		if err != nil {
 			return err
