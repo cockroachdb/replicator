@@ -827,3 +827,30 @@ func TestSyntheticWebhooks(t *testing.T) {
 	r.NoError(gen.WaitForCatchUp(ctx, targetInfo.Stat()))
 	gen.CheckConsistent(fixture.Context, t)
 }
+
+func TestSyntheticWebhooksTopicEmpty(t *testing.T) {
+	r := require.New(t)
+	fixture, _ := createFixture(t, &fixtureConfig{})
+	ctx := fixture.Context
+
+	gen, _, err := fixture.NewWorkload(ctx, &all.WorkloadConfig{})
+	r.NoError(err)
+
+	batch := &types.MultiBatch{}
+	gen.GenerateInto(batch, hlc.New(1, 2))
+
+	requestPath := "/" + ident.Join(fixture.TargetSchema, ident.Raw, '/')
+
+	// Send data.
+	payload, err := NewWebhookPayload(batch)
+	payload.Payload[0].Topic = ""
+	r.NoError(err)
+	payloadBytes, err := json.Marshal(payload)
+	r.NoError(err)
+	req := httptest.NewRequest("POST", requestPath,
+		bytes.NewReader(payloadBytes)).WithContext(ctx)
+	resp := httptest.NewRecorder()
+	fixture.Handler.ServeHTTP(resp, req)
+	r.Contains(resp.Body.String(), "table name is empty")
+	r.Equal(http.StatusBadRequest, resp.Code)
+}

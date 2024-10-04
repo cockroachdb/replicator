@@ -114,8 +114,9 @@ func (h *Handler) webhook(ctx context.Context, req *request) error {
 			return err
 		}
 
-		// In the webhook case, if the payload topic is that means the table was
-		// not passed in properly.
+		// If the topic is empty, we have received a CDC query payload and the
+		// user has not specified a three-segment request path to set a table
+		// name.
 		if payload.Payload[i].Topic == "" {
 			return errors.New("table name is empty, please ensure the table name is included in the path")
 		}
