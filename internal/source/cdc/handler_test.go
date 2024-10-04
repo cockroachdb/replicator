@@ -827,3 +827,45 @@ func TestSyntheticWebhooks(t *testing.T) {
 	r.NoError(gen.WaitForCatchUp(ctx, targetInfo.Stat()))
 	gen.CheckConsistent(fixture.Context, t)
 }
+
+func clearWebhookPayloadTopics(payload *WebhookPayload) *WebhookPayload {
+	for i := range payload.Payload {
+		payload.Payload[i].Topic = ""
+	}
+
+	return payload
+}
+
+func TestSyntheticWebhooksTopicEmpty(t *testing.T) {
+	const batches = 1024
+	r := require.New(t)
+	fixture, _ := createFixture(t, &fixtureConfig{})
+	ctx := fixture.Context
+
+	gen, _, err := fixture.NewWorkload(ctx, &all.WorkloadConfig{})
+	r.NoError(err)
+
+	batch := &types.MultiBatch{}
+	for i := range batches {
+		gen.GenerateInto(batch, hlc.New(int64(i+1), i+1))
+	}
+
+	requestPath := "/" + ident.Join(fixture.TargetSchema, ident.Raw, '/')
+
+	// Send data.
+	{
+		payload, err := NewWebhookPayload(batch)
+		// Set the payload topics to empty string to simulate case where the
+		// path doesn't contain the table name.
+		payload = clearWebhookPayloadTopics(payload)
+		r.NoError(err)
+		payloadBytes, err := json.Marshal(payload)
+		r.NoError(err)
+		req := httptest.NewRequest("POST", requestPath,
+			bytes.NewReader(payloadBytes)).WithContext(ctx)
+		resp := httptest.NewRecorder()
+		fixture.Handler.ServeHTTP(resp, req)
+		r.Contains(resp.Body.String(), "table name is empty")
+		r.Equal(http.StatusBadRequest, resp.Code)
+	}
+}
