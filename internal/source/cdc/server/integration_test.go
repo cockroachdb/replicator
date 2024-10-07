@@ -19,7 +19,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	"database/sql"
 	"fmt"
 	"io"
 	"math/big"
@@ -30,7 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/sequencer"
@@ -405,7 +404,9 @@ func supportsWebhook(version string) (bool, error) {
 	return stdpool.CockroachMinVersion(version, "v21.2")
 }
 
-func getConfig(f *base.Fixture, fc *fixtureConfig, topics []string, table ident.Table) (*Config, error) {
+func getConfig(
+	f *base.Fixture, fc *fixtureConfig, topics []string, table ident.Table,
+) (*Config, error) {
 	return &Config{}, nil
 }
 
@@ -436,8 +437,13 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 	log.SetLevel(log.DebugLevel)
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	targetFixture, err := base.NewFixture(t)
 	r.NoError(err)
+
+	fixture, err := all.NewFixtureFromBase(targetFixture.Swapped())
+	r.NoError(err)
+	acc := types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers)
+
 	ctx := fixture.Context
 	workload, _, err := fixture.NewWorkload(ctx,
 		&all.WorkloadConfig{
@@ -454,38 +460,30 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 		workload.Parent.Name())
 	r.NoError(err)
 
-	// TODO: fix this later.
-	producer, err := newSourceWriter(nil)
 	r.NoError(err)
-	defer func() {
-		if err := producer.cleanup(); err != nil {
-			log.Errorf("error closing producer %v", err)
-		}
-	}()
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	connCtx := stopper.WithContext(timeoutCtx)
-	conn, cancel, err := newTestFixture(connCtx, serverCfg)
+	testFixture, cancel, err := newTestFixture(connCtx, serverCfg)
 	defer cancel()
 	r.NoError(err)
-	stats := test.conveyor.(interface {
-		Stat() *notify.Var[sequencer.Stat]
-	}).Stat()
 
-	var clock hlc.Clock
-	r.NoError(producer.writeResolved(clock.Now()))
+	// Get the stats for the target.
+	targetInfo, err := testFixture.Handler.Conveyors.Get(fixture.TargetSchema.Schema())
+	require.NoError(t, err)
+	stats := targetInfo.Stat()
+
 	for iter := 1; iter <= maxIterations; iter++ {
 		batch := &types.MultiBatch{}
 		size := rand.IntN(maxBatchSize) + 1
 		for i := 0; i < size; i++ {
-			workload.GenerateInto(batch, clock.Now())
+			workload.GenerateInto(batch, hlc.New(int64(i+1), i))
 		}
-		r.NoError(producer.writeBatch(batch))
-		// Write a resolved timestamp file once in a while.
-		// Ensure that we have resolved file at the end.
-		if isPrime(iter) || iter == maxIterations {
-			r.NoError(producer.writeResolved(clock.Now()))
-		}
+
+		tx, err := fixture.TargetPool.BeginTx(ctx, &sql.TxOptions{})
+		r.NoError(err)
+		r.NoError(acc.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{TargetQuerier: tx}))
+		r.NoError(tx.Commit())
 	}
 	log.Info("waiting for rows")
 	// Waiting for the rows to show in the target database.
@@ -510,59 +508,7 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 		}
 	}
 	// Verify that the target database has all the data.
-	workload.CheckConsistent(ctx, t)
+	r.True(workload.CheckConsistent(ctx, t))
 	connCtx.Stop(time.Second)
 	r.NoError(connCtx.Wait())
-}
-
-type sourceWriter struct {
-	sourceFixture *base.Fixture
-}
-
-func newSourceWriter(sourceFixture *base.Fixture) (*sourceWriter, error) {
-	return &sourceWriter{sourceFixture: sourceFixture}, nil
-}
-
-func (s *sourceWriter) writeBatch(batch *types.MultiBatch) error {
-	type payload struct {
-		After   json.RawMessage `json:"after"`
-		Before  json.RawMessage `json:"before"`
-		Key     json.RawMessage `json:"key"`
-		Updated string          `json:"updated"`
-	}
-	for _, b := range batch.Data {
-		for _, t := range b.Data.Entries() {
-			for _, v := range t.Value.Data {
-				msg := &payload{
-					After:   v.Data,
-					Before:  v.Before,
-					Key:     v.Key,
-					Updated: v.Time.String(),
-				}
-				// Changfeeds encode a deletion as an absence of an after block.
-				if v.IsDelete() {
-					msg.After = nil
-				}
-				err := s.sendMessage(t.Value.Table.Raw(), v.Key, msg)
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (s *sourceWriter) writeResolved(resolved hlc.Time) error {
-	return nil
-}
-
-func (s *sourceWriter) sendMessage(
-	table string, key json.RawMessage, message any,
-) error {
-	return nil
-}
-
-func (s *sourceWriter) cleanup() error {
-	return nil
 }
