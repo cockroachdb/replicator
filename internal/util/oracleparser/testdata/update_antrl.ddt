@@ -1,9 +1,21 @@
 parse
+UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = 'Pink White', "SALARY" = 75000;
+----
+{
+  "NAME_TARGET": "Pink White",
+  "SALARY": "75000"
+}
+
+parse
 UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = 'Pink White', "SALARY" = 75000 WHERE "NAME_TARGET" = 'John Doe';
 ----
 {
   "NAME_TARGET": "Pink White",
   "SALARY": "75000"
+}
+WHERE
+{
+  "NAME_TARGET": "John Doe"
 }
 
 
@@ -14,6 +26,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE RECORDS" SET "NAME_TARGET" = 'Pink White', "SALARY
   "NAME_TARGET": "Pink White",
   "SALARY": "75000"
 }
+WHERE
+{
+  "NAME_TARGET": "John Doe"
+}
 
 
 parse
@@ -22,6 +38,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE" SET "FULL NAME" = 'Pink White', "SALARY AMOUNT" =
 {
   "FULL NAME": "Pink White",
   "SALARY AMOUNT": "75000"
+}
+WHERE
+{
+  "FULL NAME": "John Doe"
 }
 
 
@@ -32,6 +52,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME$TARGET" = 'Pink White', "SALARY#AMOUNT"
   "NAME$TARGET": "Pink White",
   "SALARY#AMOUNT": "75000"
 }
+WHERE
+{
+  "NAME$TARGET": "John Doe"
+}
 
 
 parse
@@ -41,6 +65,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = 'Pink White', "NewCol" = 'New
   "NAME_TARGET": "Pink White",
   "NewCol": "NewVal"
 }
+WHERE
+{
+  "NAME_TARGET": "John Doe"
+}
 
 
 parse
@@ -49,6 +77,10 @@ UPDATE "C##MYADMIN"."EmployeeDetails" SET "FullName" = 'Pink White', "SalaryAmou
 {
   "FullName": "Pink White",
   "SalaryAmount": "75000"
+}
+WHERE
+{
+  "FullName": "John Doe"
 }
 
 # This is a bug with Antlr that spaces of subqueries are removed for the GetText() function.
@@ -60,6 +92,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE" SET "SALARY" = (SELECT MAX("SALARY") FROM "EMPLOY
 {
   "SALARY": "(SELECTMAX(\"SALARY\")FROM\"EMPLOYEE_SALARIES\")"
 }
+WHERE
+{
+  "NAME_TARGET": "John Doe"
+}
 
 
 parse
@@ -68,6 +104,11 @@ UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = 'Pink White', "SALARY" = 7500
 {
   "NAME_TARGET": "Pink White",
   "SALARY": "75000"
+}
+WHERE
+{
+  "DEPARTMENT": "HR",
+  "NAME_TARGET": "John Doe"
 }
 
 
@@ -78,6 +119,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE" SET "NAME_TARGET" = NULL, "SALARY" = 75000 WHERE 
   "NAME_TARGET": null,
   "SALARY": "75000"
 }
+WHERE
+{
+  "NAME_TARGET": "John Doe"
+}
 
 
 parse
@@ -85,6 +130,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE" SET "DETAILS" = '{"age": 30, "position": "Manager
 ----
 {
   "DETAILS": "{\"age\": 30, \"position\": \"Manager\"}"
+}
+WHERE
+{
+  "ID": "1001"
 }
 
 
@@ -95,6 +144,10 @@ UPDATE "C##MYADMIN"."Emp (Details)" SET "Emp Name" = 'John Doe', "Salary Amount"
   "Emp Name": "John Doe",
   "Salary Amount": "75000"
 }
+WHERE
+{
+  "Emp Name": "Jane Doe"
+}
 
 
 parse
@@ -104,6 +157,10 @@ UPDATE "C##MYADMIN"."Emp (Details)" SET "Emp Name" = NULL, "Salary Amount" = 750
   "Emp Name": null,
   "Salary Amount": "75000"
 }
+WHERE
+{
+  "Emp Name": "\"HELLO\""
+}
 
 
 parse
@@ -111,6 +168,10 @@ UPDATE "C##MYADMIN"."EMPLOYEE_DETAILS_WITH_VERY_LONG_NAME" SET "EMPLOYEE_NAME_WI
 ----
 {
   "EMPLOYEE_NAME_WITH_VERY_LONG_COLUMN_NAME": "Pink White"
+}
+WHERE
+{
+  "EMPLOYEE_ID": "1001"
 }
 
 parse
@@ -120,12 +181,24 @@ update "C##MYADMIN"."E2" set "NAME_TARGET" = 'O''Reilly', "COMMENT" = 'He said, 
   "COMMENT": "He said, \"Hello!\"",
   "NAME_TARGET": "O''Reilly"
 }
+WHERE
+{
+  "COMMENT": "Initial Comment",
+  "NAME_TARGET": "John Doe",
+  "ROWID": "AAASLfAAHAAAAJ+AAA"
+}
 
 parse
 update "C##MYADMIN"."E2" set "NAME_TARGET" = 'PINK WHITE', "SALARY" = '75000' where "NAME_TARGET" = 'John Doe' and "SALARY" = '75000' and ROWID = 'AAASLfAAHAAAAJ+AAA';
 ----
 {
   "NAME_TARGET": "PINK WHITE",
+  "SALARY": "75000"
+}
+WHERE
+{
+  "NAME_TARGET": "John Doe",
+  "ROWID": "AAASLfAAHAAAAJ+AAA",
   "SALARY": "75000"
 }
 
@@ -137,6 +210,12 @@ update "C##MYADMIN"."E2" set "SALARY" = '75000', "DATE_JOINED" = TO_DATE('23-01-
   "DATE_JOINED": "TO_DATE('23-01-01','RR-MM-DD')",
   "SALARY": "75000"
 }
+WHERE
+{
+  "DATE_JOINED": null,
+  "ROWID": "AAASLfAAHAAAAJ+AAA",
+  "SALARY": null
+}
 
 
 parse
@@ -146,12 +225,24 @@ update "C##MYADMIN"."E2" set "SALARY" = NULL, "DATE_JOINED" = TO_DATE('23-01-01'
   "DATE_JOINED": "TO_DATE('23-01-01','RR-MM-DD')",
   "SALARY": null
 }
+WHERE
+{
+  "DATE_JOINED": null,
+  "ROWID": "AAASLfAAHAAAAJ+AAA",
+  "SALARY": null
+}
 
 parse
 update "C##MYADMIN"."E3" set "DETAILS" = '{"age": 30, "position": "Manager"}' where "ID" = '1014' and "NAME_TARGET" = 'JSON Example' and ROWID = 'AAASLsAAHAAAAUeAAA';
 ----
 {
   "DETAILS": "{\"age\": 30, \"position\": \"Manager\"}"
+}
+WHERE
+{
+  "ID": "1014",
+  "NAME_TARGET": "JSON Example",
+  "ROWID": "AAASLsAAHAAAAUeAAA"
 }
 
 parse
@@ -160,6 +251,17 @@ update "C##MYADMIN"."E2" set "SALARY" = '75000', "DATE_JOINED" = EMPTY_CLOB();
 {
   "DATE_JOINED": "ORACLE_EMPTY_CLOB()",
   "SALARY": "75000"
+}
+
+parse
+update "C##MYADMIN"."E2" set "SALARY" = '75000' WHERE "DATE_JOINED" = EMPTY_CLOB();
+----
+{
+  "SALARY": "75000"
+}
+WHERE
+{
+  "DATE_JOINED": "ORACLE_EMPTY_CLOB()"
 }
 
 
@@ -183,6 +285,10 @@ WHERE graduation = '01-JUN-03';
   "math_majors": "people_typ(person_typ(12,'Bob Jones','650-555-0130'),person_typ(31,'Sarah Chen','415-555-0120'),person_typ(45,'Chris Woods','415-555-0124'))",
   "physics_majors": "people_typ(person_typ(12,'Bob Jones','650-555-0130'),person_typ(45,'Chris Woods','415-555-0124'))"
 }
+WHERE
+{
+  "graduation": "01-JUN-03"
+}
 
 parse
 UPDATE employees
@@ -191,6 +297,10 @@ WHERE emp_id = 1;
 ----
 {
   "phone_numbers": "phone_varray('345-678-9012','456-789-0123','567-890-1234')"
+}
+WHERE
+{
+  "emp_id": "1"
 }
 
 
@@ -204,6 +314,10 @@ WHERE record_id = 1;
   "account_balance": "87654321098765432109.99",
   "credit_limit": "21098765432109876543.21"
 }
+WHERE
+{
+  "record_id": "1"
+}
 
 parse
 UPDATE financials
@@ -214,4 +328,67 @@ WHERE record_id = 1;
 {
   "account_balance": "87654321098765432109.9214141239",
   "credit_limit": "21098765432109876543.2241243123131"
+}
+WHERE
+{
+  "record_id": "1"
+}
+
+
+parse
+update "C##MYADMIN"."EMPLOYEE" set "NAME_TARGET" = 'Pink White' where "ID" = '1' and "NAME_TARGET" = 'John Doe' and ROWID = 'AAASLkAAHAAAAFfAAA';
+----
+{
+  "NAME_TARGET": "Pink White"
+}
+WHERE
+{
+  "ID": "1",
+  "NAME_TARGET": "John Doe",
+  "ROWID": "AAASLkAAHAAAAFfAAA"
+}
+
+parse
+update "C##MYADMIN"."EMPLOYEE" set "NAME_TARGET" = 'Pink White' where "ID" = '1' and "NAME_TARGET" IS NULL and ROWID = 'AAASLkAAHAAAAFfAAA';
+----
+{
+  "NAME_TARGET": "Pink White"
+}
+WHERE
+{
+  "ID": "1",
+  "NAME_TARGET": null,
+  "ROWID": "AAASLkAAHAAAAFfAAA"
+}
+
+
+parse
+update "C##MYADMIN"."EMPLOYEE" set "ID" = '10' where "ID" = '1' and ROWID = 'AAASLkAAHAAAAFfAAA';
+----
+{
+  "ID": "10"
+}
+WHERE
+{
+  "ID": "1",
+  "ROWID": "AAASLkAAHAAAAFfAAA"
+}
+
+parse
+update "C##MYADMIN"."USERTABLE" set
+                                    "FIELD0" = '4X)-^o8Q31Yi>V)12p4Dc"T?$Bu6_k-D916h?$"4\+',
+                                    "SOURCE_TIMESTAMP" = TO_TIMESTAMP('24-09-10 12:53:38,532918000')
+                                where "FIELD0" = '?Z;9?,>Be#Yg<6b&U#%:0=)b582$Lu)\o7/v?[m/]m'
+                                  and "SOURCE_TIMESTAMP" = TO_TIMESTAMP('24-09-10 12:53:38,487742000')
+                                  and ROWID = 'AAASMEAAHAAAAFdAAZ';
+----
+{
+  "FIELD0": "4X)-^o8Q31Yi\u003eV)12p4Dc\"T?$Bu6_k-D916h?$\"4\\+",
+  "SOURCE_TIMESTAMP": "24-09-10 12:53:38,532918000"
+}
+WHERE
+{
+  "FIELD0": "?Z;9?,\u003eBe#Yg\u003c6b\u0026U#%:0=)b582$Lu)\\o7/v?[m/]m",
+  "ROWID": "AAASMEAAHAAAAFdAAZ",
+  "SOURCE_TIMESTAMP": "24-09-10 12:53:38,487742000"
 }

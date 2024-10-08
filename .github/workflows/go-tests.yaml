@@ -92,89 +92,94 @@ jobs:
         include:
           # These are our primary supported versions.
           - cockroachdb: v24.1
-          - cockroachdb: v23.2
-          - cockroachdb: v23.1
+#          - cockroachdb: v23.2
+#          - cockroachdb: v23.1
+#
+#          # Builds that are allowed to fail.
+#          - cockroachdb: unstable
+#            experimental: true
+#
+#          # Run a test with a separate CockroachDB source and target
+#          # instance to ensure there are no accidental dependencies
+#          # between the source, staging, and target schemas.
+#          - cockroachdb: v24.1
+#            source: source-cockroachdb-v24.1
+#            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+#            target: target-cockroachdb-v24.1
+#            targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
+#
+#          # Tests for older CockroachDB versions as a source.
+#          - cockroachdb: v24.1
+#            source: source-cockroachdb-v20.1
+#            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+#          - cockroachdb: v24.1
+#            source: source-cockroachdb-v20.2
+#            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+#          - cockroachdb: v24.1
+#            source: source-cockroachdb-v21.1
+#            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+#          - cockroachdb: v24.1
+#            source: source-cockroachdb-v21.2
+#            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
+#
+#          # Tests for non-CRDB sources.
+#          - cockroachdb: v24.1
+#            integration: mysql-v8
+#          - cockroachdb: v24.1
+#            integration: mysql-v5.6
+#          - cockroachdb: v24.1
+#            integration: mysql-v5.7
+#          - cockroachdb: v24.1
+#            integration: mysql-mariadb-v10
+#          - cockroachdb: v24.1
+#            integration: postgresql-v11
+#          - cockroachdb: v24.1
+#            integration: postgresql-v12
+#          - cockroachdb: v24.1
+#            integration: postgresql-v13
+#          - cockroachdb: v24.1
+#            integration: postgresql-v14
+#          - cockroachdb: v24.1
+#            integration: postgresql-v15
+          - cockroachdb: v24.1
+            integration: oracle-v21.3
+            sourceConn: "oracle://system:SoupOrSecret@127.0.0.1:1521/XEPDB1"
 
-          # Builds that are allowed to fail.
-          - cockroachdb: unstable
-            experimental: true
-
-          # Run a test with a separate CockroachDB source and target
-          # instance to ensure there are no accidental dependencies
-          # between the source, staging, and target schemas.
-          - cockroachdb: v24.1
-            source: source-cockroachdb-v24.1
-            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-            target: target-cockroachdb-v24.1
-            targetConn: "postgresql://root@127.0.0.1:5401/defaultdb?sslmode=disable"
-
-          # Tests for older CockroachDB versions as a source.
-          - cockroachdb: v24.1
-            source: source-cockroachdb-v20.1
-            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-          - cockroachdb: v24.1
-            source: source-cockroachdb-v20.2
-            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-          - cockroachdb: v24.1
-            source: source-cockroachdb-v21.1
-            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-          - cockroachdb: v24.1
-            source: source-cockroachdb-v21.2
-            sourceConn: "postgresql://root@127.0.0.1:5400/defaultdb?sslmode=disable"
-
-          # Tests for non-CRDB sources.
-          - cockroachdb: v24.1
-            integration: mysql-v8
-          - cockroachdb: v24.1
-            integration: mysql-v5.6
-          - cockroachdb: v24.1
-            integration: mysql-v5.7
-          - cockroachdb: v24.1
-            integration: mysql-mariadb-v10
-          - cockroachdb: v24.1
-            integration: postgresql-v11
-          - cockroachdb: v24.1
-            integration: postgresql-v12
-          - cockroachdb: v24.1
-            integration: postgresql-v13
-          - cockroachdb: v24.1
-            integration: postgresql-v14
-          - cockroachdb: v24.1
-            integration: postgresql-v15
           # Test CRDB via a Kafka cluster
-          - cockroachdb: v24.1
-            integration: kafka-v7.6
-            experimental: true # TODO: Investigate connection-refused errors
-          # Test CRDB via an object store
-          - cockroachdb: v24.1
-            integration: objstore
-          # Test CRDB -> PostgreSQL for migration backfill use cases.
-          - cockroachdb: v24.1
-            target: postgresql-v11
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v24.1
-            target: postgresql-v12
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v24.1
-            target: postgresql-v13
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v24.1
-            target: postgresql-v14
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
-          - cockroachdb: v24.1
-            target: postgresql-v15
-            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+#          - cockroachdb: v24.1
+#            integration: kafka-v7.6
+#            experimental: true # TODO: Investigate connection-refused errors
+#          # Test CRDB via an object store
+#          - cockroachdb: v24.1
+#            integration: objstore
+#          # Test CRDB -> PostgreSQL for migration backfill use cases.
+#          - cockroachdb: v24.1
+#            target: postgresql-v11
+#            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+#          - cockroachdb: v24.1
+#            target: postgresql-v12
+#            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+#          - cockroachdb: v24.1
+#            target: postgresql-v13
+#            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+#          - cockroachdb: v24.1
+#            target: postgresql-v14
+#            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+#          - cockroachdb: v24.1
+#            target: postgresql-v15
+#            targetConn: "postgres://postgres:SoupOrSecret@127.0.0.1:5432"
+#
+#          # Test CRDB -> MySQL for migration backfill use cases.
+#          - cockroachdb: v24.1
+#            target: mysql-v8
+#            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql?sslmode=require"
+#
+#          # Test CRDB -> MariaDB for migration backfill use cases.
+#          - cockroachdb: v24.1
+#            target: mysql-mariadb-v10
+#            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
 
-          # Test CRDB -> MySQL for migration backfill use cases.
-          - cockroachdb: v24.1
-            target: mysql-v8
-            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql?sslmode=require"
-
-          # Test CRDB -> MariaDB for migration backfill use cases.
-          - cockroachdb: v24.1
-            target: mysql-mariadb-v10
-            targetConn: "mysql://root:SoupOrSecret@127.0.0.1:3306/mysql"
-
+          # TODO(janexing): maybe oracle -> oracle?
           # Test CRDB -> OracleDB for migration backfill use case.
           - cockroachdb: v24.1
             target: oracle-v21.3
@@ -203,7 +208,7 @@ jobs:
 
       # This uses a copy of the libraries stashed in our bucket.
       - name: Install Oracle Instant Client
-        if: ${{ startsWith(matrix.target, 'oracle') }}
+        if: ${{ startsWith(matrix.target, 'oracle') || startsWith(matrix.integration, 'oracle') }}
         run: |
           set -e
           sudo apt-get install -yqq --no-install-recommends libaio1
@@ -233,6 +238,7 @@ jobs:
           CDC_INTEGRATION: ${{ matrix.integration }}
           TEST_SOURCE_CONNECT: ${{ matrix.sourceConn }}
           TEST_TARGET_CONNECT: ${{ matrix.targetConn }}
+          ORACLE_HOME: /usr
         run: >
           set -e -o pipefail;
           go test

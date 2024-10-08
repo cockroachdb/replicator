@@ -1,0 +1,58 @@
+parse
+delete from "C##SRC_46795_1"."tbl-1" where "ID" = '2' and "NAME_TARGET" = 'John Doe' and "SALARY" = '64' and ROWID = 'AAASL4AAHAAAAG8AAB';
+----
+{}
+WHERE
+{
+  "ID": "2",
+  "NAME_TARGET": "John Doe",
+  "ROWID": "AAASL4AAHAAAAG8AAB",
+  "SALARY": "64"
+}
+
+parse
+delete from "C##SRC_46795_1"."tbl-1" where "ID" = '2';
+----
+{}
+WHERE
+{
+  "ID": "2"
+}
+
+parse
+delete from "C##SRC_46795_1"."tbl-1";
+----
+{}
+
+parse
+delete from "C##SRC_46795_1"."tbl-1" where "DATE_JOINED" = TO_DATE('23-01-01', 'RR-MM-DD');
+----
+{}
+WHERE
+{
+  "DATE_JOINED": "TO_DATE('23-01-01','RR-MM-DD')"
+}
+
+
+parse
+delete from "C##SRC_46795_1"."tbl-1" where "DATE_JOINED" = TO_DATE('23-01-01', 'RR-MM-DD');
+----
+{}
+WHERE
+{
+  "DATE_JOINED": "TO_DATE('23-01-01','RR-MM-DD')"
+}
+
+
+parse
+delete from "C##SRC_46795_1"."tbl-1"  where "FIELD0" = '?Z;9?,>Be#Yg<6b&U#%:0=)b582$Lu)\o7/v?[m/]m'
+                                  and "SOURCE_TIMESTAMP" = TO_TIMESTAMP('24-09-10 12:53:38,487742000')
+                                  and ROWID = 'AAASMEAAHAAAAFdAAZ';
+----
+{}
+WHERE
+{
+  "FIELD0": "?Z;9?,\u003eBe#Yg\u003c6b\u0026U#%:0=)b582$Lu)\\o7/v?[m/]m",
+  "ROWID": "AAASMEAAHAAAAFdAAZ",
+  "SOURCE_TIMESTAMP": "24-09-10 12:53:38,487742000"
+}

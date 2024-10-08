@@ -254,6 +254,7 @@ func (s *Core) Start(
 					accumulator = nextRound()
 				}
 
+				// Everything from accumulator goes to accumulator.batch.
 				if err := accumulator.accumulate(batch); err != nil {
 					accumulator = nil
 					return err
