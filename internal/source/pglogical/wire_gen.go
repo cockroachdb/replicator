@@ -14,6 +14,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	script2 "github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
 	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/staging/version"
@@ -23,6 +24,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
 )
 
 // Injectors from injector.go:
@@ -59,7 +61,9 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics)
+	backup := stdpool.ProvideBackup(memoMemo, stagingPool)
+	breakers := sinktest.NewBreakers()
+	targetPool, err := sinkprod.ProvideTargetPool(context, checker, targetConfig, diagnostics, backup, breakers)
 	if err != nil {
 		return nil, err
 	}
@@ -68,8 +72,8 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 		return nil, err
 	}
 	dlqConfig := &eagerConfig.DLQ
-	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	schemawatchBackup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, schemawatchBackup)
 	if err != nil {
 		return nil, err
 	}

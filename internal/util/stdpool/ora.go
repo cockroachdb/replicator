@@ -19,11 +19,17 @@
 package stdpool
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
+	errors2 "errors"
+	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/godror/godror"
 	"github.com/pkg/errors"
@@ -78,7 +84,11 @@ func oraErrorRetryable(err error) bool {
 // OpenOracleAsTarget opens a connection to an Oracle database endpoint and
 // return it as a [types.TargetPool].
 func OpenOracleAsTarget(
-	ctx *stopper.Context, connectString string, options ...Option,
+	ctx *stopper.Context,
+	connectString string,
+	backup *Backup,
+	breakers *sinktest.Breakers,
+	options ...Option,
 ) (*types.TargetPool, error) {
 	var tc TestControls
 	if err := attachOptions(ctx, &tc, options); err != nil {
@@ -101,8 +111,13 @@ func OpenOracleAsTarget(
 	}
 	connector := godror.NewConnector(params)
 
+	proxy := &oraConnectorProxy{
+		flag:     &breakers.TargetConnectionFails,
+		delegate: connector,
+	}
+
 	ret := &types.TargetPool{
-		DB: sql.OpenDB(connector),
+		DB: sql.OpenDB(proxy),
 		PoolInfo: types.PoolInfo{
 			ConnectionString: connectString,
 			Product:          types.ProductOracle,
@@ -114,23 +129,21 @@ func OpenOracleAsTarget(
 	}
 	ctx.Defer(func() { _ = ret.Close() })
 
-ping:
-	if err := ret.Ping(); err != nil {
-		if tc.WaitForStartup && isOracleStartupError(err) {
-			log.WithError(err).Info("waiting for database to become ready")
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(10 * time.Second):
-				goto ping
-			}
+	if err := ret.QueryRow("SELECT banner FROM V$VERSION").Scan(&ret.Version); err != nil {
+		queryErr := errors.Wrap(err, "could not query version")
+		log.WithError(queryErr).Warn("could not query database version; trying to load from staging backup")
+		ver, err := backup.Load(ctx, connectString)
+		if err != nil {
+			return nil, errors2.Join(queryErr, errors.Wrap(err, "could not load version from staging"))
 		}
-		return nil, errors.Wrap(err, "could not ping the database")
+		if ver == "" {
+			return nil, fmt.Errorf("empty version loaded from staging")
+		}
+		ret.Version = ver
+	} else if err := backup.Store(ctx, connectString, ret.Version); err != nil {
+		return nil, errors.Wrap(err, "could not store version to staging")
 	}
 
-	if err := ret.QueryRow("SELECT banner FROM V$VERSION").Scan(&ret.Version); err != nil {
-		return nil, errors.Wrap(err, "could not query version")
-	}
 	if err := setTableHint(ret.Info()); err != nil {
 		return nil, err
 	}
@@ -158,4 +171,20 @@ func isOracleStartupError(err error) bool {
 		return false
 	}
 	return oracleStartupErrors[code]
+}
+
+type oraConnectorProxy struct {
+	flag     *atomic.Bool
+	delegate driver.Connector
+}
+
+func (t *oraConnectorProxy) Connect(ctx context.Context) (driver.Conn, error) {
+	if t.flag.Load() {
+		return nil, errors.New("testing connection failure")
+	}
+	return t.delegate.Connect(ctx)
+}
+
+func (t *oraConnectorProxy) Driver() driver.Driver {
+	return t.delegate.Driver()
 }

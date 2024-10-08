@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/sinktest"
+	"github.com/cockroachdb/replicator/internal/staging/memo"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/pkg/errors"
@@ -77,6 +79,8 @@ func testTargetConnection(ctx *stopper.Context, connString string) error {
 	pool, err := stdpool.OpenTarget(
 		ctx,
 		connString,
+		stdpool.ProvideBackup(&memo.Memory{}, nil),
+		sinktest.NewBreakers(),
 		stdpool.WithConnectionLifetime(5*time.Minute, time.Minute, 15*time.Second),
 		stdpool.WithTransactionTimeout(time.Minute),
 	)

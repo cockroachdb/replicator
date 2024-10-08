@@ -27,5 +27,5 @@ import (
 
 // NewFixture constructs a self-contained test fixture.
 func NewFixture(t testing.TB) (*Fixture, error) {
-	panic(wire.Build(TestSet))
+	panic(wire.Build(TestSet, ProvideMemory))
 }
