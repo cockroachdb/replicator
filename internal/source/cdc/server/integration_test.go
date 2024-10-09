@@ -22,8 +22,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"math/big"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -46,12 +44,12 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/stdlogical"
 	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
+	"github.com/cockroachdb/replicator/internal/util/workload"
 	joonix "github.com/joonix/log"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/toolchain/src/math/rand/v2"
 )
 
 func TestMain(m *testing.M) {
@@ -405,61 +403,100 @@ func supportsWebhook(version string) (bool, error) {
 }
 
 func getConfig(
-	f *base.Fixture, fc *fixtureConfig, topics []string, table ident.Table,
+	cfg *testConfig, fixture *all.Fixture, targetPool *types.TargetPool,
 ) (*Config, error) {
-	return &Config{}, nil
+	fmt.Println("target pool schema: ", targetPool.ConnectionString)
+	return &Config{
+		CDC: cdc.Config{
+			ConveyorConfig: conveyor.Config{
+				Immediate: cfg.immediate,
+			},
+			SequencerConfig: sequencer.Config{
+				RetireOffset: time.Hour, // Allow post-hoc inspection of staged data.
+				Parallelism:  1,
+			},
+			NDJsonBuffer: 1,
+		},
+		HTTP: stdserver.Config{
+			BindAddr:           "127.0.0.1:0",
+			GenerateSelfSigned: cfg.webhook, // Webhook implies self-signed TLS is ok.
+		},
+		Staging: stagingProd.StagingConfig{
+			CommonConfig: stagingProd.CommonConfig{
+				Conn:        fixture.StagingPool.ConnectionString,
+				MaxPoolSize: 16,
+			},
+			Schema: fixture.StagingDB.Schema(),
+		},
+		Target: stagingProd.TargetConfig{
+			CommonConfig: stagingProd.CommonConfig{
+				Conn:        targetPool.ConnectionString,
+				MaxPoolSize: 16,
+			},
+		},
+	}, nil
 }
 
-func isPrime(i int) bool {
-	return big.NewInt(int64(i)).ProbablyPrime(0)
+const maxIterations = 25
+
+func TestWorkload(t *testing.T) {
+	testWorkload(t)
 }
 
-const (
-	maxBatchSize  = 10
-	maxIterations = 25
-	numPartitions = 5
-)
-
-type fixtureConfig struct {
-	chaos     bool
-	script    bool
-	immediate bool
-}
-
-// NB: so far I was able to copy and paste this over and replace the kafka specific aspects
-// with new types to do source writing, which is necessary for the data to make its way from
-// source to changefeed over to target.
-
-// There are still open questions around how I should write the data and to which table.
-// I also need to do the changefeed config and start and the server start here.
-// Once this is all set up then we can properly run the checks in an infinite loop.
-func testWorkload(t *testing.T, fc *fixtureConfig) {
+func testWorkload(t *testing.T) {
 	log.SetLevel(log.DebugLevel)
 	r := require.New(t)
 
-	targetFixture, err := base.NewFixture(t)
+	targetFixture, err := all.NewFixture(t)
 	r.NoError(err)
 
-	fixture, err := all.NewFixtureFromBase(targetFixture.Swapped())
-	r.NoError(err)
-	acc := types.OrderedAcceptorFrom(fixture.ApplyAcceptor, fixture.Watchers)
-
-	ctx := fixture.Context
-	workload, _, err := fixture.NewWorkload(ctx,
-		&all.WorkloadConfig{
-			// Don't create foreign keys references in immediate mode
-			DisableFK:      fc.immediate,
-			DisableStaging: true,
-		})
-	r.NoError(err)
-	topics := []string{
-		workload.Parent.Name().Raw(),
-		workload.Child.Name().Raw(),
-	}
-	serverCfg, err := getConfig(fixture.Fixture, fc, topics,
-		workload.Parent.Name())
+	sourceFixture, err := all.NewFixtureFromBase(targetFixture.Swapped())
 	r.NoError(err)
 
+	fmt.Println("source: ", targetFixture.SourcePool.ConnectionString)
+	fmt.Println("target: ", targetFixture.TargetPool.ConnectionString)
+	fmt.Println("source: ", sourceFixture.SourcePool.ConnectionString)
+	fmt.Println("target: ", sourceFixture.TargetPool.ConnectionString)
+
+	ctx := targetFixture.Context
+	// These generators will act as sources of mutations to apply later
+	// on and will then be used to validate the information in the
+	// target.
+	targetChecker, _, err := targetFixture.NewWorkload(ctx, &all.WorkloadConfig{})
+	r.NoError(err)
+
+	// Create the source generator workload.
+	sourceSchema := targetFixture.SourceSchema.Schema()
+	parent := ident.NewTable(sourceSchema, targetChecker.Parent.Name().Table())
+	child := ident.NewTable(sourceSchema, targetChecker.Child.Name().Table())
+	fmt.Println(parent, child)
+	sourceGeneratorWorkload := workload.NewGeneratorBase(parent, child)
+	r.NoError(err)
+	cfg := &testConfig{webhook: true}
+	serverCfg, err := getConfig(cfg, sourceFixture, targetFixture.TargetPool)
+	r.NoError(err)
+
+	// This sets default values that are not set in the testConfig.
+	r.NoError(serverCfg.Preflight())
+
+	// Create the tables on the target side to match.
+
+	targetSchema := targetFixture.TargetSchema.Schema()
+	sourcePool := targetFixture.SourcePool
+
+	// TODO: debug this because we need to create the target schema tables
+	// instead of putting it in the source.
+	parent = sourceGeneratorWorkload.Parent
+	child = sourceGeneratorWorkload.Child
+	parentSQL, childSQL := all.WorkloadSchema(
+		&all.WorkloadConfig{}, types.ProductPostgreSQL,
+		parent, child)
+	_, err = sourcePool.ExecContext(ctx, parentSQL)
+	r.NoError(err)
+	_, err = sourcePool.ExecContext(ctx, childSQL)
+	// TODO: consider if we need to support RIF.
+
+	// Create the test server fixture.
 	r.NoError(err)
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -468,33 +505,153 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 	defer cancel()
 	r.NoError(err)
 
+	// This part is mostly figured out, really just need to understand which
+	// exact fixutre should be used here.
+	// This did the trick really to get the data properly to the target.
+	// Though I may have something flipped here and I may not know about it.
+	// Really need to think on this logic.
+	// For some reason this needs to be the target fixture.
+	acc := types.OrderedAcceptorFrom(targetFixture.ApplyAcceptor, targetFixture.Watchers)
+
 	// Get the stats for the target.
-	targetInfo, err := testFixture.Handler.Conveyors.Get(fixture.TargetSchema.Schema())
+	targetInfo, err := testFixture.Handler.Conveyors.Get(targetFixture.TargetSchema.Schema())
 	require.NoError(t, err)
+
+	// TODO: setup the changefeed here.
+	// TODO: commonize the changefeed setup.
+	// Do sourcepool exec and give the whole string for the changefeed
+	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetFixture.StagingPool, testFixture.Authenticator, targetFixture.StagingDB)
+	r.NoError(err)
+
+	sourceVersion := sourceFixture.SourcePool.Version
+	targetDB := targetFixture.TargetSchema.Schema()
+	target := ident.NewTable(targetDB, targetChecker.Parent.Name().Table())
+	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.Schema(), diag.Schema})
+	r.NoError(err)
+
+	params := make(url.Values)
+
+	// TODO: you just want to now ensure that the data makes its way to the
+	// TARGET TABLE. You need to listen from the source table name(s)
+
+	// Set up the changefeed.
+	var feedURL url.URL
+	var pathIdent ident.Identifier
+	createStmt := "CREATE CHANGEFEED"
+	if cfg.queries {
+		pathIdent = target
+	} else {
+		pathIdent = target.Schema()
+		createStmt += fmt.Sprintf(" FOR TABLE %s, %s", sourceGeneratorWorkload.Parent, sourceGeneratorWorkload.Child)
+	}
+	if cfg.webhook {
+		params.Set("insecure_tls_skip_verify", "true")
+		feedURL = url.URL{
+			Scheme:   "webhook-https",
+			Host:     testFixture.Listener.Addr().String(),
+			Path:     ident.Join(pathIdent, ident.Raw, '/'),
+			RawQuery: params.Encode(),
+		}
+		createStmt += " INTO '" + feedURL.String() + "' " +
+			" WITH updated," +
+			"     resolved='1s'," +
+			"     webhook_auth_header='Bearer " + token + "'"
+	} else {
+		// No webhook_auth_header, so bake it into the query string.
+		// See comments in cdc.Handler.ServeHTTP checkAccess.
+		params.Set("access_token", token)
+		feedURL = url.URL{
+			Scheme:   "experimental-http",
+			Host:     testFixture.Listener.Addr().String(),
+			Path:     ident.Join(pathIdent, ident.Raw, '/'),
+			RawQuery: params.Encode(),
+		}
+		createStmt += " INTO '" + feedURL.String() + "' " +
+			"WITH updated,resolved='1s'"
+	}
+	if cfg.diff {
+		createStmt += ",diff"
+	}
+	// Don't wait the entire 30s. This options was introduced in the
+	// same versions as webhooks.
+	if ok, err := supportsMinCheckpoint(sourceVersion); err == nil && ok {
+		createStmt += ",min_checkpoint_frequency='1s'"
+	}
+	if cfg.queries {
+		createStmt += ",envelope='wrapped',format='json'"
+		createStmt += " AS SELECT pk, val"
+		createStmt += " FROM %s"
+	}
+
+	log.Debugf("changefeed URL is %s", feedURL.String())
+	fmt.Println("create stmt: ", createStmt)
+	_, err = targetFixture.SourcePool.ExecContext(ctx, createStmt)
+	r.NoError(err)
+
+	// This code properly shows that we have source and target databases.
+	rows, err := sourceFixture.TargetPool.Query("SHOW DATABASES;")
+	require.NoError(t, err)
+	for rows.Next() {
+		var item [6]string
+		rows.Scan(&item[0], &item[1], &item[2], &item[3], &item[4], &item[5])
+		fmt.Println(item)
+	}
+
+	/**
+	  * Key insight here is that the source and target tables have diff names:
+	  tbl-1/tbl-2 (target) and tbl-3/tbl-4 (source)
+	  **/
+	// TODO: figure out why the table names differ and make sure they are the
+	// same. THis should be the last key.
+	rows, err = sourceFixture.TargetPool.Query(fmt.Sprintf("SHOW TABLES FROM %s;", targetFixture.TargetSchema))
+	require.NoError(t, err)
+	fmt.Println("da tables target: ")
+	for rows.Next() {
+		var item [6]string
+		rows.Scan(&item[0], &item[1], &item[2], &item[3], &item[4], &item[5])
+		fmt.Println(item)
+	}
+	rows, err = sourceFixture.SourcePool.Query(fmt.Sprintf("SHOW TABLES FROM %s;", targetFixture.SourceSchema))
+	require.NoError(t, err)
+	fmt.Println("da tables source: ")
+	for rows.Next() {
+		var item [6]string
+		rows.Scan(&item[0], &item[1], &item[2], &item[3], &item[4], &item[5])
+		fmt.Println(item)
+	}
+
+	// This stat is necessary to determine when data in the target
+	// has caught up with the source.
 	stats := targetInfo.Stat()
 
-	for iter := 1; iter <= maxIterations; iter++ {
+	var clock hlc.Clock
+	for range maxIterations {
 		batch := &types.MultiBatch{}
-		size := rand.IntN(maxBatchSize) + 1
-		for i := 0; i < size; i++ {
-			workload.GenerateInto(batch, hlc.New(int64(i+1), i))
-		}
+		sourceGeneratorWorkload.GenerateInto(batch, clock.Now())
+		fmt.Println("generating into already")
 
-		tx, err := fixture.TargetPool.BeginTx(ctx, &sql.TxOptions{})
+		// Insert data on the source since it will flow from changefeeds
+		// to the staging DB and then to the target.
+		tx, err := sourceFixture.TargetPool.BeginTx(ctx, &sql.TxOptions{})
 		r.NoError(err)
 		r.NoError(acc.AcceptMultiBatch(ctx, batch, &types.AcceptOptions{TargetQuerier: tx}))
 		r.NoError(tx.Commit())
 	}
+
+	// This time.sleep is necessary.
+	time.Sleep(5 * time.Second)
 	log.Info("waiting for rows")
+
+	// TODO: this wait is not working properly right now.
 	// Waiting for the rows to show in the target database.
-	r.NoError(workload.WaitForCatchUp(ctx, stats))
+	r.NoError(targetChecker.WaitForCatchUp(ctx, stats))
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		parent, err := workload.Checker.StageCounter(workload.Parent.Name(),
+		parent, err := targetChecker.StageCounter(sourceGeneratorWorkload.Parent,
 			hlc.RangeIncluding(hlc.Zero(), clock.Last()))
 		r.NoError(err)
-		child, err := workload.Checker.StageCounter(workload.Child.Name(),
+		child, err := targetChecker.StageCounter(sourceGeneratorWorkload.Child,
 			hlc.RangeIncluding(hlc.Zero(), clock.Last()))
 		r.NoError(err)
 		log.Infof("staging database content parent rows: %d, child rows: %d", parent, child)
@@ -507,8 +664,75 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 		case <-ticker.C:
 		}
 	}
-	// Verify that the target database has all the data.
-	r.True(workload.CheckConsistent(ctx, t))
+
+	// Merge the generators in to the target checker.
+	// This makes it so that the target checker has all the expected
+	// data from the source generator workload.
+	targetChecker.CopyFrom(sourceGeneratorWorkload)
+
+	// Debug scan from source and target:
+	// The source row counts == 7, as expected.
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s;", sourceGeneratorWorkload.Parent)
+	fmt.Println("source query: ", query)
+	rows, err = targetFixture.SourcePool.Query(query)
+	require.NoError(t, err)
+	for rows.Next() {
+		var item string
+		err := rows.Scan(&item)
+		r.NoError(err)
+		fmt.Println("source count: ", item)
+	}
+
+	// Target row counts.
+	// An important thing to note here is that the target row counts are empty.
+	// TODO: figure out why I need to do the target schema joined with the
+	// source table names. Why do the table names differ here?
+	// Well at least I know it works now.
+	query = fmt.Sprintf("SELECT COUNT(*) FROM %s;", ident.NewTable(targetSchema, sourceGeneratorWorkload.Parent.Table()))
+	fmt.Println("target query: ", query)
+	rows, err = targetFixture.TargetPool.Query(query)
+	require.NoError(t, err)
+	for rows.Next() {
+		var item string
+		err := rows.Scan(&item)
+		r.NoError(err)
+		fmt.Println("target count: ", item)
+	}
+
+	// So, this monkey patch works and it's because the source has
+	// 7 parents, but then the target has 0, predictably.
+	//targetChecker.Parents = sourceGeneratorWorkload.Parents
+
+	r.True(targetChecker.CheckConsistent(ctx, t))
+	fmt.Println("checked that they are consistent")
+	fmt.Println("source final: ", targetFixture.SourcePool.ConnectionString)
+	fmt.Println("target final: ", targetFixture.TargetPool.ConnectionString)
+	fmt.Println("source schema: ", targetFixture.SourceSchema)
+	fmt.Println("target schema: ", targetFixture.TargetSchema)
+
+	// So we now know that the source generator workload parent and child rows
+	// check out :) . That means we have the relevant data.
+	// However the target row counts are empty as expected.
+	// So why is this test passing......
+	fmt.Println("source row counts: ", sourceGeneratorWorkload.Parent, sourceGeneratorWorkload.ChildRows(), sourceGeneratorWorkload.ParentRows())
+	fmt.Println("target row counts: ", targetChecker.Parent, targetChecker.ChildRows(), targetChecker.ParentRows())
 	connCtx.Stop(time.Second)
 	r.NoError(connCtx.Wait())
+
+	// OK cool, so here are my findings now that I verified that the changefeed
+	// is working fine......
+	// In order to make sure data ends up in the target, the source and target
+	// schemas need to have tables that are the same name. This is just how the
+	// webhook operates (based on the path and the message coming in that has
+	// table info).
+	// Right now, the problem that we have is that the tables from the target
+	// checker and the one from the source generator workload are different.
+	// This makes it so that when we check the workload on the target, it shows
+	// as 0 rows, because even though data is written, it's written to tables 3
+	// and 4, not 1 and 2.
+	// Right now, I need to figure out how I can fix the the table names so that
+	// they are consistent. Maybe I just need to override this by setting
+	// target.Parent =, target.Child = ident.NewTable(targetSchema,
+	// sourceGeneratorWorkload.Parent.Name().Table()). But this is a bit hacky.
+	// Think more on this tomorrow.
 }
