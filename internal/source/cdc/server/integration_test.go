@@ -447,6 +447,9 @@ func testWorkload(t *testing.T) {
 	log.SetLevel(log.DebugLevel)
 	r := require.New(t)
 
+	// Create the target and source fixtures, which will be used
+	// later on to generate data into the source and check that
+	// target rows are created properly.
 	targetFixture, err := all.NewFixture(t)
 	r.NoError(err)
 
@@ -454,32 +457,21 @@ func testWorkload(t *testing.T) {
 	r.NoError(err)
 
 	ctx := targetFixture.Context
-	// These generators will act as sources of mutations to apply later
-	// on and will then be used to validate the information in the
-	// target.
 	targetChecker, _, err := targetFixture.NewWorkload(ctx, &all.WorkloadConfig{})
 	r.NoError(err)
 
-	// Create the source generator workload.
 	sourceSchema := targetFixture.SourceSchema.Schema()
+	targetSchema := targetFixture.TargetSchema.Schema()
+
 	parent := ident.NewTable(sourceSchema, targetChecker.Parent.Name().Table())
 	child := ident.NewTable(sourceSchema, targetChecker.Child.Name().Table())
 	sourceGeneratorWorkload := workload.NewGeneratorBase(parent, child)
 	r.NoError(err)
-	cfg := &testConfig{webhook: true}
-	serverCfg, err := getConfig(cfg, sourceFixture, targetFixture.TargetPool)
-	r.NoError(err)
 
-	// This sets default values that are not set in the testConfig.
-	r.NoError(serverCfg.Preflight())
-
-	// Create the tables on the target side to match.
-
-	targetSchema := targetFixture.TargetSchema.Schema()
+	// Creates the tables on the source side, so that
+	// tables exist on both source and target,
+	// a requirement for replication here.
 	sourcePool := targetFixture.SourcePool
-
-	// TODO: debug this because we need to create the target schema tables
-	// instead of putting it in the source.
 	parent = sourceGeneratorWorkload.Parent
 	child = sourceGeneratorWorkload.Child
 	parentSQL, childSQL := all.WorkloadSchema(
@@ -488,9 +480,17 @@ func testWorkload(t *testing.T) {
 	_, err = sourcePool.ExecContext(ctx, parentSQL)
 	r.NoError(err)
 	_, err = sourcePool.ExecContext(ctx, childSQL)
-	// TODO: consider if we need to support RIF.
+	r.NoError(err)
+
+	// Setup test configurations.
+	cfg := &testConfig{webhook: true}
+	serverCfg, err := getConfig(cfg, sourceFixture, targetFixture.TargetPool)
+	r.NoError(err)
 
 	// Create the test server fixture.
+	// This sets default values that are not set in the testConfig.
+	r.NoError(serverCfg.Preflight())
+
 	r.NoError(err)
 	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -499,17 +499,8 @@ func testWorkload(t *testing.T) {
 	defer cancel()
 	r.NoError(err)
 
-	// This part is mostly figured out, really just need to understand which
-	// exact fixutre should be used here.
-	// This did the trick really to get the data properly to the target.
-	// Though I may have something flipped here and I may not know about it.
-	// Really need to think on this logic.
-	// For some reason this needs to be the target fixture.
-	acc := types.OrderedAcceptorFrom(targetFixture.ApplyAcceptor, targetFixture.Watchers)
-
-	// TODO: setup the changefeed here.
-	// TODO: commonize the changefeed setup.
-	// Do sourcepool exec and give the whole string for the changefeed
+	// Insert a testing key so we can properly talk to the webhook
+	// in an authenticated manner.
 	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetFixture.StagingPool, testFixture.Authenticator, targetFixture.StagingDB)
 	r.NoError(err)
 
@@ -521,6 +512,9 @@ func testWorkload(t *testing.T) {
 
 	params := make(url.Values)
 
+	// TODO: refactor to create changefeed helper that takes in a
+	// changefeed config struct. This helper can be used for
+	// other work to commonize within workloads.
 	// Set up the changefeed.
 	var feedURL url.URL
 	var pathIdent ident.Identifier
@@ -569,11 +563,15 @@ func testWorkload(t *testing.T) {
 		createStmt += " AS SELECT pk, val"
 		createStmt += " FROM %s"
 	}
-
 	log.Debugf("changefeed URL is %s", feedURL.String())
 	log.Debugf("create stmt is %s", createStmt)
 	_, err = targetFixture.SourcePool.ExecContext(ctx, createStmt)
 	r.NoError(err)
+
+	// Make this the target fixture for the accumulator. This is
+	// required for the data to write properly later on when
+	// we accumulate the batch.
+	acc := types.OrderedAcceptorFrom(targetFixture.ApplyAcceptor, targetFixture.Watchers)
 
 	for i := range maxIterations {
 		batch := &types.MultiBatch{}
@@ -587,14 +585,14 @@ func testWorkload(t *testing.T) {
 		r.NoError(tx.Commit())
 	}
 
-	// Merge the generators in to the target checker.
+	// Merge the generator values into the target checker.
 	// This makes it so that the target checker has all the expected
 	// data from the source generator workload.
 	targetChecker.CopyFrom(sourceGeneratorWorkload)
 
 	// Adapted this polling logic from the above test.
-	// This is a simpler way to determine if the row
-	// was backfilled on the target.
+	// This is a simpler way to determine if the rows
+	// were backfilled on the target.
 	for {
 		ct, err := base.GetRowCount(ctx, targetFixture.TargetPool, target)
 		r.NoError(err)
@@ -612,70 +610,4 @@ func testWorkload(t *testing.T) {
 	// the test code above can't succeed.
 	connCtx.Stop(time.Minute)
 	<-connCtx.Done()
-
-	// This is all debug logging that should be used to get an idea
-	// of what's going on with the test.
-
-	/*
-		query := fmt.Sprintf("SELECT COUNT(*) FROM %s;", sourceGeneratorWorkload.Parent)
-		fmt.Println("source query: ", query)
-		rows, err = targetFixture.SourcePool.Query(query)
-		require.NoError(t, err)
-		for rows.Next() {
-			var item string
-			err := rows.Scan(&item)
-			r.NoError(err)
-			fmt.Println("source count: ", item)
-		}
-
-		// Target row counts.
-		// An important thing to note here is that the target row counts are empty.
-		// TODO: figure out why I need to do the target schema joined with the
-		// source table names. Why do the table names differ here?
-		// Well at least I know it works now.
-		query = fmt.Sprintf("SELECT COUNT(*) FROM %s;", ident.NewTable(targetSchema, sourceGeneratorWorkload.Parent.Table()))
-		fmt.Println("target query: ", query)
-		rows, err = targetFixture.TargetPool.Query(query)
-		require.NoError(t, err)
-		for rows.Next() {
-			var item string
-			err := rows.Scan(&item)
-			r.NoError(err)
-			fmt.Println("target count: ", item)
-		}
-
-		// So, this monkey patch works and it's because the source has
-		// 7 parents, but then the target has 0, predictably.
-		//targetChecker.Parents = sourceGeneratorWorkload.Parents
-
-		fmt.Println("checked that they are consistent")
-		fmt.Println("source final: ", targetFixture.SourcePool.ConnectionString)
-		fmt.Println("target final: ", targetFixture.TargetPool.ConnectionString)
-		fmt.Println("source schema: ", targetFixture.SourceSchema)
-		fmt.Println("target schema: ", targetFixture.TargetSchema)
-
-		// So we now know that the source generator workload parent and child rows
-		// check out :) . That means we have the relevant data.
-		// However the target row counts are empty as expected.
-		// So why is this test passing......
-		fmt.Println("source row counts: ", sourceGeneratorWorkload.Parent, sourceGeneratorWorkload.ChildRows(), sourceGeneratorWorkload.ParentRows())
-		fmt.Println("target row counts: ", targetChecker.Parent, targetChecker.ChildRows(), targetChecker.ParentRows())
-
-		// OK cool, so here are my findings now that I verified that the changefeed
-		// is working fine......
-		// In order to make sure data ends up in the target, the source and target
-		// schemas need to have tables that are the same name. This is just how the
-		// webhook operates (based on the path and the message coming in that has
-		// table info).
-		// Right now, the problem that we have is that the tables from the target
-		// checker and the one from the source generator workload are different.
-		// This makes it so that when we check the workload on the target, it shows
-		// as 0 rows, because even though data is written, it's written to tables 3
-		// and 4, not 1 and 2.
-		// Right now, I need to figure out how I can fix the the table names so that
-		// they are consistent. Maybe I just need to override this by setting
-		// target.Parent =, target.Child = ident.NewTable(targetSchema,
-		// sourceGeneratorWorkload.Parent.Name().Table()). But this is a bit hacky.
-		// Think more on this tomorrow.
-	*/
 }
