@@ -742,7 +742,8 @@ func testWorkload(t *testing.T) {
 	for {
 		ct, err := base.GetRowCount(ctx, targetFixture.TargetPool, target)
 		r.NoError(err)
-		if ct >= 1 {
+		// We know we generate 7 items here in the parent.
+		if ct >= 7 {
 			break
 		}
 		log.Debug("waiting for target rows to be written")
