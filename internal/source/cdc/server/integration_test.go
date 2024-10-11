@@ -631,6 +631,20 @@ func testWorkload(t *testing.T) {
 	sourceFixture, err := all.NewFixtureFromBase(targetFixture.Swapped())
 	r.NoError(err)
 
+	cfg := &testConfig{webhook: true}
+	// The original source is from the target fixture.
+	sourceVersion := targetFixture.SourcePool.Version
+	supportsWebhook, err := supportsWebhook(sourceVersion)
+	r.NoError(err)
+	if cfg.webhook && !supportsWebhook {
+		t.Skipf("Webhook is not compatible with %s version of cockroach.", sourceVersion)
+	}
+	supportsQueries, err := supportsQueries(sourceVersion)
+	r.NoError(err)
+	if cfg.queries && !supportsQueries {
+		t.Skipf("CDC queries are not compatible with %s version of cockroach", sourceVersion)
+	}
+
 	ctx := targetFixture.Context
 	targetChecker, _, err := targetFixture.NewWorkload(ctx, &all.WorkloadConfig{})
 	r.NoError(err)
@@ -658,7 +672,6 @@ func testWorkload(t *testing.T) {
 	r.NoError(err)
 
 	// Setup test configurations.
-	cfg := &testConfig{webhook: true}
 	serverCfg, err := getConfig(cfg, sourceFixture, targetFixture.TargetPool)
 	r.NoError(err)
 
@@ -678,7 +691,6 @@ func testWorkload(t *testing.T) {
 	method, priv, err := jwtAuth.InsertTestingKey(ctx, targetFixture.StagingPool, testFixture.Authenticator, targetFixture.StagingDB)
 	r.NoError(err)
 
-	sourceVersion := sourceFixture.SourcePool.Version
 	targetDB := targetSchema.Schema()
 	target := ident.NewTable(targetDB, targetChecker.Parent.Name().Table())
 	_, token, err := jwtAuth.Sign(method, priv, []ident.Schema{target.Schema(), diag.Schema})
