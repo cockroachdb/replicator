@@ -622,13 +622,9 @@ func testWorkload(t *testing.T) {
 	log.SetLevel(log.DebugLevel)
 	r := require.New(t)
 
-	// Create the target and source fixtures, which will be used
-	// later on to generate data into the source and check that
-	// target rows are created properly.
+	// Create the target fixutre, which will be used
+	// to determine if all the data was written to the target.
 	targetFixture, err := all.NewFixture(t)
-	r.NoError(err)
-
-	sourceFixture, err := all.NewFixtureFromBase(targetFixture.Swapped())
 	r.NoError(err)
 
 	cfg := &testConfig{webhook: true}
@@ -664,11 +660,21 @@ func testWorkload(t *testing.T) {
 	parent = sourceGeneratorWorkload.Parent
 	child = sourceGeneratorWorkload.Child
 	parentSQL, childSQL := all.WorkloadSchema(
-		&all.WorkloadConfig{}, types.ProductPostgreSQL,
+		&all.WorkloadConfig{}, sourcePool.Product,
 		parent, child)
 	_, err = sourcePool.ExecContext(ctx, parentSQL)
 	r.NoError(err)
 	_, err = sourcePool.ExecContext(ctx, childSQL)
+	r.NoError(err)
+
+	// In order to ensure that the source fixture has knowledge of the new
+	// tables created on the source side to match the target, the source
+	// fixture must be created after those tables are created.
+	// Alternatively, if the source fixture must be created earlier, then
+	// after new tables are added, the source fixture must be refreshed.
+	// This is how you can refresh the source fixture:
+	// sourceFixture.Watcher.Refresh(ctx, targetPool)
+	sourceFixture, err := all.NewFixtureFromBase(targetFixture.Swapped())
 	r.NoError(err)
 
 	// Setup test configurations.
@@ -717,7 +723,7 @@ func testWorkload(t *testing.T) {
 	// Make this the target fixture for the accumulator. This is
 	// required for the data to write properly later on when
 	// we accumulate the batch.
-	acc := types.OrderedAcceptorFrom(targetFixture.ApplyAcceptor, targetFixture.Watchers)
+	acc := types.OrderedAcceptorFrom(sourceFixture.ApplyAcceptor, sourceFixture.Watchers)
 
 	for i := range maxIterations {
 		batch := &types.MultiBatch{}
