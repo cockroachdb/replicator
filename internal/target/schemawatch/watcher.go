@@ -217,6 +217,8 @@ func (w *watcher) getTables(ctx context.Context, tx *types.TargetPool) (*types.S
 			// Normalize the database name to however it's defined in
 			// the target.
 			var dbNameRaw string
+			fmt.Println(parts[0].Raw())
+			fmt.Println(tx.ConnectionString)
 			if err := tx.QueryRowContext(ctx, databaseTemplateCrdb, parts[0].Raw()).Scan(&dbNameRaw); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.Errorf("unknown schema: %s", w.schema)

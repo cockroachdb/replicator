@@ -24,6 +24,7 @@ import (
 	"net"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/source/cdc"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -35,6 +36,7 @@ type testFixture struct {
 	Authenticator types.Authenticator
 	Config        *Config
 	Diagnostics   *diag.Diagnostics
+	Handler       *cdc.Handler
 	Listener      net.Listener
 	Memo          types.Memo
 	StagingPool   *types.StagingPool
