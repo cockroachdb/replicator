@@ -385,6 +385,11 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	})
 }
 
+// Union recursive CTEs are only supported in v22.1 and later.
+func supportsUnionRecursiveCTEs(version string) (bool, error) {
+	return stdpool.CockroachMinVersion(version, "v22.1")
+}
+
 // Necessary for faster resolved timestamps.
 func supportsMinCheckpoint(version string) (bool, error) {
 	return stdpool.CockroachMinVersion(version, "v22.1")
@@ -626,10 +631,19 @@ func testWorkload(t *testing.T) {
 	// to determine if all the data was written to the target.
 	targetFixture, err := all.NewFixture(t)
 	r.NoError(err)
+	sourceVersion := targetFixture.SourcePool.Version
+
+	// Union for recursive CTEs is required in order
+	// to use the workload checker since there is a UNION
+	// under the hood.
+	supportsUnionRecursiveCTEs, err := supportsUnionRecursiveCTEs(sourceVersion)
+	r.NoError(err)
+	if !supportsUnionRecursiveCTEs {
+		t.Skipf("Union in recursive CTEs is not compatible with %s version of cockroach.", sourceVersion)
+	}
 
 	cfg := &testConfig{webhook: true}
 	// The original source is from the target fixture.
-	sourceVersion := targetFixture.SourcePool.Version
 	supportsWebhook, err := supportsWebhook(sourceVersion)
 	r.NoError(err)
 	if cfg.webhook && !supportsWebhook {
