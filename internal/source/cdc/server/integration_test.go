@@ -60,16 +60,18 @@ const (
 	testModeQueries
 	testModeParallel
 	testModeWebhook
+	testModeKeyInValue
 
 	testModeMax // Sentinel value
 )
 
 type testConfig struct {
-	diff      bool
-	immediate bool
-	parallel  bool
-	queries   bool
-	webhook   bool
+	diff       bool
+	immediate  bool
+	parallel   bool
+	queries    bool
+	webhook    bool
+	keyInValue bool
 }
 
 func (c *testConfig) String() string {
@@ -110,13 +112,21 @@ func TestIntegration(t *testing.T) {
 	// Create all testing permutations. The test helper will skip in
 	// cases that don't apply to a particular target.
 	tcs := make([]testConfig, testModeMax)
+	tcs[0] = testConfig{
+		diff:       true,
+		queries:    true,
+		webhook:    true,
+		keyInValue: false,
+	}
+
 	for i := range tcs {
 		tcs[i] = testConfig{
-			diff:      i&testModeDiff == testModeDiff,
-			immediate: i&testModeImmediate == testModeImmediate,
-			queries:   i&testModeQueries == testModeQueries,
-			parallel:  i&testModeParallel == testModeParallel,
-			webhook:   i&testModeWebhook == testModeWebhook,
+			diff:       i&testModeDiff == testModeDiff,
+			immediate:  i&testModeImmediate == testModeImmediate,
+			queries:    i&testModeQueries == testModeQueries,
+			parallel:   i&testModeParallel == testModeParallel,
+			webhook:    i&testModeWebhook == testModeWebhook,
+			keyInValue: i&testModeKeyInValue == testModeKeyInValue,
 		}
 	}
 
@@ -284,6 +294,11 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	if cfg.diff {
 		createStmt += ",diff"
 	}
+
+	if cfg.keyInValue {
+		createStmt += ",key_in_value"
+	}
+
 	// Don't wait the entire 30s. This options was introduced in the
 	// same versions as webhooks.
 	if ok, err := supportsMinCheckpoint(sourceVersion); a.NoError(err) && ok {
@@ -296,6 +311,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	}
 
 	log.Debugf("changefeed URL is %s", feedURL.String())
+	fmt.Println(createStmt)
 	r.NoError(source.Exec(ctx, createStmt), createStmt)
 
 	// Wait for the backfilled value.
