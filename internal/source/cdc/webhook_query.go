@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/cdcjson"
@@ -39,10 +40,6 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		return err
 	}
 
-	keys, err := h.getPrimaryKey(req)
-	if err != nil {
-		return err
-	}
 	var message struct {
 		Payload []json.RawMessage `json:"payload"`
 		Length  int               `json:"length"`
@@ -61,6 +58,20 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		}
 		return errors.Wrap(err, "could not decode payload")
 	}
+
+	var keys *ident.Map[int]
+	// This needs to happen after the decode so that the data is marshalled to
+	// the struct that contains the payload message. We want to see if the `key`
+	// field is present in the payload, because if it is, we don't need to get
+	// the primary key from the schema, since the values are provided by webhook
+	// message.
+	if len(message.Payload) > 0 && !strings.Contains(string(message.Payload[0]), `"key"`) {
+		keys, err = h.getPrimaryKey(req)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Bare messages are not longer supported.
 	if message.Bare != nil {
 		return cdcjson.ErrBareEnvelope

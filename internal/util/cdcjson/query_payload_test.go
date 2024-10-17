@@ -121,6 +121,19 @@ func TestQueryPayload(t *testing.T) {
 			types.Mutation{},
 			"could not find timestamp in field \"updated\" while attempting to parse envelope=wrapped",
 		},
+		{"primary key values are present in the key field",
+			`{"before":{"pk":42,"v":8},"key":[42], "updated":"1.0"}`,
+			// Forcing the key map to be nil so that the Key field in the
+			// Mutation struct is populated from the logic for unmarshalling the
+			// "key" field in the JSON.
+			nil,
+			types.Mutation{
+				Before: json.RawMessage(`{"pk":42,"v":8}`),
+				Time:   hlc.New(1, 0),
+				Key:    json.RawMessage(`[42]`),
+			},
+			"",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
