@@ -57,6 +57,7 @@ func TestMain(m *testing.M) {
 const (
 	testModeDiff = 1 << iota
 	testModeImmediate
+	testModeKeyInValue
 	testModeQueries
 	testModeParallel
 	testModeWebhook
@@ -65,11 +66,12 @@ const (
 )
 
 type testConfig struct {
-	diff      bool
-	immediate bool
-	parallel  bool
-	queries   bool
-	webhook   bool
+	diff       bool
+	immediate  bool
+	keyInValue bool
+	parallel   bool
+	queries    bool
+	webhook    bool
 }
 
 func (c *testConfig) String() string {
@@ -99,6 +101,12 @@ func (c *testConfig) String() string {
 	} else {
 		sb.WriteString(" bulk")
 	}
+	if c.keyInValue {
+		sb.WriteString(" key_in_value")
+	} else {
+		sb.WriteString(" key_not_in_value")
+	}
+
 	return sb.String()[1:]
 }
 
@@ -112,11 +120,12 @@ func TestIntegration(t *testing.T) {
 	tcs := make([]testConfig, testModeMax)
 	for i := range tcs {
 		tcs[i] = testConfig{
-			diff:      i&testModeDiff == testModeDiff,
-			immediate: i&testModeImmediate == testModeImmediate,
-			queries:   i&testModeQueries == testModeQueries,
-			parallel:  i&testModeParallel == testModeParallel,
-			webhook:   i&testModeWebhook == testModeWebhook,
+			diff:       i&testModeDiff == testModeDiff,
+			immediate:  i&testModeImmediate == testModeImmediate,
+			keyInValue: i&testModeKeyInValue == testModeKeyInValue,
+			queries:    i&testModeQueries == testModeQueries,
+			parallel:   i&testModeParallel == testModeParallel,
+			webhook:    i&testModeWebhook == testModeWebhook,
 		}
 	}
 
@@ -284,6 +293,11 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	if cfg.diff {
 		createStmt += ",diff"
 	}
+
+	if cfg.keyInValue {
+		createStmt += ",key_in_value"
+	}
+
 	// Don't wait the entire 30s. This options was introduced in the
 	// same versions as webhooks.
 	if ok, err := supportsMinCheckpoint(sourceVersion); a.NoError(err) && ok {
@@ -296,6 +310,7 @@ func testIntegration(t *testing.T, cfg testConfig) {
 	}
 
 	log.Debugf("changefeed URL is %s", feedURL.String())
+	log.Debugf("create statement is %s", createStmt)
 	r.NoError(source.Exec(ctx, createStmt), createStmt)
 
 	// Wait for the backfilled value.

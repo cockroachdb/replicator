@@ -608,6 +608,87 @@ func TestDiscard(t *testing.T) {
 	a.Equal(200, rec.Code)
 }
 
+// TestGetKeyData ensures that we skip key data extraction in the correct
+// conditions, to avoid doing duplicated processing.
+func TestGetKeyData(t *testing.T) {
+	a := assert.New(t)
+	fixture, _ := createFixture(t, &fixtureConfig{})
+	h := fixture.Handler
+
+	tests := []struct {
+		name      string
+		message   *message
+		request   *request
+		wantError error
+		keys      *ident.Map[int]
+	}{
+		{
+			name: "valid payload with key",
+			message: &message{
+				Payload: []json.RawMessage{
+					[]byte(`{ "key" : [ 42 ], "topic" : "my_topic", "updated" : "30.0" }`),
+				},
+			},
+			request: &request{
+				target: fixture.TargetSchema,
+				body: strings.NewReader(fmt.Sprintf(`
+{ "payload" : [
+{ "key" : [ 42 ], "topic" : %[1]s, "updated" : "30.0" }
+] }
+`, fixture.TargetSchema.Raw())),
+			},
+			wantError: nil,
+			keys:      nil,
+		},
+		{
+			name: "empty payload",
+			message: &message{
+				Payload: []json.RawMessage{},
+			},
+			request: &request{
+				target: fixture.TargetSchema,
+				body: strings.NewReader(`
+{ "payload" : [] }
+`),
+			},
+			wantError: nil,
+			keys:      nil,
+		},
+		{
+			name: "malformed JSON",
+			message: &message{
+				Payload: []json.RawMessage{
+					[]byte(`{ "ey : [ "invalid" ] }`),
+				},
+			},
+			request: &request{
+				target: fixture.TargetSchema,
+				body: strings.NewReader(`
+{ "payload" : [
+{ "ey : [ "invalid" ] }
+] }
+`),
+			},
+			wantError: fmt.Errorf(`invalid character 'i' after object key`),
+			keys:      nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys, err := h.getKeyData(tt.request, tt.message)
+
+			if tt.wantError != nil {
+				a.EqualError(err, tt.wantError.Error())
+			} else {
+				a.NoError(err)
+			}
+
+			a.Equal(tt.keys, keys)
+		})
+	}
+}
+
 // TestMergeInt ensures that we have a clean, end-to-end test of a
 // user apply+merge setup that uses integer values.
 func TestMergeInt(t *testing.T) {

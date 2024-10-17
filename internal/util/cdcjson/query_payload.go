@@ -30,8 +30,8 @@ var (
 	afterLabel  = ident.New("after")
 	beforeLabel = ident.New("before")
 	crdbLabel   = ident.New("__crdb__")
-	updated     = ident.New("updated")
 	keyLabel    = ident.New("key")
+	updated     = ident.New("updated")
 )
 
 // Errors
