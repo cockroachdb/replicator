@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/immediate"
 	scriptSeq "github.com/cockroachdb/replicator/internal/sequencer/script"
 	"github.com/cockroachdb/replicator/internal/target/apply"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -36,6 +37,7 @@ import (
 var Set = wire.NewSet(
 	ProvideConn,
 	ProvideEagerConfig,
+	ProvideSchemaWatchConfig,
 )
 
 // ProvideConn is called by Wire to construct this package's
@@ -115,4 +117,9 @@ func ProvideConn(
 // CLI flags. The configuration will be preflighted.
 func ProvideEagerConfig(cfg *Config, _ *script.Loader) (*EagerConfig, error) {
 	return (*EagerConfig)(cfg), cfg.Preflight()
+}
+
+// ProvideSchemaWatchConfig is called by Wire.
+func ProvideSchemaWatchConfig(cfg *Config) *schemawatch.Config {
+	return &cfg.SchemaWatchConfig
 }

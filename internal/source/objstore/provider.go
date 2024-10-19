@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/source/objstore/eventproc"
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/local"
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/s3"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/cdcjson"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -35,6 +36,7 @@ import (
 var Set = wire.NewSet(
 	ProvideConn,
 	ProvideEagerConfig,
+	ProvideSchemaWatchConfig,
 )
 
 // ProvideEagerConfig is a hack to move up the evaluation of the user
@@ -42,6 +44,11 @@ var Set = wire.NewSet(
 // CLI flags.
 func ProvideEagerConfig(cfg *Config, _ *script.Loader) *EagerConfig {
 	return (*EagerConfig)(cfg)
+}
+
+// ProvideSchemaWatchConfig is called by Wire.
+func ProvideSchemaWatchConfig(cfg *Config) *schemawatch.Config {
+	return &cfg.SchemaWatchConfig
 }
 
 // ProvideConn is called by Wire to construct this package's
