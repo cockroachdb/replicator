@@ -81,7 +81,7 @@ func ProvideWatcher(target sinktest.TargetSchema, watchers types.Watchers) (type
 // we want the schema watch to be fast.
 func ProvideSchemaWatchConfig() (*schemawatch.Config, error) {
 	cfg := &schemawatch.Config{
-		RefreshDelay: time.Second,
+		RefreshDelay: time.Minute,
 	}
 	return cfg, cfg.Preflight()
 }
