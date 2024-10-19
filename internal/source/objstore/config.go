@@ -34,6 +34,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/s3"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/secure"
@@ -131,13 +132,14 @@ var Providers = map[string]Provider{
 // Config contains the configuration necessary for creating a
 // connection to an object store.
 type Config struct {
-	Conveyor  conveyor.Config
-	DLQ       dlq.Config
-	Script    script.Config
-	Sequencer sequencer.Config
-	Staging   sinkprod.StagingConfig
-	Target    sinkprod.TargetConfig
-	TLS       secure.Config
+	Conveyor          conveyor.Config
+	DLQ               dlq.Config
+	Script            script.Config
+	Sequencer         sequencer.Config
+	Staging           sinkprod.StagingConfig
+	Target            sinkprod.TargetConfig
+	TLS               secure.Config
+	SchemaWatchConfig schemawatch.Config
 
 	// Object store specific configuration
 	BufferSize           int
@@ -169,6 +171,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
 	c.TLS.Bind(f)
+	c.SchemaWatchConfig.Bind(f)
 
 	f.IntVar(&c.BufferSize, "bufferSize", defaultBufferSize,
 		"buffer size for the ndjson parser")
@@ -223,6 +226,9 @@ func (c *Config) Preflight(ctx context.Context) error {
 	}
 	if c.TargetSchema.Empty() {
 		return errors.New("no target schema specified")
+	}
+	if err := c.SchemaWatchConfig.Preflight(); err != nil {
+		return err
 	}
 	// We can disable idempotent tracking in the sequencer stack
 	// since the logical stream is idempotent.

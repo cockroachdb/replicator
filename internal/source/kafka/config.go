@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/secure"
@@ -45,13 +46,14 @@ type EagerConfig Config
 // Config contains the configuration necessary for creating a
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
-	Conveyor  conveyor.Config
-	DLQ       dlq.Config
-	Script    script.Config
-	Sequencer sequencer.Config
-	Staging   sinkprod.StagingConfig
-	Target    sinkprod.TargetConfig
-	TLS       secure.Config
+	Conveyor          conveyor.Config
+	DLQ               dlq.Config
+	Script            script.Config
+	Sequencer         sequencer.Config
+	Staging           sinkprod.StagingConfig
+	Target            sinkprod.TargetConfig
+	TLS               secure.Config
+	SchemaWatchConfig schemawatch.Config
 
 	TargetSchema     ident.Schema
 	BatchSize        int           // How many messages to accumulate before committing to the target
@@ -93,6 +95,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
 	c.TLS.Bind(f)
+	c.SchemaWatchConfig.Bind(f)
 	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
 		"the SQL database schema in the target cluster to update")
 
@@ -152,6 +155,9 @@ func (c *Config) Preflight(ctx context.Context) error {
 		return err
 	}
 	if err := c.TLS.Preflight(); err != nil {
+		return err
+	}
+	if err := c.SchemaWatchConfig.Preflight(); err != nil {
 		return err
 	}
 	if c.TargetSchema.Empty() {

@@ -7,6 +7,8 @@
 package all
 
 import (
+	"testing"
+
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
@@ -18,7 +20,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
-	"testing"
 )
 
 // Injectors from injector.go:
@@ -71,12 +72,16 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	schemawatchConfig, err := ProvideSchemaWatchConfig()
+	if err != nil {
+		return nil, err
+	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
 	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(context, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -100,19 +105,20 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		return nil, err
 	}
 	allFixture := &Fixture{
-		Fixture:        fixture,
-		ApplyAcceptor:  acceptor,
-		Checkpoints:    checkpoints,
-		Configs:        configs,
-		Diagnostics:    diagnostics,
-		DLQConfig:      config,
-		DLQs:           dlQs,
-		Loader:         loader,
-		Memo:           memoMemo,
-		Stagers:        stagers,
-		VersionChecker: checker,
-		Watchers:       watchers,
-		Watcher:        watcher,
+		Fixture:           fixture,
+		ApplyAcceptor:     acceptor,
+		Checkpoints:       checkpoints,
+		Configs:           configs,
+		Diagnostics:       diagnostics,
+		DLQConfig:         config,
+		SchemaWatchConfig: schemawatchConfig,
+		DLQs:              dlQs,
+		Loader:            loader,
+		Memo:              memoMemo,
+		Stagers:           stagers,
+		VersionChecker:    checker,
+		Watchers:          watchers,
+		Watcher:           watcher,
 	}
 	return allFixture, nil
 }
@@ -131,6 +137,10 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		return nil, err
 	}
 	targetPool := fixture.TargetPool
+	schemawatchConfig, err := ProvideSchemaWatchConfig()
+	if err != nil {
+		return nil, err
+	}
 	stagingPool := fixture.StagingPool
 	stagingSchema := fixture.StagingDB
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
@@ -138,7 +148,7 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		return nil, err
 	}
 	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(context, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -163,19 +173,20 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		return nil, err
 	}
 	allFixture := &Fixture{
-		Fixture:        fixture,
-		ApplyAcceptor:  acceptor,
-		Checkpoints:    checkpoints,
-		Configs:        configs,
-		Diagnostics:    diagnostics,
-		DLQConfig:      config,
-		DLQs:           dlQs,
-		Loader:         loader,
-		Memo:           memoMemo,
-		Stagers:        stagers,
-		VersionChecker: checker,
-		Watchers:       watchers,
-		Watcher:        watcher,
+		Fixture:           fixture,
+		ApplyAcceptor:     acceptor,
+		Checkpoints:       checkpoints,
+		Configs:           configs,
+		Diagnostics:       diagnostics,
+		DLQConfig:         config,
+		SchemaWatchConfig: schemawatchConfig,
+		DLQs:              dlQs,
+		Loader:            loader,
+		Memo:              memoMemo,
+		Stagers:           stagers,
+		VersionChecker:    checker,
+		Watchers:          watchers,
+		Watcher:           watcher,
 	}
 	return allFixture, nil
 }

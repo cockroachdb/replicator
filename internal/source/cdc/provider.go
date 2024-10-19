@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/cdcjson"
 	"github.com/google/wire"
@@ -33,6 +34,7 @@ var Set = wire.NewSet(
 	ProvideDLQConfig,
 	ProvideScriptConfig,
 	ProvideSequencerConfig,
+	ProvideSchemaWatchConfig,
 	conveyor.Set,
 )
 
@@ -44,6 +46,11 @@ func ProvideConveyorConfig(cfg *Config) *conveyor.Config {
 // ProvideDLQConfig is called by Wire.
 func ProvideDLQConfig(cfg *Config) *dlq.Config {
 	return &cfg.DLQConfig
+}
+
+// ProvideSchemaWatchConfig is called by Wire.
+func ProvideSchemaWatchConfig(cfg *Config) *schemawatch.Config {
+	return &cfg.SchemaWatchConfig
 }
 
 // ProvideScriptConfig is called by Wire.

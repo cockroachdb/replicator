@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
@@ -41,11 +42,12 @@ type EagerConfig Config
 // replication connection. All field, other than TestControls, are
 // mandatory unless explicitly indicated.
 type Config struct {
-	DLQ       dlq.Config
-	Script    script.Config
-	Sequencer sequencer.Config
-	Staging   sinkprod.StagingConfig
-	Target    sinkprod.TargetConfig
+	DLQ               dlq.Config
+	Script            script.Config
+	Sequencer         sequencer.Config
+	Staging           sinkprod.StagingConfig
+	Target            sinkprod.TargetConfig
+	SchemaWatchConfig schemawatch.Config
 
 	// The name of the publication to attach to.
 	Publication string
@@ -67,6 +69,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Sequencer.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
+	c.SchemaWatchConfig.Bind(f)
 
 	f.StringVar(&c.Publication, "publicationName", "",
 		"the publication within the source database to replicate")
@@ -108,6 +111,9 @@ func (c *Config) Preflight() error {
 		return err
 	}
 	if err := c.Target.Preflight(); err != nil {
+		return err
+	}
+	if err := c.SchemaWatchConfig.Preflight(); err != nil {
 		return err
 	}
 

@@ -28,6 +28,7 @@ import (
 
 // factory is a memoizing factory for watcher instances.
 type factory struct {
+	cfg    *Config
 	backup Backup
 	pool   *types.TargetPool
 	stop   *stopper.Context
@@ -72,7 +73,7 @@ func (f *factory) createUnlocked(db ident.Schema) (*watcher, error) {
 		return ret, nil
 	}
 
-	ret, err := newWatcher(f.stop, f.pool, db, f.backup)
+	ret, err := newWatcher(f.stop, f.cfg, f.pool, db, f.backup)
 	if err != nil {
 		return nil, err
 	}

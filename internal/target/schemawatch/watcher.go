@@ -21,7 +21,6 @@ package schemawatch
 import (
 	"context"
 	"database/sql"
-	"flag"
 	"fmt"
 	"reflect"
 	"time"
@@ -35,11 +34,6 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
-
-// RefreshDelay controls how ofter a watcher will refresh its schema. If
-// this value is zero or negative, refresh behavior will be disabled.
-var RefreshDelay = flag.Duration("schemaRefresh", time.Minute,
-	"how often to scan for schema changes; set to zero to disable")
 
 // A watcher maintains an internal cache of a database's schema,
 // allowing callers to receive notifications of schema changes.
@@ -55,10 +49,10 @@ var _ types.Watcher = (*watcher)(nil)
 // named database. The returned watcher will internally refresh
 // until the cancel callback is executed.
 func newWatcher(
-	ctx *stopper.Context, tx *types.TargetPool, schema ident.Schema, b Backup,
+	ctx *stopper.Context, cfg *Config, tx *types.TargetPool, schema ident.Schema, b Backup,
 ) (*watcher, error) {
 	w := &watcher{
-		delay:  *RefreshDelay,
+		delay:  cfg.RefreshDelay,
 		schema: schema,
 	}
 
