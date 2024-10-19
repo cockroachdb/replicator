@@ -45,7 +45,7 @@ func TestCopier(t *testing.T) {
 	r := require.New(t)
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 

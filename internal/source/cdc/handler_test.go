@@ -81,7 +81,7 @@ func createFixture(
 ) (*testFixture, base.TableInfo[*types.TargetPool]) {
 	t.Helper()
 	r := require.New(t)
-	baseFixture, err := all.NewFixture(t)
+	baseFixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	// Ensure that the dispatch and mapper functions must have been

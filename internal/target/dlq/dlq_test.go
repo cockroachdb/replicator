@@ -19,6 +19,7 @@ package dlq_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -32,7 +33,7 @@ import (
 func TestDLQ(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -73,7 +74,7 @@ func TestDLQ(t *testing.T) {
 func TestMissingColumns(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -97,7 +98,7 @@ func TestMissingColumns(t *testing.T) {
 func TestMissingTable(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context

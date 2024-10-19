@@ -79,9 +79,9 @@ func ProvideWatcher(target sinktest.TargetSchema, watchers types.Watchers) (type
 // ProvideSchemaWatchConfig emits a default configuration, for testing
 // that has a refresh delay of one second since it test scenarios,
 // we want the schema watch to be fast.
-func ProvideSchemaWatchConfig() (*schemawatch.Config, error) {
+func ProvideSchemaWatchConfig(dur time.Duration) (*schemawatch.Config, error) {
 	cfg := &schemawatch.Config{
-		RefreshDelay: time.Minute,
+		RefreshDelay: dur,
 	}
 	return cfg, cfg.Preflight()
 }

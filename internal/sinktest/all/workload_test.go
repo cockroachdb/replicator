@@ -18,6 +18,7 @@ package all
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
@@ -28,7 +29,7 @@ import (
 func TestWorkloadSmoke(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := NewFixture(t)
+	fixture, err := NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 
@@ -49,10 +50,10 @@ func TestWorkloadSmoke(t *testing.T) {
 func TestFixtureSwap(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := NewFixture(t)
+	fixture, err := NewFixture(t, time.Minute)
 	r.NoError(err)
 
-	next, err := NewFixtureFromBase(fixture.Swapped())
+	next, err := NewFixtureFromBase(fixture.Swapped(), time.Minute)
 	r.NoError(err)
 	r.Same(fixture.SourcePool.DB, next.TargetPool.DB)
 	r.NotSame(fixture.ApplyAcceptor, next.ApplyAcceptor)

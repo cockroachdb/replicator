@@ -80,7 +80,7 @@ func testMYLogical(t *testing.T, fc *fixtureConfig) {
 	a := assert.New(t)
 	r := require.New(t)
 	// Create a basic test fixture.
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 	crdbPool := fixture.TargetPool
@@ -228,7 +228,7 @@ func TestColumNames(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 	// Create a basic test fixture.
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	dbName := fixture.SourceSchema.Schema()
 	ctx := fixture.Context
@@ -299,7 +299,7 @@ func TestDataTypes(t *testing.T) {
 	longString := sb.String()
 	log.Debug(longString)
 	// Create a basic test fixture.
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}

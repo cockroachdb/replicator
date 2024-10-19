@@ -45,7 +45,7 @@ import (
 func TestFilterStubs(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -117,7 +117,7 @@ func testPutAndDrain(t *testing.T, total int, testBatchSize int) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -213,7 +213,7 @@ func testPutAndDrain(t *testing.T, total int, testBatchSize int) {
 func TestStoreIfExists(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -305,7 +305,7 @@ func TestRead(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 	start := time.Now()
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -433,7 +433,7 @@ func BenchmarkStage(b *testing.B) {
 }
 
 func benchmarkStage(b *testing.B, batchSize int) {
-	fixture, err := all.NewFixture(b)
+	fixture, err := all.NewFixture(b, time.Minute)
 	if err != nil {
 		b.Fatal(err)
 	}

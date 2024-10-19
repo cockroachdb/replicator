@@ -118,7 +118,7 @@ func CheckSequencer(
 		}
 		r := require.New(t)
 
-		fixture, err := all.NewFixture(t)
+		fixture, err := all.NewFixture(t, time.Minute)
 		r.NoError(err)
 		ctx := fixture.Context
 

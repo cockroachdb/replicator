@@ -50,7 +50,7 @@ import (
 func TestApply(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -1029,7 +1029,7 @@ func TestAllDataTypes(t *testing.T) {
 	var readBackQ string
 	var testcases []dataTypeTestCase
 	{
-		fixture, err := all.NewFixture(t)
+		fixture, err := all.NewFixture(t, time.Minute)
 		require.NoError(t, err)
 
 		switch fixture.TargetPool.Product {
@@ -1082,7 +1082,7 @@ func TestAllDataTypes(t *testing.T) {
 			// changes in v23.1.
 			//
 			// https://github.com/cockroachdb/cockroach/issues/102259
-			fixture, err := all.NewFixture(t)
+			fixture, err := all.NewFixture(t, time.Minute)
 			require.NoError(t, err)
 			if tc.skip != nil && tc.skip(fixture) {
 				t.Skip()
@@ -1213,7 +1213,7 @@ func TestConditionals(t *testing.T) {
 func testConditions(t *testing.T, cas, deadline bool) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -1391,7 +1391,7 @@ func testConditions(t *testing.T, cas, deadline bool) {
 func TestDeleteByBody(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -1454,7 +1454,7 @@ func TestDeleteByBody(t *testing.T) {
 func TestExpressionColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -1522,7 +1522,7 @@ func TestExpressionColumns(t *testing.T) {
 func TestMergeWiring(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -1746,7 +1746,7 @@ func TestMergeWiring(t *testing.T) {
 func TestIgnoredColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -1799,7 +1799,7 @@ func TestIgnoredColumns(t *testing.T) {
 func TestRenamedColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -1849,7 +1849,7 @@ func TestRenamedColumns(t *testing.T) {
 func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -1948,7 +1948,7 @@ func TestSparsePayload(t *testing.T) {
 	const numRows = 128
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 
@@ -2068,7 +2068,7 @@ CREATE TABLE %s (
 // Verify that user-defined enums with mixed-case identifiers work.
 func TestUDTEnum(t *testing.T) {
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	require.NoError(t, err)
 
 	if fixture.TargetPool.Product != types.ProductCockroachDB {
@@ -2132,7 +2132,7 @@ func TestUDTEnum(t *testing.T) {
 func TestVirtualColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -2334,7 +2334,7 @@ func BenchmarkApply(b *testing.B) {
 func benchConditions(b *testing.B, cfg benchConfig) {
 	a := assert.New(b)
 
-	fixture, err := all.NewFixture(b)
+	fixture, err := all.NewFixture(b, time.Minute)
 	if !a.NoError(err) {
 		return
 	}

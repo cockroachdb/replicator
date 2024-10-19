@@ -62,7 +62,7 @@ func TestBestEffort(t *testing.T) {
 // changes in the underlying schema.
 func TestSchemaChange(t *testing.T) {
 	r := require.New(t)
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 

@@ -36,7 +36,7 @@ import (
 
 func TestRetire(t *testing.T) {
 	r := require.New(t)
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	seqFixture, err := seqtest.NewSequencerFixture(fixture,
 		&sequencer.Config{

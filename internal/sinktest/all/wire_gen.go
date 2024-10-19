@@ -7,8 +7,6 @@
 package all
 
 import (
-	"testing"
-
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
@@ -20,13 +18,15 @@ import (
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"testing"
+	"time"
 )
 
 // Injectors from injector.go:
 
 // NewFixture constructs a self-contained test fixture for all services
 // in the target sub-packages.
-func NewFixture(t testing.TB) (*Fixture, error) {
+func NewFixture(t testing.TB, dur time.Duration) (*Fixture, error) {
 	context := base.ProvideContext(t)
 	diagnostics := diag.New(context)
 	sourcePool, err := base.ProvideSourcePool(context, diagnostics)
@@ -72,7 +72,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	schemawatchConfig, err := ProvideSchemaWatchConfig()
+	schemawatchConfig, err := ProvideSchemaWatchConfig(dur)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 }
 
 // NewFixtureFromBase constructs a new Fixture over a [base.Fixture].
-func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
+func NewFixtureFromBase(fixture *base.Fixture, dur time.Duration) (*Fixture, error) {
 	context := fixture.Context
 	targetStatements := fixture.TargetCache
 	diagnostics := diag.New(context)
@@ -137,7 +137,7 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		return nil, err
 	}
 	targetPool := fixture.TargetPool
-	schemawatchConfig, err := ProvideSchemaWatchConfig()
+	schemawatchConfig, err := ProvideSchemaWatchConfig(dur)
 	if err != nil {
 		return nil, err
 	}

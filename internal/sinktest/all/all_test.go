@@ -18,6 +18,7 @@ package all
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +26,7 @@ import (
 func TestAllSmoke(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := NewFixture(t)
+	fixture, err := NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	r.NotEmpty(fixture.StagingPool.Version)

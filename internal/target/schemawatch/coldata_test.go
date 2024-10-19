@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -32,7 +33,7 @@ import (
 func TestGetColumns(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
@@ -540,7 +541,7 @@ func TestGetColumns(t *testing.T) {
 func TestColDataIgnoresViews(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}

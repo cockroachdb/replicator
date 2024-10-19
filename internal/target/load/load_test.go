@@ -18,6 +18,7 @@ package load_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -31,7 +32,7 @@ import (
 func TestLoad(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 

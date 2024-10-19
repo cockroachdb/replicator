@@ -39,7 +39,7 @@ func TestWorkload(t *testing.T) {
 	const testTime = 5 * time.Second
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 
@@ -153,7 +153,7 @@ func TestRunCommand(t *testing.T) {
 	t.Parallel()
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context

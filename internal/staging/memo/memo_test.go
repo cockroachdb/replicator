@@ -18,13 +18,14 @@ package memo_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRoundtrip(t *testing.T) {
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !assert.NoError(t, err) {
 		return
 	}

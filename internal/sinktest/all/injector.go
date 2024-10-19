@@ -21,6 +21,7 @@ package all
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/google/wire"
@@ -28,11 +29,11 @@ import (
 
 // NewFixture constructs a self-contained test fixture for all services
 // in the target sub-packages.
-func NewFixture(t testing.TB) (*Fixture, error) {
+func NewFixture(t testing.TB, dur time.Duration) (*Fixture, error) {
 	panic(wire.Build(TestSet))
 }
 
 // NewFixtureFromBase constructs a new Fixture over a [base.Fixture].
-func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
+func NewFixtureFromBase(fixture *base.Fixture, dur time.Duration) (*Fixture, error) {
 	panic(wire.Build(TestSetBase))
 }

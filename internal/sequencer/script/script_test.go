@@ -52,7 +52,7 @@ func testUserScriptSequencer(t *testing.T, baseMode switcher.Mode) {
 	r := require.New(t)
 
 	// Create a basic test fixture.
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context

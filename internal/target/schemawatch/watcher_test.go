@@ -19,6 +19,7 @@ package schemawatch_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
@@ -30,9 +31,7 @@ import (
 func TestWatch(t *testing.T) {
 	r := require.New(t)
 
-	// The default fixture now includes a schema watcher with a refresh delay of
-	// 1 second. No more need to set then unset the RefreshDelay package variable.
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Second)
 	r.NoError(err)
 
 	ctx := fixture.Context

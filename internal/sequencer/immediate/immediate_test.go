@@ -19,6 +19,7 @@ package immediate_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/notify"
 	"github.com/cockroachdb/replicator/internal/script"
@@ -36,7 +37,7 @@ import (
 // This can be seen as a skeleton for more interesting sequencers.
 func TestStepByStep(t *testing.T) {
 	r := require.New(t)
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 	fakeTable := ident.NewTable(fixture.TargetSchema.Schema(), ident.New("immediate_table"))

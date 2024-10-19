@@ -275,7 +275,7 @@ func testWorkload(t *testing.T, fc *fixtureConfig) {
 	log.SetLevel(log.DebugLevel)
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 	workload, _, err := fixture.NewWorkload(ctx,

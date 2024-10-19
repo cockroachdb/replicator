@@ -203,7 +203,7 @@ func TestWorkload(t *testing.T) {
 func testWorkload(t *testing.T, fc *fixtureConfig) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 	ctx := fixture.Context
 	workload, _, err := fixture.NewWorkload(ctx,

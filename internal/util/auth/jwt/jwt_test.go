@@ -19,6 +19,7 @@ package jwt
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -29,7 +30,7 @@ import (
 func TestJWT(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}

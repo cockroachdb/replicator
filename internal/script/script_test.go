@@ -53,7 +53,7 @@ func TestScript(t *testing.T) {
 	a := assert.New(t)
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context
@@ -561,7 +561,7 @@ CREATE TABLE %s.skewed_merge_times(
 func TestLegacyImport(t *testing.T) {
 	r := require.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	r.NoError(err)
 
 	ctx := fixture.Context

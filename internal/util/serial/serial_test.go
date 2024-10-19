@@ -18,6 +18,7 @@ package serial
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
 	"github.com/jackc/pgx/v5"
@@ -71,7 +72,7 @@ func (u *fakeUnlockable) Unlocked() bool { return bool(*u) }
 func TestPool(t *testing.T) {
 	a := assert.New(t)
 
-	fixture, err := all.NewFixture(t)
+	fixture, err := all.NewFixture(t, time.Minute)
 	if !a.NoError(err) {
 		return
 	}
