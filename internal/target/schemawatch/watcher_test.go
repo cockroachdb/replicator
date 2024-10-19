@@ -23,7 +23,6 @@ import (
 
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/all"
-	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/retry"
 	"github.com/stretchr/testify/require"
@@ -32,12 +31,8 @@ import (
 func TestWatch(t *testing.T) {
 	r := require.New(t)
 
-	// Override the delay to exercise the background goroutine.
-	const delay = time.Second
-	*schemawatch.RefreshDelay = delay
-	defer func() { *schemawatch.RefreshDelay = time.Minute }()
-
-	fixture, err := all.NewFixture(t)
+	refreshDuration := time.Second
+	fixture, err := all.NewFixtureWithRefresh(t, &refreshDuration)
 	r.NoError(err)
 
 	ctx := fixture.Context
