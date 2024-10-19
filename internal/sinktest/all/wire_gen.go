@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"testing"
+	"time"
 )
 
 // Injectors from injector.go:
@@ -71,12 +72,17 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	refreshDelay := _wireRefreshDelayValue
+	schemawatchConfig, err := ProvideSchemaWatchConfig(refreshDelay)
+	if err != nil {
+		return nil, err
+	}
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
 	if err != nil {
 		return nil, err
 	}
 	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(context, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -100,22 +106,27 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		return nil, err
 	}
 	allFixture := &Fixture{
-		Fixture:        fixture,
-		ApplyAcceptor:  acceptor,
-		Checkpoints:    checkpoints,
-		Configs:        configs,
-		Diagnostics:    diagnostics,
-		DLQConfig:      config,
-		DLQs:           dlQs,
-		Loader:         loader,
-		Memo:           memoMemo,
-		Stagers:        stagers,
-		VersionChecker: checker,
-		Watchers:       watchers,
-		Watcher:        watcher,
+		Fixture:           fixture,
+		ApplyAcceptor:     acceptor,
+		Checkpoints:       checkpoints,
+		Configs:           configs,
+		Diagnostics:       diagnostics,
+		DLQConfig:         config,
+		DLQs:              dlQs,
+		Loader:            loader,
+		Memo:              memoMemo,
+		SchemaWatchConfig: schemawatchConfig,
+		Stagers:           stagers,
+		VersionChecker:    checker,
+		Watchers:          watchers,
+		Watcher:           watcher,
 	}
 	return allFixture, nil
 }
+
+var (
+	_wireRefreshDelayValue = RefreshDelay(time.Minute)
+)
 
 // NewFixtureFromBase constructs a new Fixture over a [base.Fixture].
 func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
@@ -131,6 +142,11 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		return nil, err
 	}
 	targetPool := fixture.TargetPool
+	refreshDelay := _wireAllRefreshDelayValue
+	schemawatchConfig, err := ProvideSchemaWatchConfig(refreshDelay)
+	if err != nil {
+		return nil, err
+	}
 	stagingPool := fixture.StagingPool
 	stagingSchema := fixture.StagingDB
 	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
@@ -138,7 +154,7 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		return nil, err
 	}
 	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(context, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -163,19 +179,121 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		return nil, err
 	}
 	allFixture := &Fixture{
-		Fixture:        fixture,
-		ApplyAcceptor:  acceptor,
-		Checkpoints:    checkpoints,
-		Configs:        configs,
-		Diagnostics:    diagnostics,
-		DLQConfig:      config,
-		DLQs:           dlQs,
-		Loader:         loader,
-		Memo:           memoMemo,
-		Stagers:        stagers,
-		VersionChecker: checker,
-		Watchers:       watchers,
-		Watcher:        watcher,
+		Fixture:           fixture,
+		ApplyAcceptor:     acceptor,
+		Checkpoints:       checkpoints,
+		Configs:           configs,
+		Diagnostics:       diagnostics,
+		DLQConfig:         config,
+		DLQs:              dlQs,
+		Loader:            loader,
+		Memo:              memoMemo,
+		SchemaWatchConfig: schemawatchConfig,
+		Stagers:           stagers,
+		VersionChecker:    checker,
+		Watchers:          watchers,
+		Watcher:           watcher,
+	}
+	return allFixture, nil
+}
+
+var (
+	_wireAllRefreshDelayValue = RefreshDelay(time.Minute)
+)
+
+func NewFixtureWithRefresh(t testing.TB, d RefreshDelay) (*Fixture, error) {
+	context := base.ProvideContext(t)
+	diagnostics := diag.New(context)
+	sourcePool, err := base.ProvideSourcePool(context, diagnostics)
+	if err != nil {
+		return nil, err
+	}
+	sourceSchema, err := base.ProvideSourceSchema(context, sourcePool)
+	if err != nil {
+		return nil, err
+	}
+	stagingPool, err := base.ProvideStagingPool(context)
+	if err != nil {
+		return nil, err
+	}
+	stagingSchema, err := base.ProvideStagingSchema(context, stagingPool)
+	if err != nil {
+		return nil, err
+	}
+	targetPool, err := base.ProvideTargetPool(context, sourcePool, diagnostics)
+	if err != nil {
+		return nil, err
+	}
+	targetStatements := base.ProvideTargetStatements(context, targetPool)
+	targetSchema, err := base.ProvideTargetSchema(context, diagnostics, targetPool, targetStatements)
+	if err != nil {
+		return nil, err
+	}
+	fixture := &base.Fixture{
+		Context:      context,
+		SourcePool:   sourcePool,
+		SourceSchema: sourceSchema,
+		StagingPool:  stagingPool,
+		StagingDB:    stagingSchema,
+		TargetCache:  targetStatements,
+		TargetPool:   targetPool,
+		TargetSchema: targetSchema,
+	}
+	configs, err := applycfg.ProvideConfigs(diagnostics)
+	if err != nil {
+		return nil, err
+	}
+	config, err := ProvideDLQConfig()
+	if err != nil {
+		return nil, err
+	}
+	schemawatchConfig, err := ProvideSchemaWatchConfig(d)
+	if err != nil {
+		return nil, err
+	}
+	memoMemo, err := memo.ProvideMemo(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(context, schemawatchConfig, targetPool, diagnostics, backup)
+	if err != nil {
+		return nil, err
+	}
+	dlQs := dlq.ProvideDLQs(config, targetPool, watchers)
+	loader, err := load.ProvideLoader(targetStatements, targetPool)
+	if err != nil {
+		return nil, err
+	}
+	acceptor, err := apply.ProvideAcceptor(context, targetStatements, configs, diagnostics, dlQs, loader, targetPool, watchers)
+	if err != nil {
+		return nil, err
+	}
+	checkpoints, err := checkpoint.ProvideCheckpoints(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
+	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
+	checker := version.ProvideChecker(stagingPool, memoMemo)
+	watcher, err := ProvideWatcher(targetSchema, watchers)
+	if err != nil {
+		return nil, err
+	}
+	allFixture := &Fixture{
+		Fixture:           fixture,
+		ApplyAcceptor:     acceptor,
+		Checkpoints:       checkpoints,
+		Configs:           configs,
+		Diagnostics:       diagnostics,
+		DLQConfig:         config,
+		DLQs:              dlQs,
+		Loader:            loader,
+		Memo:              memoMemo,
+		SchemaWatchConfig: schemawatchConfig,
+		Stagers:           stagers,
+		VersionChecker:    checker,
+		Watchers:          watchers,
+		Watcher:           watcher,
 	}
 	return allFixture, nil
 }

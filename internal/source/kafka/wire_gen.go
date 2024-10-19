@@ -73,8 +73,9 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 		return nil, err
 	}
 	dlqConfig := &eagerConfig.DLQ
+	schemawatchConfig := ProvideSchemaWatchConfig(config)
 	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(ctx, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}

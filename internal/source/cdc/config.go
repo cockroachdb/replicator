@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 )
@@ -36,10 +37,11 @@ const (
 
 // Config adds CDC-specific configuration to the core logical loop.
 type Config struct {
-	ConveyorConfig  conveyor.Config
-	DLQConfig       dlq.Config
-	SequencerConfig sequencer.Config
-	ScriptConfig    script.Config
+	ConveyorConfig    conveyor.Config
+	DLQConfig         dlq.Config
+	SequencerConfig   sequencer.Config
+	SchemaWatchConfig schemawatch.Config
+	ScriptConfig      script.Config
 	// Discard all incoming HTTP payloads. This is useful for tuning
 	// changefeed throughput without considering Replicator performance.
 	Discard bool
@@ -61,8 +63,9 @@ type Config struct {
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.ConveyorConfig.Bind(f)
 	c.DLQConfig.Bind(f)
-	c.SequencerConfig.Bind(f)
+	c.SchemaWatchConfig.Bind(f)
 	c.ScriptConfig.Bind(f)
+	c.SequencerConfig.Bind(f)
 
 	f.BoolVar(&c.Discard, "discard", false,
 		"(dangerous) discard all incoming HTTP requests; useful for changefeed throughput testing")
@@ -87,6 +90,9 @@ func (c *Config) Preflight() error {
 		return err
 	}
 	if err := c.ScriptConfig.Preflight(); err != nil {
+		return err
+	}
+	if err := c.SchemaWatchConfig.Preflight(); err != nil {
 		return err
 	}
 

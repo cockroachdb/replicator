@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/target/load"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -44,17 +45,18 @@ import (
 type Fixture struct {
 	*base.Fixture
 
-	ApplyAcceptor  *apply.Acceptor
-	Checkpoints    *checkpoint.Checkpoints
-	Configs        *applycfg.Configs
-	Diagnostics    *diag.Diagnostics
-	DLQConfig      *dlq.Config
-	DLQs           types.DLQs
-	Loader         *load.Loader
-	Memo           types.Memo
-	Stagers        types.Stagers
-	VersionChecker *version.Checker
-	Watchers       types.Watchers
+	ApplyAcceptor     *apply.Acceptor
+	Checkpoints       *checkpoint.Checkpoints
+	Configs           *applycfg.Configs
+	Diagnostics       *diag.Diagnostics
+	DLQConfig         *dlq.Config
+	DLQs              types.DLQs
+	Loader            *load.Loader
+	Memo              types.Memo
+	SchemaWatchConfig *schemawatch.Config
+	Stagers           types.Stagers
+	VersionChecker    *version.Checker
+	Watchers          types.Watchers
 
 	Watcher types.Watcher // A watcher for TestDB.
 }
