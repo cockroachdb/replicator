@@ -40,3 +40,13 @@ func LimitLookahead(limit int) Option {
 }
 
 func (l limitLookahead) isOption() {}
+
+type skipBackwardsDataCheck struct{}
+
+// SkipBackwardsDataCheck disables the error check for when
+// data is moving backwards.
+func SkipBackwardsDataCheck() Option {
+	return skipBackwardsDataCheck{}
+}
+
+func (s skipBackwardsDataCheck) isOption() {}

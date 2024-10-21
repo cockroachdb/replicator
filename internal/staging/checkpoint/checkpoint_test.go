@@ -58,6 +58,16 @@ func TestResolved(t *testing.T) {
 		bounds2,
 	)
 	r.NoError(err)
+
+	// g3 is the exact same as g1, but we're going to use it to test that
+	// when we ignore the backwards check, we no longer error out.
+	g3, err := chk.Start(ctx,
+		&types.TableGroup{Name: ident.New("fake")},
+		bounds1,
+		SkipBackwardsDataCheck(),
+	)
+
+	r.NoError(err)
 	r.NotSame(g1, g2)
 
 	const minNanos = int64(1)
@@ -140,6 +150,11 @@ func TestResolved(t *testing.T) {
 	t.Run("no-going-back", func(t *testing.T) {
 		r := require.New(t)
 		r.ErrorContains(g1.Advance(ctx, part, hlc.New(1, 1)), "is going backwards")
+	})
+
+	t.Run("skip-going-back-check", func(t *testing.T) {
+		r := require.New(t)
+		r.NoError(g3.Advance(ctx, part, hlc.New(1, 1)))
 	})
 }
 
@@ -231,6 +246,7 @@ func TestStreamNotification(t *testing.T) {
 		&types.TableGroup{Name: ident.New("fake")},
 		&notify.Var[hlc.Range]{},
 		0,
+		false, /* ignoreBackwardsCheck */
 	)
 	receiver.streamConn = notify.VarOf[*pgx.Conn](nil)
 	_, woken := receiver.fastWakeup.Get()
@@ -240,6 +256,7 @@ func TestStreamNotification(t *testing.T) {
 		&types.TableGroup{Name: ident.New("fake")},
 		&notify.Var[hlc.Range]{},
 		0,
+		false, /* ignoreBackwardsCheck */
 	)
 
 	select {
@@ -304,6 +321,7 @@ func testTransitions(t *testing.T, partitionCount int) {
 		},
 		notify.VarOf(hlc.RangeEmpty()),
 		1024,
+		false, /* ignoreBackwardsCheck */
 	)
 
 	expect := func(low, high int) {
