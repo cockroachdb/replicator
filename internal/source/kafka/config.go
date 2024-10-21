@@ -48,12 +48,12 @@ type EagerConfig Config
 type Config struct {
 	Conveyor          conveyor.Config
 	DLQ               dlq.Config
+	SchemaWatchConfig schemawatch.Config
 	Script            script.Config
 	Sequencer         sequencer.Config
 	Staging           sinkprod.StagingConfig
 	Target            sinkprod.TargetConfig
 	TLS               secure.Config
-	SchemaWatchConfig schemawatch.Config
 
 	TargetSchema     ident.Schema
 	BatchSize        int           // How many messages to accumulate before committing to the target
@@ -90,12 +90,12 @@ type SASLConfig struct {
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Conveyor.Bind(f)
 	c.DLQ.Bind(f)
+	c.SchemaWatchConfig.Bind(f)
 	c.Script.Bind(f)
 	c.Sequencer.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
 	c.TLS.Bind(f)
-	c.SchemaWatchConfig.Bind(f)
 	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
 		"the SQL database schema in the target cluster to update")
 
@@ -142,6 +142,9 @@ func (c *Config) Preflight(ctx context.Context) error {
 	if err := c.DLQ.Preflight(); err != nil {
 		return err
 	}
+	if err := c.SchemaWatchConfig.Preflight(); err != nil {
+		return err
+	}
 	if err := c.Script.Preflight(); err != nil {
 		return err
 	}
@@ -155,9 +158,6 @@ func (c *Config) Preflight(ctx context.Context) error {
 		return err
 	}
 	if err := c.TLS.Preflight(); err != nil {
-		return err
-	}
-	if err := c.SchemaWatchConfig.Preflight(); err != nil {
 		return err
 	}
 	if c.TargetSchema.Empty() {

@@ -32,9 +32,9 @@ var Set = wire.NewSet(
 	ProvideHandler,
 	ProvideConveyorConfig,
 	ProvideDLQConfig,
+	ProvideSchemaWatchConfig,
 	ProvideScriptConfig,
 	ProvideSequencerConfig,
-	ProvideSchemaWatchConfig,
 	conveyor.Set,
 )
 

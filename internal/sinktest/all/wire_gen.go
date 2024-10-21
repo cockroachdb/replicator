@@ -7,8 +7,6 @@
 package all
 
 import (
-	"testing"
-
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
@@ -20,6 +18,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"testing"
 )
 
 // Injectors from injector.go:
@@ -111,10 +110,10 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		Configs:           configs,
 		Diagnostics:       diagnostics,
 		DLQConfig:         config,
-		SchemaWatchConfig: schemawatchConfig,
 		DLQs:              dlQs,
 		Loader:            loader,
 		Memo:              memoMemo,
+		SchemaWatchConfig: schemawatchConfig,
 		Stagers:           stagers,
 		VersionChecker:    checker,
 		Watchers:          watchers,
@@ -179,10 +178,10 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		Configs:           configs,
 		Diagnostics:       diagnostics,
 		DLQConfig:         config,
-		SchemaWatchConfig: schemawatchConfig,
 		DLQs:              dlQs,
 		Loader:            loader,
 		Memo:              memoMemo,
+		SchemaWatchConfig: schemawatchConfig,
 		Stagers:           stagers,
 		VersionChecker:    checker,
 		Watchers:          watchers,

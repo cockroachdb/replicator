@@ -40,8 +40,8 @@ var TestSet = wire.NewSet(
 	target.Set,
 
 	ProvideDLQConfig,
-	ProvideWatcher,
 	ProvideSchemaWatchConfig,
+	ProvideWatcher,
 
 	wire.Struct(new(Fixture), "*"),
 )
@@ -57,8 +57,8 @@ var TestSetBase = wire.NewSet(
 	target.Set,
 
 	ProvideDLQConfig,
-	ProvideWatcher,
 	ProvideSchemaWatchConfig,
+	ProvideWatcher,
 
 	wire.Bind(new(context.Context), new(*stopper.Context)),
 	wire.Struct(new(Fixture), "*"),

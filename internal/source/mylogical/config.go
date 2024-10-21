@@ -42,11 +42,11 @@ type EagerConfig Config
 // replication connection. ServerID and SourceConn are mandatory.
 type Config struct {
 	DLQ               dlq.Config
+	SchemaWatchConfig schemawatch.Config
 	Script            script.Config
 	Sequencer         sequencer.Config
 	Staging           sinkprod.StagingConfig
 	Target            sinkprod.TargetConfig
-	SchemaWatchConfig schemawatch.Config
 
 	InitialGTID   string
 	FetchMetadata bool
@@ -68,11 +68,11 @@ type Config struct {
 // Bind adds flags to the set. It delegates to the embedded Config.Bind.
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.DLQ.Bind(f)
+	c.SchemaWatchConfig.Bind(f)
 	c.Script.Bind(f)
 	c.Sequencer.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
-	c.SchemaWatchConfig.Bind(f)
 
 	f.StringVar(&c.InitialGTID, "defaultGTIDSet", "",
 		"default GTIDSet. Used if no state is persisted")
@@ -141,6 +141,9 @@ func (c *Config) Preflight() error {
 	if err := c.DLQ.Preflight(); err != nil {
 		return err
 	}
+	if err := c.SchemaWatchConfig.Preflight(); err != nil {
+		return err
+	}
 	if err := c.Script.Preflight(); err != nil {
 		return err
 	}
@@ -151,9 +154,6 @@ func (c *Config) Preflight() error {
 		return err
 	}
 	if err := c.Target.Preflight(); err != nil {
-		return err
-	}
-	if err := c.SchemaWatchConfig.Preflight(); err != nil {
 		return err
 	}
 

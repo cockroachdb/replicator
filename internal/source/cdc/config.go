@@ -40,8 +40,8 @@ type Config struct {
 	ConveyorConfig    conveyor.Config
 	DLQConfig         dlq.Config
 	SequencerConfig   sequencer.Config
-	ScriptConfig      script.Config
 	SchemaWatchConfig schemawatch.Config
+	ScriptConfig      script.Config
 	// Discard all incoming HTTP payloads. This is useful for tuning
 	// changefeed throughput without considering Replicator performance.
 	Discard bool
@@ -63,9 +63,9 @@ type Config struct {
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.ConveyorConfig.Bind(f)
 	c.DLQConfig.Bind(f)
-	c.SequencerConfig.Bind(f)
-	c.ScriptConfig.Bind(f)
 	c.SchemaWatchConfig.Bind(f)
+	c.ScriptConfig.Bind(f)
+	c.SequencerConfig.Bind(f)
 
 	f.BoolVar(&c.Discard, "discard", false,
 		"(dangerous) discard all incoming HTTP requests; useful for changefeed throughput testing")

@@ -50,10 +50,10 @@ type Fixture struct {
 	Configs           *applycfg.Configs
 	Diagnostics       *diag.Diagnostics
 	DLQConfig         *dlq.Config
-	SchemaWatchConfig *schemawatch.Config
 	DLQs              types.DLQs
 	Loader            *load.Loader
 	Memo              types.Memo
+	SchemaWatchConfig *schemawatch.Config
 	Stagers           types.Stagers
 	VersionChecker    *version.Checker
 	Watchers          types.Watchers

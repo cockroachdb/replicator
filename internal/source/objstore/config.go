@@ -134,12 +134,12 @@ var Providers = map[string]Provider{
 type Config struct {
 	Conveyor          conveyor.Config
 	DLQ               dlq.Config
+	SchemaWatchConfig schemawatch.Config
 	Script            script.Config
 	Sequencer         sequencer.Config
 	Staging           sinkprod.StagingConfig
 	Target            sinkprod.TargetConfig
 	TLS               secure.Config
-	SchemaWatchConfig schemawatch.Config
 
 	// Object store specific configuration
 	BufferSize           int
@@ -166,12 +166,12 @@ type Config struct {
 func (c *Config) Bind(f *pflag.FlagSet) {
 	c.Conveyor.Bind(f)
 	c.DLQ.Bind(f)
+	c.SchemaWatchConfig.Bind(f)
 	c.Script.Bind(f)
 	c.Sequencer.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
 	c.TLS.Bind(f)
-	c.SchemaWatchConfig.Bind(f)
 
 	f.IntVar(&c.BufferSize, "bufferSize", defaultBufferSize,
 		"buffer size for the ndjson parser")
@@ -209,6 +209,9 @@ func (c *Config) Preflight(ctx context.Context) error {
 	if err := c.DLQ.Preflight(); err != nil {
 		return err
 	}
+	if err := c.SchemaWatchConfig.Preflight(); err != nil {
+		return err
+	}
 	if err := c.Script.Preflight(); err != nil {
 		return err
 	}
@@ -226,9 +229,6 @@ func (c *Config) Preflight(ctx context.Context) error {
 	}
 	if c.TargetSchema.Empty() {
 		return errors.New("no target schema specified")
-	}
-	if err := c.SchemaWatchConfig.Preflight(); err != nil {
-		return err
 	}
 	// We can disable idempotent tracking in the sequencer stack
 	// since the logical stream is idempotent.
