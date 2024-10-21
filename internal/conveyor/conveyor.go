@@ -102,6 +102,11 @@ func (c *Conveyors) Get(schema ident.Schema) (*Conveyor, error) {
 	if l := c.cfg.LimitLookahead; l > 0 {
 		opts = append(opts, checkpoint.LimitLookahead(l))
 	}
+
+	// Since this is a boolean, can just pass in the value directly to this
+	// method.
+	opts = append(opts, checkpoint.SkipBackwardsDataCheck(c.cfg.SkipBackwardsDataCheck))
+
 	ret.checkpoint, err = c.checkpoints.Start(c.stopper, tableGroup, &ret.resolvingRange, opts...)
 	if err != nil {
 		return nil, err

@@ -43,8 +43,12 @@ type Checkpoints struct {
 // conjunction with updating the checkpoint timestamp staging table. The
 // returned Group is not memoized.
 func (r *Checkpoints) Start(
-	ctx *stopper.Context, group *types.TableGroup, bounds *notify.Var[hlc.Range], options ...Option,
+	ctx *stopper.Context,
+	group *types.TableGroup,
+	bounds *notify.Var[hlc.Range],
+	options ...Option,
 ) (*Group, error) {
+	var ignoreBackwardsCheck bool
 	var lookahead int
 	useStream := true
 	for _, opt := range options {
@@ -56,9 +60,11 @@ func (r *Checkpoints) Start(
 			if lookahead <= 0 {
 				return nil, errors.New("lookahead must be greater than zero")
 			}
+		case skipBackwardsDataCheck:
+			ignoreBackwardsCheck = bool(t)
 		}
 	}
-	ret := r.newGroup(group, bounds, lookahead)
+	ret := r.newGroup(group, bounds, lookahead, ignoreBackwardsCheck)
 	// Populate data immediately.
 	if err := ret.refreshBounds(ctx); err != nil {
 		return nil, err
@@ -73,12 +79,13 @@ func (r *Checkpoints) Start(
 }
 
 func (r *Checkpoints) newGroup(
-	group *types.TableGroup, bounds *notify.Var[hlc.Range], lookahead int,
+	group *types.TableGroup, bounds *notify.Var[hlc.Range], lookahead int, ignoreBackwardsCheck bool,
 ) *Group {
 	ret := &Group{
-		bounds: bounds,
-		pool:   r.pool,
-		target: group,
+		bounds:               bounds,
+		ignoreBackwardsCheck: ignoreBackwardsCheck,
+		pool:                 r.pool,
+		target:               group,
 	}
 
 	labels := prometheus.Labels{"schema": group.Name.Raw()}

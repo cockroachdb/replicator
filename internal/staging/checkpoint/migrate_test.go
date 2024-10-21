@@ -85,6 +85,7 @@ INSERT INTO %s (target_schema, source_nanos, source_logical, target_applied_at) 
 			},
 			notify.VarOf(hlc.RangeEmpty()),
 			1024,
+			false, /* ignoreBackwardsCheck */
 		).refreshQuery(ctx, hlc.Zero())
 		r.NoError(err)
 		r.Equal(expect, rng)
