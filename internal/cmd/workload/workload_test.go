@@ -100,7 +100,7 @@ func TestWorkload(t *testing.T) {
 	}
 
 	var resolvedRange notify.Var[hlc.Range]
-	_, err = svr.Checkpoints.Start(ctx, group, &resolvedRange)
+	_, err = svr.Checkpoints.Start(ctx, false /* ignoreBackwardsCheck */, group, &resolvedRange)
 	r.NoError(err)
 	for {
 		progress, changed := resolvedRange.Get()

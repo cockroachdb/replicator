@@ -54,6 +54,11 @@ type Config struct {
 	// (e.g. running into a lock), but will cause replication to stall
 	// if behind by this many checkpoints.
 	LimitLookahead int
+
+	// If set, skips the data check that determines if data is moving
+	// in a backwards direction. There are situations where customers
+	// may want to skip this check.
+	SkipBackwardsDataCheck bool
 }
 
 // Bind adds configuration flags to the set.
@@ -71,6 +76,16 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	f.IntVar(&c.LimitLookahead, "limitLookahead", 0,
 		"limit number of checkpoints to be considered when computing the resolving range; "+
 			"may cause replication to stall completely if older mutations cannot be applied")
+	f.BoolVar(&c.SkipBackwardsDataCheck, "ignoreBackwardsCheck", false,
+		"skip checks for data moving backwards")
+
+	// Marking this ignore check functionality as hidden in order to not
+	// encourage customers to use this option since it disables a critical check
+	// that data is moving backwards. This should be made known to customers on
+	// an as-needed basis.
+	if err := f.MarkHidden("ignoreBackwardsCheck"); err != nil {
+		panic(err)
+	}
 }
 
 // Preflight ensures the Config is in a known-good state.

@@ -47,6 +47,7 @@ func TestResolved(t *testing.T) {
 	// same name are able to coordinate.
 	bounds1 := &notify.Var[hlc.Range]{}
 	g1, err := chk.Start(ctx,
+		false, /* ignoreBackwardsCheck */
 		&types.TableGroup{Name: ident.New("fake")},
 		bounds1,
 	)
@@ -54,6 +55,7 @@ func TestResolved(t *testing.T) {
 
 	bounds2 := &notify.Var[hlc.Range]{}
 	g2, err := chk.Start(ctx,
+		false, /* ignoreBackwardsCheck */
 		&types.TableGroup{Name: ident.New("fake")},
 		bounds2,
 	)
@@ -157,6 +159,7 @@ func TestLimitLookahead(t *testing.T) {
 	r.NoError(err)
 
 	g1, err := chk.Start(ctx,
+		false, /* ignoreBackwardsCheck */
 		&types.TableGroup{Name: ident.New("fake")},
 		&notify.Var[hlc.Range]{},
 		LimitLookahead(int(maxNanos/2-1)),
@@ -190,6 +193,7 @@ func TestLimitLookahead(t *testing.T) {
 	// Verify staring a new group will skip to the end of the applied
 	// timestamps.
 	g2, err := chk.Start(ctx,
+		false, /* ignoreBackwardsCheck */
 		&types.TableGroup{Name: ident.New("fake")},
 		&notify.Var[hlc.Range]{},
 		LimitLookahead(1),
@@ -231,6 +235,7 @@ func TestStreamNotification(t *testing.T) {
 		&types.TableGroup{Name: ident.New("fake")},
 		&notify.Var[hlc.Range]{},
 		0,
+		false, /* ignoreBackwardsCheck */
 	)
 	receiver.streamConn = notify.VarOf[*pgx.Conn](nil)
 	_, woken := receiver.fastWakeup.Get()
@@ -240,6 +245,7 @@ func TestStreamNotification(t *testing.T) {
 		&types.TableGroup{Name: ident.New("fake")},
 		&notify.Var[hlc.Range]{},
 		0,
+		false, /* ignoreBackwardsCheck */
 	)
 
 	select {
@@ -304,6 +310,7 @@ func testTransitions(t *testing.T, partitionCount int) {
 		},
 		notify.VarOf(hlc.RangeEmpty()),
 		1024,
+		false, /* ignoreBackwardsCheck */
 	)
 
 	expect := func(low, high int) {
