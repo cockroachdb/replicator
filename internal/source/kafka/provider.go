@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/google/wire"
 )
 
@@ -28,6 +29,7 @@ var Set = wire.NewSet(
 	ProvideConn,
 	ProvideConveyorConfig,
 	ProvideEagerConfig,
+	ProvideSchemaWatchConfig,
 )
 
 // ProvideEagerConfig is a hack to move up the evaluation of the user
@@ -40,6 +42,11 @@ func ProvideEagerConfig(cfg *Config, _ *script.Loader) *EagerConfig {
 // ProvideConveyorConfig is called by Wire.
 func ProvideConveyorConfig(cfg *Config) *conveyor.Config {
 	return &cfg.Conveyor
+}
+
+// ProvideSchemaWatchConfig is called by Wire.
+func ProvideSchemaWatchConfig(cfg *Config) *schemawatch.Config {
+	return &cfg.SchemaWatchConfig
 }
 
 // ProvideConn is called by Wire to construct this package's

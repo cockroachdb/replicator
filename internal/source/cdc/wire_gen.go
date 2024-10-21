@@ -41,11 +41,12 @@ func newTestFixture(fixture *all.Fixture, config *Config) (*testFixture, error) 
 	}
 	stagers := fixture.Stagers
 	stagingPool := baseFixture.StagingPool
+	schemawatchConfig := ProvideSchemaWatchConfig(config)
 	targetPool := baseFixture.TargetPool
 	diagnostics := diag.New(context)
 	memo := fixture.Memo
 	backup := schemawatch.ProvideBackup(memo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(context, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}

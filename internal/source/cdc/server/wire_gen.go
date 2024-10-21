@@ -91,8 +91,9 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 		return nil, err
 	}
 	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
+	schemawatchConfig := cdc.ProvideSchemaWatchConfig(cdcConfig)
 	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(ctx, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +198,9 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 		return nil, nil, err
 	}
 	dlqConfig := cdc.ProvideDLQConfig(cdcConfig)
+	schemawatchConfig := cdc.ProvideSchemaWatchConfig(cdcConfig)
 	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(context, targetPool, diagnostics, backup)
+	watchers, err := schemawatch.ProvideFactory(context, schemawatchConfig, targetPool, diagnostics, backup)
 	if err != nil {
 		return nil, nil, err
 	}

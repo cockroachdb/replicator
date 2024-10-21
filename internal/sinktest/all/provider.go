@@ -19,6 +19,7 @@ package all
 
 import (
 	"context"
+	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinktest"
@@ -26,6 +27,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/staging"
 	"github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/google/wire"
@@ -38,6 +40,7 @@ var TestSet = wire.NewSet(
 	target.Set,
 
 	ProvideDLQConfig,
+	ProvideSchemaWatchConfig,
 	ProvideWatcher,
 
 	wire.Struct(new(Fixture), "*"),
@@ -54,6 +57,7 @@ var TestSetBase = wire.NewSet(
 	target.Set,
 
 	ProvideDLQConfig,
+	ProvideSchemaWatchConfig,
 	ProvideWatcher,
 
 	wire.Bind(new(context.Context), new(*stopper.Context)),
@@ -70,4 +74,14 @@ func ProvideDLQConfig() (*dlq.Config, error) {
 // bound to the testing database.
 func ProvideWatcher(target sinktest.TargetSchema, watchers types.Watchers) (types.Watcher, error) {
 	return watchers.Get(target.Schema())
+}
+
+// ProvideSchemaWatchConfig emits a default configuration, for testing
+// that has a refresh delay of one second since it test scenarios,
+// we want the schema watch to be fast.
+func ProvideSchemaWatchConfig(refreshDelay *time.Duration) (*schemawatch.Config, error) {
+	cfg := &schemawatch.Config{
+		RefreshDelay: *refreshDelay,
+	}
+	return cfg, cfg.Preflight()
 }
