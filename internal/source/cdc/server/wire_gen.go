@@ -7,6 +7,8 @@
 package server
 
 import (
+	"net"
+
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/conveyor"
 	"github.com/cockroachdb/replicator/internal/script"
@@ -38,7 +40,6 @@ import (
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
 	"github.com/google/wire"
-	"net"
 )
 
 // Injectors from injector.go:

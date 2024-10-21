@@ -19,3 +19,5 @@
 FROM ghcr.io/cockroachdb/cdc-sink/oracle-express:21.3.0-xe
 # Configure with NNE turned on.
 COPY sqlnet.ora /opt/oracle/oradata/dbconfig/XE
+# Copy the init sql files.
+COPY set-archivelog.sql /docker-entrypoint-initdb.d/startup
