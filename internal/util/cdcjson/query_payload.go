@@ -31,6 +31,7 @@ var (
 	beforeLabel = ident.New("before")
 	crdbLabel   = ident.New("__crdb__")
 	updated     = ident.New("updated")
+	keyLabel    = ident.New("key")
 )
 
 // Errors
@@ -98,6 +99,17 @@ func (q *queryPayload) UnmarshalJSON(data []byte) error {
 	if !ok {
 		return errors.Errorf("could not find timestamp in field %s while attempting to parse envelope=wrapped", updated)
 	}
+
+	// Get the PK values from the "key" part of the payload.
+	// This is only done for CDC queries that specify the key_in_value option.
+	// In the case that the key_in_value option is not specified, this will
+	// be empty.
+	if key, ok := msg.Get(keyLabel); ok {
+		if err := json.Unmarshal(key, &q.keyValues); err != nil {
+			return errors.Wrap(err, "could not unmarshal 'key' field")
+		}
+	}
+
 	if err := q.updated.UnmarshalJSON(ts); err != nil {
 		return errors.Wrapf(err, "could not parse %s as a timestamp", string(ts))
 	}
@@ -126,14 +138,20 @@ func (q *queryPayload) UnmarshalJSON(data []byte) error {
 	if msg == nil {
 		return errors.New("missing primary keys")
 	}
-	// Extract PK values.
-	q.keyValues = make([]json.RawMessage, q.keys.Len())
-	for k, pos := range q.keys.All() {
-		v, ok := msg.Get(k)
-		if !ok {
-			return errors.Errorf("missing primary key: %s", k)
+
+	// Extract PK values only if they have not already been
+	// extracted previously due to the key that "key_in_value"
+	// options provide.
+	if len(q.keyValues) == 0 {
+		q.keyValues = make([]json.RawMessage, q.keys.Len())
+		for k, pos := range q.keys.All() {
+			v, ok := msg.Get(k)
+			if !ok {
+				return errors.Errorf("missing primary key: %s", k)
+			}
+			q.keyValues[pos] = v
 		}
-		q.keyValues[pos] = v
 	}
+
 	return nil
 }
