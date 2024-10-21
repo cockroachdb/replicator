@@ -17,6 +17,8 @@
 package workload
 
 import (
+	"fmt"
+
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/source/cdc/server"
 	"github.com/cockroachdb/replicator/internal/util/workload"
@@ -70,6 +72,10 @@ func pcDemo() *cobra.Command {
 			if err := cfg.initURL(svr.GetListener()); err != nil {
 				return err
 			}
+
+			fmt.Printf("Changefeed target URL: %s\n", cfg.url)
+			fmt.Printf("Parent table: %s\n", cfg.parentTable)
+			fmt.Printf("Child table: %s\n", cfg.childTable)
 
 			if !serverCfg.HTTP.DisableAuth {
 				if err := cfg.generateJWT(ctx, svr); err != nil {

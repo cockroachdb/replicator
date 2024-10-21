@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer/staging"
 	"github.com/cockroachdb/replicator/internal/sequencer/switcher"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
 	"github.com/cockroachdb/replicator/internal/staging/leases"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
@@ -31,6 +32,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/target/schemawatch"
 	"github.com/cockroachdb/replicator/internal/util/applycfg"
 	"github.com/cockroachdb/replicator/internal/util/diag"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
 )
 
 // Injectors from injector.go:
@@ -64,7 +66,9 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 		return nil, err
 	}
 	checker := version.ProvideChecker(stagingPool, memoMemo)
-	targetPool, err := sinkprod.ProvideTargetPool(ctx, checker, targetConfig, diagnostics)
+	backup := stdpool.ProvideBackup(memoMemo, stagingPool)
+	breakers := sinktest.NewBreakers()
+	targetPool, err := sinkprod.ProvideTargetPool(ctx, checker, targetConfig, diagnostics, backup, breakers)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +77,8 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 		return nil, err
 	}
 	dlqConfig := &eagerConfig.DLQ
-	backup := schemawatch.ProvideBackup(memoMemo, stagingPool)
-	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics, backup)
+	schemawatchBackup := schemawatch.ProvideBackup(memoMemo, stagingPool)
+	watchers, err := schemawatch.ProvideFactory(ctx, targetPool, diagnostics, schemawatchBackup)
 	if err != nil {
 		return nil, err
 	}

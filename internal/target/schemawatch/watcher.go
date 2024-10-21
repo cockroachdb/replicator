@@ -64,16 +64,16 @@ func newWatcher(
 
 	var data *types.SchemaData
 	if err := tx.Ping(); err != nil {
-		log.WithError(err).Warn("failed to ping target database; trying to restore backup")
+		log.WithError(err).Warn("failed to ping target database; trying to restore schema backup")
 		// On start up, when the target database is down, fall back to
 		// the staging memo about the table schema
 		data, err = b.restore(ctx, schema)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "failed to restore schema backup for %s", schema)
 		}
 		if data == nil {
 			// Restore saw no errors, but we also didn't have a value
-			return nil, errors.Wrapf(err, "no backup schema data for %s", schema)
+			return nil, fmt.Errorf("no backup schema data for %s", schema)
 		}
 	} else {
 		// Initial data load to sanity-check and make ready.

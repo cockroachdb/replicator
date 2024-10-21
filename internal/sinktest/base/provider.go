@@ -32,6 +32,7 @@ import (
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
 	"github.com/cockroachdb/replicator/internal/sinktest"
+	"github.com/cockroachdb/replicator/internal/staging/memo"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -101,15 +102,23 @@ var TestSet = wire.NewSet(
 	ProvideTargetSchema,
 	ProvideTargetStatements,
 	diag.New,
+	sinktest.NewBreakers,
+	stdpool.ProvideBackup,
 
 	wire.Bind(new(context.Context), new(*stopper.Context)),
 	wire.Struct(new(Fixture), "*"),
 )
 
+// ProvideMemory returns the test implementation of types.Memo
+func ProvideMemory() types.Memo {
+	return &memo.Memory{}
+}
+
 // Fixture can be used for tests that "just need a database",
 // without the other services provided by the target package. One can be
 // constructed by calling NewFixture.
 type Fixture struct {
+	Breakers     *sinktest.Breakers      // Breakers for the test
 	Context      *stopper.Context        // The context for the test.
 	SourcePool   *types.SourcePool       // Access to user-data tables and changefeed creation.
 	SourceSchema sinktest.SourceSchema   // A container for tables within SourcePool.
@@ -186,6 +195,8 @@ func ProvideSourcePool(ctx *stopper.Context, diags *diag.Diagnostics) (*types.So
 	tgt := *sourceConn
 	log.Infof("source connect string: %s", tgt)
 	ret, err := stdpool.OpenTarget(ctx, tgt,
+		stdpool.ProvideBackup(&memo.Memory{}, nil),
+		sinktest.NewBreakers(),
 		stdpool.WithDiagnostics(diags, "source"),
 		stdpool.WithTestControls(stdpool.TestControls{
 			WaitForStartup: true,
@@ -277,7 +288,11 @@ func ProvideStagingPool(ctx *stopper.Context) (*types.StagingPool, error) {
 // ProvideTargetPool connects to the target database (which is most
 // often the same as the source database).
 func ProvideTargetPool(
-	ctx *stopper.Context, source *types.SourcePool, diags *diag.Diagnostics,
+	ctx *stopper.Context,
+	source *types.SourcePool,
+	backup *stdpool.Backup,
+	diags *diag.Diagnostics,
+	breakers *sinktest.Breakers,
 ) (*types.TargetPool, error) {
 	tgt := *targetString
 	if tgt == source.ConnectionString {
@@ -285,15 +300,9 @@ func ProvideTargetPool(
 		return (*types.TargetPool)(source), nil
 	}
 	log.Infof("target connect string: %s", tgt)
-	pool, err := stdpool.OpenTarget(ctx, *targetString,
-		stdpool.WithDiagnostics(diags, "target"),
-		stdpool.WithTestControls(stdpool.TestControls{
-			WaitForStartup: true,
-		}),
-		stdpool.WithConnectionLifetime(time.Minute, 15*time.Second, 5*time.Second),
-		stdpool.WithPoolSize(32),
-		stdpool.WithTransactionTimeout(2*time.Minute), // Aligns with test case timeout.
-	)
+	pool, err := stdpool.OpenTarget(ctx, *targetString, backup, breakers, stdpool.WithDiagnostics(diags, "target"), stdpool.WithTestControls(stdpool.TestControls{
+		WaitForStartup: true,
+	}), stdpool.WithConnectionLifetime(time.Minute, 15*time.Second, 5*time.Second), stdpool.WithPoolSize(32), stdpool.WithTransactionTimeout(2*time.Minute))
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +326,8 @@ func ProvideTargetSchema(
 	diags *diag.Diagnostics,
 	pool *types.TargetPool,
 	stmts *types.TargetStatements,
+	backup *stdpool.Backup,
+	breakers *sinktest.Breakers,
 ) (sinktest.TargetSchema, error) {
 	sch, err := provideSchema(ctx, pool, "tgt")
 	ret := sinktest.TargetSchema(sch)
@@ -338,7 +349,7 @@ func ProvideTargetSchema(
 	if pool.Info().Product == types.ProductPostgreSQL {
 		db, _ := sch.Split()
 		conn := fmt.Sprintf("%s/%s", pool.ConnectionString, db.Raw())
-		next, err := stdpool.OpenPgxAsTarget(ctx, conn,
+		next, err := stdpool.OpenPgxAsTarget(ctx, conn, backup, breakers,
 			stdpool.WithDiagnostics(diags, "target_reopened"))
 		if err != nil {
 			return sinktest.TargetSchema{}, err
@@ -358,7 +369,7 @@ func ProvideTargetSchema(
 		u.User = url.UserPassword(sch.Raw(), DummyPassword)
 		conn := u.String()
 
-		next, err := stdpool.OpenOracleAsTarget(ctx, conn,
+		next, err := stdpool.OpenOracleAsTarget(ctx, conn, backup, breakers,
 			stdpool.WithDiagnostics(diags, "target_reopened"))
 		if err != nil {
 			return sinktest.TargetSchema{}, err
