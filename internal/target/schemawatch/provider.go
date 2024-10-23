@@ -32,9 +32,9 @@ var Set = wire.NewSet(
 
 // ProvideFactory is called by Wire to construct the Watchers factory.
 func ProvideFactory(
-	ctx *stopper.Context, pool *types.TargetPool, d *diag.Diagnostics, b Backup,
+	ctx *stopper.Context, cfg *Config, pool *types.TargetPool, d *diag.Diagnostics, b Backup,
 ) (types.Watchers, error) {
-	w := &factory{pool: pool, stop: ctx, backup: b}
+	w := &factory{cfg: cfg, pool: pool, stop: ctx, backup: b}
 	w.mu.data = &ident.SchemaMap[*watcher]{}
 	if err := d.Register("schema", w); err != nil {
 		return nil, err
