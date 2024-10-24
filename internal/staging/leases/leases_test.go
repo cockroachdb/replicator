@@ -312,6 +312,9 @@ func TestLeases(t *testing.T) {
 		// Initial acquisition.
 		facade, err := l.Acquire(ctx, t.Name())
 		a.NoError(err)
+		found, ok := facade.Context().Value(types.LeaseKey{}).(types.Lease)
+		a.True(ok)
+		a.Same(facade, found)
 
 		// Verify that a duplicate fails.
 		_, err = l.Acquire(ctx, t.Name())

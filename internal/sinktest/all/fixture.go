@@ -50,6 +50,7 @@ type Fixture struct {
 	Diagnostics    *diag.Diagnostics
 	DLQConfig      *dlq.Config
 	DLQs           types.DLQs
+	Leases         types.Leases
 	Loader         *load.Loader
 	Memo           types.Memo
 	Stagers        types.Stagers

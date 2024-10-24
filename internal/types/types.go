@@ -88,6 +88,9 @@ func IsLeaseBusy(err error) (busy *LeaseBusyError, ok bool) {
 	return busy, errors.As(err, &busy)
 }
 
+// LeaseKey may be used to retrieve a Lease from its [context.Context].
+type LeaseKey struct{}
+
 // Leases coordinates behavior across multiple instances of Replicator.
 type Leases interface {
 	// Acquire the named leases in an all-or-nothing fashion. A

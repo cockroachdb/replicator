@@ -9,6 +9,7 @@ package all
 import (
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
+	"github.com/cockroachdb/replicator/internal/staging/leases"
 	"github.com/cockroachdb/replicator/internal/staging/memo"
 	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/staging/version"
@@ -93,6 +94,10 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	watcher, err := ProvideWatcher(targetSchema, watchers)
@@ -107,6 +112,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		Diagnostics:    diagnostics,
 		DLQConfig:      config,
 		DLQs:           dlQs,
+		Leases:         typesLeases,
 		Loader:         loader,
 		Memo:           memoMemo,
 		Stagers:        stagers,
@@ -155,6 +161,10 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
+	typesLeases, err := leases.ProvideLeases(context, stagingPool, stagingSchema)
+	if err != nil {
+		return nil, err
+	}
 	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	targetSchema := fixture.TargetSchema
@@ -170,6 +180,7 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		Diagnostics:    diagnostics,
 		DLQConfig:      config,
 		DLQs:           dlQs,
+		Leases:         typesLeases,
 		Loader:         loader,
 		Memo:           memoMemo,
 		Stagers:        stagers,

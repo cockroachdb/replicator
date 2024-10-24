@@ -113,7 +113,6 @@ func LeaseGroup(
 						entry.Debug("restarting")
 					}
 				})
-			return nil
 		}
 		return nil
 	})
