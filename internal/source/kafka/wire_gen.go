@@ -94,7 +94,8 @@ func Start(ctx *stopper.Context, config *Config) (*Kafka, error) {
 	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	sequencerConfig := &eagerConfig.Sequencer
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
+	stageConfig := &eagerConfig.Stage
+	stagers := stage.ProvideFactory(stageConfig, stagingPool, stagingSchema, ctx)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(ctx, sequencerConfig)
 	if err != nil {

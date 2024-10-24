@@ -43,6 +43,10 @@ func TestTableMerger(t *testing.T) {
 	r.NoError(err)
 	ctx := fixture.Context
 
+	f := ProvideFactory(
+		&Config{}, fixture.StagingPool, fixture.StagingDB, fixture.Context,
+	).(*factory)
+	r.NoError(f.cfg.Preflight())
 	tables := make([]ident.Table, tableCount)
 	stages := make([]*stage, tableCount)
 	for idx := range tables {
@@ -50,7 +54,7 @@ func TestTableMerger(t *testing.T) {
 		r.NoError(err)
 		tables[idx] = info.Name()
 
-		stage, err := newStage(ctx, fixture.StagingPool, fixture.StagingDB.Schema(), info.Name())
+		stage, err := f.newStage(info.Name())
 		r.NoError(err)
 		stages[idx] = stage
 	}

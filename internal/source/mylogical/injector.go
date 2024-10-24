@@ -42,7 +42,7 @@ func Start(ctx *stopper.Context, config *Config) (*MYLogical, error) {
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Struct(new(MYLogical), "*"),
 		wire.FieldsOf(new(*Config), "Script"),
-		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Staging", "Target"),
+		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Stage", "Staging", "Target"),
 		Set,
 		chaos.Set,
 		decorators.Set,

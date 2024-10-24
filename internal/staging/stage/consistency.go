@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/pkg/errors"
@@ -52,24 +53,31 @@ SELECT key, count(*)
 func (s *stage) CheckConsistency(
 	ctx context.Context, db types.StagingQuerier, muts []types.Mutation, followerRead bool,
 ) (int, error) {
-	var aost, in string
+	var aost, predicate string
 	var args []any
 	if followerRead {
 		aost = "AS OF SYSTEM TIME follower_read_timestamp()"
 	}
 	if len(muts) > 0 {
-		in = "WHERE key IN (SELECT unnest($1::STRING[]))"
+		// If there are specific keys to check, we ignore any time
+		// limits imposed.
+		predicate = "WHERE key IN (SELECT unnest($1::STRING[]))"
 
 		keys := make([]string, len(muts))
 		for idx, mut := range muts {
 			keys[idx] = string(mut.Key)
 		}
 		args = []any{keys}
+	} else if s.cfg.SanityCheckWindow > 0 {
+		// The window is an offset from the current time. Zero would
+		// indicate no bounds.
+		predicate = "WHERE nanos >= ($1::INT8)"
+		args = []any{time.Now().Add(-s.cfg.SanityCheckWindow).UnixNano()}
 	}
-	q := fmt.Sprintf(checkTemplate, s.stage.Base, in, aost)
+	q := fmt.Sprintf(checkTemplate, s.stage.Base, predicate, aost)
 	rows, err := db.Query(ctx, q, args...)
 	if err != nil {
-		return 0, errors.WithStack(err)
+		return 0, errors.Wrap(err, q)
 	}
 	var count int
 	trace := log.IsLevelEnabled(log.TraceLevel)

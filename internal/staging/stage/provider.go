@@ -30,9 +30,10 @@ var Set = wire.NewSet(
 
 // ProvideFactory is called by Wire to construct the Stagers factory.
 func ProvideFactory(
-	db *types.StagingPool, stagingDB ident.StagingSchema, stop *stopper.Context,
+	cfg *Config, db *types.StagingPool, stagingDB ident.StagingSchema, stop *stopper.Context,
 ) types.Stagers {
 	f := &factory{
+		cfg:       cfg,
 		db:        db,
 		stagingDB: stagingDB.Schema(),
 		stop:      stop,

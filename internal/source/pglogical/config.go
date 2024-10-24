@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/script"
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/util/ident"
 	"github.com/pkg/errors"
@@ -44,7 +45,8 @@ type Config struct {
 	DLQ       dlq.Config
 	Script    script.Config
 	Sequencer sequencer.Config
-	Staging   sinkprod.StagingConfig
+	Stage     stage.Config           // Staging table configuration.
+	Staging   sinkprod.StagingConfig // Staging database configuration.
 	Target    sinkprod.TargetConfig
 
 	// The name of the publication to attach to.
@@ -65,6 +67,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.DLQ.Bind(f)
 	c.Script.Bind(f)
 	c.Sequencer.Bind(f)
+	c.Stage.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
 
@@ -102,6 +105,9 @@ func (c *Config) Preflight() error {
 		return err
 	}
 	if err := c.Sequencer.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Stage.Preflight(); err != nil {
 		return err
 	}
 	if err := c.Staging.Preflight(); err != nil {

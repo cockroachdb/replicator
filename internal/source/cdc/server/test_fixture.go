@@ -50,7 +50,7 @@ func newTestFixture(*stopper.Context, *Config) (*testFixture, func(), error) {
 	panic(wire.Build(
 		completeSet,
 		wire.Bind(new(context.Context), new(*stopper.Context)),
-		wire.FieldsOf(new(*Config), "CDC", "Staging", "Target"),
+		wire.FieldsOf(new(*Config), "CDC", "Stage", "Staging", "Target"),
 		wire.Struct(new(testFixture), "*"),
 	))
 }

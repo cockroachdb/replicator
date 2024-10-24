@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging/checkpoint"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/target/apply"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
@@ -52,6 +53,7 @@ type Fixture struct {
 	DLQs           types.DLQs
 	Loader         *load.Loader
 	Memo           types.Memo
+	StageConfig    *stage.Config
 	Stagers        types.Stagers
 	VersionChecker *version.Checker
 	Watchers       types.Watchers

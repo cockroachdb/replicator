@@ -17,8 +17,9 @@
 package server
 
 import (
-	stagingProd "github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/source/cdc"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/util/stdserver"
 	"github.com/spf13/pflag"
 )
@@ -32,14 +33,16 @@ type EagerConfig Config
 type Config struct {
 	CDC     cdc.Config
 	HTTP    stdserver.Config
-	Staging stagingProd.StagingConfig
-	Target  stagingProd.TargetConfig
+	Stage   stage.Config           // Staging table configuration.
+	Staging sinkprod.StagingConfig // Staging database configuration.
+	Target  sinkprod.TargetConfig
 }
 
 // Bind registers flags.
 func (c *Config) Bind(flags *pflag.FlagSet) {
 	c.CDC.Bind(flags)
 	c.HTTP.Bind(flags)
+	c.Stage.Bind(flags)
 	c.Staging.Bind(flags)
 	c.Target.Bind(flags)
 }
@@ -50,6 +53,9 @@ func (c *Config) Preflight() error {
 		return err
 	}
 	if err := c.HTTP.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Stage.Preflight(); err != nil {
 		return err
 	}
 	if err := c.Staging.Preflight(); err != nil {

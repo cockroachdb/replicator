@@ -28,6 +28,7 @@ import (
 )
 
 type factory struct {
+	cfg       *Config
 	db        *types.StagingPool
 	stagingDB ident.Schema
 	stop      *stopper.Context
@@ -56,7 +57,7 @@ func (f *factory) createUnlocked(table ident.Table) (*stage, error) {
 		return ret, nil
 	}
 
-	ret, err := newStage(f.stop, f.db, f.stagingDB, table)
+	ret, err := f.newStage(table)
 	if err == nil {
 		f.mu.instances.Put(table, ret)
 	}

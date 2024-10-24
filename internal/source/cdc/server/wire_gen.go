@@ -112,7 +112,8 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 	}
 	sequencer := script2.ProvideSequencer(loader, targetPool, watchers)
 	sequencerConfig := cdc.ProvideSequencerConfig(cdcConfig)
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, ctx)
+	stageConfig := &eagerConfig.Stage
+	stagers := stage.ProvideFactory(stageConfig, stagingPool, stagingSchema, ctx)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(ctx, sequencerConfig)
 	if err != nil {
@@ -223,7 +224,8 @@ func newTestFixture(context *stopper.Context, config *Config) (*testFixture, fun
 	}
 	sequencer := script2.ProvideSequencer(scriptLoader, targetPool, watchers)
 	sequencerConfig := cdc.ProvideSequencerConfig(cdcConfig)
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
+	stageConfig := &config.Stage
+	stagers := stage.ProvideFactory(stageConfig, stagingPool, stagingSchema, context)
 	retireRetire := retire.ProvideRetire(sequencerConfig, stagingPool, stagers)
 	schedulerScheduler, err := scheduler.ProvideScheduler(context, sequencerConfig)
 	if err != nil {
