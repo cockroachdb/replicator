@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/sinktest/base"
 	"github.com/cockroachdb/replicator/internal/staging"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/target"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/types"
@@ -38,6 +39,7 @@ var TestSet = wire.NewSet(
 	target.Set,
 
 	ProvideDLQConfig,
+	ProvideStageConfig,
 	ProvideWatcher,
 
 	wire.Struct(new(Fixture), "*"),
@@ -54,6 +56,7 @@ var TestSetBase = wire.NewSet(
 	target.Set,
 
 	ProvideDLQConfig,
+	ProvideStageConfig,
 	ProvideWatcher,
 
 	wire.Bind(new(context.Context), new(*stopper.Context)),
@@ -63,6 +66,12 @@ var TestSetBase = wire.NewSet(
 // ProvideDLQConfig emits a default configuration.
 func ProvideDLQConfig() (*dlq.Config, error) {
 	cfg := &dlq.Config{}
+	return cfg, cfg.Preflight()
+}
+
+// ProvideStageConfig emits a default configuration.
+func ProvideStageConfig() (*stage.Config, error) {
+	cfg := &stage.Config{}
 	return cfg, cfg.Preflight()
 }
 

@@ -51,7 +51,7 @@ func NewServer(ctx *stopper.Context, config *Config) (*Server, error) {
 		completeSet,
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.FieldsOf(new(*Config), "CDC"),
-		wire.FieldsOf(new(*EagerConfig), "Staging", "Target"),
+		wire.FieldsOf(new(*EagerConfig), "Stage", "Staging", "Target"),
 		wire.Struct(new(Server), "*"),
 	))
 }

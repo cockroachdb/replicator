@@ -120,6 +120,9 @@ func testPutAndDrain(t *testing.T, total int, testBatchSize int) {
 	fixture, err := all.NewFixture(t)
 	r.NoError(err)
 
+	// Set the batch size before staging.
+	fixture.StageConfig.MarkAppliedLimit = testBatchSize
+
 	ctx := fixture.Context
 	a.NotEmpty(fixture.StagingPool.Version)
 	pool := fixture.StagingPool
@@ -137,11 +140,6 @@ func testPutAndDrain(t *testing.T, total int, testBatchSize int) {
 			ctx context.Context, db types.StagingQuerier, before hlc.Time, aost bool,
 		) (int, error)
 	})
-	batcher := s.(interface {
-		SetMarkAppliedBatchSize(size int)
-	})
-	// Set the batch size before staging.
-	batcher.SetMarkAppliedBatchSize(testBatchSize)
 
 	jumbledStager, err := fixture.Stagers.Get(ctx, sinktest.JumbleTable(dummyTarget))
 	r.NoError(err)

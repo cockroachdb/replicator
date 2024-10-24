@@ -93,7 +93,11 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
+	stageConfig, err := ProvideStageConfig()
+	if err != nil {
+		return nil, err
+	}
+	stagers := stage.ProvideFactory(stageConfig, stagingPool, stagingSchema, context)
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	watcher, err := ProvideWatcher(targetSchema, watchers)
 	if err != nil {
@@ -109,6 +113,7 @@ func NewFixture(t testing.TB) (*Fixture, error) {
 		DLQs:           dlQs,
 		Loader:         loader,
 		Memo:           memoMemo,
+		StageConfig:    stageConfig,
 		Stagers:        stagers,
 		VersionChecker: checker,
 		Watchers:       watchers,
@@ -155,7 +160,11 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 	if err != nil {
 		return nil, err
 	}
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
+	stageConfig, err := ProvideStageConfig()
+	if err != nil {
+		return nil, err
+	}
+	stagers := stage.ProvideFactory(stageConfig, stagingPool, stagingSchema, context)
 	checker := version.ProvideChecker(stagingPool, memoMemo)
 	targetSchema := fixture.TargetSchema
 	watcher, err := ProvideWatcher(targetSchema, watchers)
@@ -172,6 +181,7 @@ func NewFixtureFromBase(fixture *base.Fixture) (*Fixture, error) {
 		DLQs:           dlQs,
 		Loader:         loader,
 		Memo:           memoMemo,
+		StageConfig:    stageConfig,
 		Stagers:        stagers,
 		VersionChecker: checker,
 		Watchers:       watchers,

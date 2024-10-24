@@ -42,7 +42,7 @@ func Start(*stopper.Context, *Config) (*PGLogical, error) {
 		wire.Bind(new(context.Context), new(*stopper.Context)),
 		wire.Struct(new(PGLogical), "*"),
 		wire.FieldsOf(new(*Config), "Script"),
-		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Staging", "Target"),
+		wire.FieldsOf(new(*EagerConfig), "DLQ", "Sequencer", "Stage", "Staging", "Target"),
 		Set,
 		chaos.Set,
 		decorators.Set,

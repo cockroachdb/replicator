@@ -33,6 +33,7 @@ import (
 	"github.com/cockroachdb/replicator/internal/sequencer"
 	"github.com/cockroachdb/replicator/internal/sinkprod"
 	"github.com/cockroachdb/replicator/internal/source/objstore/providers/s3"
+	"github.com/cockroachdb/replicator/internal/staging/stage"
 	"github.com/cockroachdb/replicator/internal/target/dlq"
 	"github.com/cockroachdb/replicator/internal/util/hlc"
 	"github.com/cockroachdb/replicator/internal/util/ident"
@@ -135,7 +136,8 @@ type Config struct {
 	DLQ       dlq.Config
 	Script    script.Config
 	Sequencer sequencer.Config
-	Staging   sinkprod.StagingConfig
+	Stage     stage.Config           // Staging table configuration.
+	Staging   sinkprod.StagingConfig // Staging database configuration.
 	Target    sinkprod.TargetConfig
 	TLS       secure.Config
 
@@ -166,6 +168,7 @@ func (c *Config) Bind(f *pflag.FlagSet) {
 	c.DLQ.Bind(f)
 	c.Script.Bind(f)
 	c.Sequencer.Bind(f)
+	c.Stage.Bind(f)
 	c.Staging.Bind(f)
 	c.Target.Bind(f)
 	c.TLS.Bind(f)
@@ -210,6 +213,9 @@ func (c *Config) Preflight(ctx context.Context) error {
 		return err
 	}
 	if err := c.Sequencer.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Stage.Preflight(); err != nil {
 		return err
 	}
 	if err := c.Staging.Preflight(); err != nil {

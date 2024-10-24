@@ -86,7 +86,8 @@ func Start(context *stopper.Context, config *Config) (*PGLogical, error) {
 	chaosChaos := &chaos.Chaos{
 		Config: sequencerConfig,
 	}
-	stagers := stage.ProvideFactory(stagingPool, stagingSchema, context)
+	stageConfig := &eagerConfig.Stage
+	stagers := stage.ProvideFactory(stageConfig, stagingPool, stagingSchema, context)
 	marker := decorators.ProvideMarker(stagingPool, stagers)
 	once := decorators.ProvideOnce(stagingPool, stagers)
 	retryTarget := decorators.ProvideRetryTarget(targetPool)

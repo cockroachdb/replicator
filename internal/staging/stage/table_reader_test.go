@@ -48,7 +48,11 @@ func TestTableReader(t *testing.T) {
 	info, err := fixture.CreateTargetTable(ctx, "CREATE TABLE %s (pk int primary key)")
 	r.NoError(err)
 
-	stage, err := newStage(ctx, fixture.StagingPool, fixture.StagingDB.Schema(), info.Name())
+	f := ProvideFactory(
+		&Config{}, fixture.StagingPool, fixture.StagingDB, fixture.Context,
+	).(*factory)
+	r.NoError(f.cfg.Preflight())
+	stage, err := f.newStage(info.Name())
 	r.NoError(err)
 
 	// Insert single-row transactions and then a single large transaction.

@@ -43,10 +43,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// defaultMarkApppliedBatchSize is the default number of mutations to mark
-// applied in the staging table at once.
-const defaultMarkAppliedBatchSize = 100_000
-
 // This mutation value will be stored when a mutation is marked as
 // having been applied without having been previously staged.
 var stubSentinel = json.RawMessage(`{"__stub__":true}`)
@@ -62,11 +58,10 @@ func stagingTable(stagingDB ident.Schema, target ident.Table) ident.Table {
 // stage implements a storage and retrieval mechanism for staging
 // Mutation instances.
 type stage struct {
-	// The staging table that holds the mutations.
-	stage                *ident.Hinted[ident.Table]
-	stagingDB            *types.StagingPool
-	retireFrom           notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
-	markAppliedBatchSize int
+	cfg        *Config
+	stage      *ident.Hinted[ident.Table] // The staging table that holds the mutations.
+	stagingDB  *types.StagingPool
+	retireFrom notify.Var[hlc.Time] // Makes subsequent calls to Retire() a bit faster.
 
 	consistencyError prometheus.Gauge
 	filterApplied    prometheus.Observer
@@ -116,21 +111,20 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 
 // newStage constructs a new mutation stage that will track pending
 // mutations to be applied to the given target table.
-func newStage(
-	ctx *stopper.Context, db *types.StagingPool, stagingDB ident.Schema, target ident.Table,
-) (*stage, error) {
-	table := stagingTable(stagingDB, target)
+func (f *factory) newStage(target ident.Table) (*stage, error) {
+	ctx := f.stop
+	table := stagingTable(f.stagingDB, target)
 	keyIdx := ident.New(table.Table().Raw() + "_key_applied")
 	// Try to create the staging table with a helper virtual column. We
 	// never query for it, so it should have essentially no cost.
-	if err := retry.Execute(ctx, db, fmt.Sprintf(tableSchema, table,
+	if err := retry.Execute(ctx, f.db, fmt.Sprintf(tableSchema, table,
 		`source_time TIMESTAMPTZ AS (to_timestamp(nanos::float/1e9)) VIRTUAL,`,
 		keyIdx)); err != nil {
 
 		// Old versions of CRDB don't know about to_timestamp(). Try
 		// again without the helper column.
-		if code, ok := db.ErrCode(err); ok && code == "42883" /* unknown function */ {
-			err = retry.Execute(ctx, db, fmt.Sprintf(tableSchema, table, "", keyIdx))
+		if code, ok := f.db.ErrCode(err); ok && code == "42883" /* unknown function */ {
+			err = retry.Execute(ctx, f.db, fmt.Sprintf(tableSchema, table, "", keyIdx))
 		}
 		if err != nil {
 			return nil, errors.WithStack(err)
@@ -140,24 +134,24 @@ func newStage(
 	// Transparently upgrade older staging tables. This avoids needing
 	// to add a breaking change to the Versions slice.
 	log.Tracef("upgrading schema for %s", table)
-	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+	if err := retry.Execute(ctx, f.db, fmt.Sprintf(`
 ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS before BYTES NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+	if err := retry.Execute(ctx, f.db, fmt.Sprintf(`
 CREATE INDEX IF NOT EXISTS %[1]s ON %[2]s (key) STORING (applied)
 `, keyIdx, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
 	// We're not going to worry about trying to backfill this, since
 	// old, applied mutations are retired on a regular basis.
-	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+	if err := retry.Execute(ctx, f.db, fmt.Sprintf(`
 ALTER TABLE %s ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if err := retry.Execute(ctx, db, fmt.Sprintf(`
+	if err := retry.Execute(ctx, f.db, fmt.Sprintf(`
 ALTER TABLE %s ADD COLUMN IF NOT EXISTS deletion BOOL NULL
 `, table)); err != nil {
 		return nil, errors.WithStack(err)
@@ -166,28 +160,28 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS deletion BOOL NULL
 
 	labels := metrics.TableValues(target)
 	s := &stage{
-		stage:                db.HintNoFTS(table),
-		stagingDB:            db,
-		markAppliedBatchSize: defaultMarkAppliedBatchSize,
-		consistencyError:     stageConsistencyErrors.WithLabelValues(labels...),
-		filterApplied:        stageFilterAppliedDuration.WithLabelValues(labels...),
-		filterCount:          stageFilterCount.WithLabelValues(labels...),
-		markDuration:         stageMarkDuration.WithLabelValues(labels...),
-		retireDuration:       stageRetireDurations.WithLabelValues(labels...),
-		retireError:          stageRetireErrors.WithLabelValues(labels...),
-		selectCount:          stageSelectCount.WithLabelValues(labels...),
-		selectDuration:       stageSelectDurations.WithLabelValues(labels...),
-		selectError:          stageSelectErrors.WithLabelValues(labels...),
-		staleCount:           stageStaleMutations.WithLabelValues(labels...),
-		stageCount:           stageCount.WithLabelValues(labels...),
-		stageDupes:           stageDuplicateCount.WithLabelValues(labels...),
-		stageDuration:        stageDuration.WithLabelValues(labels...),
-		stageError:           stageErrors.WithLabelValues(labels...),
+		cfg:              f.cfg,
+		stage:            f.db.HintNoFTS(table),
+		stagingDB:        f.db,
+		consistencyError: stageConsistencyErrors.WithLabelValues(labels...),
+		filterApplied:    stageFilterAppliedDuration.WithLabelValues(labels...),
+		filterCount:      stageFilterCount.WithLabelValues(labels...),
+		markDuration:     stageMarkDuration.WithLabelValues(labels...),
+		retireDuration:   stageRetireDurations.WithLabelValues(labels...),
+		retireError:      stageRetireErrors.WithLabelValues(labels...),
+		selectCount:      stageSelectCount.WithLabelValues(labels...),
+		selectDuration:   stageSelectDurations.WithLabelValues(labels...),
+		selectError:      stageSelectErrors.WithLabelValues(labels...),
+		staleCount:       stageStaleMutations.WithLabelValues(labels...),
+		stageCount:       stageCount.WithLabelValues(labels...),
+		stageDupes:       stageDuplicateCount.WithLabelValues(labels...),
+		stageDuration:    stageDuration.WithLabelValues(labels...),
+		stageError:       stageErrors.WithLabelValues(labels...),
 	}
 
 	// Prevent these hot-path queries from being planned with a full
 	// table scan if statistics are stale.
-	tableHinted := db.HintNoFTS(table)
+	tableHinted := f.db.HintNoFTS(table)
 	s.sql.filterApplied = fmt.Sprintf(filterAppliedTemplate, tableHinted)
 	s.sql.markApplied = fmt.Sprintf(markAppliedTemplate, tableHinted, stubSentinel)
 	s.sql.retire = fmt.Sprintf(retireTemplate, tableHinted)
@@ -199,7 +193,10 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS deletion BOOL NULL
 
 	// Report unapplied mutations on a periodic basis.
 	ctx.Go(func(ctx *stopper.Context) error {
-		ticker := time.NewTicker(10 * time.Second)
+		if f.cfg.UnappliedPeriod <= 0 {
+			return nil
+		}
+		ticker := time.NewTicker(f.cfg.UnappliedPeriod)
 		defer ticker.Stop()
 
 		for {
@@ -207,7 +204,7 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS deletion BOOL NULL
 			// since this value may be updated at a high rate on the
 			// instance of Replicator that holds the resolver lease.
 			from, _ := s.retireFrom.Get()
-			ct, err := s.CountUnapplied(ctx, db, from, true /* AOST */)
+			ct, err := s.CountUnapplied(ctx, f.db, from, true /* AOST */)
 			if code, ok := s.stagingDB.ErrCode(err); ok &&
 				(code == "3D000" /* invalid_catalog_name */ ||
 					code == "42P01" /* undefined_table */) {
@@ -235,7 +232,11 @@ ALTER TABLE %s ADD COLUMN IF NOT EXISTS deletion BOOL NULL
 
 	// Validate table consistency on a periodic basis.
 	ctx.Go(func(ctx *stopper.Context) error {
-		ticker := time.NewTicker(time.Minute)
+		// Non-positive value to disable this behavior.
+		if f.cfg.SanityCheckPeriod <= 0 {
+			return nil
+		}
+		ticker := time.NewTicker(f.cfg.SanityCheckPeriod)
 		defer ticker.Stop()
 		for {
 			ct, err := s.CheckConsistency(ctx, s.stagingDB, nil /* all keys */, true /* follower read */)
@@ -557,12 +558,6 @@ func (s *stage) stageOneBatch(
 	return nil
 }
 
-// SetMarkAppliedBatchSize is used for testing and helps set the mark applied
-// batch size so we can verify the behavior of different batch sizes.
-func (s *stage) SetMarkAppliedBatchSize(size int) {
-	s.markAppliedBatchSize = size
-}
-
 const markAppliedTemplate = `
 WITH t (key, nanos, logical) AS (SELECT unnest($1::STRING[]), unnest($2::INT8[]), unnest($3::INT8[]))
 INSERT INTO %s (key, nanos, logical, applied, applied_at, mut)
@@ -595,7 +590,7 @@ func (s *stage) MarkApplied(
 		// 2) extraSanityChecks: we need a transaction in order to check if the
 		// data is consistent.
 		var tx pgx.Tx
-		if extraSanityChecks || len(muts) > s.markAppliedBatchSize {
+		if extraSanityChecks || len(muts) > s.cfg.MarkAppliedLimit {
 			if _, isTx := db.(pgx.Tx); !isTx {
 				var err error
 				tx, err = s.stagingDB.Begin(ctx)
@@ -611,7 +606,7 @@ func (s *stage) MarkApplied(
 		// `sql.conn.max_read_buffer_message_size` This also reduces
 		// the memory being used during this step in the case there
 		// are millions or more rows.
-		if err := batches.Window(s.markAppliedBatchSize, len(muts), func(begin, end int) error {
+		if err := batches.Window(s.cfg.MarkAppliedLimit, len(muts), func(begin, end int) error {
 			lenWindow := end - begin
 			keys := make([]json.RawMessage, lenWindow)
 			nanos := make([]int64, lenWindow)
