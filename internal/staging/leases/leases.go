@@ -179,8 +179,9 @@ func (l *leases) Acquire(ctx context.Context, names ...string) (types.Lease, err
 			_, _ = l.release(context.Background(), leaseRow)
 			cancel()
 		},
-		ctx: ctx,
 	}
+	// Export the lease for testing purposes.
+	ret.ctx = context.WithValue(ctx, types.LeaseKey{}, types.Lease(ret))
 
 	runtime.SetFinalizer(ret, func(f *leaseFacade) { f.Release() })
 
