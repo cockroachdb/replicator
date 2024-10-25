@@ -29,6 +29,16 @@ import (
 	"github.com/pkg/errors"
 )
 
+// message represents the webhook message from the changefeed.
+type message struct {
+	Payload []json.RawMessage `json:"payload"`
+	Length  int               `json:"length"`
+	// With envelope="bare" (default for queries), there is a  `__crdb__` property.
+	Bare json.RawMessage `json:"__crdb__"`
+	// With envelope="wrapped" there is `resolved` property.
+	Resolved string `json:"resolved"`
+}
+
 // webhookForQuery responds to the v23.1 webhook scheme for cdc feeds with queries.
 // We expect the CREATE CHANGE FEED INTO ... AS ... to use the following options:
 // envelope="wrapped",format="json",diff
@@ -39,18 +49,7 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		return err
 	}
 
-	keys, err := h.getPrimaryKey(req)
-	if err != nil {
-		return err
-	}
-	var message struct {
-		Payload []json.RawMessage `json:"payload"`
-		Length  int               `json:"length"`
-		// With envelope="bare" (default for queries), there is a  `__crdb__` property.
-		Bare json.RawMessage `json:"__crdb__"`
-		// With envelope="wrapped" there is `resolved` property.
-		Resolved string `json:"resolved"`
-	}
+	var message message
 	dec := json.NewDecoder(req.body)
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
@@ -61,6 +60,17 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		}
 		return errors.Wrap(err, "could not decode payload")
 	}
+
+	// This needs to happen after the decode so that the data is marshalled to
+	// the struct that contains the payload message. We want to see if the `key`
+	// field is present in the payload, because if it is, we don't need to get
+	// the primary key from the schema, since the values are provided by webhook
+	// message.
+	keys, err := h.getKeyData(req, &message)
+	if err != nil {
+		return err
+	}
+
 	// Bare messages are not longer supported.
 	if message.Bare != nil {
 		return cdcjson.ErrBareEnvelope
@@ -92,4 +102,30 @@ func (h *Handler) webhookForQuery(ctx context.Context, req *request) error {
 		}
 	}
 	return conveyor.AcceptMultiBatch(ctx, toProcess, &types.AcceptOptions{})
+}
+
+func (h *Handler) getKeyData(req *request, message *message) (*ident.Map[int], error) {
+	if len(message.Payload) == 0 {
+		return nil, nil
+	}
+
+	var payloadMap map[string]interface{}
+	if err := json.Unmarshal(message.Payload[0], &payloadMap); err != nil {
+		return nil, err
+	}
+
+	// If the "key" field is present, no need to get the primary key from the
+	// schema.
+	if _, ok := payloadMap["key"]; ok {
+		return nil, nil
+	}
+
+	// In the case we don't have any "key" data from the request paylod,
+	// then we need to get the primary key from the schema.
+	keys, err := h.getPrimaryKey(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return keys, nil
 }
