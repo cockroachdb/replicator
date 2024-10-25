@@ -24,6 +24,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// The __Name const variables are to enable parallel test executions for
+// specific dialect.
 const (
 	// IntegrationEnvName is an environment variable that enables
 	// integration tests for some databases. We expect this to be of the
@@ -48,6 +50,11 @@ const (
 	// .github/docker-compose.yml file and the integration matrix
 	// variable in workflows/tests.yaml.
 	PostgreSQLName = "postgresql"
+
+	// OracleName must be kept in alignment with the
+	// .github/docker-compose.yml file and the integration matrix
+	// variable in workflows/tests.yaml.
+	OracleName = "oracle"
 )
 
 // IntegrationMain runs the tests if the value of IntegrationEnvName

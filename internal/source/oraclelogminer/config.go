@@ -1,0 +1,133 @@
+// Copyright 2024 The Cockroach Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package oraclelogminer
+
+import (
+	"time"
+
+	"github.com/cockroachdb/replicator/internal/script"
+	"github.com/cockroachdb/replicator/internal/sequencer"
+	"github.com/cockroachdb/replicator/internal/sinkprod"
+	"github.com/cockroachdb/replicator/internal/source/oraclelogminer/scn"
+	"github.com/cockroachdb/replicator/internal/target/dlq"
+	"github.com/cockroachdb/replicator/internal/util/ident"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+	"github.com/spf13/pflag"
+)
+
+// EagerConfig is a hack to get Wire to move userscript evaluation to
+// the beginning of the injector. This allows CLI flags to be set by the
+// script.
+type EagerConfig Config
+
+// Config contains the configuration necessary for creating a
+// replication connection. SourceConn is mandatory.
+type Config struct {
+	DLQ       dlq.Config
+	Script    script.Config
+	Sequencer sequencer.Config
+	Staging   sinkprod.StagingConfig
+	Target    sinkprod.TargetConfig
+
+	LogMinerPullInterval time.Duration
+	// SCN is System Change Number in Oracle, which serves as a system time
+	// for the logMiner.
+	SCN scn.SCN
+	// Connection string for the source Oracle Database.
+	SourceConn string
+	// SourceSchema marks the schema of the table. In oracle, it is the
+	// owner of the table. Note that this is different from the user
+	// passed in via the connection string to the source database. To
+	// use logMiner, the connection string user must be the sys dba.
+	// SourceSchema here means the owner (equivalent to schema in
+	// postgres context) of the tables to monitor.
+	SourceSchema ident.Schema
+	// The SQL schema in the target cluster to write into. This value is
+	// optional if a userscript dispatch function is present.
+	TargetSchema ident.Schema
+}
+
+const (
+	defaultLogMinerPullInterval = 300 * time.Millisecond
+)
+
+// Bind adds flags to the set.
+func (c *Config) Bind(f *pflag.FlagSet) {
+	c.DLQ.Bind(f)
+	c.Script.Bind(f)
+	c.Sequencer.Bind(f)
+	c.Staging.Bind(f)
+	c.Target.Bind(f)
+	c.SCN = scn.SCN{}
+
+	f.DurationVar(&c.LogMinerPullInterval, "pullInterval", defaultLogMinerPullInterval,
+		"interval duration for pulling from logMiner (source) for changefeed")
+	f.IntVar(&c.SCN.Val, "scn", 0, "starting SCN for logMiner")
+
+	f.StringVar(&c.SourceConn, "sourceConn", "",
+		"the source database's connection string")
+
+	f.Var(ident.NewSchemaFlag(&c.SourceSchema), "sourceSchema",
+		"the owner of the source table, case sensitive")
+
+	f.Var(ident.NewSchemaFlag(&c.TargetSchema), "targetSchema",
+		"the SQL database schema in the target cluster to update")
+
+}
+
+// Preflight updates the configuration with sane defaults or returns an
+// error if there are missing options for which a default cannot be
+// provided.
+func (c *Config) Preflight() error {
+	if err := c.DLQ.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Script.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Sequencer.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Staging.Preflight(); err != nil {
+		return err
+	}
+	if err := c.Target.Preflight(); err != nil {
+		return err
+	}
+
+	// We can disable idempotent tracking in the sequencer stack
+	// since the logical stream is idempotent.
+	c.Sequencer.IdempotentSource = true
+
+	if c.SourceConn == "" {
+		return errors.New("no source connection was configured")
+	}
+	if c.TargetSchema.Empty() {
+		return errors.New("no target schema specified")
+	}
+
+	if c.SourceSchema.Empty() {
+		return errors.New("no source schema (owner of the table) specified")
+	}
+
+	if c.SCN.IsEmpty() {
+		log.Warn("no scn specified, auto-querying the latest SCN")
+	}
+
+	return nil
+}

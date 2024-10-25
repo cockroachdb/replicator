@@ -25,7 +25,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Command returns the pglogical subcommand.
+// Command returns the kafka subcommand.
 func Command() *cobra.Command {
 	cfg := &kafka.Config{}
 	return stdlogical.New(&stdlogical.Template{
