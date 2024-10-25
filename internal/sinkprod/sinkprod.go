@@ -21,6 +21,8 @@ package sinkprod
 import (
 	"time"
 
+	"github.com/cockroachdb/replicator/internal/sinktest"
+	"github.com/cockroachdb/replicator/internal/util/stdpool"
 	"github.com/google/wire"
 )
 
@@ -29,7 +31,9 @@ var Set = wire.NewSet(
 	ProvideStagingDB,
 	ProvideStagingPool,
 	ProvideTargetPool,
+	stdpool.ProvideBackup,
 	ProvideStatementCache,
+	sinktest.NewBreakers,
 )
 
 const (

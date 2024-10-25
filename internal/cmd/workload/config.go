@@ -59,6 +59,7 @@ type clientConfig struct {
 	requestTimeout     time.Duration
 	resolvedInterval   time.Duration
 	retryMin, retryMax time.Duration
+	suffix             string
 
 	childTable   ident.Table  // Derived from targetSchema
 	parentTable  ident.Table  // Derived from targetSchema
@@ -85,6 +86,8 @@ func (c *clientConfig) Bind(flags *pflag.FlagSet) {
 		"the maximum delay between HTTP retry attempts")
 	flags.DurationVar(&c.retryMin, "retryMin", defaultRetryMin,
 		"the minimum delay between HTTP retry attempts")
+	flags.StringVar(&c.suffix, "suffix", "",
+		"parent/child table suffix")
 	flags.StringVar(&c.token, "token", "",
 		"JWT bearer token if security is enabled")
 	flags.StringVar(&c.url, "url", defaultURL,
@@ -133,10 +136,10 @@ func (c *clientConfig) Preflight() error {
 		}
 	}
 	if c.childTable.Empty() {
-		c.childTable = ident.NewTable(c.targetSchema, ident.New("child"))
+		c.childTable = ident.NewTable(c.targetSchema, ident.New("child"+c.suffix))
 	}
 	if c.parentTable.Empty() {
-		c.parentTable = ident.NewTable(c.targetSchema, ident.New("parent"))
+		c.parentTable = ident.NewTable(c.targetSchema, ident.New("parent"+c.suffix))
 	}
 	return nil
 }
@@ -144,7 +147,9 @@ func (c *clientConfig) Preflight() error {
 func (c *clientConfig) createTables(ctx *stopper.Context, targetPool *types.TargetPool) error {
 	// We need a 64-bit type.
 	bigType := "BIGINT"
-	uniq := fmt.Sprintf("_%d_%d", os.Getpid(), rand.Int32N(10000))
+	if c.suffix == "" {
+		c.suffix = fmt.Sprintf("_%d_%d", os.Getpid(), rand.Int32N(10000))
+	}
 
 	// Create the tables within the "current" schema specified on the
 	// command-line. We'll use uniquely-named tables to ensure that
@@ -179,8 +184,8 @@ func (c *clientConfig) createTables(ctx *stopper.Context, targetPool *types.Targ
 	if err != nil {
 		return err
 	}
-	c.parentTable = ident.NewTable(c.targetSchema, ident.New("parent"+uniq))
-	c.childTable = ident.NewTable(c.targetSchema, ident.New("child"+uniq))
+	c.parentTable = ident.NewTable(c.targetSchema, ident.New("parent"+c.suffix))
+	c.childTable = ident.NewTable(c.targetSchema, ident.New("child"+c.suffix))
 
 	if _, err := targetPool.ExecContext(ctx, fmt.Sprintf(
 		`CREATE TABLE %s(parent %[2]s PRIMARY KEY, val %[2]s DEFAULT 0 NOT NULL)`,
@@ -194,7 +199,7 @@ child %[4]s PRIMARY KEY,
 parent %[4]s NOT NULL,
 val %[4]s DEFAULT 0 NOT NULL,
 CONSTRAINT parent_fk%[2]s FOREIGN KEY(parent) REFERENCES %[3]s(parent)
-)`, c.childTable, uniq, c.parentTable, bigType)); err != nil {
+)`, c.childTable, c.suffix, c.parentTable, bigType)); err != nil {
 		return errors.WithStack(err)
 	}
 

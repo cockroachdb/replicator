@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/staging/version"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/cockroachdb/replicator/internal/util/diag"
@@ -74,7 +75,12 @@ func (c *TargetConfig) Preflight() error {
 // Adding the Replicator version checker here is a bit of a hack. If
 // Wire supported eager dependencies, this would be an obvious use.
 func ProvideTargetPool(
-	ctx *stopper.Context, check *version.Checker, config *TargetConfig, diags *diag.Diagnostics,
+	ctx *stopper.Context,
+	check *version.Checker,
+	config *TargetConfig,
+	diags *diag.Diagnostics,
+	backup *stdpool.Backup,
+	breakers *sinktest.Breakers,
 ) (*types.TargetPool, error) {
 	missing, err := check.Check(ctx)
 	if err != nil {
@@ -94,7 +100,7 @@ func ProvideTargetPool(
 		stdpool.WithTransactionTimeout(config.ApplyTimeout),
 	}
 
-	ret, err := stdpool.OpenTarget(ctx, config.Conn, options...)
+	ret, err := stdpool.OpenTarget(ctx, config.Conn, backup, breakers, options...)
 	if err != nil {
 		return nil, err
 	}

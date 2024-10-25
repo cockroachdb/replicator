@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/field-eng-powertools/stopper"
+	"github.com/cockroachdb/replicator/internal/sinktest"
 	"github.com/cockroachdb/replicator/internal/types"
 	"github.com/pkg/errors"
 )
@@ -28,7 +29,11 @@ import (
 // OpenTarget selects from target connector implementations based on the
 // URL scheme contained in the connection string.
 func OpenTarget(
-	ctx *stopper.Context, connectString string, options ...Option,
+	ctx *stopper.Context,
+	connectString string,
+	backup *Backup,
+	breakers *sinktest.Breakers,
+	options ...Option,
 ) (*types.TargetPool, error) {
 	u, err := url.Parse(connectString)
 	if err != nil {
@@ -37,11 +42,11 @@ func OpenTarget(
 
 	switch strings.ToLower(u.Scheme) {
 	case "mysql":
-		return OpenMySQLAsTarget(ctx, connectString, u, options...)
+		return OpenMySQLAsTarget(ctx, connectString, backup, breakers, options...)
 	case "pg", "pgx", "postgres", "postgresql":
-		return OpenPgxAsTarget(ctx, connectString, options...)
+		return OpenPgxAsTarget(ctx, connectString, backup, breakers, options...)
 	case "ora", "oracle":
-		return OpenOracleAsTarget(ctx, connectString, options...)
+		return OpenOracleAsTarget(ctx, connectString, backup, breakers, options...)
 	default:
 		return nil, errors.Errorf("unknown URL scheme: %s", u.Scheme)
 	}
