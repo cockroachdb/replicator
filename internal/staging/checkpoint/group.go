@@ -68,11 +68,12 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 //	partitions of a checkpoint, whereas the commit time is always common
 //	to all partitions.
 type Group struct {
-	bounds     *notify.Var[hlc.Range]
-	fastWakeup notify.Var[struct{}]
-	pool       *types.StagingPool
-	streamConn *notify.Var[*pgx.Conn] // Used for testing.
-	target     *types.TableGroup
+	bounds               *notify.Var[hlc.Range]
+	fastWakeup           notify.Var[struct{}]
+	ignoreBackwardsCheck bool
+	pool                 *types.StagingPool
+	streamConn           *notify.Var[*pgx.Conn] // Used for testing.
+	target               *types.TableGroup
 
 	metrics struct {
 		advanceDuration prometheus.Observer
@@ -132,7 +133,7 @@ func (r *Group) Advance(ctx context.Context, partition ident.Ident, ts hlc.Time)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	if tag.RowsAffected() == 0 {
+	if tag.RowsAffected() == 0 && !r.ignoreBackwardsCheck {
 		r.metrics.backwards.Inc()
 		return errors.Errorf(
 			"proposed checkpoint timestamp for group=%s, partition=%s is going backwards: %s; "+
